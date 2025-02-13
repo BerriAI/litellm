@@ -5,6 +5,7 @@ from typing import Any, Callable, Optional, Union
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -26,7 +27,7 @@ def make_sync_call(
     data: str,
     model: str,
     messages: list,
-    logging_obj,
+    logging_obj: LiteLLMLoggingObject,
     json_mode: Optional[bool] = False,
     fake_stream: bool = False,
 ):
@@ -38,6 +39,7 @@ def make_sync_call(
         headers=headers,
         data=data,
         stream=not fake_stream,
+        logging_obj=logging_obj,
     )
 
     if response.status_code != 200:
@@ -171,7 +173,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         print_verbose: Callable,
         timeout: Optional[Union[float, httpx.Timeout]],
         encoding,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObject,
         stream,
         optional_params: dict,
         litellm_params: dict,
@@ -205,7 +207,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": prepped.headers,
             },
         )
 
@@ -223,7 +225,12 @@ class BedrockConverseLLM(BaseAWSLLM):
             client = client  # type: ignore
 
         try:
-            response = await client.post(url=api_base, headers=headers, data=data)  # type: ignore
+            response = await client.post(
+                url=api_base,
+                headers=headers,
+                data=data,
+                logging_obj=logging_obj,
+            )  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -254,7 +261,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         model_response: ModelResponse,
         print_verbose: Callable,
         encoding,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObject,
         optional_params: dict,
         acompletion: bool,
         timeout: Optional[Union[float, httpx.Timeout]],
@@ -263,6 +270,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         extra_headers: Optional[dict] = None,
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
     ):
+
         try:
             from botocore.credentials import Credentials
         except ImportError:
@@ -296,8 +304,6 @@ class BedrockConverseLLM(BaseAWSLLM):
         aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
         aws_sts_endpoint = optional_params.pop("aws_sts_endpoint", None)
 
-        litellm_params["aws_region_name"] = aws_region_name
-
         ### SET REGION NAME ###
         if aws_region_name is None:
             # check env #
@@ -316,6 +322,10 @@ class BedrockConverseLLM(BaseAWSLLM):
 
             if aws_region_name is None:
                 aws_region_name = "us-west-2"
+
+        litellm_params["aws_region_name"] = (
+            aws_region_name  # [DO NOT DELETE] important for async calls
+        )
 
         credentials: Credentials = self.get_credentials(
             aws_access_key_id=aws_access_key_id,
@@ -343,7 +353,6 @@ class BedrockConverseLLM(BaseAWSLLM):
             proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/converse"
 
         ## COMPLETION CALL
-
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
@@ -458,7 +467,12 @@ class BedrockConverseLLM(BaseAWSLLM):
         ### COMPLETION
 
         try:
-            response = client.post(url=proxy_endpoint_url, headers=prepped.headers, data=data)  # type: ignore
+            response = client.post(
+                url=proxy_endpoint_url,
+                headers=prepped.headers,
+                data=data,
+                logging_obj=logging_obj,
+            )  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code

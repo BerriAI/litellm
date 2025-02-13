@@ -70,7 +70,7 @@ class AnthropicConfig(BaseConfig):
         metadata: Optional[dict] = None,
         system: Optional[str] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -98,6 +98,7 @@ class AnthropicConfig(BaseConfig):
     def get_json_schema_from_pydantic_object(
         self, response_format: Union[Any, Dict, None]
     ) -> Optional[dict]:
+
         return type_to_response_format_param(
             response_format, ref_template="/$defs/{model}"
         )  # Relevant issue: https://github.com/BerriAI/litellm/issues/7755
@@ -627,6 +628,7 @@ class AnthropicConfig(BaseConfig):
             )
         else:
             text_content = ""
+            citations: List[Any] = []
             tool_calls: List[ChatCompletionToolCallChunk] = []
             for idx, content in enumerate(completion_response["content"]):
                 if content["type"] == "text":
@@ -644,10 +646,14 @@ class AnthropicConfig(BaseConfig):
                             index=idx,
                         )
                     )
+                ## CITATIONS
+                if content.get("citations", None) is not None:
+                    citations.append(content["citations"])
 
             _message = litellm.Message(
                 tool_calls=tool_calls,
                 content=text_content or None,
+                provider_specific_fields={"citations": citations},
             )
 
             ## HANDLE JSON MODE - anthropic returns single function call

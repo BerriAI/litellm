@@ -156,6 +156,12 @@ def test_get_guardrails_list_response():
     sample_config = [
         {
             "guardrail_name": "test-guard",
+            "litellm_params": {
+                "guardrail": "test-guard",
+                "mode": "pre_call",
+                "api_key": "test-api-key",
+                "api_base": "test-api-base",
+            },
             "guardrail_info": {
                 "params": [
                     {
@@ -188,9 +194,56 @@ def test_get_guardrails_list_response():
     assert len(empty_response.guardrails) == 0
 
     # Test case 3: Missing optional fields
-    minimal_config = [{"guardrail_name": "minimal-guard"}]
+    minimal_config = [
+        {
+            "guardrail_name": "minimal-guard",
+            "litellm_params": {"guardrail": "minimal-guard", "mode": "pre_call"},
+        }
+    ]
     minimal_response = _get_guardrails_list_response(minimal_config)
     assert isinstance(minimal_response, ListGuardrailsResponse)
     assert len(minimal_response.guardrails) == 1
     assert minimal_response.guardrails[0].guardrail_name == "minimal-guard"
     assert minimal_response.guardrails[0].guardrail_info is None
+
+
+def test_default_on_guardrail():
+    # Test guardrail with default_on=True
+    guardrail = CustomGuardrail(
+        guardrail_name="test-guardrail",
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+    )
+
+    # Should run when event_type matches, even without explicit request
+    assert (
+        guardrail.should_run_guardrail(
+            {"metadata": {}},  # Empty metadata, no explicit guardrail request
+            GuardrailEventHooks.pre_call,
+        )
+        == True
+    )
+
+    # Should not run when event_type doesn't match
+    assert (
+        guardrail.should_run_guardrail({"metadata": {}}, GuardrailEventHooks.post_call)
+        == False
+    )
+
+    # Should run even when different guardrail explicitly requested
+    # run test-guardrail-5 and test-guardrail
+    assert (
+        guardrail.should_run_guardrail(
+            {"metadata": {"guardrails": ["test-guardrail-5"]}},
+            GuardrailEventHooks.pre_call,
+        )
+        == True
+    )
+
+    assert (
+        guardrail.should_run_guardrail(
+            {"metadata": {"guardrails": []}},
+            GuardrailEventHooks.pre_call,
+        )
+        == True
+    )

@@ -45,13 +45,13 @@ const sidebars = {
             "proxy/health",
             "proxy/debugging",
             "proxy/spending_monitoring",
-        ],
+          ],
         },
         "proxy/demo",
         {
           type: "category",
           label: "Architecture",
-          items: ["proxy/architecture", "proxy/db_info", "router_architecture", "proxy/user_management_heirarchy"],
+          items: ["proxy/architecture", "proxy/db_info", "router_architecture", "proxy/user_management_heirarchy", "proxy/jwt_auth_arch"],
         },
         {
           type: "link",
@@ -66,6 +66,7 @@ const sidebars = {
             "proxy/user_keys",
             "proxy/clientside_auth",
             "proxy/response_headers",
+            "proxy/request_headers",
           ],
         },
         {
@@ -76,6 +77,7 @@ const sidebars = {
             "proxy/token_auth",
             "proxy/service_accounts",
             "proxy/access_control",
+            "proxy/custom_auth",
             "proxy/ip_address",
             "proxy/email",
             "proxy/multiple_admins",
@@ -96,6 +98,7 @@ const sidebars = {
             "proxy/ui",
             "proxy/admin_ui_sso",
             "proxy/self_serve",
+            "proxy/public_teams",
             "proxy/custom_sso"
           ],
         },
@@ -139,7 +142,7 @@ const sidebars = {
             "proxy/guardrails/secret_detection",
             "proxy/guardrails/custom_guardrail",
             "prompt_injection"
-        ],
+          ],
         },
         {
           type: "category",
@@ -159,7 +162,6 @@ const sidebars = {
           ]
         },
         "proxy/caching",
-
       ]
     },
     {
@@ -178,6 +180,7 @@ const sidebars = {
         "providers/openai_compatible",
         "providers/azure",
         "providers/azure_ai",
+        "providers/aiml",
         "providers/vertex",
         "providers/gemini",
         "providers/anthropic",
@@ -203,6 +206,7 @@ const sidebars = {
         "providers/perplexity",
         "providers/friendliai",
         "providers/galadriel",
+        "providers/topaz",
         "providers/groq",
         "providers/github",
         "providers/deepseek",
@@ -275,7 +279,14 @@ const sidebars = {
         },
         "text_completion",
         "embedding/supported_embedding",
-        "image_generation",
+        {
+          type: "category",
+          label: "Image",
+          items: [
+            "image_generation",
+            "image_variations",
+          ]
+        },
         {
           type: "category",
           label: "Audio",
@@ -294,6 +305,7 @@ const sidebars = {
             "pass_through/cohere",
             "pass_through/anthropic_completion",
             "pass_through/bedrock",
+            "pass_through/assembly_ai",
             "pass_through/langfuse",
             "proxy/pass_through",
           ],
@@ -316,7 +328,7 @@ const sidebars = {
         description: "Learn how to load balance, route, and set fallbacks for your LLM requests",
         slug: "/routing-load-balancing",
       },
-      items: ["routing", "scheduler", "proxy/load_balancing", "proxy/reliability", "proxy/timeout", "proxy/tag_routing", "proxy/provider_budget_routing",  "wildcard_routing"],
+      items: ["routing", "scheduler", "proxy/load_balancing", "proxy/reliability", "proxy/timeout", "proxy/tag_routing", "proxy/provider_budget_routing", "wildcard_routing"],
     },
     {
       type: "category",
@@ -418,13 +430,6 @@ const sidebars = {
         "data_security",
         "data_retention",
         "migration_policy",
-        "contributing",
-        "proxy/pii_masking",
-        "extras/code_quality",
-        "rules",
-        "proxy/team_based_routing",
-        "proxy/customer_routing",
-        "proxy_server",
         {
           type: "category",
           label: "❤️ 🚅 Projects built on LiteLLM",
@@ -436,6 +441,7 @@ const sidebars = {
             slug: "/project",
           },
           items: [
+            "projects/smolagents",
             "projects/Docq.AI",
             "projects/OpenInterpreter",
             "projects/dbally",
@@ -453,6 +459,13 @@ const sidebars = {
             "projects/llm_cord",
           ],
         },
+        "contributing",
+        "proxy/pii_masking",
+        "extras/code_quality",
+        "rules",
+        "proxy/team_based_routing",
+        "proxy/customer_routing",
+        "proxy_server",
       ],
     },
     "troubleshoot",

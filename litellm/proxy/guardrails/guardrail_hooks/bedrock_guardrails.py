@@ -13,7 +13,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import json
 import sys
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, List, Literal, Optional, Union
 
 from fastapi import HTTPException
 
@@ -22,6 +22,9 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
+)
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    convert_content_list_to_str,
 )
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
@@ -36,6 +39,7 @@ from litellm.types.guardrails import (
     BedrockTextContent,
     GuardrailEventHooks,
 )
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
 GUARDRAIL_NAME = "bedrock"
@@ -62,7 +66,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     def convert_to_bedrock_format(
         self,
-        messages: Optional[List[Dict[str, str]]] = None,
+        messages: Optional[List[AllMessageValues]] = None,
         response: Optional[Union[Any, ModelResponse]] = None,
     ) -> BedrockRequest:
         bedrock_request: BedrockRequest = BedrockRequest(source="INPUT")
@@ -70,12 +74,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         if messages:
             for message in messages:
-                content = message.get("content")
-                if isinstance(content, str):
-                    bedrock_content_item = BedrockContentItem(
-                        text=BedrockTextContent(text=content)
+                bedrock_content_item = BedrockContentItem(
+                    text=BedrockTextContent(
+                        text=convert_content_list_to_str(message=message)
                     )
-                    bedrock_request_content.append(bedrock_content_item)
+                )
+                bedrock_request_content.append(bedrock_content_item)
 
             bedrock_request["content"] = bedrock_request_content
         if response:

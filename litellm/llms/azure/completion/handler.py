@@ -49,6 +49,7 @@ class AzureTextCompletion(BaseLLM):
         api_version: str,
         api_type: str,
         azure_ad_token: str,
+        azure_ad_token_provider: Optional[Callable],
         print_verbose: Callable,
         timeout,
         logging_obj,
@@ -130,6 +131,7 @@ class AzureTextCompletion(BaseLLM):
                         timeout=timeout,
                         client=client,
                         logging_obj=logging_obj,
+                        max_retries=max_retries,
                     )
             elif "stream" in optional_params and optional_params["stream"] is True:
                 return self.streaming(
@@ -170,6 +172,7 @@ class AzureTextCompletion(BaseLLM):
                     "http_client": litellm.client_session,
                     "max_retries": max_retries,
                     "timeout": timeout,
+                    "azure_ad_token_provider": azure_ad_token_provider,
                 }
                 azure_client_params = select_azure_base_url_or_endpoint(
                     azure_client_params=azure_client_params
@@ -234,17 +237,12 @@ class AzureTextCompletion(BaseLLM):
         timeout: Any,
         model_response: ModelResponse,
         logging_obj: Any,
+        max_retries: int,
         azure_ad_token: Optional[str] = None,
         client=None,  # this is the AsyncAzureOpenAI
     ):
         response = None
         try:
-            max_retries = data.pop("max_retries", 2)
-            if not isinstance(max_retries, int):
-                raise AzureOpenAIError(
-                    status_code=422, message="max retries must be an int"
-                )
-
             # init AzureOpenAI Client
             azure_client_params = {
                 "api_version": api_version,

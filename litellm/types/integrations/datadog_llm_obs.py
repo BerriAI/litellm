@@ -40,6 +40,7 @@ class LLMObsPayload(TypedDict):
     start_ns: int
     duration: int
     metrics: LLMMetrics
+    tags: List
 
 
 class DDSpanAttributes(TypedDict):

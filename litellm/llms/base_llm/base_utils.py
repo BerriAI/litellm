@@ -1,20 +1,24 @@
+"""
+Utility functions for base LLM classes.
+"""
+
+import copy
 from abc import ABC, abstractmethod
 from typing import List, Optional, Type, Union
 
 from openai.lib import _parsing, _pydantic
 from pydantic import BaseModel
 
-from litellm.types.utils import ModelInfoBase
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ProviderSpecificModelInfo
 
 
 class BaseLLMModelInfo(ABC):
-    @abstractmethod
-    def get_model_info(
+    def get_provider_info(
         self,
         model: str,
-        existing_model_info: Optional[ModelInfoBase] = None,
-    ) -> Optional[ModelInfoBase]:
-        pass
+    ) -> Optional[ProviderSpecificModelInfo]:
+        return None
 
     @abstractmethod
     def get_models(self) -> List[str]:
@@ -30,6 +34,58 @@ class BaseLLMModelInfo(ABC):
     def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
         pass
 
+    @staticmethod
+    @abstractmethod
+    def get_base_model(model: str) -> Optional[str]:
+        """
+        Returns the base model name from the given model name.
+
+        Some providers like bedrock - can receive model=`invoke/anthropic.claude-3-opus-20240229-v1:0` or `converse/anthropic.claude-3-opus-20240229-v1:0`
+            This function will return `anthropic.claude-3-opus-20240229-v1:0`
+        """
+        pass
+
+
+def _dict_to_response_format_helper(
+    response_format: dict, ref_template: Optional[str] = None
+) -> dict:
+    if ref_template is not None and response_format.get("type") == "json_schema":
+        # Deep copy to avoid modifying original
+        modified_format = copy.deepcopy(response_format)
+        schema = modified_format["json_schema"]["schema"]
+
+        # Update all $ref values in the schema
+        def update_refs(schema):
+            stack = [(schema, [])]
+            visited = set()
+
+            while stack:
+                obj, path = stack.pop()
+                obj_id = id(obj)
+
+                if obj_id in visited:
+                    continue
+                visited.add(obj_id)
+
+                if isinstance(obj, dict):
+                    if "$ref" in obj:
+                        ref_path = obj["$ref"]
+                        model_name = ref_path.split("/")[-1]
+                        obj["$ref"] = ref_template.format(model=model_name)
+
+                    for k, v in obj.items():
+                        if isinstance(v, (dict, list)):
+                            stack.append((v, path + [k]))
+
+                elif isinstance(obj, list):
+                    for i, item in enumerate(obj):
+                        if isinstance(item, (dict, list)):
+                            stack.append((item, path + [i]))
+
+        update_refs(schema)
+        return modified_format
+    return response_format
+
 
 def type_to_response_format_param(
     response_format: Optional[Union[Type[BaseModel], dict]],
@@ -44,7 +100,7 @@ def type_to_response_format_param(
         return None
 
     if isinstance(response_format, dict):
-        return response_format
+        return _dict_to_response_format_helper(response_format, ref_template)
 
     # type checkers don't narrow the negation of a `TypeGuard` as it isn't
     # a safe default behaviour but we know that at this point the `response_format`
@@ -65,3 +121,18 @@ def type_to_response_format_param(
             "strict": True,
         },
     }
+
+
+def map_developer_role_to_system_role(
+    messages: List[AllMessageValues],
+) -> List[AllMessageValues]:
+    """
+    Translate `developer` role to `system` role for non-OpenAI providers.
+    """
+    new_messages: List[AllMessageValues] = []
+    for m in messages:
+        if m["role"] == "developer":
+            new_messages.append({"role": "system", "content": m["content"]})
+        else:
+            new_messages.append(m)
+    return new_messages

@@ -84,7 +84,7 @@ const DashboardTeam: React.FC<DashboardTeamProps> = ({
               value={String(index)}
               onClick={() => {
                 setSelectedTeam(team);
-                setKeys(team["keys"]);
+                // setKeys(team["keys"]);
               }}
             >
               {team["team_alias"]}

@@ -61,10 +61,11 @@ def _get_user_in_team(
     for member in team_table.members_with_roles:
         if member.user_id is not None and member.user_id == user_id:
             return member
+
     return None
 
 
-def _is_allowed_to_create_key(
+def _is_allowed_to_make_key_request(
     user_api_key_dict: UserAPIKeyAuth, user_id: Optional[str], team_id: Optional[str]
 ) -> bool:
     """
@@ -167,6 +168,8 @@ def _team_key_generation_check(
     user_api_key_dict: UserAPIKeyAuth,
     data: GenerateKeyRequest,
 ):
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return True
     if (
         litellm.key_generation_settings is not None
         and "team_key_generation" in litellm.key_generation_settings
@@ -263,6 +266,40 @@ def key_generation_check(
         return _personal_key_generation_check(
             user_api_key_dict=user_api_key_dict, data=data
         )
+
+
+def common_key_access_checks(
+    user_api_key_dict: UserAPIKeyAuth,
+    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    llm_router: Optional[Router],
+    premium_user: bool,
+) -> Literal[True]:
+    """
+    Check if user is allowed to make a key request, for this key
+    """
+    try:
+        _is_allowed_to_make_key_request(
+            user_api_key_dict=user_api_key_dict,
+            user_id=data.user_id,
+            team_id=data.team_id,
+        )
+    except AssertionError as e:
+        raise HTTPException(
+            status_code=403,
+            detail=str(e),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e),
+        )
+
+    _check_model_access_group(
+        models=data.models,
+        llm_router=llm_router,
+        premium_user=premium_user,
+    )
+    return True
 
 
 router = APIRouter()
@@ -366,6 +403,7 @@ async def generate_key_fn(  # noqa: PLR0915
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=user_api_key_dict.parent_otel_span,
+                    check_db_only=True,
                 )
             except Exception as e:
                 verbose_proxy_logger.debug(
@@ -379,25 +417,9 @@ async def generate_key_fn(  # noqa: PLR0915
             data=data,
         )
 
-        try:
-            _is_allowed_to_create_key(
-                user_api_key_dict=user_api_key_dict,
-                user_id=data.user_id,
-                team_id=data.team_id,
-            )
-        except AssertionError as e:
-            raise HTTPException(
-                status_code=403,
-                detail=str(e),
-            )
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=str(e),
-            )
-
-        _check_model_access_group(
-            models=data.models,
+        common_key_access_checks(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
             llm_router=llm_router,
             premium_user=premium_user,
         )
@@ -682,6 +704,8 @@ async def update_key_fn(
     ```
     """
     from litellm.proxy.proxy_server import (
+        llm_router,
+        premium_user,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
@@ -690,9 +714,17 @@ async def update_key_fn(
     try:
         data_json: dict = data.model_dump(exclude_unset=True, exclude_none=True)
         key = data_json.pop("key")
+
         # get the row from db
         if prisma_client is None:
             raise Exception("Not connected to DB!")
+
+        common_key_access_checks(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            llm_router=llm_router,
+            premium_user=premium_user,
+        )
 
         existing_key_row = await prisma_client.get_data(
             token=data.key, table_name="key", query_type="find_unique"
@@ -1410,6 +1442,13 @@ async def delete_verification_tokens(
                         ):
                             await prisma_client.delete_data(tokens=[key.token])
                             deleted_tokens.append(key.token)
+                        else:
+                            raise HTTPException(
+                                status_code=status.HTTP_403_FORBIDDEN,
+                                detail={
+                                    "error": "You are not authorized to delete this key"
+                                },
+                            )
 
                     tasks.append(_delete_key(key))
                 await asyncio.gather(*tasks)
@@ -1637,6 +1676,52 @@ async def regenerate_key_fn(
         raise handle_exception_on_proxy(e)
 
 
+def validate_key_list_check(
+    complete_user_info: LiteLLM_UserTable,
+    user_id: Optional[str],
+    team_id: Optional[str],
+    organization_id: Optional[str],
+    key_alias: Optional[str],
+):
+    if complete_user_info.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return  # proxy admin can see all keys
+
+    # internal user can only see their own keys
+    if user_id:
+        if complete_user_info.user_id != user_id:
+            raise ProxyException(
+                message="You are not authorized to check another user's keys",
+                type=ProxyErrorTypes.bad_request_error,
+                param="user_id",
+                code=status.HTTP_403_FORBIDDEN,
+            )
+
+    if team_id:
+        if team_id not in complete_user_info.teams:
+            raise ProxyException(
+                message="You are not authorized to check this team's keys",
+                type=ProxyErrorTypes.bad_request_error,
+                param="team_id",
+                code=status.HTTP_403_FORBIDDEN,
+            )
+
+    if organization_id:
+        if (
+            complete_user_info.organization_memberships is None
+            or organization_id
+            not in [
+                membership.organization_id
+                for membership in complete_user_info.organization_memberships
+            ]
+        ):
+            raise ProxyException(
+                message="You are not authorized to check this organization's keys",
+                type=ProxyErrorTypes.bad_request_error,
+                param="organization_id",
+                code=status.HTTP_403_FORBIDDEN,
+            )
+
+
 @router.get(
     "/key/list",
     tags=["key management"],
@@ -1650,21 +1735,35 @@ async def list_keys(
     size: int = Query(10, description="Page size", ge=1, le=100),
     user_id: Optional[str] = Query(None, description="Filter keys by user ID"),
     team_id: Optional[str] = Query(None, description="Filter keys by team ID"),
+    organization_id: Optional[str] = Query(
+        None, description="Filter keys by organization ID"
+    ),
     key_alias: Optional[str] = Query(None, description="Filter keys by key alias"),
-):
-    try:
-        import logging
+    return_full_object: bool = Query(False, description="Return full key object"),
+) -> KeyListResponseObject:
+    """
+    List all keys for a given user / team / organization.
 
+    Returns:
+        {
+            "keys": List[str] or List[UserAPIKeyAuth],
+            "total_count": int,
+            "current_page": int,
+            "total_pages": int,
+        }
+    """
+    try:
         from litellm.proxy.proxy_server import prisma_client
 
-        logging.debug("Entering list_keys function")
-
-        if prisma_client is None:
-            logging.error("Database not connected")
-            raise Exception("Database not connected")
-
         # Check for unsupported parameters
-        supported_params = {"page", "size", "user_id", "team_id", "key_alias"}
+        supported_params = {
+            "page",
+            "size",
+            "user_id",
+            "team_id",
+            "key_alias",
+            "return_full_object",
+        }
         unsupported_params = set(request.query_params.keys()) - supported_params
         if unsupported_params:
             raise ProxyException(
@@ -1674,60 +1773,69 @@ async def list_keys(
                 code=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Prepare filter conditions
-        where = {}
-        if user_id and isinstance(user_id, str):
-            where["user_id"] = user_id
-        if team_id and isinstance(team_id, str):
-            where["team_id"] = team_id
-        if key_alias and isinstance(key_alias, str):
-            where["key_alias"] = key_alias
+        verbose_proxy_logger.debug("Entering list_keys function")
 
-        logging.debug(f"Filter conditions: {where}")
+        if prisma_client is None:
+            verbose_proxy_logger.error("Database not connected")
+            raise Exception("Database not connected")
 
-        # Calculate skip for pagination
-        skip = (page - 1) * size
+        if not user_api_key_dict.user_id:
+            raise ProxyException(
+                message="You are not authorized to access this endpoint. No 'user_id' is associated with your API key.",
+                type=ProxyErrorTypes.bad_request_error,
+                param="user_id",
+                code=status.HTTP_403_FORBIDDEN,
+            )
 
-        logging.debug(f"Pagination: skip={skip}, take={size}")
-
-        # Fetch keys with pagination
-        keys = await prisma_client.db.litellm_verificationtoken.find_many(
-            where=where,  # type: ignore
-            skip=skip,  # type: ignore
-            take=size,  # type: ignore
+        complete_user_info: Optional[BaseModel] = (
+            await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": user_api_key_dict.user_id},
+                include={"organization_memberships": True},
+            )
         )
 
-        logging.debug(f"Fetched {len(keys)} keys")
+        if complete_user_info is None:
+            raise ProxyException(
+                message="You are not authorized to access this endpoint. No 'user_id' is associated with your API key.",
+                type=ProxyErrorTypes.bad_request_error,
+                param="user_id",
+                code=status.HTTP_403_FORBIDDEN,
+            )
 
-        # Get total count of keys
-        total_count = await prisma_client.db.litellm_verificationtoken.count(
-            where=where  # type: ignore
+        complete_user_info_pydantic_obj = LiteLLM_UserTable(
+            **complete_user_info.model_dump()
         )
 
-        logging.debug(f"Total count of keys: {total_count}")
+        validate_key_list_check(
+            complete_user_info=complete_user_info_pydantic_obj,
+            user_id=user_id,
+            team_id=team_id,
+            organization_id=organization_id,
+            key_alias=key_alias,
+        )
 
-        # Calculate total pages
-        total_pages = -(-total_count // size)  # Ceiling division
+        if user_id is None and complete_user_info_pydantic_obj.user_role != [
+            LitellmUserRoles.PROXY_ADMIN.value,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+        ]:
+            user_id = user_api_key_dict.user_id
 
-        # Prepare response
-        key_list = []
-        for key in keys:
-            key_dict = key.dict()
-            _token = key_dict.get("token")
-            key_list.append(_token)
+        response = await _list_key_helper(
+            prisma_client=prisma_client,
+            page=page,
+            size=size,
+            user_id=user_id,
+            team_id=team_id,
+            key_alias=key_alias,
+            return_full_object=return_full_object,
+        )
 
-        response = {
-            "keys": key_list,
-            "total_count": total_count,
-            "current_page": page,
-            "total_pages": total_pages,
-        }
-
-        logging.debug("Successfully prepared response")
+        verbose_proxy_logger.debug("Successfully prepared response")
 
         return response
 
     except Exception as e:
+        verbose_proxy_logger.exception(f"Error in list_keys: {e}")
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"error({str(e)})"),
@@ -1743,6 +1851,91 @@ async def list_keys(
             param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+async def _list_key_helper(
+    prisma_client: PrismaClient,
+    page: int,
+    size: int,
+    user_id: Optional[str],
+    team_id: Optional[str],
+    key_alias: Optional[str],
+    exclude_team_id: Optional[str] = None,
+    return_full_object: bool = False,
+) -> KeyListResponseObject:
+    """
+    Helper function to list keys
+    Args:
+        page: int
+        size: int
+        user_id: Optional[str]
+        team_id: Optional[str]
+        key_alias: Optional[str]
+        exclude_team_id: Optional[str] # exclude a specific team_id
+        return_full_object: bool # when true, will return UserAPIKeyAuth objects instead of just the token
+
+    Returns:
+        KeyListResponseObject
+        {
+            "keys": List[str] or List[UserAPIKeyAuth],  # Updated to reflect possible return types
+            "total_count": int,
+            "current_page": int,
+            "total_pages": int,
+        }
+    """
+
+    # Prepare filter conditions
+    where: Dict[str, Union[str, Dict[str, str]]] = {}
+    if user_id and isinstance(user_id, str):
+        where["user_id"] = user_id
+    if team_id and isinstance(team_id, str):
+        where["team_id"] = team_id
+    if key_alias and isinstance(key_alias, str):
+        where["key_alias"] = key_alias
+    if exclude_team_id and isinstance(exclude_team_id, str):
+        where["team_id"] = {"not": exclude_team_id}
+
+    verbose_proxy_logger.debug(f"Filter conditions: {where}")
+
+    # Calculate skip for pagination
+    skip = (page - 1) * size
+
+    verbose_proxy_logger.debug(f"Pagination: skip={skip}, take={size}")
+
+    # Fetch keys with pagination
+    keys = await prisma_client.db.litellm_verificationtoken.find_many(
+        where=where,  # type: ignore
+        skip=skip,  # type: ignore
+        take=size,  # type: ignore
+    )
+
+    verbose_proxy_logger.debug(f"Fetched {len(keys)} keys")
+
+    # Get total count of keys
+    total_count = await prisma_client.db.litellm_verificationtoken.count(
+        where=where  # type: ignore
+    )
+
+    verbose_proxy_logger.debug(f"Total count of keys: {total_count}")
+
+    # Calculate total pages
+    total_pages = -(-total_count // size)  # Ceiling division
+
+    # Prepare response
+    key_list: List[Union[str, UserAPIKeyAuth]] = []
+    for key in keys:
+        if return_full_object is True:
+            key_list.append(UserAPIKeyAuth(**key.dict()))  # Return full key object
+        else:
+            _token = key.dict().get("token")
+            key_list.append(_token)  # Return only the token
+
+    return KeyListResponseObject(
+        keys=key_list,
+        total_count=total_count,
+        current_page=page,
+        total_pages=total_pages,
+    )
 
 
 @router.post(

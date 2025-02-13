@@ -18,7 +18,7 @@ from openai.types.moderation import (
     CategoryScores,
 )
 from openai.types.moderation_create_response import Moderation, ModerationCreateResponse
-from pydantic import BaseModel, ConfigDict, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
@@ -81,6 +81,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_response_schema: Optional[bool]
     supports_vision: Optional[bool]
     supports_function_calling: Optional[bool]
+    supports_tool_choice: Optional[bool]
     supports_assistant_prefill: Optional[bool]
     supports_prompt_caching: Optional[bool]
     supports_audio_input: Optional[bool]
@@ -259,10 +260,34 @@ class ChatCompletionTokenLogprob(OpenAIObject):
     returned.
     """
 
+    def __contains__(self, key):
+        # Define custom behavior for the 'in' operator
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
+
 
 class ChoiceLogprobs(OpenAIObject):
     content: Optional[List[ChatCompletionTokenLogprob]] = None
     """A list of message content tokens with log probability information."""
+
+    def __contains__(self, key):
+        # Define custom behavior for the 'in' operator
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
 
 
 class FunctionCall(OpenAIObject):
@@ -438,6 +463,9 @@ class Message(OpenAIObject):
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
     audio: Optional[ChatCompletionAudioResponse] = None
+    provider_specific_fields: Optional[Dict[str, Any]] = Field(
+        default=None, exclude=True
+    )
 
     def __init__(
         self,
@@ -446,6 +474,7 @@ class Message(OpenAIObject):
         function_call=None,
         tool_calls: Optional[list] = None,
         audio: Optional[ChatCompletionAudioResponse] = None,
+        provider_specific_fields: Optional[Dict[str, Any]] = None,
         **params,
     ):
         init_values: Dict[str, Any] = {
@@ -481,6 +510,11 @@ class Message(OpenAIObject):
             # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
             del self.audio
 
+        if provider_specific_fields:  # set if provider_specific_fields is not empty
+            self.provider_specific_fields = provider_specific_fields
+            for k, v in provider_specific_fields.items():
+                setattr(self, k, v)
+
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
@@ -502,6 +536,10 @@ class Message(OpenAIObject):
 
 
 class Delta(OpenAIObject):
+    provider_specific_fields: Optional[Dict[str, Any]] = Field(
+        default=None, exclude=True
+    )
+
     def __init__(
         self,
         content=None,
@@ -512,13 +550,20 @@ class Delta(OpenAIObject):
         **params,
     ):
         super(Delta, self).__init__(**params)
+        provider_specific_fields: Dict[str, Any] = {}
+
+        if "reasoning_content" in params:
+            provider_specific_fields["reasoning_content"] = params["reasoning_content"]
+            setattr(self, "reasoning_content", params["reasoning_content"])
         self.content = content
         self.role = role
-
         # Set default values and correct types
         self.function_call: Optional[Union[FunctionCall, Any]] = None
         self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None
         self.audio: Optional[ChatCompletionAudioResponse] = None
+
+        if provider_specific_fields:  # set if provider_specific_fields is not empty
+            self.provider_specific_fields = provider_specific_fields
 
         if function_call is not None and isinstance(function_call, dict):
             self.function_call = FunctionCall(**function_call)
@@ -581,7 +626,10 @@ class Choices(OpenAIObject):
             elif isinstance(message, dict):
                 self.message = Message(**message)
         if logprobs is not None:
-            self.logprobs = logprobs
+            if isinstance(logprobs, dict):
+                self.logprobs = ChoiceLogprobs(**logprobs)
+            else:
+                self.logprobs = logprobs
         if enhancements is not None:
             self.enhancements = enhancements
 
@@ -784,6 +832,7 @@ class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
             new_choice = StreamingChoices(**choice).model_dump()
             new_choices.append(new_choice)
         kwargs["choices"] = new_choices
+
         super().__init__(**kwargs)
 
 
@@ -1455,6 +1504,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_org_id: Optional[str]
     user_api_key_team_id: Optional[str]
     user_api_key_user_id: Optional[str]
+    user_api_key_user_email: Optional[str]
     user_api_key_team_alias: Optional[str]
     user_api_key_end_user_id: Optional[str]
 
@@ -1476,6 +1526,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     requester_ip_address: Optional[str]
     requester_metadata: Optional[dict]
     prompt_management_metadata: Optional[StandardLoggingPromptManagementMetadata]
+    applied_guardrails: Optional[List[str]]
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):
@@ -1490,6 +1541,7 @@ class StandardLoggingHiddenParams(TypedDict):
     cache_key: Optional[str]
     api_base: Optional[str]
     response_cost: Optional[str]
+    litellm_overhead_time_ms: Optional[float]
     additional_headers: Optional[StandardLoggingAdditionalHeaders]
 
 
@@ -1523,7 +1575,7 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
 
 class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_name: Optional[str]
-    guardrail_mode: Optional[GuardrailEventHooks]
+    guardrail_mode: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]]
     guardrail_response: Optional[Union[dict, str]]
     guardrail_status: Literal["success", "failure"]
 
@@ -1640,6 +1692,7 @@ all_litellm_params = [
     "api_key",
     "api_version",
     "prompt_id",
+    "provider_specific_header",
     "prompt_variables",
     "api_base",
     "force_timeout",
@@ -1707,6 +1760,7 @@ all_litellm_params = [
     "max_fallbacks",
     "max_budget",
     "budget_duration",
+    "use_in_pass_through",
 ] + list(StandardCallbackDynamicParams.__annotations__.keys())
 
 
@@ -1819,6 +1873,7 @@ class LlmProviders(str, Enum):
     LANGFUSE = "langfuse"
     HUMANLOOP = "humanloop"
     TOPAZ = "topaz"
+    ASSEMBLYAI = "assemblyai"
 
 
 # Create a set of all provider values for quick lookup
@@ -1861,3 +1916,13 @@ class HttpHandlerRequestFields(TypedDict, total=False):
     params: dict  # query params
     files: dict  # file uploads
     content: Any  # raw content
+
+
+class ProviderSpecificHeader(TypedDict):
+    custom_llm_provider: str
+    extra_headers: dict
+
+
+class SelectTokenizerResponse(TypedDict):
+    type: Literal["openai_tokenizer", "huggingface_tokenizer"]
+    tokenizer: Any

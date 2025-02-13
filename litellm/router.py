@@ -57,6 +57,7 @@ from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.router_strategy.simple_shuffle import simple_shuffle
 from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
+from litellm.router_utils.add_retry_headers import add_retry_headers_to_response
 from litellm.router_utils.batch_utils import (
     _get_router_metadata_variable_name,
     replace_model_in_jsonl,
@@ -177,6 +178,7 @@ class Router:
             int
         ] = None,  # max fallbacks to try before exiting the call. Defaults to 5.
         timeout: Optional[float] = None,
+        stream_timeout: Optional[float] = None,
         default_litellm_params: Optional[
             dict
         ] = None,  # default params for Router.chat.completion.create
@@ -402,6 +404,7 @@ class Router:
             self.max_fallbacks = litellm.ROUTER_MAX_FALLBACKS
 
         self.timeout = timeout or litellm.request_timeout
+        self.stream_timeout = stream_timeout
 
         self.retry_after = retry_after
         self.routing_strategy = routing_strategy
@@ -480,15 +483,21 @@ class Router:
         self.access_groups = None
         ## USAGE TRACKING ##
         if isinstance(litellm._async_success_callback, list):
-            litellm._async_success_callback.append(self.deployment_callback_on_success)
+            litellm.logging_callback_manager.add_litellm_async_success_callback(
+                self.deployment_callback_on_success
+            )
         else:
-            litellm._async_success_callback.append(self.deployment_callback_on_success)
+            litellm.logging_callback_manager.add_litellm_async_success_callback(
+                self.deployment_callback_on_success
+            )
         if isinstance(litellm.success_callback, list):
-            litellm.success_callback.append(self.sync_deployment_callback_on_success)
+            litellm.logging_callback_manager.add_litellm_success_callback(
+                self.sync_deployment_callback_on_success
+            )
         else:
             litellm.success_callback = [self.sync_deployment_callback_on_success]
         if isinstance(litellm._async_failure_callback, list):
-            litellm._async_failure_callback.append(
+            litellm.logging_callback_manager.add_litellm_async_failure_callback(
                 self.async_deployment_callback_on_failure
             )
         else:
@@ -497,7 +506,9 @@ class Router:
             ]
         ## COOLDOWNS ##
         if isinstance(litellm.failure_callback, list):
-            litellm.failure_callback.append(self.deployment_callback_on_failure)
+            litellm.logging_callback_manager.add_litellm_failure_callback(
+                self.deployment_callback_on_failure
+            )
         else:
             litellm.failure_callback = [self.deployment_callback_on_failure]
         verbose_router_logger.debug(
@@ -562,6 +573,36 @@ class Router:
             litellm.amoderation, call_type="moderation"
         )
 
+
+    def discard(self):
+        """
+        Pseudo-destructor to be invoked to clean up global data structures when router is no longer used.
+        For now, unhook router's callbacks from all lists
+        """
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm._async_success_callback, self)
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.success_callback, self)
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm._async_failure_callback, self)
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.failure_callback, self)
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.input_callback, self)
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.service_callback, self)
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, self)
+
+
+    def _update_redis_cache(self, cache: RedisCache):
+        """
+        Update the redis cache for the router, if none set.
+
+        Allows proxy user to just do
+        ```yaml
+        litellm_settings:
+            cache: true
+        ```
+        and caching to just work.
+        """
+        if self.cache.redis_cache is None:
+            self.cache.redis_cache = cache
+
+
     def initialize_assistants_endpoint(self):
         ## INITIALIZE PASS THROUGH ASSISTANTS ENDPOINT ##
         self.acreate_assistants = self.factory_function(litellm.acreate_assistants)
@@ -603,7 +644,7 @@ class Router:
                         model_list=self.model_list,
                     )
                 if _callback is not None:
-                    litellm.callbacks.append(_callback)
+                    litellm.logging_callback_manager.add_litellm_callback(_callback)
 
     def routing_strategy_init(
         self, routing_strategy: Union[RoutingStrategy, str], routing_strategy_args: dict
@@ -622,7 +663,7 @@ class Router:
             else:
                 litellm.input_callback = [self.leastbusy_logger]  # type: ignore
             if isinstance(litellm.callbacks, list):
-                litellm.callbacks.append(self.leastbusy_logger)  # type: ignore
+                litellm.logging_callback_manager.add_litellm_callback(self.leastbusy_logger)  # type: ignore
         elif (
             routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING.value
             or routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING
@@ -633,7 +674,7 @@ class Router:
                 routing_args=routing_strategy_args,
             )
             if isinstance(litellm.callbacks, list):
-                litellm.callbacks.append(self.lowesttpm_logger)  # type: ignore
+                litellm.logging_callback_manager.add_litellm_callback(self.lowesttpm_logger)  # type: ignore
         elif (
             routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING_V2.value
             or routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING_V2
@@ -644,7 +685,7 @@ class Router:
                 routing_args=routing_strategy_args,
             )
             if isinstance(litellm.callbacks, list):
-                litellm.callbacks.append(self.lowesttpm_logger_v2)  # type: ignore
+                litellm.logging_callback_manager.add_litellm_callback(self.lowesttpm_logger_v2)  # type: ignore
         elif (
             routing_strategy == RoutingStrategy.LATENCY_BASED.value
             or routing_strategy == RoutingStrategy.LATENCY_BASED
@@ -655,7 +696,7 @@ class Router:
                 routing_args=routing_strategy_args,
             )
             if isinstance(litellm.callbacks, list):
-                litellm.callbacks.append(self.lowestlatency_logger)  # type: ignore
+                litellm.logging_callback_manager.add_litellm_callback(self.lowestlatency_logger)  # type: ignore
         elif (
             routing_strategy == RoutingStrategy.COST_BASED.value
             or routing_strategy == RoutingStrategy.COST_BASED
@@ -666,7 +707,7 @@ class Router:
                 routing_args={},
             )
             if isinstance(litellm.callbacks, list):
-                litellm.callbacks.append(self.lowestcost_logger)  # type: ignore
+                litellm.logging_callback_manager.add_litellm_callback(self.lowestcost_logger)  # type: ignore
         else:
             pass
 
@@ -1045,8 +1086,23 @@ class Router:
 
         return model_client
 
-    def _get_timeout(self, kwargs: dict, data: dict) -> Optional[Union[float, int]]:
-        """Helper to get timeout from kwargs or deployment params"""
+    def _get_stream_timeout(
+        self, kwargs: dict, data: dict
+    ) -> Optional[Union[float, int]]:
+        """Helper to get stream timeout from kwargs or deployment params"""
+        return (
+            kwargs.get("stream_timeout", None)  # the params dynamically set by user
+            or data.get(
+                "stream_timeout", None
+            )  # timeout set on litellm_params for this deployment
+            or self.stream_timeout  # timeout set on router
+            or self.default_litellm_params.get("stream_timeout", None)
+        )
+
+    def _get_non_stream_timeout(
+        self, kwargs: dict, data: dict
+    ) -> Optional[Union[float, int]]:
+        """Helper to get non-stream timeout from kwargs or deployment params"""
         timeout = (
             kwargs.get("timeout", None)  # the params dynamically set by user
             or kwargs.get("request_timeout", None)  # the params dynamically set by user
@@ -1059,7 +1115,17 @@ class Router:
             or self.timeout  # timeout set on router
             or self.default_litellm_params.get("timeout", None)
         )
+        return timeout
 
+    def _get_timeout(self, kwargs: dict, data: dict) -> Optional[Union[float, int]]:
+        """Helper to get timeout from kwargs or deployment params"""
+        timeout: Optional[Union[float, int]] = None
+        if kwargs.get("stream", False):
+            timeout = self._get_stream_timeout(kwargs=kwargs, data=data)
+        if timeout is None:
+            timeout = self._get_non_stream_timeout(
+                kwargs=kwargs, data=data
+            )  # default to this if no stream specific timeout set
         return timeout
 
     async def abatch_completion(
@@ -3063,12 +3129,15 @@ class Router:
             )
             # if the function call is successful, no exception will be raised and we'll break out of the loop
             response = await self.make_call(original_function, *args, **kwargs)
-
+            response = add_retry_headers_to_response(
+                response=response, attempted_retries=0, max_retries=None
+            )
             return response
         except Exception as e:
             current_attempt = None
             original_exception = e
             deployment_num_retries = getattr(e, "num_retries", None)
+
             if deployment_num_retries is not None and isinstance(
                 deployment_num_retries, int
             ):
@@ -3109,6 +3178,9 @@ class Router:
             else:
                 raise
 
+            verbose_router_logger.info(
+                f"Retrying request with num_retries: {num_retries}"
+            )
             # decides how long to sleep before retry
             retry_after = self._time_to_sleep_before_retry(
                 e=original_exception,
@@ -3119,6 +3191,7 @@ class Router:
             )
 
             await asyncio.sleep(retry_after)
+
             for current_attempt in range(num_retries):
                 try:
                     # if the function call is successful, no exception will be raised and we'll break out of the loop
@@ -3127,6 +3200,12 @@ class Router:
                         response
                     ):  # async errors are often returned as coroutines
                         response = await response
+
+                    response = add_retry_headers_to_response(
+                        response=response,
+                        attempted_retries=current_attempt + 1,
+                        max_retries=num_retries,
+                    )
                     return response
 
                 except Exception as e:
@@ -3185,6 +3264,15 @@ class Router:
         mock_testing_rate_limit_error: Optional[bool] = kwargs.pop(
             "mock_testing_rate_limit_error", None
         )
+
+        available_models = self.get_model_list(model_name=model_group)
+        num_retries: Optional[int] = None
+
+        if available_models is not None and len(available_models) == 1:
+            num_retries = cast(
+                Optional[int], available_models[0]["litellm_params"].get("num_retries")
+            )
+
         if (
             mock_testing_rate_limit_error is not None
             and mock_testing_rate_limit_error is True
@@ -3196,6 +3284,7 @@ class Router:
                 model=model_group,
                 llm_provider="",
                 message=f"This is a mock exception for model={model_group}, to trigger a rate limit error.",
+                num_retries=num_retries,
             )
 
     def should_retry_this_error(
@@ -3640,8 +3729,9 @@ class Router:
 
         Else, original response is returned.
         """
-        if response.choices[0].finish_reason != "content_filter":
-            return False
+        if response.choices and len(response.choices) > 0:
+            if response.choices[0].finish_reason != "content_filter":
+                return False
 
         content_policy_fallbacks = kwargs.get(
             "content_policy_fallbacks", self.content_policy_fallbacks
@@ -4084,7 +4174,53 @@ class Router:
             litellm_router_instance=self, model=deployment.to_json(exclude_none=True)
         )
 
+        self._initialize_deployment_for_pass_through(
+            deployment=deployment,
+            custom_llm_provider=custom_llm_provider,
+            model=deployment.litellm_params.model,
+        )
+
         return deployment
+
+    def _initialize_deployment_for_pass_through(
+        self, deployment: Deployment, custom_llm_provider: str, model: str
+    ):
+        """
+        Optional: Initialize deployment for pass-through endpoints if `deployment.litellm_params.use_in_pass_through` is True
+
+        Each provider uses diff .env vars for pass-through endpoints, this helper uses the deployment credentials to set the .env vars for pass-through endpoints
+        """
+        if deployment.litellm_params.use_in_pass_through is True:
+            if custom_llm_provider == "vertex_ai":
+                from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
+                    vertex_pass_through_router,
+                )
+
+                if (
+                    deployment.litellm_params.vertex_project is None
+                    or deployment.litellm_params.vertex_location is None
+                    or deployment.litellm_params.vertex_credentials is None
+                ):
+                    raise ValueError(
+                        "vertex_project, vertex_location, and vertex_credentials must be set in litellm_params for pass-through endpoints"
+                    )
+                vertex_pass_through_router.add_vertex_credentials(
+                    project_id=deployment.litellm_params.vertex_project,
+                    location=deployment.litellm_params.vertex_location,
+                    vertex_credentials=deployment.litellm_params.vertex_credentials,
+                )
+            else:
+                from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+                    passthrough_endpoint_router,
+                )
+
+                passthrough_endpoint_router.set_pass_through_credentials(
+                    custom_llm_provider=custom_llm_provider,
+                    api_base=deployment.litellm_params.api_base,
+                    api_key=deployment.litellm_params.api_key,
+                )
+            pass
+        pass
 
     def add_deployment(self, deployment: Deployment) -> Optional[Deployment]:
         """
@@ -4747,6 +4883,37 @@ class Router:
             model_names.append(m["model_name"])
         return model_names
 
+    def get_model_list_from_model_alias(
+        self, model_name: Optional[str] = None
+    ) -> List[DeploymentTypedDict]:
+        """
+        Helper function to get model list from model alias.
+
+        Used by `.get_model_list` to get model list from model alias.
+        """
+        returned_models: List[DeploymentTypedDict] = []
+        for model_alias, model_value in self.model_group_alias.items():
+            if model_name is not None and model_alias != model_name:
+                continue
+            if isinstance(model_value, str):
+                _router_model_name: str = model_value
+            elif isinstance(model_value, dict):
+                _model_value = RouterModelGroupAliasItem(**model_value)  # type: ignore
+                if _model_value["hidden"] is True:
+                    continue
+                else:
+                    _router_model_name = _model_value["model"]
+            else:
+                continue
+
+            returned_models.extend(
+                self._get_all_deployments(
+                    model_name=_router_model_name, model_alias=model_alias
+                )
+            )
+
+        return returned_models
+
     def get_model_list(
         self, model_name: Optional[str] = None
     ) -> Optional[List[DeploymentTypedDict]]:
@@ -4760,24 +4927,9 @@ class Router:
                 returned_models.extend(self._get_all_deployments(model_name=model_name))
 
             if hasattr(self, "model_group_alias"):
-                for model_alias, model_value in self.model_group_alias.items():
-
-                    if isinstance(model_value, str):
-                        _router_model_name: str = model_value
-                    elif isinstance(model_value, dict):
-                        _model_value = RouterModelGroupAliasItem(**model_value)  # type: ignore
-                        if _model_value["hidden"] is True:
-                            continue
-                        else:
-                            _router_model_name = _model_value["model"]
-                    else:
-                        continue
-
-                    returned_models.extend(
-                        self._get_all_deployments(
-                            model_name=_router_model_name, model_alias=model_alias
-                        )
-                    )
+                returned_models.extend(
+                    self.get_model_list_from_model_alias(model_name=model_name)
+                )
 
             if len(returned_models) == 0:  # check if wildcard route
                 potential_wildcard_models = self.pattern_router.route(model_name)
@@ -5730,8 +5882,8 @@ class Router:
 
         self.slack_alerting_logger = _slack_alerting_logger
 
-        litellm.callbacks.append(_slack_alerting_logger)  # type: ignore
-        litellm.success_callback.append(
+        litellm.logging_callback_manager.add_litellm_callback(_slack_alerting_logger)  # type: ignore
+        litellm.logging_callback_manager.add_litellm_success_callback(
             _slack_alerting_logger.response_taking_too_long_callback
         )
         verbose_router_logger.info(

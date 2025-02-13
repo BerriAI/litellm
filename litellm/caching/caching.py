@@ -41,6 +41,7 @@ from .dual_cache import DualCache  # noqa
 from .in_memory_cache import InMemoryCache
 from .qdrant_semantic_cache import QdrantSemanticCache
 from .redis_cache import RedisCache
+from .redis_cluster_cache import RedisClusterCache
 from .redis_semantic_cache import RedisSemanticCache
 from .s3_cache import S3Cache
 
@@ -158,14 +159,23 @@ class Cache:
             None. Cache is set as a litellm param
         """
         if type == LiteLLMCacheType.REDIS:
-            self.cache: BaseCache = RedisCache(
-                host=host,
-                port=port,
-                password=password,
-                redis_flush_size=redis_flush_size,
-                startup_nodes=redis_startup_nodes,
-                **kwargs,
-            )
+            if redis_startup_nodes:
+                self.cache: BaseCache = RedisClusterCache(
+                    host=host,
+                    port=port,
+                    password=password,
+                    redis_flush_size=redis_flush_size,
+                    startup_nodes=redis_startup_nodes,
+                    **kwargs,
+                )
+            else:
+                self.cache = RedisCache(
+                    host=host,
+                    port=port,
+                    password=password,
+                    redis_flush_size=redis_flush_size,
+                    **kwargs,
+                )
         elif type == LiteLLMCacheType.REDIS_SEMANTIC:
             self.cache = RedisSemanticCache(
                 host=host,
@@ -207,9 +217,9 @@ class Cache:
         if "cache" not in litellm.input_callback:
             litellm.input_callback.append("cache")
         if "cache" not in litellm.success_callback:
-            litellm.success_callback.append("cache")
+            litellm.logging_callback_manager.add_litellm_success_callback("cache")
         if "cache" not in litellm._async_success_callback:
-            litellm._async_success_callback.append("cache")
+            litellm.logging_callback_manager.add_litellm_async_success_callback("cache")
         self.supported_call_types = supported_call_types  # default to ["completion", "acompletion", "embedding", "aembedding"]
         self.type = type
         self.namespace = namespace
@@ -774,9 +784,9 @@ def enable_cache(
     if "cache" not in litellm.input_callback:
         litellm.input_callback.append("cache")
     if "cache" not in litellm.success_callback:
-        litellm.success_callback.append("cache")
+        litellm.logging_callback_manager.add_litellm_success_callback("cache")
     if "cache" not in litellm._async_success_callback:
-        litellm._async_success_callback.append("cache")
+        litellm.logging_callback_manager.add_litellm_async_success_callback("cache")
 
     if litellm.cache is None:
         litellm.cache = Cache(

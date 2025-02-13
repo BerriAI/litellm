@@ -432,6 +432,7 @@ class Huggingface(BaseLLM):
         embed_url: str,
     ) -> dict:
         data: Dict = {}
+
         ## TRANSFORMATION ##
         if "sentence-transformers" in model:
             if len(input) == 0:

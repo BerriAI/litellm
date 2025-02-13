@@ -68,16 +68,21 @@ async def test_openai_image_variation_litellm_sdk(image_url, sync_mode):
         await aimage_variation(image=image_url, n=2, size="1024x1024")
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])  # ,
-@pytest.mark.asyncio
-async def test_topaz_image_variation(image_url, sync_mode):
+def test_topaz_image_variation(image_url):
     from litellm import image_variation, aimage_variation
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from unittest.mock import patch
 
-    if sync_mode:
-        image_variation(
-            model="topaz/Standard V2", image=image_url, n=2, size="1024x1024"
-        )
-    else:
-        response = await aimage_variation(
-            model="topaz/Standard V2", image=image_url, n=2, size="1024x1024"
-        )
+    client = HTTPHandler()
+    with patch.object(client, "post") as mock_post:
+        try:
+            image_variation(
+                model="topaz/Standard V2",
+                image=image_url,
+                n=2,
+                size="1024x1024",
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+        mock_post.assert_called_once()

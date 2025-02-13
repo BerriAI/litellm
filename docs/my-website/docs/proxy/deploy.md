@@ -1048,3 +1048,4 @@ export DATABASE_SCHEMA="schema-name" # skip to use the default "public" schema
 ```bash
 litellm --config /path/to/config.yaml --iam_token_db_auth
 ```
+
