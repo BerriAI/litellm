@@ -37,8 +37,8 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
           noStyle
         >
           {(selectedProvider === Providers.Azure) || 
-           (selectedProvider === Providers.OpenAI_Compatible) || 
-           (selectedProvider === Providers.Ollama) ? (
+           (selectedProvider === Providers.Ollama) || 
+           (selectedProvider.toString() === Providers.OpenAI_Compatible.toString()) ? (
             <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
           ) : providerModels.length > 0 ? (
             <AntSelect

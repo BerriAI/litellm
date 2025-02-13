@@ -1544,30 +1544,11 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       ))}
                     </AntdSelect>
                   </Form.Item>
-                  <Form.Item
-                    label="LiteLLM Model Name"
-                    name="model"
-                    rules={[{ required: true, message: 'Required' }]}
-                    tooltip="The model name passed to litellm.completion()"
-                    labelCol={{ span: 10 }}
-                    labelAlign="left"
-                  >
-                    <AntdSelect
-                      showSearch
-                      placeholder={getPlaceholder(selectedProvider)}
-                      optionFilterProp="children"
-                      allowClear
-                      mode="tags"         // This enables custom input
-                      maxTagCount={1}     // Only show one tag/value
-                      maxTagTextLength={60}
-                    >
-                      {providerModels.map((model) => (
-                        <AntdSelect.Option key={model} value={model}>
-                          {model}
-                        </AntdSelect.Option>
-                      ))}
-                    </AntdSelect>
-                  </Form.Item>
+                  <LiteLLMModelNameField
+                      selectedProvider={selectedProvider}
+                      providerModels={providerModels}
+                      getPlaceholder={getPlaceholder}
+                    />
                   
                   {/* Conditionally Render "Public Model Name" */}
                   <ConditionalPublicModelName  />
