@@ -379,6 +379,36 @@ async def test_chat_completion_streaming():
 
 
 @pytest.mark.asyncio
+async def test_completion_streaming_usage_metrics():
+    """
+    [PROD Test] Ensures usage metrics are returned correctly when `include_usage` is set to `True`
+    """
+    client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+    response = await client.completions.create(
+        model="gpt-instruct",
+        prompt="hey",
+        stream=True,
+        stream_options={"include_usage": True},
+        max_tokens=4,
+        temperature=0.00000001,
+    )
+
+    last_chunk = None
+    async for chunk in response:
+        print("chunk", chunk)
+        last_chunk = chunk
+
+    assert last_chunk is not None, "No chunks were received"
+    assert last_chunk.usage is not None, "Usage information was not received"
+    assert last_chunk.usage.prompt_tokens > 0, "Prompt tokens should be greater than 0"
+    assert (
+        last_chunk.usage.completion_tokens > 0
+    ), "Completion tokens should be greater than 0"
+    assert last_chunk.usage.total_tokens > 0, "Total tokens should be greater than 0"
+
+
+@pytest.mark.asyncio
 async def test_chat_completion_anthropic_structured_output():
     """
     Ensure nested pydantic output is returned correctly

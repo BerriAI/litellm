@@ -38,14 +38,14 @@ from litellm.types.integrations.datadog import *
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import StandardLoggingPayload
 
-from ..base_health_check import HealthCheckIntegration
+from ..additional_logging_utils import AdditionalLoggingUtils
 
 DD_MAX_BATCH_SIZE = 1000  # max number of logs DD API can accept
 
 
 class DataDogLogger(
     CustomBatchLogger,
-    HealthCheckIntegration,
+    AdditionalLoggingUtils,
 ):
     # Class variables or attributes
     def __init__(
@@ -543,3 +543,13 @@ class DataDogLogger(
                 status="unhealthy",
                 error_message=str(e),
             )
+
+    async def get_request_response_payload(
+        self,
+        request_id: str,
+        start_time_utc: Optional[datetimeObj],
+        end_time_utc: Optional[datetimeObj],
+    ) -> Optional[dict]:
+        raise NotImplementedError(
+            "Datdog Integration for getting request/response payloads not implemented as yet"
+        )
