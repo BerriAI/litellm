@@ -768,7 +768,10 @@ async def test_async_router_context_window_fallback(sync_mode):
         else:
             response = router.completion(
                 model="gpt-4",
-                messages=[{"role": "user", "content": "Who was Alexander?"}],
+                messages=[
+                    {"role": "system", "content": text * 2},
+                    {"role": "user", "content": "Who was Alexander?"},
+                ],
             )
             assert "gpt-4-turbo" in response.model
     except Exception as e:
