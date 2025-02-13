@@ -1278,7 +1278,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                                   </p>
                                 </div>
                               </Card>
-                              <Card key={item.name}>
+                              <Card key={item.key_name}>
                                 <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
                                   Budget
                                 </p>
