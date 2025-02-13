@@ -3210,6 +3210,38 @@ export const healthCheckCall = async (accessToken: String) => {
   }
 };
 
+export const cachingHealthCheckCall = async (accessToken: String) => {
+  /**
+   * Get all the models user has access to
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/cache/ping` : `/cache/ping`;
+
+    //message.info("Requesting model data");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    //message.info("Received model data");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to call /cache/ping:", error);
+    throw error;
+  }
+};
+
 export const getProxyUISettings = async (
   accessToken: String,
 ) => {
