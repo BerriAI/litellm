@@ -67,6 +67,18 @@ class TritonConfig(BaseConfig):
                 optional_params[param] = value
         return optional_params
 
+    def get_complete_url(
+        self,
+        api_base: str,
+        model: str,
+        optional_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        llm_type = self._get_triton_llm_type(api_base)
+        if llm_type == "generate" and stream:
+            return api_base + "_stream"
+        return api_base
+
     def transform_response(
         self,
         model: str,
@@ -166,17 +178,6 @@ class TritonGenerateConfig(TritonConfig):
     """
     Transformations for triton /generate endpoint (This is a trtllm model)
     """
-
-    def get_complete_url(
-        self,
-        api_base: str,
-        model: str,
-        optional_params: dict,
-        stream: Optional[bool] = None,
-    ) -> str:
-        if stream:
-            return api_base + "_stream"
-        return api_base
 
     def transform_request(
         self,
