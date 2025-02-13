@@ -52,17 +52,6 @@ class TritonConfig(BaseConfig):
     ) -> Dict:
         return {"Content-Type": "application/json"}
 
-    def get_complete_url(
-        self,
-        api_base: str,
-        model: str,
-        optional_params: dict,
-        stream: Optional[bool] = None,
-    ) -> str:
-        if stream:
-            return api_base + "_stream"
-        return api_base
-
     def get_supported_openai_params(self, model: str) -> List:
         return ["max_tokens", "max_completion_tokens"]
 
@@ -178,6 +167,17 @@ class TritonGenerateConfig(TritonConfig):
     Transformations for triton /generate endpoint (This is a trtllm model)
     """
 
+    def get_complete_url(
+        self,
+        api_base: str,
+        model: str,
+        optional_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        if stream:
+            return api_base + "_stream"
+        return api_base
+
     def transform_request(
         self,
         model: str,
@@ -227,7 +227,7 @@ class TritonGenerateConfig(TritonConfig):
         return model_response
 
 
-class TritonInferConfig(TritonGenerateConfig):
+class TritonInferConfig(TritonConfig):
     """
     Transformations for triton /infer endpoint (his is an infer model with a custom model on triton)
     """
