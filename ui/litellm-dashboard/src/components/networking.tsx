@@ -1542,16 +1542,22 @@ export const allEndUsersCall = async (accessToken: String) => {
   }
 };
 
-export const userFilterUICall = async (accessToken: String, params: URLSearchParams) => {
+export const userFilterUICall = async (accessToken: String, user_email: string | null, user_id: string | null, page: number, page_size: number) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/user/filter/ui` : `/user/filter/ui`;
+    
+    const queryParams = new URLSearchParams();
+    if (user_email) queryParams.append('user_email', user_email);
+    if (user_id) queryParams.append('user_id', user_id);
+    if (page) queryParams.append('page', page.toString());
+    if (page_size) queryParams.append('page_size', page_size.toString());
 
-    if (params.get("user_email")) {
-      url += `?user_email=${params.get("user_email")}`;
+    // Append query parameters to URL if any exist
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
     }
-    if (params.get("user_id")) {
-      url += `?user_id=${params.get("user_id")}`;
-    }
+
 
     const response = await fetch(url, {
       method: "GET",

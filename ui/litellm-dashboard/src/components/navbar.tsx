@@ -106,13 +106,11 @@ const Navbar: React.FC<NavbarProps> = ({
         <div className="flex items-center h-12 px-4">
           {/* Left side with correct logo positioning */}
           <div className="flex items-center flex-shrink-0">
-            <Link href="/" className="flex items-center">
               <img
                 src={imageUrl}
                 alt="LiteLLM Brand"
                 className="h-8 w-auto"
               />
-            </Link>
           </div>
 
           {/* Organization selector with beta label */}

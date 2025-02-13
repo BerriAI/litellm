@@ -12,6 +12,7 @@ These are members of a Team on LiteLLM
 """
 
 import asyncio
+import math
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -945,7 +946,7 @@ async def add_internal_user_to_organization(
     dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
     responses={
-        200: {"model": List[LiteLLM_UserTable]},
+        200: {"model": UserListResponse},  # Update response model
     },
 )
 async def ui_view_users(
@@ -965,16 +966,6 @@ async def ui_view_users(
 ):
     """
     [PROXY-ADMIN ONLY]Filter users based on partial match of user_id or email with pagination.
-
-    Args:
-        user_id (Optional[str]): Partial user ID to search for
-        user_email (Optional[str]): Partial email to search for
-        page (int): Page number for pagination (starts at 1)
-        page_size (int): Number of items per page (max 100)
-        user_api_key_dict (UserAPIKeyAuth): User authentication information
-
-    Returns:
-        List[LiteLLM_SpendLogs]: Paginated list of matching user records
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -991,14 +982,19 @@ async def ui_view_users(
         if user_id:
             where_conditions["user_id"] = {
                 "contains": user_id,
-                "mode": "insensitive",  # Case-insensitive search
+                "mode": "insensitive",
             }
 
         if user_email:
             where_conditions["user_email"] = {
                 "contains": user_email,
-                "mode": "insensitive",  # Case-insensitive search
+                "mode": "insensitive",
             }
+
+        # Get total count for pagination
+        total_users = await prisma_client.db.litellm_usertable.count(
+            where=where_conditions
+        )
 
         # Query users with pagination and filters
         users = await prisma_client.db.litellm_usertable.find_many(
@@ -1008,10 +1004,16 @@ async def ui_view_users(
             order={"created_at": "desc"},
         )
 
-        if not users:
-            return []
+        # Calculate total pages
+        total_pages = math.ceil(total_users / page_size)
 
-        return users
+        return {
+            "users": users if users else [],
+            "total": total_users,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+        }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error searching users: {str(e)}")
