@@ -1275,23 +1275,21 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               }}
                             >
                               <div className="flex items-center space-x-2">
-                                {model.provider && (
+                                {getProviderLogoAndName(model.provider).logo ? (
                                   <img
                                     src={getProviderLogoAndName(model.provider).logo}
                                     alt={`${model.provider} logo`}
                                     className="w-4 h-4"
-                                    onError={(e) => {
-                                      // Create a div with provider initial as fallback
-                                      const target = e.target as HTMLImageElement;
-                                      const parent = target.parentElement;
-                                      if (parent) {
-                                        const fallbackDiv = document.createElement('div');
-                                        fallbackDiv.className = 'w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs';
-                                        fallbackDiv.textContent = model.provider?.charAt(0) || '-';
-                                        parent.replaceChild(fallbackDiv, target);
-                                      }
-                                    }}
                                   />
+                                ) : (
+                                  <>
+                                  {
+                                    model.provider ?   <div className="w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs">
+                                    {model.provider ? model.provider.charAt(0) : "-"}
+                                  </div> : <></>
+                                  }
+                                  </>
+                                
                                 )}
                                 <p className="text-xs">{model.provider || "-"}</p>
                               </div>
@@ -1455,6 +1453,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                   modelID={model.model_info.id}
                                   accessToken={accessToken}
                                   callback={handleRefreshClick}
+                                  setModelData={setModelData}
+                                  modelData={modelData}
                                 />
                               </Col>
                             </Grid>
