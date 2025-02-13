@@ -34,7 +34,6 @@ import {
     adminGlobalCacheActivity,
     cachingHealthCheckCall,
     healthCheckCall,
-
 } from "./networking";
 
 const formatDateWithoutTZ = (date: Date | undefined) => {
@@ -258,7 +257,7 @@ const runCachingHealthCheck = async () => {
           <div className="flex">
             <Tab>Cache Analytics</Tab>
             <Tab>
-              <pre>/health Caching</pre>
+              <pre>Cache Health</pre>
             </Tab>
           </div>
 
@@ -317,7 +316,7 @@ const runCachingHealthCheck = async () => {
       </Grid>
 
       <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 mt-4">
-      <Card>
+          <Card>
             <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
               Cache Hit Ratio
             </p>
@@ -380,16 +379,15 @@ const runCachingHealthCheck = async () => {
 
 
       </Card>
-
           </TabPanel>
           <TabPanel>
-            <Card>
+            <Card className="mt-4">
               <Text>
-                `/health caching` will run a very small request through API /cache/ping
+                Cache health will run a very small request through API /cache/ping
                 configured on litellm
               </Text>
 
-              <Button onClick={runCachingHealthCheck}>Run `/health caching`</Button>
+              <Button onClick={runCachingHealthCheck} className="mt-4">Run cache health</Button>
               {healthCheckResponse && (
                 <pre className="mt-4" style={{ 
                   whiteSpace: 'pre-wrap',
