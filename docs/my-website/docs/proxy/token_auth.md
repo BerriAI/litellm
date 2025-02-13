@@ -163,10 +163,12 @@ scope: "litellm-proxy-admin ..."
 
 ```yaml
 general_settings:
-  master_key: sk-1234
+  enable_jwt_auth: True
   litellm_jwtauth:
     user_id_jwt_field: "sub"
     team_ids_jwt_field: "groups" 
+    user_id_upsert: true # add user_id to the db if they don't exist
+    enforce_team_based_model_access: true # don't allow users to access models unless the team has access
 ```
 
 This is assuming your token looks like this:
@@ -352,11 +354,11 @@ environment_variables:
 
 ### Example Token 
 
-```
+```bash
 {
   "aud": "api://LiteLLM_Proxy",
   "oid": "eec236bd-0135-4b28-9354-8fc4032d543e",
-  "roles": ["litellm.api.consumer"]
+  "roles": ["litellm.api.consumer"] 
 }
 ```
 
@@ -413,9 +415,9 @@ general_settings:
 
 Expected Token:
 
-```
+```bash
 {
-  "scope": ["litellm.api.consumer", "litellm.api.gpt_3_5_turbo"]
+  "scope": ["litellm.api.consumer", "litellm.api.gpt_3_5_turbo"] # can be a list or a space-separated string
 }
 ```
 

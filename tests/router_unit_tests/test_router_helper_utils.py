@@ -918,6 +918,31 @@ def test_flush_cache(model_list):
     assert router.cache.get_cache("test") is None
 
 
+def test_discard(model_list):
+    """
+    Test that discard properly removes a Router from the callback lists
+    """
+    litellm.callbacks = []
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+    litellm.failure_callback = []
+    litellm._async_failure_callback = []
+    litellm.input_callback = []
+    litellm.service_callback = []
+
+    router = Router(model_list=model_list)
+    router.discard()
+
+    # Verify all callback lists are empty
+    assert len(litellm.callbacks) == 0
+    assert len(litellm.success_callback) == 0
+    assert len(litellm.failure_callback) == 0
+    assert len(litellm._async_success_callback) == 0
+    assert len(litellm._async_failure_callback) == 0
+    assert len(litellm.input_callback) == 0
+    assert len(litellm.service_callback) == 0
+
+
 def test_initialize_assistants_endpoint(model_list):
     """Test if the 'initialize_assistants_endpoint' function is working correctly"""
     router = Router(model_list=model_list)

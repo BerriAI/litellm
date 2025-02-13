@@ -73,6 +73,7 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
             user_api_key_alias="test_alias",
             user_api_key_team_id="test_team",
             user_api_key_user_id="test_user",
+            user_api_key_user_email="test@example.com",
             user_api_key_team_alias="test_team_alias",
             user_api_key_org_id=None,
             spend_logs_metadata=None,
@@ -475,6 +476,7 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
         team="test_team",
         team_alias="test_team_alias",
         model="gpt-3.5-turbo",
+        user_email=None,
     )
     prometheus_logger.litellm_requests_metric.labels().inc.assert_called_once()
 
@@ -631,6 +633,7 @@ async def test_async_post_call_failure_hook(prometheus_logger):
         team_alias="test_team_alias",
         user="test_user",
         status_code="429",
+        user_email=None,
     )
     prometheus_logger.litellm_proxy_total_requests_metric.labels().inc.assert_called_once()
 
@@ -674,6 +677,7 @@ async def test_async_post_call_success_hook(prometheus_logger):
         team_alias="test_team_alias",
         user="test_user",
         status_code="200",
+        user_email=None,
     )
     prometheus_logger.litellm_proxy_total_requests_metric.labels().inc.assert_called_once()
 

@@ -344,6 +344,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             or "https://api.openai.com/v1"
         )
 
+    @staticmethod
+    def get_base_model(model: str) -> str:
+        return model
+
     def get_model_response_iterator(
         self,
         streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],

@@ -3,7 +3,7 @@ import secrets
 from datetime import datetime
 from datetime import datetime as dt
 from datetime import timezone
-from typing import Optional, cast
+from typing import List, Optional, cast
 
 from pydantic import BaseModel
 
@@ -32,7 +32,9 @@ def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
     return False
 
 
-def _get_spend_logs_metadata(metadata: Optional[dict]) -> SpendLogsMetadata:
+def _get_spend_logs_metadata(
+    metadata: Optional[dict], applied_guardrails: Optional[List[str]] = None
+) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
             user_api_key=None,
@@ -44,8 +46,9 @@ def _get_spend_logs_metadata(metadata: Optional[dict]) -> SpendLogsMetadata:
             spend_logs_metadata=None,
             requester_ip_address=None,
             additional_usage_values=None,
+            applied_guardrails=None,
         )
-    verbose_proxy_logger.debug(
+    verbose_proxy_logger.info(
         "getting payload for SpendLogs, available keys in metadata: "
         + str(list(metadata.keys()))
     )
@@ -58,6 +61,8 @@ def _get_spend_logs_metadata(metadata: Optional[dict]) -> SpendLogsMetadata:
             if key in metadata
         }
     )
+    clean_metadata["applied_guardrails"] = applied_guardrails
+
     return clean_metadata
 
 
@@ -130,7 +135,14 @@ def get_logging_payload(  # noqa: PLR0915
     _model_group = metadata.get("model_group", "")
 
     # clean up litellm metadata
-    clean_metadata = _get_spend_logs_metadata(metadata)
+    clean_metadata = _get_spend_logs_metadata(
+        metadata,
+        applied_guardrails=(
+            standard_logging_payload["metadata"].get("applied_guardrails", None)
+            if standard_logging_payload is not None
+            else None
+        ),
+    )
 
     special_usage_fields = ["completion_tokens", "prompt_tokens", "total_tokens"]
     additional_usage_values = {}
