@@ -2,8 +2,9 @@ import Link from "next/link";
 import React from "react";
 import type { MenuProps } from "antd";
 import { Dropdown } from "antd";
+import { CogIcon } from "@heroicons/react/outline";
 import { Organization } from "@/components/networking";
-import { defaultOrg } from "@/components/common_components/default_org";
+
 interface NavbarProps {
   userID: string | null;
   userRole: string | null;
@@ -74,7 +75,10 @@ const Navbar: React.FC<NavbarProps> = ({
           <span className="text-sm">Default Organization</span>
         </div>
       ),
-      onClick: () => onOrgChange(defaultOrg)
+      onClick: () => onOrgChange({ 
+        organization_id: null, 
+        organization_alias: "Default Organization" 
+      } as Organization)
     },
     ...organizations.filter(org => org.organization_id !== null).map(org => ({
       key: org.organization_id ?? "default",

@@ -268,11 +268,10 @@ class LiteLLMRoutes(enum.Enum):
         "/v2/key/info",
         "/model_group/info",
         "/health",
-        "/key/list",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
-    master_key_only_routes = ["/global/spend/reset"]
+    master_key_only_routes = ["/global/spend/reset", "/key/list"]
 
     management_routes = [  # key
         "/key/generate",
@@ -281,7 +280,6 @@ class LiteLLMRoutes(enum.Enum):
         "/key/delete",
         "/key/info",
         "/key/health",
-        "/key/list",
         # user
         "/user/new",
         "/user/update",
@@ -1350,7 +1348,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     key_alias: Optional[str] = None
     spend: float = 0.0
     max_budget: Optional[float] = None
-    expires: Optional[Union[str, datetime]] = None
+    expires: Optional[str] = None
     models: List = []
     aliases: Dict = {}
     config: Dict = {}
