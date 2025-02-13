@@ -1412,6 +1412,19 @@
         "deprecation_date": "2025-03-31",
         "supports_tool_choice": true
     },
+    "azure/gpt-3.5-turbo-0125": {
+        "max_tokens": 4096,
+        "max_input_tokens": 16384,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0000005,
+        "output_cost_per_token": 0.0000015,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "deprecation_date": "2025-03-31",
+        "supports_tool_choice": true
+    },
     "azure/gpt-35-turbo-16k": {
         "max_tokens": 4096,
         "max_input_tokens": 16385,
@@ -1423,6 +1436,17 @@
         "supports_tool_choice": true
     },
     "azure/gpt-35-turbo": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4097,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0000005,
+        "output_cost_per_token": 0.0000015,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "azure/gpt-3.5-turbo": {
         "max_tokens": 4096,
         "max_input_tokens": 4097,
         "max_output_tokens": 4096,
@@ -8171,6 +8195,24 @@
         "mode": "chat" ,
         "deprecation_date": "2025-02-22",
         "supports_tool_choice": true
+    },
+    "perplexity/sonar": { 
+        "max_tokens": 127072,
+        "max_input_tokens": 127072,
+        "max_output_tokens": 127072,
+        "input_cost_per_token": 0.000001, 
+        "output_cost_per_token": 0.000001,  
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
+    },
+    "perplexity/sonar-pro": { 
+        "max_tokens": 200000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8096,
+        "input_cost_per_token": 0.000003, 
+        "output_cost_per_token": 0.000015,  
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
     },
     "perplexity/pplx-7b-chat": { 
         "max_tokens": 8192,
