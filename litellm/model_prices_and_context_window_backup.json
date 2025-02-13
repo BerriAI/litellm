@@ -3692,7 +3692,7 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
     "gemini-2.0-flash-exp": {
         "max_tokens": 8192,
