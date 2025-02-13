@@ -1191,6 +1191,20 @@ async def delete_team(
     return deleted_teams
 
 
+def validate_membership(
+    user_api_key_dict: UserAPIKeyAuth, team_table: LiteLLM_TeamTable
+):
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+
+    if user_api_key_dict.user_id not in [
+        m.user_id for m in team_table.members_with_roles
+    ]:
+        raise HTTPException(
+            status_code=403, detail={"error": "User not authorized to access this team"}
+        )
+
+
 @router.get(
     "/team/info", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
@@ -1229,32 +1243,19 @@ async def team_info(
                 detail={"message": "Malformed request. No team id passed in."},
             )
 
-        if (
-            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
-            or user_api_key_dict.user_role
-            == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
-        ):
-            pass
-        elif user_api_key_dict.team_id is None or (
-            team_id != user_api_key_dict.team_id
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="key not allowed to access this team's info. Key team_id={}, Requested team_id={}".format(
-                    user_api_key_dict.team_id, team_id
-                ),
-            )
-
-        team_info: Optional[Union[LiteLLM_TeamTable, dict]] = (
-            await prisma_client.get_data(
-                team_id=team_id, table_name="team", query_type="find_unique"
+        team_info_db_obj: Optional[BaseModel] = (
+            await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id}
             )
         )
-        if team_info is None:
+        if team_info_db_obj is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"message": f"Team not found, passed team id: {team_id}."},
             )
+
+        team_info = LiteLLM_TeamTable(**team_info_db_obj.model_dump())
+        validate_membership(user_api_key_dict, team_info)
 
         ## GET ALL KEYS ##
         keys = await prisma_client.get_data(
@@ -1266,13 +1267,6 @@ async def team_info(
 
         if keys is None:
             keys = []
-
-        if team_info is None:
-            ## make sure we still return a total spend ##
-            spend = 0
-            for k in keys:
-                spend += getattr(k, "spend", 0)
-            team_info = {"spend": spend}
 
         ## REMOVE HASHED TOKEN INFO before returning ##
         for key in keys:
