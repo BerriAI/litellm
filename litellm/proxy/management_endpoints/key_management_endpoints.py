@@ -1676,15 +1676,41 @@ async def regenerate_key_fn(
         raise handle_exception_on_proxy(e)
 
 
-def validate_key_list_check(
-    complete_user_info: LiteLLM_UserTable,
+async def validate_key_list_check(
+    user_api_key_dict: UserAPIKeyAuth,
     user_id: Optional[str],
     team_id: Optional[str],
     organization_id: Optional[str],
     key_alias: Optional[str],
+    prisma_client: PrismaClient,
 ):
-    if complete_user_info.user_role == LitellmUserRoles.PROXY_ADMIN.value:
-        return  # proxy admin can see all keys
+
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+
+    if user_api_key_dict.user_id is None:
+        raise ProxyException(
+            message="You are not authorized to access this endpoint. No 'user_id' is associated with your API key.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="user_id",
+            code=status.HTTP_403_FORBIDDEN,
+        )
+    complete_user_info_db_obj: Optional[BaseModel] = (
+        await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": user_api_key_dict.user_id},
+            include={"organization_memberships": True},
+        )
+    )
+
+    if complete_user_info_db_obj is None:
+        raise ProxyException(
+            message="You are not authorized to access this endpoint. No 'user_id' is associated with your API key.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="user_id",
+            code=status.HTTP_403_FORBIDDEN,
+        )
+
+    complete_user_info = LiteLLM_UserTable(**complete_user_info_db_obj.model_dump())
 
     # internal user can only see their own keys
     if user_id:
@@ -1779,42 +1805,16 @@ async def list_keys(
             verbose_proxy_logger.error("Database not connected")
             raise Exception("Database not connected")
 
-        if not user_api_key_dict.user_id:
-            raise ProxyException(
-                message="You are not authorized to access this endpoint. No 'user_id' is associated with your API key.",
-                type=ProxyErrorTypes.bad_request_error,
-                param="user_id",
-                code=status.HTTP_403_FORBIDDEN,
-            )
-
-        complete_user_info: Optional[BaseModel] = (
-            await prisma_client.db.litellm_usertable.find_unique(
-                where={"user_id": user_api_key_dict.user_id},
-                include={"organization_memberships": True},
-            )
-        )
-
-        if complete_user_info is None:
-            raise ProxyException(
-                message="You are not authorized to access this endpoint. No 'user_id' is associated with your API key.",
-                type=ProxyErrorTypes.bad_request_error,
-                param="user_id",
-                code=status.HTTP_403_FORBIDDEN,
-            )
-
-        complete_user_info_pydantic_obj = LiteLLM_UserTable(
-            **complete_user_info.model_dump()
-        )
-
-        validate_key_list_check(
-            complete_user_info=complete_user_info_pydantic_obj,
+        await validate_key_list_check(
+            user_api_key_dict=user_api_key_dict,
             user_id=user_id,
             team_id=team_id,
             organization_id=organization_id,
             key_alias=key_alias,
+            prisma_client=prisma_client,
         )
 
-        if user_id is None and complete_user_info_pydantic_obj.user_role != [
+        if user_id is None and user_api_key_dict.user_role not in [
             LitellmUserRoles.PROXY_ADMIN.value,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
         ]:
