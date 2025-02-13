@@ -1270,9 +1270,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                                   <p className="text-tremor font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
                                     {(() => {
                                       try {
-                                        return parseFloat(
-                                          selectedToken.spend
-                                        ).toFixed(4);
+                                        return selectedToken.spend.toFixed(4);
                                       } catch (error) {
                                         return selectedToken.spend;
                                       }
