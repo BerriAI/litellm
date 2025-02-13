@@ -885,6 +885,11 @@ async def delete_user(
         where={"user_id": {"in": data.user_ids}}
     )
 
+    ## DELETE ASSOCIATED ORGANIZATION MEMBERSHIPS
+    await prisma_client.db.litellm_organizationmembership.delete_many(
+        where={"user_id": {"in": data.user_ids}}
+    )
+
     ## DELETE USERS
     deleted_users = await prisma_client.db.litellm_usertable.delete_many(
         where={"user_id": {"in": data.user_ids}}
