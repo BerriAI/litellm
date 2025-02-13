@@ -1485,7 +1485,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             </Modal>
           </TabPanel>
           <TabPanel className="h-full">
-            <Title2 level={2}>Add new model</Title2>
+            <Title2 level={2} className="mt-4 mb-2">Add new model</Title2>
             <Card>
               <Form
                 form={form}
@@ -1563,13 +1563,13 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   />
                   
 
-                  <div className="flex justify-between items-center mb-4">
+                  <div className="flex justify-between items-center mb-4 mt-8">
                     <Tooltip title="Get help on our github">
                       <Typography.Link href="https://github.com/BerriAI/litellm/issues">
                         Need Help?
                       </Typography.Link>
                     </Tooltip>
-                    <Button2 htmlType="submit">Add Model</Button2>
+                    <Button>Add Model</Button>
                   </div>
                 </>
               </Form>
