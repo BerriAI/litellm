@@ -1079,7 +1079,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                       <Text>
                         {(() => {
                           try {
-                            return parseFloat(item.spend).toFixed(4);
+                            return item.spend.toFixed(4);
                           } catch (error) {
                             return item.spend;
                           }
