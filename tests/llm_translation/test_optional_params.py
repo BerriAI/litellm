@@ -1069,6 +1069,21 @@ def test_gemini_frequency_penalty():
     assert optional_params["frequency_penalty"] == 0.5
 
 
+
+def test_azure_prediction_param():
+    optional_params = get_optional_params(
+        model="chatgpt-v2",
+        custom_llm_provider="azure",
+        prediction={
+            "type": "content",
+            "content": "LiteLLM is a very useful way to connect to a variety of LLMs.",
+        },
+    )
+    assert optional_params["prediction"] == {
+        "type": "content",
+        "content": "LiteLLM is a very useful way to connect to a variety of LLMs.",
+    }
+
 def test_vertex_ai_ft_llama():
     optional_params = get_optional_params(
         model="1984786713414729728",
