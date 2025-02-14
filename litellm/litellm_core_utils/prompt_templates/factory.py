@@ -455,6 +455,12 @@ def hf_chat_template(  # noqa: PLR0915
         )  # don't use verbose_logger.exception, if exception is raised
 
 
+def deepseek_r1_pt(messages):
+    return hf_chat_template(
+        model="deepseek-r1/deepseek-r1-7b-instruct", messages=messages
+    )
+
+
 # Anthropic template
 def claude_2_1_pt(
     messages: list,

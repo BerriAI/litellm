@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.prompt_templates.factory import (
     cohere_message_pt,
     custom_prompt,
+    deepseek_r1_pt,
     prompt_factory,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -355,7 +356,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 outputText = (
                     completion_response.get("completions")[0].get("data").get("text")
                 )
-            elif provider == "meta" or provider == "llama":
+            elif provider == "meta" or provider == "llama" or provider == "deepseek_r1":
                 outputText = completion_response["generation"]
             elif provider == "mistral":
                 outputText = completion_response["outputs"][0]["text"]
@@ -668,6 +669,8 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             )
         elif provider == "cohere":
             prompt, chat_history = cohere_message_pt(messages=messages)
+        elif provider == "deepseek_r1":
+            prompt = deepseek_r1_pt(messages=messages)
         else:
             prompt = ""
             for message in messages:
