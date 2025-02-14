@@ -4,6 +4,11 @@ import { keyListCall, Organization } from '../networking';
 export interface Team {
     team_id: string;
     team_alias: string;
+    models: string[];
+    max_budget: number | null;
+    budget_duration: string | null;
+    tpm_limit: number | null;
+    rpm_limit: number | null;
 }
 
 export interface KeyResponse {

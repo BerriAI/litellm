@@ -30,21 +30,11 @@ import {
   modelAvailableCall,
   getGuardrailsList,
 } from "./networking";
+import { Team } from "./key_team_helpers/key_list";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Tooltip } from 'antd';
 
 const { Option } = Select;
-
-export interface Team {
-  team_id: string;
-  team_alias?: string;
-  models: string[];
-  max_budget: number | null;
-  budget_duration: string | null;
-  tpm_limit: number | null;
-  rpm_limit: number | null;
-}
-
 
 interface CreateKeyProps {
   userID: string;
