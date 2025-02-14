@@ -761,3 +761,7 @@ def test_hf_chat_template():
     ]
     chat_template = hf_chat_template(model=model, messages=messages)
     print(chat_template)
+    assert (
+        chat_template.rstrip()
+        == """<｜begin▁of▁sentence｜>You are a helpful assistant.<｜User｜>What is the weather in Copenhagen?<｜Assistant｜><think>"""
+    )
