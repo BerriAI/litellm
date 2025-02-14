@@ -76,10 +76,6 @@ interface UseKeyListProps {
 selectedTeam?: Team;
 currentOrg: Organization | null;
 accessToken: string;
-filters?: {
-    team_id?: string;
-    key_alias?: string;
-};
 }
 
 interface PaginationData {
@@ -100,7 +96,6 @@ const useKeyList = ({
     selectedTeam,
     currentOrg,
     accessToken,
-    filters,
 }: UseKeyListProps): UseKeyListReturn => {
     const [keyData, setKeyData] = useState<KeyListResponse>({ 
         keys: [], 
@@ -121,22 +116,10 @@ const useKeyList = ({
             }
             setIsLoading(true);
 
-            const queryParams: Record<string, string> = {};
-
-            const teamFilter = (params.team_id as string) ?? filters?.team_id;
-            if (teamFilter) {
-                queryParams.team_id = teamFilter;
-            }
-
-            const keyAliasFilter = (params.key_alias as string) ?? filters?.key_alias;
-            if (keyAliasFilter) {
-                queryParams.key_alias = keyAliasFilter;
-            }
-
             const data = await keyListCall(
                 accessToken,
                 currentOrg.organization_id,
-                Object.keys(queryParams).length > 0 ? queryParams : null
+                selectedTeam?.team_id || ""
             );
             console.log("data", data);
             setKeyData(data);
@@ -150,7 +133,8 @@ const useKeyList = ({
 
     useEffect(() => {
         fetchKeys();
-    }, [selectedTeam, currentOrg, accessToken, filters]);
+        console.log("selectedTeam", selectedTeam, "currentOrg", currentOrg, "accessToken", accessToken);
+    }, [selectedTeam, currentOrg, accessToken]);
 
     return {
         keys: keyData.keys,

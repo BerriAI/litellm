@@ -348,34 +348,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   return (
     <div className="w-full mx-4">
       <Grid numItems={1} className="gap-2 p-8 h-[75vh] w-full mt-2">
-        <Col numColSpan={1}>
-          {/* <ViewUserTeam
-            userID={userID}
-            userRole={userRole}
-            selectedTeam={selectedTeam ? selectedTeam : null}
-            accessToken={accessToken}
-          />
-          <ViewUserSpend
-            userID={userID}
-            userRole={userRole}
-            userMaxBudget={userSpendData?.max_budget || null}
-            accessToken={accessToken}
-            userSpend={teamSpend}
-            selectedTeam={selectedTeam ? selectedTeam : null}
-          /> */}
-
-          <ViewKeyTable
-            userID={userID}
-            userRole={userRole}
-            accessToken={accessToken}
-            selectedTeam={selectedTeam ? selectedTeam : null}
-            data={keys}
-            setData={setKeys}
-            premiumUser={premiumUser}
-            teams={teams}
-            currentOrg={currentOrg}
-          />
-          <CreateKey
+        <Col numColSpan={1} className="flex flex-col gap-2">
+        <CreateKey
             key={selectedTeam ? selectedTeam.team_id : null}
             userID={userID}
             team={selectedTeam ? selectedTeam : null}
@@ -383,6 +357,19 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             accessToken={accessToken}
             data={keys}
             setData={setKeys}
+          />
+
+          <ViewKeyTable
+            userID={userID}
+            userRole={userRole}
+            accessToken={accessToken}
+            selectedTeam={selectedTeam ? selectedTeam : null}
+            setSelectedTeam={setSelectedTeam}
+            data={keys}
+            setData={setKeys}
+            premiumUser={premiumUser}
+            teams={teams}
+            currentOrg={currentOrg}
           />
         </Col>
       </Grid>

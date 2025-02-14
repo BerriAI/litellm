@@ -50,7 +50,7 @@ const columns: ColumnDef<KeyResponse>[] = [
     cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
   },
   {
-    header: "Team",
+    header: "Team ID",
     accessorKey: "team_id",
     cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
   },

@@ -100,6 +100,7 @@ interface ViewKeyTableProps {
   userRole: string | null;
   accessToken: string;
   selectedTeam: any | null;
+  setSelectedTeam: React.Dispatch<React.SetStateAction<any | null>>;
   data: any[] | null;
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
   teams: any[] | null;
@@ -145,6 +146,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   userRole,
   accessToken,
   selectedTeam,
+  setSelectedTeam,
   data,
   setData,
   teams,
@@ -191,7 +193,6 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     selectedTeam,
     currentOrg,
     accessToken,
-    filters,
   });
 
   console.log("keys", keys);
@@ -520,14 +521,18 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
               className="mt-8"
               help="the team this key belongs to"
             >
-              <Select3 value={token.team_alias}>
+              <Select3 
+            
+              value={token.team_alias}
+              >
                 {teams?.map((team_obj, index) => (
                   <SelectItem
                     key={index}
                     value={team_obj.team_id}
                     onClick={() => setKeyTeam(team_obj)}
                   >
-                    {team_obj.team_alias}
+                    <span className="font-bold">{team_obj.team_alias}</span>{" "}
+                    <span className="text-gray-500">({team_obj.team_id})</span>
                   </SelectItem>
                 ))}
               </Select3>
@@ -1051,19 +1056,24 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   return (
     <div>
       {/* Filter Controls */}
-      <div className="mb-4 flex space-x-4">
-        <Select3
-          value={teamFilter}
-          onValueChange={(value) => setTeamFilter(value)}
+      {/* <div className="mb-4 flex space-x-4">
+        <Select2
+          showSearch
+          value={selectedTeam?.team_id || ""}
+          onChange={(teamId) => {
+            const team = teams?.find(t => t.team_id === teamId);
+            setSelectedTeam(team || null);
+          }}
           placeholder="Filter by Team"
         >
           <SelectItem value="">All Teams</SelectItem>
           {teams?.map((team) => (
             <SelectItem key={team.team_id} value={team.team_id}>
-              {team.team_alias}
+              <span className="font-bold">{team.team_alias}</span>{" "}
+              <span className="text-gray-500">({team.team_id})</span>
             </SelectItem>
           ))}
-        </Select3>
+        </Select2>
         <Select3
           value={keyAliasFilter}
           onValueChange={(value) => setKeyAliasFilter(value)}
@@ -1076,10 +1086,10 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
             </SelectItem>
           ))}
         </Select3>
-      </div>
+      </div> */}
 
       <AllKeysTable 
-        keys={keys} 
+        keys={keys}
         isLoading={isLoading}
       />
 
