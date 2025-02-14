@@ -4665,3 +4665,71 @@ def test_completion_o3_mini_temperature():
         assert resp.choices[0].message.content is not None
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+def test_completion_gpt_4o_empty_str():
+    litellm._turn_on_debug()
+    from openai import OpenAI
+    from unittest.mock import MagicMock
+
+    client = OpenAI()
+
+    # Create response object matching OpenAI's format
+    mock_response_data = {
+        "id": "chatcmpl-B0W3vmiM78Xkgx7kI7dr7PC949DMS",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "logprobs": None,
+                "message": {
+                    "content": "",
+                    "refusal": None,
+                    "role": "assistant",
+                    "audio": None,
+                    "function_call": None,
+                    "tool_calls": None,
+                },
+            }
+        ],
+        "created": 1739462947,
+        "model": "gpt-4o-mini-2024-07-18",
+        "object": "chat.completion",
+        "service_tier": "default",
+        "system_fingerprint": "fp_bd83329f63",
+        "usage": {
+            "completion_tokens": 1,
+            "prompt_tokens": 121,
+            "total_tokens": 122,
+            "completion_tokens_details": {
+                "accepted_prediction_tokens": 0,
+                "audio_tokens": 0,
+                "reasoning_tokens": 0,
+                "rejected_prediction_tokens": 0,
+            },
+            "prompt_tokens_details": {"audio_tokens": 0, "cached_tokens": 0},
+        },
+    }
+
+    # Create a mock response object
+    mock_raw_response = MagicMock()
+    mock_raw_response.headers = {
+        "x-request-id": "123",
+        "openai-organization": "org-123",
+        "x-ratelimit-limit-requests": "100",
+        "x-ratelimit-remaining-requests": "99",
+    }
+    mock_raw_response.parse.return_value = mock_response_data
+
+    # Set up the mock completion
+    mock_completion = MagicMock()
+    mock_completion.return_value = mock_raw_response
+
+    with patch.object(
+        client.chat.completions.with_raw_response, "create", mock_completion
+    ) as mock_create:
+        resp = litellm.completion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": ""}],
+        )
+        assert resp.choices[0].message.content is not None
