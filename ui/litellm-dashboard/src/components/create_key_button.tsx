@@ -80,7 +80,7 @@ const getPredefinedTags = (data: any[] | null) => {
   return uniqueTags;
 }
 
-const getTeamModels = (team: Team | null, allAvailableModels: string[]): string[] => {
+export const getTeamModels = (team: Team | null, allAvailableModels: string[]): string[] => {
   let tempModelsToPick = [];
 
   if (team) {

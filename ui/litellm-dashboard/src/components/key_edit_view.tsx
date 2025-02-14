@@ -1,13 +1,18 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { Form, Input, InputNumber, Select } from "antd";
 import { Button, TextInput } from "@tremor/react";
 import { KeyResponse } from "./key_team_helpers/key_list";
+import { getTeamModels } from "../components/create_key_button";
+import { modelAvailableCall } from "./networking";
 
 interface KeyEditViewProps {
   keyData: KeyResponse;
   onCancel: () => void;
   onSubmit: (values: any) => Promise<void>;
   teams?: any[] | null;
+  accessToken: string | null;
+  userID: string | null;
+  userRole: string | null;
 }
 
 // Add this helper function
@@ -29,9 +34,40 @@ const getAvailableModelsForKey = (keyData: KeyResponse, teams: any[] | null): st
   return [];
 };
 
-export function KeyEditView({ keyData, onCancel, onSubmit, teams }: KeyEditViewProps) {
+export function KeyEditView({ 
+    keyData, 
+    onCancel, 
+    onSubmit, 
+    teams,
+    accessToken,
+    userID,
+    userRole }: KeyEditViewProps) {
   const [form] = Form.useForm();
-  const availableModels = getAvailableModelsForKey(keyData, teams);
+  const [userModels, setUserModels] = useState<string[]>([]);
+  const team = teams?.find(team => team.team_id === keyData.team_id);
+  const availableModels = getTeamModels(team, userModels);
+  
+
+  useEffect(() => {
+    const fetchUserModels = async () => {
+      try {
+        const model_available = await modelAvailableCall(
+          accessToken,
+          userID,
+          userRole
+        );
+        let available_model_names = model_available["data"].map(
+          (element: { id: string }) => element.id
+        );
+        console.log("available_model_names:", available_model_names);
+        setUserModels(available_model_names);
+      } catch (error) {
+        console.error("Error fetching user models:", error);
+      }
+    };
+
+    fetchUserModels();
+  }, []);
 
   // Convert API budget duration to form format
   const getBudgetDuration = (duration: string | null) => {

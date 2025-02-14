@@ -758,6 +758,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         selectedTeam={selectedTeam}
         setSelectedTeam={setSelectedTeam}
         accessToken={accessToken}
+        userID={userID}
+        userRole={userRole}
       />
 
       {isDeleteModalOpen && (
