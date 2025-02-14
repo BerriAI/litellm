@@ -317,7 +317,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               >
                 {teams?.map((team) => (
                   <Select.Option key={team.team_id} value={team.team_id}>
-                    {team.team_name || team.team_id}
+                    <span className="font-medium">{team.team_alias}</span>{" "}
+                    <span className="text-gray-500">({team.team_id})</span>
                   </Select.Option>
                 ))}
               </Select>
