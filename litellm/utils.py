@@ -5189,9 +5189,10 @@ def _calculate_retry_after(
 # custom prompt helper function
 def register_prompt_template(
     model: str,
-    roles: dict,
+    roles: dict = {},
     initial_prompt_value: str = "",
     final_prompt_value: str = "",
+    tokenizer_config: dict = {},
 ):
     """
     Register a prompt template to follow your custom format for a given model
@@ -5228,12 +5229,20 @@ def register_prompt_template(
     )
     ```
     """
+    complete_model = model
     model = get_llm_provider(model=model)[0]
-    litellm.custom_prompt_dict[model] = {
-        "roles": roles,
-        "initial_prompt_value": initial_prompt_value,
-        "final_prompt_value": final_prompt_value,
-    }
+    potential_models = [model, complete_model]
+    if tokenizer_config:
+        for m in potential_models:
+            litellm.known_tokenizer_config[m] = tokenizer_config
+    else:
+        for m in potential_models:
+            litellm.custom_prompt_dict[m] = {
+                "roles": roles,
+                "initial_prompt_value": initial_prompt_value,
+                "final_prompt_value": final_prompt_value,
+            }
+
     return litellm.custom_prompt_dict
 
 

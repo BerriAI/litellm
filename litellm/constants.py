@@ -335,6 +335,25 @@ bedrock_embedding_models: List = [
     "cohere.embed-multilingual-v3",
 ]
 
+known_tokenizer_config = {
+    "mistralai/Mistral-7B-Instruct-v0.1": {
+        "tokenizer": {
+            "chat_template": "{{ bos_token }}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + message['content'] + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token + ' ' }}{% else %}{{ raise_exception('Only user and assistant roles are supported!') }}{% endif %}{% endfor %}",
+            "bos_token": "<s>",
+            "eos_token": "</s>",
+        },
+        "status": "success",
+    },
+    "meta-llama/Meta-Llama-3-8B-Instruct": {
+        "tokenizer": {
+            "chat_template": "{% set loop_messages = messages %}{% for message in loop_messages %}{% set content = '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ message['content'] | trim + '<|eot_id|>' %}{% if loop.index0 == 0 %}{% set content = bos_token + content %}{% endif %}{{ content }}{% endfor %}{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}",
+            "bos_token": "<|begin_of_text|>",
+            "eos_token": "",
+        },
+        "status": "success",
+    },
+}
+
 
 OPENAI_FINISH_REASONS = ["stop", "length", "function_call", "content_filter", "null"]
 HUMANLOOP_PROMPT_CACHE_TTL_SECONDS = 60  # 1 minute
