@@ -283,6 +283,7 @@ export default function CreateKeyPage() {
                 />
               ) : page == "organizations" ? (
                 <Organizations
+                  organizations={organizations}
                   teams={teams}
                   setTeams={setTeams}
                   searchParams={searchParams}

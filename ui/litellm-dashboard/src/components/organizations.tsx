@@ -25,19 +25,7 @@ import { PencilAltIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline"
 import { TextInput } from "@tremor/react";
 import { getModelDisplayName } from './key_team_helpers/fetch_available_models_team_key';
 import OrganizationInfoView from './organization/organization_view';
-
-interface Organization {
-  organization_id: string;
-  organization_alias: string;
-  spend: number;
-  max_budget: number | null;
-  models: string[];
-  tpm_limit: number | null;
-  rpm_limit: number | null;
-  members: any[];
-  created_at: string;
-}
-
+import { Organization } from './networking';
 interface OrganizationsTableProps {
   organizations: Organization[];
   userRole: string;
