@@ -76,6 +76,10 @@ interface UseKeyListProps {
 selectedTeam?: Team;
 currentOrg: Organization | null;
 accessToken: string;
+filters?: {
+    team_id?: string;
+    key_alias?: string;
+};
 }
 
 interface PaginationData {
@@ -92,7 +96,12 @@ pagination: PaginationData;
 refresh: (params?: Record<string, unknown>) => Promise<void>;
 }
 
-const useKeyList = ({ selectedTeam, currentOrg, accessToken }: UseKeyListProps): UseKeyListReturn => {
+const useKeyList = ({
+    selectedTeam,
+    currentOrg,
+    accessToken,
+    filters,
+}: UseKeyListProps): UseKeyListReturn => {
     const [keyData, setKeyData] = useState<KeyListResponse>({ 
         keys: [], 
         total_count: 0, 
@@ -105,20 +114,35 @@ const useKeyList = ({ selectedTeam, currentOrg, accessToken }: UseKeyListProps):
     const fetchKeys = async (params: Record<string, unknown> = {}): Promise<void> => {
         try {
             console.log("calling fetchKeys");
-            if (!currentOrg || !selectedTeam || !accessToken) {
+            if (!currentOrg || !accessToken) {
                 console.log("currentOrg", currentOrg);
-                console.log("selectedTeam", selectedTeam);
                 console.log("accessToken", accessToken);
-                return
+                return;
             }
             setIsLoading(true);
 
-            const data = await keyListCall(accessToken, currentOrg.organization_id, null);
+            const queryParams: Record<string, string> = {};
+
+            const teamFilter = (params.team_id as string) ?? filters?.team_id;
+            if (teamFilter) {
+                queryParams.team_id = teamFilter;
+            }
+
+            const keyAliasFilter = (params.key_alias as string) ?? filters?.key_alias;
+            if (keyAliasFilter) {
+                queryParams.key_alias = keyAliasFilter;
+            }
+
+            const data = await keyListCall(
+                accessToken,
+                currentOrg.organization_id,
+                Object.keys(queryParams).length > 0 ? queryParams : null
+            );
             console.log("data", data);
             setKeyData(data);
             setError(null);
         } catch (err) {
-            setError(err instanceof Error ? err : new Error('An error occurred'));
+            setError(err instanceof Error ? err : new Error("An error occurred"));
         } finally {
             setIsLoading(false);
         }
@@ -126,7 +150,7 @@ const useKeyList = ({ selectedTeam, currentOrg, accessToken }: UseKeyListProps):
 
     useEffect(() => {
         fetchKeys();
-    }, [selectedTeam, currentOrg]);
+    }, [selectedTeam, currentOrg, accessToken, filters]);
 
     return {
         keys: keyData.keys,

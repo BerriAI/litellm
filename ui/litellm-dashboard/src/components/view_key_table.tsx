@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import {
   keyDeleteCall,
   modelAvailableCall,
@@ -66,7 +66,6 @@ import {
   Tooltip,
   DatePicker,
 } from "antd";
-
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import TextArea from "antd/es/input/TextArea";
 import useKeyList from "./key_team_helpers/key_list";
@@ -160,10 +159,39 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     { day: string; spend: number }[] | null
   >(null);
   
+  // NEW: Declare filter states for team and key alias.
+  const [teamFilter, setTeamFilter] = useState<string>(selectedTeam?.team_id || "");
+  const [keyAliasFilter, setKeyAliasFilter] = useState<string>("");
+
+  // Keep the team filter in sync with the incoming prop.
+  useEffect(() => {
+    setTeamFilter(selectedTeam?.team_id || "");
+  }, [selectedTeam]);
+
+  // Build a memoized filters object for the backend call.
+  const filters = useMemo(
+    () => {
+      const f: { team_id?: string; key_alias?: string } = {};
+      
+      if (teamFilter) {
+        f.team_id = teamFilter;
+      }
+      
+      if (keyAliasFilter) {
+        f.key_alias = keyAliasFilter;
+      }
+      
+      return f;
+    },
+    [teamFilter, keyAliasFilter]
+  );
+
+  // Pass filters into the hook so the API call includes these query parameters.
   const { keys, isLoading, error, refresh } = useKeyList({
     selectedTeam,
     currentOrg,
-    accessToken
+    accessToken,
+    filters,
   });
 
   console.log("keys", keys);
@@ -1014,8 +1042,42 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     }
   };
 
+  // New filter UI rendered above the table.
+  // For the team filter we use the teams prop, and for key alias we compute unique aliases from the keys.
+  const uniqueKeyAliases = Array.from(
+    new Set(keys.map((k) => (k.key_alias ? k.key_alias : "Not Set")))
+  );
+
   return (
     <div>
+      {/* Filter Controls */}
+      <div className="mb-4 flex space-x-4">
+        <Select3
+          value={teamFilter}
+          onValueChange={(value) => setTeamFilter(value)}
+          placeholder="Filter by Team"
+        >
+          <SelectItem value="">All Teams</SelectItem>
+          {teams?.map((team) => (
+            <SelectItem key={team.team_id} value={team.team_id}>
+              {team.team_alias}
+            </SelectItem>
+          ))}
+        </Select3>
+        <Select3
+          value={keyAliasFilter}
+          onValueChange={(value) => setKeyAliasFilter(value)}
+          placeholder="Filter by Key Alias"
+        >
+          <SelectItem value="">All Key Aliases</SelectItem>
+          {uniqueKeyAliases.map((alias) => (
+            <SelectItem key={alias} value={alias}>
+              {alias}
+            </SelectItem>
+          ))}
+        </Select3>
+      </div>
+
       <AllKeysTable 
         keys={keys} 
         isLoading={isLoading}
