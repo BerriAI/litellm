@@ -16,6 +16,7 @@ import {
 } from "antd";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { Select, SelectItem, Subtitle } from "@tremor/react";
+import { Team } from "./key_team_helpers/key_list";
 import {
   Table,
   TableBody,
@@ -38,7 +39,7 @@ import { InvitationLink } from "./onboarding_link";
 interface AdminPanelProps {
   searchParams: any;
   accessToken: string | null;
-  setTeams: React.Dispatch<React.SetStateAction<Object[] | null>>;
+  setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
   showSSOBanner: boolean;
   premiumUser: boolean;
 }

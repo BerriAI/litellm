@@ -41,7 +41,7 @@ export function DataTable<TData, TValue>({
   });
 
   return (
-    <div className="rounded-lg custom-border table-wrapper">
+    <div className="rounded-lg custom-border">
       <Table className="[&_td]:py-0.5 [&_th]:py-1">
         <TableHead>
           {table.getHeaderGroups().map((headerGroup) => (

@@ -68,6 +68,13 @@ export const columns: ColumnDef<LogEntry>[] = [
     ),
   },
   {
+    header: "Cost",
+    accessorKey: "spend",
+    cell: (info: any) => (
+      <span>${Number(info.getValue() || 0).toFixed(6)}</span>
+    ),
+  },
+  {
     header: "Country",
     accessorKey: "requester_ip_address",
     cell: (info: any) => <CountryCell ipAddress={info.getValue()} />,
@@ -149,13 +156,7 @@ export const columns: ColumnDef<LogEntry>[] = [
     accessorKey: "end_user",
     cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
   },
-  {
-    header: "Cost",
-    accessorKey: "spend",
-    cell: (info: any) => (
-      <span>${Number(info.getValue() || 0).toFixed(6)}</span>
-    ),
-  },
+
   {
     header: "Tags",
     accessorKey: "request_tags",
