@@ -349,7 +349,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     <div className="w-full mx-4">
       <Grid numItems={1} className="gap-2 p-8 h-[75vh] w-full mt-2">
         <Col numColSpan={1}>
-          <ViewUserTeam
+          {/* <ViewUserTeam
             userID={userID}
             userRole={userRole}
             selectedTeam={selectedTeam ? selectedTeam : null}
@@ -362,7 +362,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             accessToken={accessToken}
             userSpend={teamSpend}
             selectedTeam={selectedTeam ? selectedTeam : null}
-          />
+          /> */}
 
           <ViewKeyTable
             userID={userID}
