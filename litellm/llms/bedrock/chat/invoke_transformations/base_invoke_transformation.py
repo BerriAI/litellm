@@ -270,7 +270,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 "inputText": prompt,
                 "textGenerationConfig": inference_params,
             }
-        elif provider == "meta" or provider == "llama":
+        elif provider == "meta" or provider == "llama" or provider == "deepseek_r1":
             ## LOAD CONFIG
             config = litellm.AmazonLlamaConfig.get_config()
             for k, v in config.items():

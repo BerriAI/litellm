@@ -3311,6 +3311,37 @@ def test_bedrock_deepseek_custom_prompt_dict():
         )
 
 
+def test_bedrock_deepseek_known_tokenizer_config():
+    model = "deepseek_r1/arn:aws:bedrock:us-east-1:1234:imported-model/45d34re"
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    messages = [
+        {"role": "system", "content": "You are a good assistant"},
+        {"role": "user", "content": "What is the weather in Copenhagen?"},
+    ]
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            completion(
+                model="bedrock/" + model,
+                messages=messages,
+                client=client,
+            )
+        except Exception as e:
+            traceback.print_exc()
+            print(f"Error occurred: {e}")
+
+        mock_post.assert_called_once()
+        print(mock_post.call_args.kwargs)
+        json_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert (
+            json_data["prompt"].rstrip()
+            == """<｜begin▁of▁sentence｜>You are a good assistant<｜User｜>What is the weather in Copenhagen?<｜Assistant｜><think>"""
+        )
+
+
 # test_replicate_custom_prompt_dict()
 
 # commenthing this out since we won't be always testing a custom, replicate deployment
