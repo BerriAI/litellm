@@ -105,6 +105,7 @@ class AmazonConverseConfig(BaseConfig):
             or base_model.startswith("cohere")
             or base_model.startswith("meta.llama3-1")
             or base_model.startswith("meta.llama3-2")
+            or base_model.startswith("meta.llama3-3")
             or base_model.startswith("amazon.nova")
         ):
             supported_params.append("tools")
