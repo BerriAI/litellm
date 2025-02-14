@@ -70,7 +70,7 @@ import TextArea from "antd/es/input/TextArea";
 import useKeyList from "./key_team_helpers/key_list";
 import { KeyResponse } from "./key_team_helpers/key_list";
 import { AllKeysTable } from "./all_keys_table";
-const { Option } = Select;
+import { Team } from "./key_team_helpers/key_list";
 
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
@@ -102,7 +102,7 @@ interface ViewKeyTableProps {
   setSelectedTeam: React.Dispatch<React.SetStateAction<any | null>>;
   data: any[] | null;
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
-  teams: any[] | null;
+  teams: Team[];
   premiumUser: boolean;
   currentOrg: Organization | null;
 }
@@ -480,7 +480,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
               {newModelRow !== null && (
                 <TableRow>
                   <TableCell>
-                    <Select
+                    <Select2
                       style={{ width: 200 }}
                       placeholder="Select a model"
                       onChange={handleModelSelect}
@@ -489,11 +489,11 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                       {availableModels
                         .filter((m) => !modelLimits.hasOwnProperty(m))
                         .map((m) => (
-                          <Option key={m} value={m}>
+                          <Select2.Option key={m} value={m}>
                             {m}
-                          </Option>
+                          </Select2.Option>
                         ))}
-                    </Select>
+                    </Select2>
                   </TableCell>
                   <TableCell>-</TableCell>
                   <TableCell>-</TableCell>
