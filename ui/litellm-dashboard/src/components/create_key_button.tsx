@@ -88,6 +88,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [keyOwner, setKeyOwner] = useState("you");
   const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Object | null>(team);
 
   const handleOk = () => {
     setIsModalVisible(false);
@@ -201,14 +202,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   useEffect(() => {
     let tempModelsToPick = [];
 
-    if (team) {
-      if (team.models.length > 0) {
-        if (team.models.includes("all-proxy-models")) {
+    if (selectedCreateKeyTeam) {
+      if (selectedCreateKeyTeam.models.length > 0) {
+        if (selectedCreateKeyTeam.models.includes("all-proxy-models")) {
           // if the team has all-proxy-models show all available models
           tempModelsToPick = userModels;
         } else {
           // show team models
-          tempModelsToPick = team.models;
+          tempModelsToPick = selectedCreateKeyTeam.models;
         }
       } else {
         // show all available models if the team has no models set
@@ -222,7 +223,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     tempModelsToPick = unfurlWildcardModelsInList(tempModelsToPick, userModels);
 
     setModelsToPick(tempModelsToPick);
-  }, [team, userModels]);
+    form.setFieldValue('models', []);
+  }, [selectedCreateKeyTeam, userModels]);
 
   return (
     <div>
@@ -289,7 +291,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               <Select
                 showSearch
                 placeholder="Search or select a team"
-                onChange={(value) => form.setFieldValue('team_id', value)}
+                onChange={(value) => {
+                  form.setFieldValue('team_id', value);
+                  const selectedTeam = teams?.find(team => team.team_id === value);
+                  setSelectedCreateKeyTeam(selectedTeam || null);
+                }}
                 filterOption={(input, option) => {
                   if (!option) return false;
                   const optionValue = option.children?.toString() || '';
