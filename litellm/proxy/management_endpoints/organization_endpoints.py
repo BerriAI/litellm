@@ -250,14 +250,36 @@ async def list_organization(
     return response
 
 
+@router.get(
+    "/organization/info",
+    tags=["organization management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def info_organization(organization_id: str):
+    """
+    Get the org specific information
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    response = await prisma_client.db.litellm_organizationtable.find_unique(
+        where={"organization_id": organization_id},
+        include={"litellm_budget_table": True},
+    )
+
+    return response
+
+
 @router.post(
     "/organization/info",
     tags=["organization management"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def info_organization(data: OrganizationRequest):
+async def deprecated_info_organization(data: OrganizationRequest):
     """
-    Get the org specific information
+    DEPRECATED: Use GET /organization/info instead
     """
     from litellm.proxy.proxy_server import prisma_client
 
