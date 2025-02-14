@@ -12,6 +12,7 @@ import {
   TabPanels,
   Title,
   Badge,
+  TextInput,
   Select as TremorSelect
 } from "@tremor/react";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
@@ -133,7 +134,7 @@ export default function KeyInfoView({ keyId, onClose, keyData }: KeyInfoViewProp
                   layout="vertical"
                 >
                   <Form.Item label="Key Alias" name="key_alias">
-                    <Input />
+                    <TextInput />
                   </Form.Item>
 
                   <Form.Item label="Models" name="models">
