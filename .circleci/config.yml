@@ -2050,6 +2050,7 @@ jobs:
             nvm use v18.17.0
             
             cd ui/litellm-dashboard
+            npm install
             npm test
       - run:
           name: Build UI
