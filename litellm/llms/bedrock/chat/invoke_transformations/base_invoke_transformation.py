@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.prompt_templates.factory import (
     cohere_message_pt,
     custom_prompt,
+    deepseek_r1_pt,
     prompt_factory,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -178,11 +179,15 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         ## SETUP ##
         stream = optional_params.pop("stream", None)
         custom_prompt_dict: dict = litellm_params.pop("custom_prompt_dict", None) or {}
+        hf_model_name = litellm_params.get("hf_model_name", None)
 
         provider = self.get_bedrock_invoke_provider(model)
 
         prompt, chat_history = self.convert_messages_to_prompt(
-            model, messages, provider, custom_prompt_dict
+            model=hf_model_name or model,
+            messages=messages,
+            provider=provider,
+            custom_prompt_dict=custom_prompt_dict,
         )
         inference_params = copy.deepcopy(optional_params)
         inference_params = {
@@ -266,7 +271,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 "inputText": prompt,
                 "textGenerationConfig": inference_params,
             }
-        elif provider == "meta" or provider == "llama":
+        elif provider == "meta" or provider == "llama" or provider == "deepseek_r1":
             ## LOAD CONFIG
             config = litellm.AmazonLlamaConfig.get_config()
             for k, v in config.items():
@@ -351,7 +356,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 outputText = (
                     completion_response.get("completions")[0].get("data").get("text")
                 )
-            elif provider == "meta" or provider == "llama":
+            elif provider == "meta" or provider == "llama" or provider == "deepseek_r1":
                 outputText = completion_response["generation"]
             elif provider == "mistral":
                 outputText = completion_response["outputs"][0]["text"]
@@ -664,6 +669,8 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             )
         elif provider == "cohere":
             prompt, chat_history = cohere_message_pt(messages=messages)
+        elif provider == "deepseek_r1":
+            prompt = deepseek_r1_pt(messages=messages)
         else:
             prompt = ""
             for message in messages:

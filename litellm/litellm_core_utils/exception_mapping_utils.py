@@ -223,6 +223,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 "Request Timeout Error" in error_str
                 or "Request timed out" in error_str
                 or "Timed out generating response" in error_str
+                or "The read operation timed out" in error_str
             ):
                 exception_mapping_worked = True
 
