@@ -289,7 +289,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               name="team_id"
               initialValue={team ? team.team_id : null}
               className="mt-8"
-              rules={[{ required: true, message: 'Please select a team' }]}
             >
               <Select
                 showSearch

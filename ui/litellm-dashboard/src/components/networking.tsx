@@ -2545,8 +2545,8 @@ export const teamMemberDeleteCall = async (
       },
       body: JSON.stringify({
         team_id: teamId,
-        ...(formValues.user_email && { user_email: formValues.user_email }),
-        ...(formValues.user_id && { user_id: formValues.user_id })
+        ...(formValues.user_email !== undefined && { user_email: formValues.user_email }),
+        ...(formValues.user_id !== undefined && { user_id: formValues.user_id })
       }),
     });
 
