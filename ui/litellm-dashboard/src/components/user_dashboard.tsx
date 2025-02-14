@@ -335,8 +335,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
   console.log("inside user dashboard, selected team", selectedTeam);
   return (
-    <div className="w-full mx-4">
-      <Grid numItems={1} className="gap-2 p-8 h-[75vh] w-full mt-2">
+    <div className="w-full mx-4 overflow-hidden h-[75vh]">
+      <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
         <CreateKey
             key={selectedTeam ? selectedTeam.team_id : null}

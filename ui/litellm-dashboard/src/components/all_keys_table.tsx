@@ -277,7 +277,7 @@ export function AllKeysTable({
   ];
   
   return (
-    <div className="w-full">
+    <div className="w-full h-full overflow-hidden">
       {selectedKeyId ? (
         <KeyInfoView 
           keyId={selectedKeyId} 
@@ -289,7 +289,7 @@ export function AllKeysTable({
           teams={teams}
         />
       ) : (
-        <div className="border-b py-4">
+        <div className="border-b py-4 flex-1 overflow-hidden">
           <div className="flex items-center justify-between w-full">
             <TeamFilter 
               teams={teams} 
@@ -324,15 +324,16 @@ export function AllKeysTable({
               </div>
             </div>
           </div>
-          <DataTable
-            columns={columns.filter(col => col.id !== 'expander')}
-            data={keys}
-            isLoading={isLoading}
-            getRowCanExpand={() => false}
-            renderSubComponent={() => <></>}
-          />
+          <div className="h-[32rem] overflow-auto">
+            <DataTable
+              columns={columns.filter(col => col.id !== 'expander')}
+              data={keys}
+              isLoading={isLoading}
+              getRowCanExpand={() => false}
+              renderSubComponent={() => <></>}
+            />
+          </div>
         </div>
-        
       )}
       
     </div>
