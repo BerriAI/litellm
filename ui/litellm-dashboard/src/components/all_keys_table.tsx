@@ -325,10 +325,12 @@ export function AllKeysTable({
             </div>
           </div>
           <DataTable
-        columns={columns}
-        data={keys}
-        isLoading={isLoading}
-      />
+            columns={columns.filter(col => col.id !== 'expander')}
+            data={keys}
+            isLoading={isLoading}
+            getRowCanExpand={() => false}
+            renderSubComponent={() => <></>}
+          />
         </div>
         
       )}
