@@ -3314,6 +3314,25 @@ def test_bedrock_deepseek_custom_prompt_dict():
 def test_bedrock_deepseek_known_tokenizer_config():
     model = "deepseek_r1/arn:aws:bedrock:us-east-1:1234:imported-model/45d34re"
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from unittest.mock import Mock
+    import httpx
+
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.headers = {
+        "x-amzn-bedrock-input-token-count": "20",
+        "x-amzn-bedrock-output-token-count": "30",
+    }
+
+    # The response format for deepseek_r1
+    response_data = {
+        "generation": "The weather in Copenhagen is currently sunny with a temperature of 20°C (68°F). The forecast shows clear skies throughout the day with a gentle breeze from the northwest.",
+        "stop_reason": "stop",
+        "stop_sequence": None,
+    }
+
+    mock_response.json.return_value = response_data
+    mock_response.text = json.dumps(response_data)
 
     client = HTTPHandler()
 
@@ -3322,16 +3341,12 @@ def test_bedrock_deepseek_known_tokenizer_config():
         {"role": "user", "content": "What is the weather in Copenhagen?"},
     ]
 
-    with patch.object(client, "post") as mock_post:
-        try:
-            completion(
-                model="bedrock/" + model,
-                messages=messages,
-                client=client,
-            )
-        except Exception as e:
-            traceback.print_exc()
-            print(f"Error occurred: {e}")
+    with patch.object(client, "post", return_value=mock_response) as mock_post:
+        completion(
+            model="bedrock/" + model,
+            messages=messages,
+            client=client,
+        )
 
         mock_post.assert_called_once()
         print(mock_post.call_args.kwargs)
