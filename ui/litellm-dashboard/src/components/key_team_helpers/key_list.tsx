@@ -113,7 +113,7 @@ const useKeyList = ({ selectedTeam, currentOrg, accessToken }: UseKeyListProps):
             }
             setIsLoading(true);
 
-            const data = await keyListCall(accessToken, currentOrg.organization_id, selectedTeam.team_id);
+            const data = await keyListCall(accessToken, currentOrg.organization_id, null);
             console.log("data", data);
             setKeyData(data);
             setError(null);

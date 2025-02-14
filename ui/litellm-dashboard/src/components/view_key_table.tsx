@@ -71,6 +71,7 @@ import { CopyToClipboard } from "react-copy-to-clipboard";
 import TextArea from "antd/es/input/TextArea";
 import useKeyList from "./key_team_helpers/key_list";
 import { KeyResponse } from "./key_team_helpers/key_list";
+import { AllKeysTable } from "./all_keys_table";
 const { Option } = Select;
 
 const isLocal = process.env.NODE_ENV === "development";
@@ -1015,420 +1016,55 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
   return (
     <div>
-      <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh] mb-4 mt-2">
-        <Table className="mt-5 max-h-[300px] min-h-[300px]">
-          <TableHead>
-            <TableRow>
-              <TableHeaderCell>Key Alias</TableHeaderCell>
-              <TableHeaderCell>Secret Key</TableHeaderCell>
-              <TableHeaderCell>Created</TableHeaderCell>
-              <TableHeaderCell>Expires</TableHeaderCell>
-              <TableHeaderCell>Spend (USD)</TableHeaderCell>
-              <TableHeaderCell>Budget (USD)</TableHeaderCell>
-              <TableHeaderCell>Budget Reset</TableHeaderCell>
-              <TableHeaderCell>Models</TableHeaderCell>
-              <TableHeaderCell>Rate Limits</TableHeaderCell>
-              <TableHeaderCell>Rate Limits per model</TableHeaderCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {keys &&
-              keys.map((item) => {
-                console.log(item);
-                // skip item if item.team_id == "litellm-dashboard"
-                if (item.team_id === "litellm-dashboard") {
-                  return null;
-                }
-                if (selectedTeam) {
-                  /**
-                   * if selected team id is null -> show the keys with no team id or team id's that don't exist in db
-                   */
+      <AllKeysTable 
+        keys={keys} 
+        isLoading={isLoading}
+      />
 
-                  if (
-                    selectedTeam.team_id == null &&
-                    item.team_id !== null &&
-                    !knownTeamIDs.has(item.team_id)
-                  ) {
-                    // do nothing -> returns a row with this key
-                  } else if (item.team_id != selectedTeam.team_id) {
-                    return null;
-                  }
-                  console.log(`item team id: ${item.team_id}, is returned`);
-                }
-                return (
-                  <TableRow key={item.token}>
-                    <TableCell
-                      style={{
-                        maxWidth: "2px",
-                        whiteSpace: "pre-wrap",
-                        overflow: "hidden",
-                      }}
-                    >
-                      {item.key_alias != null ?
-                        <Text>{item.key_alias}</Text>
-                      : <Text>Not Set</Text>}
-                    </TableCell>
-                    <TableCell>
-                      <Text>{item.key_name}</Text>
-                    </TableCell>
-                    <TableCell>
-                      {item.created_at != null ?
-                        <div>
-                          <p style={{ fontSize: "0.70rem" }}>
-                            {new Date(item.created_at).toLocaleDateString()}
-                          </p>
-                        </div>
-                      : <p style={{ fontSize: "0.70rem" }}>Not available</p>}
-                    </TableCell>
-                    <TableCell>
-                      {item.expires != null ?
-                        <div>
-                          <p style={{ fontSize: "0.70rem" }}>
-                            {new Date(item.expires).toLocaleDateString()}
-                          </p>
-                        </div>
-                      : <p style={{ fontSize: "0.70rem" }}>Never</p>}
-                    </TableCell>
-                    <TableCell>
-                      <Text>
-                        {(() => {
-                          try {
-                            return item.spend.toFixed(4);
-                          } catch (error) {
-                            return item.spend;
-                          }
-                        })()}
-                      </Text>
-                    </TableCell>
-                    <TableCell>
-                      {item.max_budget != null ?
-                        <Text>{item.max_budget}</Text>
-                      : <Text>Unlimited</Text>}
-                    </TableCell>
-                    <TableCell>
-                      {item.budget_reset_at != null ?
-                        <div>
-                          <p style={{ fontSize: "0.70rem" }}>
-                            {new Date(item.budget_reset_at).toLocaleString()}
-                          </p>
-                        </div>
-                      : <p style={{ fontSize: "0.70rem" }}>Never</p>}
-                    </TableCell>
-                    {/* <TableCell style={{ maxWidth: '2px' }}>
-                  <ViewKeySpendReport
-                    token={item.token}
-                    accessToken={accessToken}
-                    keySpend={item.spend}
-                    keyBudget={item.max_budget}
-                    keyName={item.key_name}
-                  />
-                </TableCell> */}
-                    {/* <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
-                  <Text>{item.team_alias && item.team_alias != "None" ? item.team_alias : item.team_id}</Text>
-                </TableCell> */}
-                    {/* <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
-                  <Text>{JSON.stringify(item.metadata).slice(0, 400)}</Text>
-                  
-                </TableCell> */}
+      {isDeleteModalOpen && (
+        <div className="fixed z-10 inset-0 overflow-y-auto">
+          <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div
+              className="fixed inset-0 transition-opacity"
+              aria-hidden="true"
+            >
+              <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
+            </div>
 
-                    <TableCell>
-                      {Array.isArray(item.models) ?
-                        <div
-                          style={{ display: "flex", flexDirection: "column" }}
-                        >
-                          {item.models.length === 0 ?
-                            <>
-                              {
-                                (
-                                  selectedTeam &&
-                                  selectedTeam.models &&
-                                  selectedTeam.models.length > 0
-                                ) ?
-                                  selectedTeam.models.map(
-                                    (model: string, index: number) =>
-                                      model === "all-proxy-models" ?
-                                        <Badge
-                                          key={index}
-                                          size={"xs"}
-                                          className="mb-1"
-                                          color="red"
-                                        >
-                                          <Text>All Proxy Models</Text>
-                                        </Badge>
-                                      : model === "all-team-models" ?
-                                        <Badge
-                                          key={index}
-                                          size={"xs"}
-                                          className="mb-1"
-                                          color="red"
-                                        >
-                                          <Text>All Team Models</Text>
-                                        </Badge>
-                                      : <Badge
-                                          key={index}
-                                          size={"xs"}
-                                          className="mb-1"
-                                          color="blue"
-                                        >
-                                          <Text>
-                                            {model.length > 30 ?
-                                              `${getModelDisplayName(model).slice(0, 30)}...`
-                                            : getModelDisplayName(model)}
-                                          </Text>
-                                        </Badge>
-                                  )
-                                  // If selected team is None or selected team's models are empty, show all models
-                                : <Badge
-                                    size={"xs"}
-                                    className="mb-1"
-                                    color="blue"
-                                  >
-                                    <Text>all-proxy-models</Text>
-                                  </Badge>
+            {/* Modal Panel */}
+            <span
+              className="hidden sm:inline-block sm:align-middle sm:h-screen"
+              aria-hidden="true"
+            >
+              &#8203;
+            </span>
 
-                              }
-                            </>
-                          : item.models.map((model: string, index: number) =>
-                              model === "all-proxy-models" ?
-                                <Badge
-                                  key={index}
-                                  size={"xs"}
-                                  className="mb-1"
-                                  color="red"
-                                >
-                                  <Text>All Proxy Models</Text>
-                                </Badge>
-                              : model === "all-team-models" ?
-                                <Badge
-                                  key={index}
-                                  size={"xs"}
-                                  className="mb-1"
-                                  color="red"
-                                >
-                                  <Text>All Team Models</Text>
-                                </Badge>
-                              : <Badge
-                                  key={index}
-                                  size={"xs"}
-                                  className="mb-1"
-                                  color="blue"
-                                >
-                                  <Text>
-                                    {model.length > 30 ?
-                                      `${getModelDisplayName(model).slice(0, 30)}...`
-                                    : getModelDisplayName(model)}
-                                  </Text>
-                                </Badge>
-                            )
-                          }
-                        </div>
-                      : null}
-                    </TableCell>
-
-                    <TableCell>
-                      <Text>
-                        TPM: {item.tpm_limit ? item.tpm_limit : "Unlimited"}{" "}
-                        <br></br> RPM:{" "}
-                        {item.rpm_limit ? item.rpm_limit : "Unlimited"}
-                      </Text>
-                    </TableCell>
-                    <TableCell>
-                      <Button
-                        size="xs"
-                        onClick={() => handleModelLimitClick(item)}
-                      >
-                        Edit Limits
-                      </Button>
-                    </TableCell>
-                    <TableCell>
-                      <Icon
-                        onClick={() => {
-                          setSelectedToken(item);
-                          setInfoDialogVisible(true);
-                        }}
-                        icon={InformationCircleIcon}
-                        size="sm"
-                      />
-
-                      <Modal
-                        open={infoDialogVisible}
-                        onCancel={() => {
-                          setInfoDialogVisible(false);
-                          setSelectedToken(null);
-                        }}
-                        footer={null}
-                        width={800}
-                      >
-                        {selectedToken && (
-                          <>
-                            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 mt-8">
-                              <Card>
-                                <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
-                                  Spend
-                                </p>
-                                <div className="mt-2 flex items-baseline space-x-2.5">
-                                  <p className="text-tremor font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
-                                    {(() => {
-                                      try {
-                                        return selectedToken.spend.toFixed(4);
-                                      } catch (error) {
-                                        return selectedToken.spend;
-                                      }
-                                    })()}
-                                  </p>
-                                </div>
-                              </Card>
-                              <Card key={item.key_name}>
-                                <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
-                                  Budget
-                                </p>
-                                <div className="mt-2 flex items-baseline space-x-2.5">
-                                  <p className="text-tremor font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
-                                    {selectedToken.max_budget != null ?
-                                      <>
-                                        {selectedToken.max_budget}
-                                        {selectedToken.budget_duration && (
-                                          <>
-                                            <br />
-                                            Budget will be reset at{" "}
-                                            {selectedToken.budget_reset_at ?
-                                              new Date(
-                                                selectedToken.budget_reset_at
-                                              ).toLocaleString()
-                                            : "Never"}
-                                          </>
-                                        )}
-                                      </>
-                                    : <>Unlimited</>}
-                                  </p>
-                                </div>
-                              </Card>
-                              <Card key={item.key_name}>
-                                <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
-                                  Expires
-                                </p>
-                                <div className="mt-2 flex items-baseline space-x-2.5">
-                                  <p className="text-tremor-default font-small text-tremor-content-strong dark:text-dark-tremor-content-strong">
-                                    {selectedToken.expires != null ?
-                                      <>
-                                        {new Date(
-                                          selectedToken.expires
-                                        ).toLocaleString(undefined, {
-                                          day: "numeric",
-                                          month: "long",
-                                          year: "numeric",
-                                          hour: "numeric",
-                                          minute: "numeric",
-                                          second: "numeric",
-                                        })}
-                                      </>
-                                    : <>Never</>}
-                                  </p>
-                                </div>
-                              </Card>
-                            </div>
-
-                            <Card className="my-4">
-                              <Title>Token Name</Title>
-                              <Text className="my-1">
-                                {selectedToken.key_alias ?
-                                  selectedToken.key_alias
-                                : selectedToken.key_name}
-                              </Text>
-                              <Title>Token ID</Title>
-                              <Text className="my-1 text-[12px]">
-                                {selectedToken.token}
-                              </Text>
-                              <Title>User ID</Title>
-                              <Text className="my-1 text-[12px]">
-                                {selectedToken.user_id}
-                              </Text>
-                              <Title>Metadata</Title>
-                              <Text className="my-1">
-                                <pre>
-                                  {JSON.stringify(selectedToken.metadata)}{" "}
-                                </pre>
-                              </Text>
-                            </Card>
-
-                            <Button
-                              className="mx-auto flex items-center"
-                              onClick={() => {
-                                setInfoDialogVisible(false);
-                                setSelectedToken(null);
-                              }}
-                            >
-                              Close
-                            </Button>
-                          </>
-                        )}
-                      </Modal>
-                      <Icon
-                        icon={PencilAltIcon}
-                        size="sm"
-                        onClick={() => handleEditClick(item)}
-                      />
-                      <Icon
-                        onClick={() => handleRegenerateClick(item)}
-                        icon={RefreshIcon}
-                        size="sm"
-                      />
-                      <Icon
-                        onClick={() => handleDelete(item)}
-                        icon={TrashIcon}
-                        size="sm"
-                      />
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-          </TableBody>
-        </Table>
-        {isDeleteModalOpen && (
-          <div className="fixed z-10 inset-0 overflow-y-auto">
-            <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-              <div
-                className="fixed inset-0 transition-opacity"
-                aria-hidden="true"
-              >
-                <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
-              </div>
-
-              {/* Modal Panel */}
-              <span
-                className="hidden sm:inline-block sm:align-middle sm:h-screen"
-                aria-hidden="true"
-              >
-                &#8203;
-              </span>
-
-              {/* Confirmation Modal Content */}
-              <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-                <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                  <div className="sm:flex sm:items-start">
-                    <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                      <h3 className="text-lg leading-6 font-medium text-gray-900">
-                        Delete Key
-                      </h3>
-                      <div className="mt-2">
-                        <p className="text-sm text-gray-500">
-                          Are you sure you want to delete this key ?
-                        </p>
-                      </div>
+            {/* Confirmation Modal Content */}
+            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <div className="sm:flex sm:items-start">
+                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
+                    <h3 className="text-lg leading-6 font-medium text-gray-900">
+                      Delete Key
+                    </h3>
+                    <div className="mt-2">
+                      <p className="text-sm text-gray-500">
+                        Are you sure you want to delete this key ?
+                      </p>
                     </div>
                   </div>
                 </div>
-                <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                  <Button onClick={confirmDelete} color="red" className="ml-2">
-                    Delete
-                  </Button>
-                  <Button onClick={cancelDelete}>Cancel</Button>
-                </div>
+              </div>
+              <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <Button onClick={confirmDelete} color="red" className="ml-2">
+                  Delete
+                </Button>
+                <Button onClick={cancelDelete}>Cancel</Button>
               </div>
             </div>
           </div>
-        )}
-      </Card>
+        </div>
+      )}
 
       {selectedToken && (
         <EditKeyModal

@@ -384,16 +384,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             data={keys}
             setData={setKeys}
           />
-          <DashboardTeam
-            teams={teams}
-            setSelectedTeam={setSelectedTeam}
-            userRole={userRole}
-            proxySettings={proxySettings}
-            setProxySettings={setProxySettings}
-            userInfo={userSpendData}
-            accessToken={accessToken}
-            setKeys={setKeys}
-          />
         </Col>
       </Grid>
     </div>
