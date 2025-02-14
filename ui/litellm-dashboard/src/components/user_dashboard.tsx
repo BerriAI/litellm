@@ -19,6 +19,7 @@ import ViewUserTeam from "./view_user_team";
 import DashboardTeam from "./dashboard_default_team";
 import Onboarding from "../app/onboarding/page";
 import { useSearchParams, useRouter } from "next/navigation";
+import { Team } from "./key_team_helpers/key_list";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
 const isLocal = process.env.NODE_ENV === "development";
@@ -56,11 +57,11 @@ interface UserDashboardProps {
   userID: string | null;
   userRole: string | null;
   userEmail: string | null;
-  teams: any[] | null;
+  teams: Team[] | null;
   keys: any[] | null;
   setUserRole: React.Dispatch<React.SetStateAction<string>>;
   setUserEmail: React.Dispatch<React.SetStateAction<string | null>>;
-  setTeams: React.Dispatch<React.SetStateAction<Object[] | null>>;
+  setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
   setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
   setOrganizations: React.Dispatch<React.SetStateAction<Organization[]>>;
   premiumUser: boolean;
@@ -108,9 +109,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     team_alias: "Default Team",
     team_id: null,
   };
-  const [selectedTeam, setSelectedTeam] = useState<any | null>(
-    teams ? teams[0] : defaultTeam
-  );
+  const [selectedTeam, setSelectedTeam] = useState<any | null>(null);
   // check if window is not undefined
   if (typeof window !== "undefined") {
     window.addEventListener("beforeunload", function () {
@@ -213,16 +212,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
               
             }
 
-            const teamsArray = [...response["teams"]];
-            if (teamsArray.length > 0) {
-              console.log(`response['teams']: ${JSON.stringify(teamsArray)}`);
-              setSelectedTeam(teamsArray[0]);
-            } else {
-              setSelectedTeam(defaultTeam);
-              
-            }
-
-            
             sessionStorage.setItem(
               "userData" + userID,
               JSON.stringify(response["keys"])
@@ -348,20 +337,16 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   return (
     <div className="w-full mx-4">
       <Grid numItems={1} className="gap-2 p-8 h-[75vh] w-full mt-2">
-        <Col numColSpan={1}>
-          <ViewUserTeam
+        <Col numColSpan={1} className="flex flex-col gap-2">
+        <CreateKey
+            key={selectedTeam ? selectedTeam.team_id : null}
             userID={userID}
+            team={selectedTeam as Team | null}
+            teams={teams as Team[]}
             userRole={userRole}
-            selectedTeam={selectedTeam ? selectedTeam : null}
             accessToken={accessToken}
-          />
-          <ViewUserSpend
-            userID={userID}
-            userRole={userRole}
-            userMaxBudget={userSpendData?.max_budget || null}
-            accessToken={accessToken}
-            userSpend={teamSpend}
-            selectedTeam={selectedTeam ? selectedTeam : null}
+            data={keys}
+            setData={setKeys}
           />
 
           <ViewKeyTable
@@ -369,30 +354,12 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             userRole={userRole}
             accessToken={accessToken}
             selectedTeam={selectedTeam ? selectedTeam : null}
+            setSelectedTeam={setSelectedTeam}
             data={keys}
             setData={setKeys}
             premiumUser={premiumUser}
             teams={teams}
             currentOrg={currentOrg}
-          />
-          <CreateKey
-            key={selectedTeam ? selectedTeam.team_id : null}
-            userID={userID}
-            team={selectedTeam ? selectedTeam : null}
-            userRole={userRole}
-            accessToken={accessToken}
-            data={keys}
-            setData={setKeys}
-          />
-          <DashboardTeam
-            teams={teams}
-            setSelectedTeam={setSelectedTeam}
-            userRole={userRole}
-            proxySettings={proxySettings}
-            setProxySettings={setProxySettings}
-            userInfo={userSpendData}
-            accessToken={accessToken}
-            setKeys={setKeys}
           />
         </Col>
       </Grid>
