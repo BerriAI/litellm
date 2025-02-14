@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { organizationListCall, organizationMemberAddCall, Member, modelAvailableCall } from "./networking";
+import { Team } from "./key_team_helpers/key_list";
 import {
   Col,
   Grid,
@@ -15,10 +16,10 @@ if (isLocal != true) {
   console.log = function() {};
 }
 interface TeamProps {
-  teams: any[] | null;
+  teams: Team[] | null;
   searchParams: any;
   accessToken: string | null;
-  setTeams: React.Dispatch<React.SetStateAction<Object[] | null>>;
+  setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
   userID: string | null;
   userRole: string | null;
   premiumUser: boolean;
