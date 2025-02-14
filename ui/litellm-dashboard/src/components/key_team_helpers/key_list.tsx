@@ -31,7 +31,7 @@ export interface KeyResponse {
     soft_budget_cooldown: boolean;
     blocked: boolean;
     litellm_budget_table: Record<string, unknown>;
-    org_id: string | null;
+    organization_id: string | null;
     created_at: string;
     updated_at: string;
     team_spend: number;
