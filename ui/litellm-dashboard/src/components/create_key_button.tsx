@@ -37,7 +37,7 @@ const { Option } = Select;
 
 export interface Team {
   team_id: string;
-  team_name?: string;
+  team_alias?: string;
   models: string[];
   max_budget: number | null;
   budget_duration: string | null;
