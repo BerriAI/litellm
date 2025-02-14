@@ -108,9 +108,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     team_alias: "Default Team",
     team_id: null,
   };
-  const [selectedTeam, setSelectedTeam] = useState<any | null>(
-    teams ? teams[0] : defaultTeam
-  );
+  const [selectedTeam, setSelectedTeam] = useState<any | null>(null);
   // check if window is not undefined
   if (typeof window !== "undefined") {
     window.addEventListener("beforeunload", function () {
@@ -213,16 +211,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
               
             }
 
-            const teamsArray = [...response["teams"]];
-            if (teamsArray.length > 0) {
-              console.log(`response['teams']: ${JSON.stringify(teamsArray)}`);
-              setSelectedTeam(teamsArray[0]);
-            } else {
-              setSelectedTeam(defaultTeam);
-              
-            }
-
-            
             sessionStorage.setItem(
               "userData" + userID,
               JSON.stringify(response["keys"])
