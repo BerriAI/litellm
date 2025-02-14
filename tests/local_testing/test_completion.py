@@ -3243,9 +3243,9 @@ def test_replicate_custom_prompt_dict():
 
 
 def test_bedrock_deepseek_custom_prompt_dict():
-    model = "deepseek/deepseek-chat"
+    model = "llama/arn:aws:bedrock:us-east-1:1234:imported-model/45d34re"
     litellm.register_prompt_template(
-        model="deepseek/deepseek-chat",
+        model=model,
         tokenizer_config={
             "add_bos_token": True,
             "add_eos_token": False,
@@ -3282,7 +3282,7 @@ def test_bedrock_deepseek_custom_prompt_dict():
             "chat_template": "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% set ns = namespace(is_first=false, is_tool=false, is_output_first=true, system_prompt='') %}{%- for message in messages %}{%- if message['role'] == 'system' %}{% set ns.system_prompt = message['content'] %}{%- endif %}{%- endfor %}{{bos_token}}{{ns.system_prompt}}{%- for message in messages %}{%- if message['role'] == 'user' %}{%- set ns.is_tool = false -%}{{'<｜User｜>' + message['content']}}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is none %}{%- set ns.is_tool = false -%}{%- for tool in message['tool_calls']%}{%- if not ns.is_first %}{{'<｜Assistant｜><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\\n' + '```json' + '\\n' + tool['function']['arguments'] + '\\n' + '```' + '<｜tool▁call▁end｜>'}}{%- set ns.is_first = true -%}{%- else %}{{'\\n' + '<｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\\n' + '```json' + '\\n' + tool['function']['arguments'] + '\\n' + '```' + '<｜tool▁call▁end｜>'}}{{'<｜tool▁calls▁end｜><｜end▁of▁sentence｜>'}}{%- endif %}{%- endfor %}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is not none %}{%- if ns.is_tool %}{{'<｜tool▁outputs▁end｜>' + message['content'] + '<｜end▁of▁sentence｜>'}}{%- set ns.is_tool = false -%}{%- else %}{% set content = message['content'] %}{% if '</think>' in content %}{% set content = content.split('</think>')[-1] %}{% endif %}{{'<｜Assistant｜>' + content + '<｜end▁of▁sentence｜>'}}{%- endif %}{%- endif %}{%- if message['role'] == 'tool' %}{%- set ns.is_tool = true -%}{%- if ns.is_output_first %}{{'<｜tool▁outputs▁begin｜><｜tool▁output▁begin｜>' + message['content'] + '<｜tool▁output▁end｜>'}}{%- set ns.is_output_first = false %}{%- else %}{{'\\n<｜tool▁output▁begin｜>' + message['content'] + '<｜tool▁output▁end｜>'}}{%- endif %}{%- endif %}{%- endfor -%}{% if ns.is_tool %}{{'<｜tool▁outputs▁end｜>'}}{% endif %}{% if add_generation_prompt and not ns.is_tool %}{{'<｜Assistant｜><think>\\n'}}{% endif %}",
         },
     )
-    assert "deepseek/deepseek-chat" in litellm.known_tokenizer_config
+    assert model in litellm.known_tokenizer_config
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
@@ -3290,7 +3290,7 @@ def test_bedrock_deepseek_custom_prompt_dict():
     with patch.object(client, "post") as mock_post:
         try:
             completion(
-                model="deepseek/deepseek-chat",
+                model="bedrock/" + model,
                 messages=messages,
                 client=client,
             )
@@ -3298,6 +3298,9 @@ def test_bedrock_deepseek_custom_prompt_dict():
             pass
 
         mock_post.assert_called_once()
+        mock_post.call_args.kwargs["json"]["messages"][0][
+            "content"
+        ] == "You are a good assistant"
 
 
 # test_replicate_custom_prompt_dict()

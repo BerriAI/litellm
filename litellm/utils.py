@@ -5230,11 +5230,18 @@ def register_prompt_template(
     ```
     """
     complete_model = model
-    model = get_llm_provider(model=model)[0]
-    potential_models = [model, complete_model]
+    potential_models = [complete_model]
+    try:
+        model = get_llm_provider(model=model)[0]
+        potential_models.append(model)
+    except Exception:
+        pass
     if tokenizer_config:
         for m in potential_models:
-            litellm.known_tokenizer_config[m] = tokenizer_config
+            litellm.known_tokenizer_config[m] = {
+                "tokenizer": tokenizer_config,
+                "status": "success",
+            }
     else:
         for m in potential_models:
             litellm.custom_prompt_dict[m] = {
