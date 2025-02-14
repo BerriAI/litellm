@@ -1,9 +1,21 @@
 import React, { useState } from "react";
-import { Card, Text, Button, Grid, Col, TabGroup, TabList, Tab, TabPanels, TabPanel, Title, Badge } from "@tremor/react";
-import { KeyResponse } from "./all_keys_table";
+import {
+  Card,
+  Text,
+  Button,
+  Grid,
+  Col,
+  Tab,
+  TabList,
+  TabGroup,
+  TabPanel,
+  TabPanels,
+  Title,
+  Badge,
+  Select as TremorSelect
+} from "@tremor/react";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
-import { Form, Input, InputNumber, message } from "antd";
-
+import { Form, Input, InputNumber, message, Select } from "antd";
 interface KeyInfoViewProps {
   keyId: string;
   onClose: () => void;
@@ -62,7 +74,6 @@ export default function KeyInfoView({ keyId, onClose, keyData }: KeyInfoViewProp
         <TabList className="mb-4">
           <Tab>Overview</Tab>
           <Tab>Settings</Tab>
-          <Tab>Usage</Tab>
         </TabList>
 
         <TabPanels>
@@ -125,8 +136,27 @@ export default function KeyInfoView({ keyId, onClose, keyData }: KeyInfoViewProp
                     <Input />
                   </Form.Item>
 
+                  <Form.Item label="Models" name="models">
+                    <Select
+                      mode="multiple"
+                      placeholder="Select models"
+                      style={{ width: "100%" }}
+                    >
+                      <Select.Option value="all-team-models">All Team Models</Select.Option>
+                      {/* Add model options based on team models */}
+                    </Select>
+                  </Form.Item>
+
                   <Form.Item label="Max Budget (USD)" name="max_budget">
                     <InputNumber step={0.01} precision={2} style={{ width: "100%" }} />
+                  </Form.Item>
+
+                  <Form.Item label="Reset Budget" name="budget_duration">
+                    <Select placeholder="n/a">
+                      <Select.Option value="daily">daily</Select.Option>
+                      <Select.Option value="weekly">weekly</Select.Option>
+                      <Select.Option value="monthly">monthly</Select.Option>
+                    </Select>
                   </Form.Item>
 
                   <Form.Item label="TPM Limit" name="tpm_limit">
@@ -135,6 +165,18 @@ export default function KeyInfoView({ keyId, onClose, keyData }: KeyInfoViewProp
 
                   <Form.Item label="RPM Limit" name="rpm_limit">
                     <InputNumber style={{ width: "100%" }} />
+                  </Form.Item>
+
+                  <Form.Item label="Guardrails" name="guardrails">
+                    <Select
+                      mode="tags"
+                      style={{ width: "100%" }}
+                      placeholder="Select or enter guardrails"
+                    />
+                  </Form.Item>
+
+                  <Form.Item label="Metadata" name="metadata">
+                    <Input.TextArea rows={10} />
                   </Form.Item>
 
                   <div className="flex justify-end gap-2 mt-6">
@@ -225,13 +267,6 @@ export default function KeyInfoView({ keyId, onClose, keyData }: KeyInfoViewProp
                   </div>
                 </div>
               )}
-            </Card>
-          </TabPanel>
-          {/* Usage Panel */}
-          <TabPanel>
-            <Card>
-              <Title>Usage Statistics</Title>
-              {/* Add usage statistics here */}
             </Card>
           </TabPanel>
         </TabPanels>
