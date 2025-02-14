@@ -51,16 +51,18 @@ export function KeyEditView({
   useEffect(() => {
     const fetchUserModels = async () => {
       try {
-        const model_available = await modelAvailableCall(
-          accessToken,
-          userID,
-          userRole
-        );
-        let available_model_names = model_available["data"].map(
-          (element: { id: string }) => element.id
-        );
-        console.log("available_model_names:", available_model_names);
-        setUserModels(available_model_names);
+        if (accessToken && userID && userRole) {
+          const model_available = await modelAvailableCall(
+            accessToken,
+            userID,
+            userRole
+          );
+          let available_model_names = model_available["data"].map(
+            (element: { id: string }) => element.id
+          );
+          console.log("available_model_names:", available_model_names);
+          setUserModels(available_model_names);
+        }
       } catch (error) {
         console.error("Error fetching user models:", error);
       }
@@ -159,7 +161,7 @@ export function KeyEditView({
         <Button variant="light" onClick={onCancel}>
           Cancel
         </Button>
-        <Button type="primary" htmlType="submit">
+        <Button>
           Save Changes
         </Button>
       </div>
