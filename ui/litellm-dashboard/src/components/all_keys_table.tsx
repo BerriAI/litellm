@@ -325,13 +325,15 @@ export function AllKeysTable({
               </div>
             </div>
           </div>
-        </div>
-      )}
-      <DataTable
+          <DataTable
         columns={columns}
         data={keys}
         isLoading={isLoading}
       />
+        </div>
+        
+      )}
+      
     </div>
   );
 }
