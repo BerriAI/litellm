@@ -56,6 +56,11 @@ const columns: ColumnDef<KeyResponse>[] = [
       ) : null,
   },
   {
+    header: "Key ID",
+    accessorKey: "token",
+    cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
+  },
+  {
     header: "Organization",
     accessorKey: "organization_id",
     cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
@@ -299,8 +304,6 @@ export function AllKeysTable({
       <DataTable
         columns={columns}
         data={keys}
-        renderSubComponent={({ row }) => <KeyViewer row={row} />}
-        getRowCanExpand={() => true}
         isLoading={isLoading}
       />
     </div>
