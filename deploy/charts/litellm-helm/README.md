@@ -77,7 +77,7 @@ proxyConfigMap:
 # proxy_config is ignored in this mode
 ```
 
-#### Example `environmentSecrets` Secret 
+#### Example `environmentSecrets` Secret
 
 
 ```
@@ -97,6 +97,7 @@ type: Opaque
 | `db.endpoint`                                              | If `db.useExisting` is `true`, this is the IP, Hostname or Service Name of the Postgres server to connect to.                                                                         | `localhost`  |
 | `db.database`                                              | If `db.useExisting` is `true`, the name of the existing database to connect to.                                                                                                       | `litellm`  |
 | `db.url`                                              | If `db.useExisting` is `true`, the connection url of the existing database to connect to can be overwritten with this value.                                                                                                       | `postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_HOST)/$(DATABASE_NAME)`  |
+| `db.secret.enabled`                                        | If `db.secretenabled` is `true`, a Kubernetes Secret that contains credentials will be created.                                                                                       | `true`      |
 | `db.secret.name`                                           | If `db.useExisting` is `true`, the name of the Kubernetes Secret that contains credentials.                                                                                           | `postgres`  |
 | `db.secret.usernameKey`                                    | If `db.useExisting` is `true`, the name of the key within the Kubernetes Secret that holds the username for authenticating with the Postgres instance.                                | `username`  |
 | `db.secret.passwordKey`                                    | If `db.useExisting` is `true`, the name of the key within the Kubernetes Secret that holds the password associates with the above user.                                               | `password`  |
