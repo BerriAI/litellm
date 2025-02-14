@@ -6,27 +6,7 @@ import { Select, SelectItem } from "@tremor/react"
 import { Button } from "@tremor/react"
 import KeyInfoView from "./key_info_view";
 import { Tooltip } from "antd";
-import { Team } from "./key_team_helpers/key_list";
-/**
- * This type is based on our KeyResponse (or ItemData) structure from view_key_table.tsx.
- * Adjust or extend as needed.
- */
-export interface KeyResponse {
-  key_alias: string | null;
-  key_name: string;
-  team_id: string | null;
-  organization_id: string | null;
-  created_at: string;
-  expires: string | null;
-  spend: number;
-  max_budget: number | null;
-  budget_reset_at: string | null;
-  models: string[];
-  tpm_limit: number | null;
-  rpm_limit: number | null;
-  metadata: any;
-  token: string;
-}
+import { Team, KeyResponse } from "./key_team_helpers/key_list";
 
 interface AllKeysTableProps {
   keys: KeyResponse[];
