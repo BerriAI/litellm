@@ -18,7 +18,7 @@ interface AllKeysTableProps {
   };
   onPageChange: (page: number) => void;
   pageSize?: number;
-  teams: Team[];
+  teams: Team[] | null;
   selectedTeam: Team | null;
   setSelectedTeam: (team: Team | null) => void;
   accessToken: string | null;
@@ -98,7 +98,7 @@ const TeamFilter = ({
   selectedTeam, 
   setSelectedTeam 
 }: { 
-  teams: Team[];
+  teams: Team[] | null;
   selectedTeam: Team | null;
   setSelectedTeam: (team: Team | null) => void;
 }) => {

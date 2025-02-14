@@ -9,6 +9,8 @@ export interface Team {
     budget_duration: string | null;
     tpm_limit: number | null;
     rpm_limit: number | null;
+    organization_id: string;
+    created_at: string;
 }
 
 export interface KeyResponse {
