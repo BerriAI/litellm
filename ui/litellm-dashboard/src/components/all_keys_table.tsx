@@ -113,7 +113,15 @@ function KeyViewer({ row }: { row: Row<KeyResponse> }) {
   );
 }
 
-const TeamFilter = ({ teams, selectedTeam, setSelectedTeam }) => {
+const TeamFilter = ({ 
+  teams, 
+  selectedTeam, 
+  setSelectedTeam 
+}: { 
+  teams: Team[];
+  selectedTeam: Team | null;
+  setSelectedTeam: (team: Team | null) => void;
+}) => {
     const handleTeamChange = (value: string) => {
       const team = teams?.find(t => t.team_id === value);
       setSelectedTeam(team || null);
