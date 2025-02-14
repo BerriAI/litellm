@@ -80,7 +80,29 @@ const getPredefinedTags = (data: any[] | null) => {
   return uniqueTags;
 }
 
+const getTeamModels = (team: Team | null, allAvailableModels: string[]): string[] => {
+  let tempModelsToPick = [];
 
+  if (team) {
+    if (team.models.length > 0) {
+      if (team.models.includes("all-proxy-models")) {
+        // if the team has all-proxy-models show all available models
+        tempModelsToPick = allAvailableModels;
+      } else {
+        // show team models
+        tempModelsToPick = team.models;
+      }
+    } else {
+      // show all available models if the team has no models set
+      tempModelsToPick = allAvailableModels;
+    }
+  } else {
+    // no team set, show all available models
+    tempModelsToPick = allAvailableModels;
+  }
+
+  return unfurlWildcardModelsInList(tempModelsToPick, allAvailableModels);
+};
 
 const CreateKey: React.FC<CreateKeyProps> = ({
   userID,
@@ -212,29 +234,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   };
 
   useEffect(() => {
-    let tempModelsToPick = [];
-
-    if (selectedCreateKeyTeam) {
-      if (selectedCreateKeyTeam.models.length > 0) {
-        if (selectedCreateKeyTeam.models.includes("all-proxy-models")) {
-          // if the team has all-proxy-models show all available models
-          tempModelsToPick = userModels;
-        } else {
-          // show team models
-          tempModelsToPick = selectedCreateKeyTeam.models;
-        }
-      } else {
-        // show all available models if the team has no models set
-        tempModelsToPick = userModels;
-      }
-    } else {
-      // no team set, show all available models
-      tempModelsToPick = userModels;
-    }
-
-    tempModelsToPick = unfurlWildcardModelsInList(tempModelsToPick, userModels);
-
-    setModelsToPick(tempModelsToPick);
+    const models = getTeamModels(selectedCreateKeyTeam, userModels);
+    setModelsToPick(models);
     form.setFieldValue('models', []);
   }, [selectedCreateKeyTeam, userModels]);
 
