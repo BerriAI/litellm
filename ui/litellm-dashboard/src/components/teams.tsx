@@ -53,16 +53,17 @@ import {
 } from "@tremor/react";
 import { CogIcon } from "@heroicons/react/outline";
 import AvailableTeamsPanel from "@/components/team/available_teams";
+import type { Team } from "./key_team_helpers/key_list";
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 if (isLocal != true) {
   console.log = function() {};
 }
 interface TeamProps {
-  teams: any[] | null;
+  teams: Team[] | null;
   searchParams: any;
   accessToken: string | null;
-  setTeams: React.Dispatch<React.SetStateAction<Object[] | null>>;
+  setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
   userID: string | null;
   userRole: string | null;
   currentOrg: Organization | null;  
