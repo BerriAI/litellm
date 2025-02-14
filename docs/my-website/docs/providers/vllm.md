@@ -16,15 +16,15 @@ LiteLLM supports all models on VLLM.
 # Quick Start
 
 ## Usage - litellm.completion (calling OpenAI compatible endpoint)
-vLLM Provides an OpenAI compatible endpoints - here's how to call it with LiteLLM 
+vLLM Provides an OpenAI compatible endpoints - here's how to call it with LiteLLM
 
 In order to use litellm to call a hosted vllm server add the following to your completion call
 
-* `model="hosted_vllm/<your-vllm-model-name>"` 
+* `model="hosted_vllm/<your-vllm-model-name>"`
 * `api_base = "your-hosted-vllm-server"`
 
 ```python
-import litellm 
+import litellm
 
 response = litellm.completion(
             model="hosted_vllm/facebook/opt-125m", # pass the vllm model name
@@ -41,7 +41,7 @@ print(response)
 
 Here's how to call an OpenAI-Compatible Endpoint with the LiteLLM Proxy Server
 
-1. Modify the config.yaml 
+1. Modify the config.yaml
 
   ```yaml
   model_list:
@@ -51,7 +51,7 @@ Here's how to call an OpenAI-Compatible Endpoint with the LiteLLM Proxy Server
         api_base: https://hosted-vllm-api.co      # add api base for OpenAI compatible provider
   ```
 
-2. Start the proxy 
+2. Start the proxy
 
   ```bash
   $ litellm --config /path/to/config.yaml
@@ -97,7 +97,7 @@ Here's how to call an OpenAI-Compatible Endpoint with the LiteLLM Proxy Server
           "role": "user",
           "content": "what llm are you"
           }
-      ],
+      ]
   }'
   ```
   </TabItem>
@@ -111,7 +111,7 @@ Here's how to call an OpenAI-Compatible Endpoint with the LiteLLM Proxy Server
 <TabItem value="sdk" label="SDK">
 
 ```python
-from litellm import embedding   
+from litellm import embedding
 import os
 
 os.environ["HOSTED_VLLM_API_BASE"] = "http://localhost:8000"
@@ -135,7 +135,7 @@ model_list:
         api_base: https://hosted-vllm-api.co      # add api base for OpenAI compatible provider
 ```
 
-2. Start the proxy 
+2. Start the proxy
 
 ```bash
 $ litellm --config /path/to/config.yaml
@@ -143,7 +143,7 @@ $ litellm --config /path/to/config.yaml
 # RUNNING on http://0.0.0.0:4000
 ```
 
-3. Test it! 
+3. Test it!
 
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/embeddings' \
@@ -157,14 +157,14 @@ curl -L -X POST 'http://0.0.0.0:4000/embeddings' \
 </TabItem>
 </Tabs>
 
-## (Deprecated) for `vllm pip package` 
+## (Deprecated) for `vllm pip package`
 ### Using - `litellm.completion`
 
 ```
 pip install litellm vllm
 ```
 ```python
-import litellm 
+import litellm
 
 response = litellm.completion(
             model="vllm/facebook/opt-125m", # add a vllm prefix so litellm knows the custom_llm_provider==vllm
@@ -186,7 +186,7 @@ provider = "vllm"
 messages = [[{"role": "user", "content": "Hey, how's it going"}] for _ in range(5)]
 
 response_list = batch_completion(
-            model=model_name, 
+            model=model_name,
             custom_llm_provider=provider, # can easily switch to huggingface, replicate, together ai, sagemaker, etc.
             messages=messages,
             temperature=0.2,
@@ -199,7 +199,7 @@ print(response_list)
 For models with special prompt templates (e.g. Llama2), we format the prompt to fit their template.
 
 **What if we don't support a model you need?**
-You can also specify you're own custom prompt formatting, in case we don't have your model covered yet. 
+You can also specify you're own custom prompt formatting, in case we don't have your model covered yet.
 
 **Does this mean you have to specify a prompt for all models?**
 No. By default we'll concatenate your message content to make a prompt (expected format for Bloom, T-5, Llama-2 base models, etc.)
@@ -226,8 +226,8 @@ def default_pt(messages):
 
 #### Custom prompt templates
 
-```python 
-# Create your own custom prompt template works 
+```python
+# Create your own custom prompt template works
 litellm.register_prompt_template(
 	model="togethercomputer/LLaMA-2-7B-32K",
 	roles={
@@ -235,10 +235,10 @@ litellm.register_prompt_template(
                 "pre_message": "[INST] <<SYS>>\n",
                 "post_message": "\n<</SYS>>\n [/INST]\n"
             },
-            "user": { 
+            "user": {
                 "pre_message": "[INST] ",
                 "post_message": " [/INST]\n"
-            }, 
+            },
             "assistant": {
                 "pre_message": "\n",
                 "post_message": "\n",
