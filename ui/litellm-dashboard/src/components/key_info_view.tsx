@@ -26,9 +26,10 @@ interface KeyInfoViewProps {
   onClose: () => void;
   keyData: KeyResponse | undefined;
   accessToken: string | null;
+  teams: any[] | null;
 }
 
-export default function KeyInfoView({ keyId, onClose, keyData, accessToken }: KeyInfoViewProps) {
+export default function KeyInfoView({ keyId, onClose, keyData, accessToken, teams }: KeyInfoViewProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -234,6 +235,7 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken }: Ke
                   keyData={keyData}
                   onCancel={() => setIsEditing(false)}
                   onSubmit={handleKeyUpdate}
+                  teams={teams}
                 />
               ) : (
                 <div className="space-y-4">

@@ -7,10 +7,31 @@ interface KeyEditViewProps {
   keyData: KeyResponse;
   onCancel: () => void;
   onSubmit: (values: any) => Promise<void>;
+  teams?: any[] | null;
 }
 
-export function KeyEditView({ keyData, onCancel, onSubmit }: KeyEditViewProps) {
+// Add this helper function
+const getAvailableModelsForKey = (keyData: KeyResponse, teams: any[] | null): string[] => {
+  // If no teams data is available, return empty array
+  console.log("getAvailableModelsForKey:", teams);
+  if (!teams || !keyData.team_id) {
+    return [];
+  }
+
+  // Find the team that matches the key's team_id
+  const keyTeam = teams.find(team => team.team_id === keyData.team_id);
+  
+  // If team found and has models, return those models
+  if (keyTeam?.models) {
+    return keyTeam.models;
+  }
+
+  return [];
+};
+
+export function KeyEditView({ keyData, onCancel, onSubmit, teams }: KeyEditViewProps) {
   const [form] = Form.useForm();
+  const availableModels = getAvailableModelsForKey(keyData, teams);
 
   // Convert API budget duration to form format
   const getBudgetDuration = (duration: string | null) => {
@@ -48,8 +69,16 @@ export function KeyEditView({ keyData, onCancel, onSubmit }: KeyEditViewProps) {
           placeholder="Select models"
           style={{ width: "100%" }}
         >
-          <Select.Option value="all-team-models">All Team Models</Select.Option>
-          {/* Add model options based on team models */}
+          {/* Only show All Team Models if team has models */}
+          {availableModels.length > 0 && (
+            <Select.Option value="all-team-models">All Team Models</Select.Option>
+          )}
+          {/* Show available team models */}
+          {availableModels.map(model => (
+            <Select.Option key={model} value={model}>
+              {model}
+            </Select.Option>
+          ))}
         </Select>
       </Form.Item>
 

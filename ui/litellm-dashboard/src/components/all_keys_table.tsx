@@ -291,6 +291,7 @@ export function AllKeysTable({
           onClose={() => setSelectedKeyId(null)}
           keyData={keys.find(k => k.token === selectedKeyId)}
           accessToken={accessToken}
+          teams={teams}
         />
       ) : (
         <div className="border-b py-4">
