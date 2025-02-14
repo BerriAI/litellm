@@ -807,25 +807,6 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         </div>
       )}
 
-      {selectedToken && (
-        <EditKeyModal
-          visible={editModalVisible}
-          onCancel={handleEditCancel}
-          token={selectedToken}
-          onSubmit={handleEditSubmit}
-        />
-      )}
-
-      {selectedToken && (
-        <ModelLimitModal
-          visible={modelLimitModalVisible}
-          onCancel={() => setModelLimitModalVisible(false)}
-          token={selectedToken}
-          onSubmit={handleModelLimitSubmit}
-          accessToken={accessToken}
-        />
-      )}
-
       {/* Regenerate Key Form Modal */}
       <Modal
         title="Regenerate API Key"
