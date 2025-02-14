@@ -40,6 +40,7 @@ interface AllKeysTableProps {
   teams: Team[];
   selectedTeam: Team | null;
   setSelectedTeam: (team: Team | null) => void;
+  accessToken: string | null;
 }
 
 // Define columns similar to our logs table
@@ -151,7 +152,8 @@ export function AllKeysTable({
   pageSize = 50,
   teams,
   selectedTeam,
-  setSelectedTeam
+  setSelectedTeam,
+  accessToken
 }: AllKeysTableProps) {
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
 
@@ -288,6 +290,7 @@ export function AllKeysTable({
           keyId={selectedKeyId} 
           onClose={() => setSelectedKeyId(null)}
           keyData={keys.find(k => k.token === selectedKeyId)}
+          accessToken={accessToken}
         />
       ) : (
         <div className="border-b py-4">
