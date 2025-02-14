@@ -42,6 +42,8 @@ import {
   BarChart,
   TextInput,
   Textarea,
+  Select,
+  SelectItem,
 } from "@tremor/react";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import {
@@ -49,8 +51,6 @@ import {
   getModelDisplayName,
 } from "./key_team_helpers/fetch_available_models_team_key";
 import {
-  Select as Select3,
-  SelectItem,
   MultiSelect,
   MultiSelectItem,
 } from "@tremor/react";
@@ -62,7 +62,6 @@ import {
   Select as Select2,
   InputNumber,
   message,
-  Select,
   Tooltip,
   DatePicker,
 } from "antd";
@@ -140,6 +139,35 @@ interface CombinedLimit {
 interface CombinedLimits {
   [key: string]: CombinedLimit;  // Index signature allowing string keys
 }
+
+const TeamFilter = ({ teams, selectedTeam, setSelectedTeam }) => {
+  const handleTeamChange = (value: string) => {
+    const team = teams?.find(t => t.team_id === value);
+    setSelectedTeam(team || null);
+  };
+
+  return (
+    <div className="mb-4">
+      <div className="flex items-center gap-2">
+        <span className="text-sm text-gray-600">Where Team is</span>
+        <Select
+          value={selectedTeam?.team_id || ""}
+          onValueChange={handleTeamChange}
+          placeholder="Team ID"
+          className="w-[400px]"
+        >
+          <SelectItem value="team_id">Team ID</SelectItem>
+          {teams?.map((team) => (
+            <SelectItem key={team.team_id} value={team.team_id}>
+              <span className="font-medium">{team.team_alias}</span>{" "}
+              <span className="text-gray-500">({team.team_id})</span>
+            </SelectItem>
+          ))}
+        </Select>
+      </div>
+    </div>
+  );
+};
 
 const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   userID,
@@ -521,7 +549,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
               className="mt-8"
               help="the team this key belongs to"
             >
-              <Select3 
+              <Select2 
             
               value={token.team_alias}
               >
@@ -535,7 +563,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     <span className="text-gray-500">({team_obj.team_id})</span>
                   </SelectItem>
                 ))}
-              </Select3>
+              </Select2>
             </Form.Item>
 
             <Form.Item
@@ -1055,39 +1083,12 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
   return (
     <div>
-      {/* Filter Controls */}
-      {/* <div className="mb-4 flex space-x-4">
-        <Select2
-          showSearch
-          value={selectedTeam?.team_id || ""}
-          onChange={(teamId) => {
-            const team = teams?.find(t => t.team_id === teamId);
-            setSelectedTeam(team || null);
-          }}
-          placeholder="Filter by Team"
-        >
-          <SelectItem value="">All Teams</SelectItem>
-          {teams?.map((team) => (
-            <SelectItem key={team.team_id} value={team.team_id}>
-              <span className="font-bold">{team.team_alias}</span>{" "}
-              <span className="text-gray-500">({team.team_id})</span>
-            </SelectItem>
-          ))}
-        </Select2>
-        <Select3
-          value={keyAliasFilter}
-          onValueChange={(value) => setKeyAliasFilter(value)}
-          placeholder="Filter by Key Alias"
-        >
-          <SelectItem value="">All Key Aliases</SelectItem>
-          {uniqueKeyAliases.map((alias) => (
-            <SelectItem key={alias} value={alias}>
-              {alias}
-            </SelectItem>
-          ))}
-        </Select3>
-      </div> */}
-
+      <TeamFilter 
+        teams={teams} 
+        selectedTeam={selectedTeam} 
+        setSelectedTeam={setSelectedTeam} 
+      />
+      
       <AllKeysTable 
         keys={keys}
         isLoading={isLoading}
