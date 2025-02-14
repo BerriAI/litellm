@@ -35,14 +35,25 @@ import { Tooltip } from 'antd';
 
 const { Option } = Select;
 
+export interface Team {
+  team_id: string;
+  team_name?: string;
+  models: string[];
+  max_budget: number | null;
+  budget_duration: string | null;
+  tpm_limit: number | null;
+  rpm_limit: number | null;
+}
+
+
 interface CreateKeyProps {
   userID: string;
-  team: any | null;
+  team: Team | null;
   userRole: string | null;
   accessToken: string;
   data: any[] | null;
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
-  teams: any[] | null;
+  teams: Team[] | null;
 }
 
 const getPredefinedTags = (data: any[] | null) => {
@@ -70,6 +81,7 @@ const getPredefinedTags = (data: any[] | null) => {
 }
 
 
+
 const CreateKey: React.FC<CreateKeyProps> = ({
   userID,
   team,
@@ -88,7 +100,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [keyOwner, setKeyOwner] = useState("you");
   const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
-  const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Object | null>(team);
+  const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
 
   const handleOk = () => {
     setIsModalVisible(false);

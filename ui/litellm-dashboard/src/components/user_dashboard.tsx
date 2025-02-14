@@ -340,8 +340,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
         <CreateKey
             key={selectedTeam ? selectedTeam.team_id : null}
             userID={userID}
-            team={selectedTeam ? selectedTeam : null}
-            teams={teams}
+            team={selectedTeam as Team | null}
+            teams={teams as Team[]}
             userRole={userRole}
             accessToken={accessToken}
             data={keys}
