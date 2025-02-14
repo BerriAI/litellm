@@ -6,6 +6,7 @@ import { Select, SelectItem } from "@tremor/react"
 import { Button } from "@tremor/react"
 import KeyInfoView from "./key_info_view";
 import { Tooltip } from "antd";
+import { Team } from "./key_team_helpers/key_list";
 /**
  * This type is based on our KeyResponse (or ItemData) structure from view_key_table.tsx.
  * Adjust or extend as needed.
@@ -180,7 +181,7 @@ export function AllKeysTable({
       accessorKey: "token",
       cell: (info) => (
         <div className="overflow-hidden">
-          <Tooltip title={info.getValue()}>
+          <Tooltip title={info.getValue() as string}>
             <Button 
               size="xs"
               variant="light"
@@ -211,14 +212,14 @@ export function AllKeysTable({
     {
       header: "Secret Key",
       accessorKey: "key_name",
-      cell: (info) => <span className="font-mono text-xs">{info.getValue()}</span>,
+      cell: (info) => <span className="font-mono text-xs">{info.getValue() as string}</span>,
     },
     {
       header: "Created",
       accessorKey: "created_at",
       cell: (info) => {
         const value = info.getValue();
-        return value ? new Date(value).toLocaleDateString() : "-";
+        return value ? new Date(value as string).toLocaleDateString() : "-";
       },
     },
     {
@@ -226,7 +227,7 @@ export function AllKeysTable({
       accessorKey: "expires",
       cell: (info) => {
         const value = info.getValue();
-        return value ? new Date(value).toLocaleDateString() : "Never";
+        return value ? new Date(value as string).toLocaleDateString() : "Never";
       },
     },
     {
@@ -247,7 +248,7 @@ export function AllKeysTable({
       accessorKey: "budget_reset_at",
       cell: (info) => {
         const value = info.getValue();
-        return value ? new Date(value).toLocaleString() : "Never";
+        return value ? new Date(value as string).toLocaleString() : "Never";
       },
     },
     {
