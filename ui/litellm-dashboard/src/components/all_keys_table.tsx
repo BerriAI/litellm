@@ -2,6 +2,7 @@
 import React from "react";
 import { ColumnDef, Row } from "@tanstack/react-table";
 import { DataTable } from "./view_logs/table";
+import { Select, SelectItem } from "@tremor/react"
 
 /**
  * This type is based on our KeyResponse (or ItemData) structure from view_key_table.tsx.
@@ -34,6 +35,9 @@ interface AllKeysTableProps {
   };
   onPageChange: (page: number) => void;
   pageSize?: number;
+  teams: Team[];
+  selectedTeam: Team | null;
+  setSelectedTeam: (team: Team | null) => void;
 }
 
 // Define columns similar to our logs table
@@ -210,6 +214,36 @@ function KeyViewer({ row }: { row: Row<KeyResponse> }) {
   );
 }
 
+const TeamFilter = ({ teams, selectedTeam, setSelectedTeam }) => {
+    const handleTeamChange = (value: string) => {
+      const team = teams?.find(t => t.team_id === value);
+      setSelectedTeam(team || null);
+    };
+  
+    return (
+      <div className="mb-4">
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-600">Where Team is</span>
+          <Select
+            value={selectedTeam?.team_id || ""}
+            onValueChange={handleTeamChange}
+            placeholder="Team ID"
+            className="w-[400px]"
+          >
+            <SelectItem value="team_id">Team ID</SelectItem>
+            {teams?.map((team) => (
+              <SelectItem key={team.team_id} value={team.team_id}>
+                <span className="font-medium">{team.team_alias}</span>{" "}
+                <span className="text-gray-500">({team.team_id})</span>
+              </SelectItem>
+            ))}
+          </Select>
+        </div>
+      </div>
+    );
+  };
+  
+
 /**
  * AllKeysTable – a new table for keys that mimics the table styling used in view_logs.
  * The team selector and filtering have been removed so that all keys are shown.
@@ -219,45 +253,48 @@ export function AllKeysTable({
   isLoading = false,
   pagination,
   onPageChange,
-  pageSize = 50
+  pageSize = 50,
+  teams,
+  selectedTeam,
+  setSelectedTeam
 }: AllKeysTableProps) {
   return (
     <div className="w-full">
-      <div className="border-b px-6 py-4">
-        <div className="flex justify-end items-center space-x-4">
-          <span className="text-sm text-gray-700">
-            Showing{" "}
-            {isLoading
-              ? "..."
-              : `${(pagination.currentPage - 1) * pageSize + 1} - ${
-                  Math.min(pagination.currentPage * pageSize, pagination.totalCount)
-                }`}{" "}
-            of {isLoading ? "..." : pagination.totalCount} results
-          </span>
-          <div className="flex items-center space-x-2">
-            <span className="text-sm text-gray-700">
-              Page {isLoading ? "..." : pagination.currentPage} of{" "}
-              {isLoading ? "..." : pagination.totalPages}
-            </span>
-            <button
-              onClick={() => onPageChange(pagination.currentPage - 1)}
-              disabled={isLoading || pagination.currentPage === 1}
-              className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Previous
-            </button>
-            <button
-              onClick={() => onPageChange(pagination.currentPage + 1)}
-              disabled={
-                isLoading ||
-                pagination.currentPage === pagination.totalPages
-              }
-              className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Next
-            </button>
-          </div>
-        </div>
+      <div className="border-b py-4">
+      <div className="flex items-center justify-between w-full">
+  <TeamFilter 
+    teams={teams} 
+    selectedTeam={selectedTeam} 
+    setSelectedTeam={setSelectedTeam} 
+  />
+  <div className="flex items-center gap-4">
+  <span className="inline-flex text-sm text-gray-700">
+    Showing {isLoading ? "..." : `${(pagination.currentPage - 1) * pageSize + 1} - ${Math.min(pagination.currentPage * pageSize, pagination.totalCount)}`} of {isLoading ? "..." : pagination.totalCount} results
+  </span>
+  
+  <div className="inline-flex items-center gap-2">
+    <span className="text-sm text-gray-700">
+      Page {isLoading ? "..." : pagination.currentPage} of {isLoading ? "..." : pagination.totalPages}
+    </span>
+    
+    <button
+      onClick={() => onPageChange(pagination.currentPage - 1)}
+      disabled={isLoading || pagination.currentPage === 1}
+      className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+    >
+      Previous
+    </button>
+    
+    <button
+      onClick={() => onPageChange(pagination.currentPage + 1)} 
+      disabled={isLoading || pagination.currentPage === pagination.totalPages}
+      className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+    >
+      Next
+    </button>
+    </div>
+  </div>
+</div>
       </div>
       <DataTable
         columns={columns}

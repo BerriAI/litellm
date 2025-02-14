@@ -140,35 +140,6 @@ interface CombinedLimits {
   [key: string]: CombinedLimit;  // Index signature allowing string keys
 }
 
-const TeamFilter = ({ teams, selectedTeam, setSelectedTeam }) => {
-  const handleTeamChange = (value: string) => {
-    const team = teams?.find(t => t.team_id === value);
-    setSelectedTeam(team || null);
-  };
-
-  return (
-    <div className="mb-4">
-      <div className="flex items-center gap-2">
-        <span className="text-sm text-gray-600">Where Team is</span>
-        <Select
-          value={selectedTeam?.team_id || ""}
-          onValueChange={handleTeamChange}
-          placeholder="Team ID"
-          className="w-[400px]"
-        >
-          <SelectItem value="team_id">Team ID</SelectItem>
-          {teams?.map((team) => (
-            <SelectItem key={team.team_id} value={team.team_id}>
-              <span className="font-medium">{team.team_alias}</span>{" "}
-              <span className="text-gray-500">({team.team_id})</span>
-            </SelectItem>
-          ))}
-        </Select>
-      </div>
-    </div>
-  );
-};
-
 const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   userID,
   userRole,
@@ -1085,18 +1056,15 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
   return (
     <div>
-      <TeamFilter 
-        teams={teams} 
-        selectedTeam={selectedTeam} 
-        setSelectedTeam={setSelectedTeam} 
-      />
-      
       <AllKeysTable 
         keys={keys}
         isLoading={isLoading}
         pagination={pagination}
         onPageChange={handlePageChange}
         pageSize={50}
+        teams={teams}
+        selectedTeam={selectedTeam}
+        setSelectedTeam={setSelectedTeam}
       />
 
       {isDeleteModalOpen && (
