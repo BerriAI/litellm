@@ -19,6 +19,7 @@ import ViewUserTeam from "./view_user_team";
 import DashboardTeam from "./dashboard_default_team";
 import Onboarding from "../app/onboarding/page";
 import { useSearchParams, useRouter } from "next/navigation";
+import { Team } from "./create_key_button";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
 const isLocal = process.env.NODE_ENV === "development";
