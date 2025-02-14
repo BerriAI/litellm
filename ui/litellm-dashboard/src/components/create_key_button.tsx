@@ -42,6 +42,7 @@ interface CreateKeyProps {
   accessToken: string;
   data: any[] | null;
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
+  teams: any[] | null;
 }
 
 const getPredefinedTags = (data: any[] | null) => {
@@ -72,6 +73,7 @@ const getPredefinedTags = (data: any[] | null) => {
 const CreateKey: React.FC<CreateKeyProps> = ({
   userID,
   team,
+  teams,
   userRole,
   accessToken,
   data,
@@ -278,18 +280,40 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               <TextInput placeholder="" />
             </Form.Item>
             <Form.Item
-              label="Team ID"
+              label="Team"
               name="team_id"
-              hidden={keyOwner !== "another_user"}
-              initialValue={team ? team["team_id"] : null}
-              valuePropName="team_id"
+              initialValue={team ? team.team_id : null}
               className="mt-8"
+              rules={[{ required: true, message: 'Please select a team' }]}
             >
-              <TextInput defaultValue={team ? team["team_id"] : null} onChange={(e) => form.setFieldValue('team_id', e.target.value)}/>
+              <Select
+                showSearch
+                placeholder="Search or select a team"
+                onChange={(value) => form.setFieldValue('team_id', value)}
+                filterOption={(input, option) => {
+                  if (!option) return false;
+                  const optionValue = option.children?.toString() || '';
+                  return optionValue.toLowerCase().includes(input.toLowerCase());
+                }}
+                optionFilterProp="children"
+              >
+                {teams?.map((team) => (
+                  <Select.Option key={team.team_id} value={team.team_id}>
+                    {team.team_name || team.team_id}
+                  </Select.Option>
+                ))}
+              </Select>
             </Form.Item>
 
             <Form.Item
-              label="Models"
+              label={
+                <span>
+                  Models{' '}
+                  <Tooltip title="These are the models that your selected team has access to">
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              }
               name="models"
               rules={[{ required: true, message: "Please select a model" }]}
               help="required"
@@ -299,15 +323,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 placeholder="Select models"
                 style={{ width: "100%" }}
                 onChange={(values) => {
-                  // Check if "All Team Models" is selected
-                  const isAllTeamModelsSelected =
-                    values.includes("all-team-models");
-
-                  // If "All Team Models" is selected, deselect all other models
-                  if (isAllTeamModelsSelected) {
-                    const newValues = ["all-team-models"];
-                    // You can call the form's setFieldsValue method to update the value
-                    form.setFieldsValue({ models: newValues });
+                  if (values.includes("all-team-models")) {
+                    form.setFieldsValue({ models: ["all-team-models"] });
                   }
                 }}
               >
