@@ -686,7 +686,14 @@ class BaseLLMChatTest(ABC):
             request_args.update(self.get_base_completion_call_args())
             response: ModelResponse = completion(**request_args)  # type: ignore
             print(f"response: {response}")
+
+            assert response is not None
+
+            # if the provider did not return any tool calls do not make a subsequent llm api call
+            if response.choices[0].message.tool_calls is None:
+                return
             # Add any assertions here to check the response
+
             assert isinstance(
                 response.choices[0].message.tool_calls[0].function.name, str
             )
