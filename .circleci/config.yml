@@ -2039,6 +2039,18 @@ jobs:
     steps:
       - checkout
       - run:
+          name: Run Jest Tests
+          command: |
+            # Set up nvm again as we're in a new step
+            export NVM_DIR="/opt/circleci/.nvm"
+            source "$NVM_DIR/nvm.sh"
+            source "$NVM_DIR/bash_completion"
+            
+            nvm use v18.17.0
+            
+            cd ui/litellm-dashboard
+            npm test
+      - run:
           name: Build UI
           command: |
             # Set up nvm
