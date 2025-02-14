@@ -178,11 +178,15 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         ## SETUP ##
         stream = optional_params.pop("stream", None)
         custom_prompt_dict: dict = litellm_params.pop("custom_prompt_dict", None) or {}
+        hf_model_name = litellm_params.get("hf_model_name", None)
 
         provider = self.get_bedrock_invoke_provider(model)
 
         prompt, chat_history = self.convert_messages_to_prompt(
-            model, messages, provider, custom_prompt_dict
+            model=hf_model_name or model,
+            messages=messages,
+            provider=provider,
+            custom_prompt_dict=custom_prompt_dict,
         )
         inference_params = copy.deepcopy(optional_params)
         inference_params = {
