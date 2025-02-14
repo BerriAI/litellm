@@ -3287,6 +3287,11 @@ def test_bedrock_deepseek_custom_prompt_dict():
 
     client = HTTPHandler()
 
+    messages = [
+        {"role": "system", "content": "You are a good assistant"},
+        {"role": "user", "content": "What is the weather in Copenhagen?"},
+    ]
+
     with patch.object(client, "post") as mock_post:
         try:
             completion(
@@ -3298,9 +3303,12 @@ def test_bedrock_deepseek_custom_prompt_dict():
             pass
 
         mock_post.assert_called_once()
-        mock_post.call_args.kwargs["json"]["messages"][0][
-            "content"
-        ] == "You are a good assistant"
+        print(mock_post.call_args.kwargs)
+        json_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert (
+            json_data["prompt"].rstrip()
+            == """<｜begin▁of▁sentence｜>You are a good assistant<｜User｜>What is the weather in Copenhagen?<｜Assistant｜><think>"""
+        )
 
 
 # test_replicate_custom_prompt_dict()
