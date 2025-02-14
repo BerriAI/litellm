@@ -723,7 +723,13 @@ class BaseLLMChatTest(ABC):
             request_2_args.update(self.get_base_completion_call_args())
             second_response: ModelResponse = completion(**request_2_args)  # type: ignore
             print(f"second response: {second_response}")
-            assert isinstance(second_response.choices[0].message.content, str)
+            assert second_response is not None
+
+            # either content or tool calls should be present
+            assert (
+                second_response.choices[0].message.content is not None
+                or second_response.choices[0].message.tool_calls is not None
+            )
         except litellm.RateLimitError:
             pass
         except Exception as e:
