@@ -2079,6 +2079,8 @@ export const keyListCall = async (
   accessToken: String, 
   organizationID: string | null,
   teamID: string | null,
+  page: number,
+  pageSize: number
 ) => {
   /**
    * Get all available teams on proxy
@@ -2094,6 +2096,14 @@ export const keyListCall = async (
     
     if (organizationID) {
       queryParams.append('organization_id', organizationID.toString());
+    }
+
+    if (page) {
+      queryParams.append('page', page.toString());
+    }
+
+    if (pageSize) {
+      queryParams.append('size', pageSize.toString());
     }
 
     queryParams.append('return_full_object', 'true');

@@ -76,6 +76,7 @@ interface UseKeyListProps {
 selectedTeam?: Team;
 currentOrg: Organization | null;
 accessToken: string;
+currentPage?: number;
 }
 
 interface PaginationData {
@@ -96,6 +97,8 @@ const useKeyList = ({
     selectedTeam,
     currentOrg,
     accessToken,
+    currentPage = 1,
+
 }: UseKeyListProps): UseKeyListReturn => {
     const [keyData, setKeyData] = useState<KeyListResponse>({ 
         keys: [], 
@@ -119,7 +122,9 @@ const useKeyList = ({
             const data = await keyListCall(
                 accessToken,
                 currentOrg.organization_id,
-                selectedTeam?.team_id || ""
+                selectedTeam?.team_id || "",
+                params.page as number || 1,
+                50
             );
             console.log("data", data);
             setKeyData(data);

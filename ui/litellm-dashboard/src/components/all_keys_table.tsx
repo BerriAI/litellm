@@ -27,6 +27,13 @@ export interface KeyResponse {
 interface AllKeysTableProps {
   keys: KeyResponse[];
   isLoading?: boolean;
+  pagination: {
+    currentPage: number;
+    totalPages: number;
+    totalCount: number;
+  };
+  onPageChange: (page: number) => void;
+  pageSize?: number;
 }
 
 // Define columns similar to our logs table
@@ -207,9 +214,51 @@ function KeyViewer({ row }: { row: Row<KeyResponse> }) {
  * AllKeysTable – a new table for keys that mimics the table styling used in view_logs.
  * The team selector and filtering have been removed so that all keys are shown.
  */
-export function AllKeysTable({ keys, isLoading = false }: AllKeysTableProps) {
+export function AllKeysTable({ 
+  keys, 
+  isLoading = false,
+  pagination,
+  onPageChange,
+  pageSize = 50
+}: AllKeysTableProps) {
   return (
     <div className="w-full">
+      <div className="border-b px-6 py-4">
+        <div className="flex justify-end items-center space-x-4">
+          <span className="text-sm text-gray-700">
+            Showing{" "}
+            {isLoading
+              ? "..."
+              : `${(pagination.currentPage - 1) * pageSize + 1} - ${
+                  Math.min(pagination.currentPage * pageSize, pagination.totalCount)
+                }`}{" "}
+            of {isLoading ? "..." : pagination.totalCount} results
+          </span>
+          <div className="flex items-center space-x-2">
+            <span className="text-sm text-gray-700">
+              Page {isLoading ? "..." : pagination.currentPage} of{" "}
+              {isLoading ? "..." : pagination.totalPages}
+            </span>
+            <button
+              onClick={() => onPageChange(pagination.currentPage - 1)}
+              disabled={isLoading || pagination.currentPage === 1}
+              className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            <button
+              onClick={() => onPageChange(pagination.currentPage + 1)}
+              disabled={
+                isLoading ||
+                pagination.currentPage === pagination.totalPages
+              }
+              className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      </div>
       <DataTable
         columns={columns}
         data={keys}

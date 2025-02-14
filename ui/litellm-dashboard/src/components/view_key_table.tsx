@@ -217,13 +217,15 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   );
 
   // Pass filters into the hook so the API call includes these query parameters.
-  const { keys, isLoading, error, refresh } = useKeyList({
+  const { keys, isLoading, error, pagination, refresh } = useKeyList({
     selectedTeam,
     currentOrg,
     accessToken,
   });
 
-  console.log("keys", keys);
+  const handlePageChange = (newPage: number) => {
+    refresh({ page: newPage });
+  };
 
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [infoDialogVisible, setInfoDialogVisible] = useState(false);
@@ -1092,6 +1094,9 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       <AllKeysTable 
         keys={keys}
         isLoading={isLoading}
+        pagination={pagination}
+        onPageChange={handlePageChange}
+        pageSize={50}
       />
 
       {isDeleteModalOpen && (
