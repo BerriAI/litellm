@@ -1,10 +1,10 @@
 import asyncio
 import json
+import re
 import time
 import traceback
 import uuid
-import re
-from typing import Dict, Iterable, List, Literal, Optional, Union, Tuple
+from typing import Dict, Iterable, List, Literal, Optional, Tuple, Union
 
 import litellm
 from litellm._logging import verbose_logger
@@ -221,16 +221,27 @@ def _handle_invalid_parallel_tool_calls(
         # if there is a JSONDecodeError, return the original tool_calls
         return tool_calls
 
-def _parse_content_for_reasoning(message_text: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+
+def _parse_content_for_reasoning(
+    message_text: Optional[str],
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Parse the content for reasoning
+
+    Returns:
+    - reasoning_content: The content of the reasoning
+    - content: The content of the message
+    """
     if not message_text:
-        return None, None
-    
+        return None, message_text
+
     reasoning_match = re.match(r"<think>(.*?)</think>(.*)", message_text, re.DOTALL)
 
     if reasoning_match:
         return reasoning_match.group(1), reasoning_match.group(2)
-    
+
     return None, message_text
+
 
 class LiteLLMResponseObjectHandler:
 
@@ -445,9 +456,15 @@ def convert_to_model_response_object(  # noqa: PLR0915
                             provider_specific_fields[field] = choice["message"][field]
 
                     # Handle reasoning models that display `reasoning_content` within `content`
-                    reasoning_content, content = _parse_content_for_reasoning(choice["message"].get("content", None))
+
+                    reasoning_content, content = _parse_content_for_reasoning(
+                        choice["message"].get("content")
+                    )
+
                     if reasoning_content:
-                        provider_specific_fields["reasoning_content"] = reasoning_content
+                        provider_specific_fields["reasoning_content"] = (
+                            reasoning_content
+                        )
 
                     message = Message(
                         content=content,
