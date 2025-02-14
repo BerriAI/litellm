@@ -57,7 +57,7 @@ def get_fallback_model_group(
     fallback_model_group: Optional[List[str]] = None
     ## check for specific model group-specific fallbacks
     for idx, item in enumerate(fallbacks):
-        if isinstance(item, dict):
+        if isinstance(item, dict) and item:  # handle empty dicts
             if list(item.keys())[0] == model_group:  # check exact match
                 fallback_model_group = item[model_group]
                 break
