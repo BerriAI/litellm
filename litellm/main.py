@@ -471,7 +471,7 @@ async def acompletion(
         if (
             custom_llm_provider == "text-completion-openai"
             or custom_llm_provider == "text-completion-codestral"
-        ) and isinstance(response, TextCompletionResponse):
+        ) and isinstance(response, TextCompletionResponse) and not kwargs.get("text_completion", False):
             response = litellm.OpenAITextCompletionConfig().convert_to_chat_model_response_object(
                 response_object=response,
                 model_response_object=litellm.ModelResponse(),
@@ -1533,13 +1533,13 @@ def completion(  # type: ignore # noqa: PLR0915
                 logger_fn=logger_fn,
                 timeout=timeout,  # type: ignore
             )
-
+        
             if (
-                optional_params.get("stream", False) is False
-                and acompletion is False
+                not optional_params.get("stream", False)
+                and isinstance(_response, TextCompletionResponse)
                 and text_completion is False
             ):
-                # convert to chat completion response
+                # convert to ModelResponse unless text_completion is explicitly set to True
                 _response = litellm.OpenAITextCompletionConfig().convert_to_chat_model_response_object(
                     response_object=_response, model_response_object=model_response
                 )
@@ -2558,7 +2558,15 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_key=api_key,
                 timeout=timeout,
             )
-
+            if (
+                not optional_params.get("stream", False)
+                and isinstance(_model_response, TextCompletionResponse)
+                and text_completion is False
+            ):
+                # convert to ModelResponse unless text_completion is explicitly set to True
+                _model_response = litellm.OpenAITextCompletionConfig().convert_to_chat_model_response_object(
+                    response_object=_model_response, model_response_object=model_response
+                )
             if (
                 "stream" in optional_params
                 and optional_params["stream"] is True
