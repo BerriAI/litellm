@@ -16,9 +16,10 @@ import {
   Select as TremorSelect
 } from "@tremor/react";
 import { ArrowLeftIcon, TrashIcon } from "@heroicons/react/outline";
-import { keyDeleteCall } from "./networking";
+import { keyDeleteCall, keyUpdateCall } from "./networking";
 import { KeyResponse } from "./key_team_helpers/key_list";
 import { Form, Input, InputNumber, message, Select } from "antd";
+import { KeyEditView } from "./key_edit_view";
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -48,11 +49,47 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken }: Ke
     );
   }
 
-  const handleKeyUpdate = async (values: any) => {
+  const handleKeyUpdate = async (formValues: Record<string, any>) => {
     try {
-      // TODO: Implement key update API call
+      if (!accessToken) return;
+
+      const currentKey = formValues.token;
+      formValues.key = currentKey;
+
+      // Convert metadata back to an object if it exists and is a string
+      if (formValues.metadata && typeof formValues.metadata === "string") {
+        try {
+          const parsedMetadata = JSON.parse(formValues.metadata);
+          formValues.metadata = {
+            ...parsedMetadata,
+            ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
+          };
+        } catch (error) {
+          console.error("Error parsing metadata JSON:", error);
+          message.error("Invalid metadata JSON");
+          return;
+        }
+      } else {
+        formValues.metadata = {
+          ...(formValues.metadata || {}),
+          ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
+        };
+      }
+
+      // Convert budget_duration to API format
+      if (formValues.budget_duration) {
+        const durationMap: Record<string, string> = {
+          daily: "24h",
+          weekly: "7d",
+          monthly: "30d"
+        };
+        formValues.budget_duration = durationMap[formValues.budget_duration];
+      }
+
+      const newKeyValues = await keyUpdateCall(accessToken, formValues);
       message.success("Key updated successfully");
       setIsEditing(false);
+      // Refresh key data here if needed
     } catch (error) {
       message.error("Failed to update key");
       console.error("Error updating key:", error);
@@ -193,68 +230,11 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken }: Ke
               </div>
 
               {isEditing ? (
-                <Form
-                  form={form}
-                  onFinish={handleKeyUpdate}
-                  initialValues={keyData}
-                  layout="vertical"
-                >
-                  <Form.Item label="Key Alias" name="key_alias">
-                    <TextInput />
-                  </Form.Item>
-
-                  <Form.Item label="Models" name="models">
-                    <Select
-                      mode="multiple"
-                      placeholder="Select models"
-                      style={{ width: "100%" }}
-                    >
-                      <Select.Option value="all-team-models">All Team Models</Select.Option>
-                      {/* Add model options based on team models */}
-                    </Select>
-                  </Form.Item>
-
-                  <Form.Item label="Max Budget (USD)" name="max_budget">
-                    <InputNumber step={0.01} precision={2} style={{ width: "100%" }} />
-                  </Form.Item>
-
-                  <Form.Item label="Reset Budget" name="budget_duration">
-                    <Select placeholder="n/a">
-                      <Select.Option value="daily">daily</Select.Option>
-                      <Select.Option value="weekly">weekly</Select.Option>
-                      <Select.Option value="monthly">monthly</Select.Option>
-                    </Select>
-                  </Form.Item>
-
-                  <Form.Item label="TPM Limit" name="tpm_limit">
-                    <InputNumber style={{ width: "100%" }} />
-                  </Form.Item>
-
-                  <Form.Item label="RPM Limit" name="rpm_limit">
-                    <InputNumber style={{ width: "100%" }} />
-                  </Form.Item>
-
-                  <Form.Item label="Guardrails" name="guardrails">
-                    <Select
-                      mode="tags"
-                      style={{ width: "100%" }}
-                      placeholder="Select or enter guardrails"
-                    />
-                  </Form.Item>
-
-                  <Form.Item label="Metadata" name="metadata">
-                    <Input.TextArea rows={10} />
-                  </Form.Item>
-
-                  <div className="flex justify-end gap-2 mt-6">
-                    <Button variant="light" onClick={() => setIsEditing(false)}>
-                      Cancel
-                    </Button>
-                    <Button type="primary" htmlType="submit">
-                      Save Changes
-                    </Button>
-                  </div>
-                </Form>
+                <KeyEditView
+                  keyData={keyData}
+                  onCancel={() => setIsEditing(false)}
+                  onSubmit={handleKeyUpdate}
+                />
               ) : (
                 <div className="space-y-4">
                   <div>
