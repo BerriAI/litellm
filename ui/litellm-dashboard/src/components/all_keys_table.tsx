@@ -1,9 +1,11 @@
 "use client";
-import React from "react";
+import React, { useState } from "react";
 import { ColumnDef, Row } from "@tanstack/react-table";
 import { DataTable } from "./view_logs/table";
 import { Select, SelectItem } from "@tremor/react"
-
+import { Button } from "@tremor/react"
+import KeyInfoView from "./key_info_view";
+import { Tooltip } from "antd";
 /**
  * This type is based on our KeyResponse (or ItemData) structure from view_key_table.tsx.
  * Adjust or extend as needed.
@@ -41,118 +43,6 @@ interface AllKeysTableProps {
 }
 
 // Define columns similar to our logs table
-const columns: ColumnDef<KeyResponse>[] = [
-  {
-    id: "expander",
-    header: () => null,
-    cell: ({ row }) =>
-      row.getCanExpand() ? (
-        <button
-          onClick={row.getToggleExpandedHandler()}
-          style={{ cursor: "pointer" }}
-        >
-          {row.getIsExpanded() ? "▼" : "▶"}
-        </button>
-      ) : null,
-  },
-  {
-    header: "Key ID",
-    accessorKey: "token",
-    cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
-  },
-  {
-    header: "Organization",
-    accessorKey: "organization_id",
-    cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
-  },
-  {
-    header: "Team ID",
-    accessorKey: "team_id",
-    cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
-  },
-  {
-    header: "Key Alias",
-    accessorKey: "key_alias",
-    cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
-  },
-  {
-    header: "Secret Key",
-    accessorKey: "key_name",
-    cell: (info) => <span className="font-mono text-xs">{info.getValue()}</span>,
-  },
-  {
-    header: "Created",
-    accessorKey: "created_at",
-    cell: (info) => {
-      const value = info.getValue();
-      return value ? new Date(value).toLocaleDateString() : "-";
-    },
-  },
-  {
-    header: "Expires",
-    accessorKey: "expires",
-    cell: (info) => {
-      const value = info.getValue();
-      return value ? new Date(value).toLocaleDateString() : "Never";
-    },
-  },
-  {
-    header: "Spend (USD)",
-    accessorKey: "spend",
-    cell: (info) => Number(info.getValue()).toFixed(4),
-  },
-  {
-    header: "Budget (USD)",
-    accessorKey: "max_budget",
-    cell: (info) =>
-      info.getValue() !== null && info.getValue() !== undefined
-        ? info.getValue()
-        : "Unlimited",
-  },
-  {
-    header: "Budget Reset",
-    accessorKey: "budget_reset_at",
-    cell: (info) => {
-      const value = info.getValue();
-      return value ? new Date(value).toLocaleString() : "Never";
-    },
-  },
-  {
-    header: "Models",
-    accessorKey: "models",
-    cell: (info) => {
-      const models = info.getValue() as string[];
-      return (
-        <div className="flex flex-wrap gap-1">
-          {models && models.length > 0 ? (
-            models.map((model, index) => (
-              <span
-                key={index}
-                className="px-2 py-1 bg-blue-100 rounded text-xs"
-              >
-                {model}
-              </span>
-            ))
-          ) : (
-            "-"
-          )}
-        </div>
-      );
-    },
-  },
-  {
-    header: "Rate Limits",
-    cell: ({ row }) => {
-      const key = row.original;
-      return (
-        <div>
-          <div>TPM: {key.tpm_limit !== null ? key.tpm_limit : "Unlimited"}</div>
-          <div>RPM: {key.rpm_limit !== null ? key.rpm_limit : "Unlimited"}</div>
-        </div>
-      );
-    },
-  },
-];
 
 function KeyViewer({ row }: { row: Row<KeyResponse> }) {
   return (
@@ -263,44 +153,180 @@ export function AllKeysTable({
   selectedTeam,
   setSelectedTeam
 }: AllKeysTableProps) {
+  const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
+
+  const columns: ColumnDef<KeyResponse>[] = [
+    {
+      id: "expander",
+      header: () => null,
+      cell: ({ row }) =>
+        row.getCanExpand() ? (
+          <button
+            onClick={row.getToggleExpandedHandler()}
+            style={{ cursor: "pointer" }}
+          >
+            {row.getIsExpanded() ? "▼" : "▶"}
+          </button>
+        ) : null,
+    },
+    {
+      header: "Key ID",
+      accessorKey: "token",
+      cell: (info) => (
+        <div className="overflow-hidden">
+          <Tooltip title={info.getValue()}>
+            <Button 
+              size="xs"
+              variant="light"
+              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+              onClick={() => setSelectedKeyId(info.getValue() as string)}
+            >
+              {info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "Not Set"}
+            </Button>
+          </Tooltip>
+        </div>
+      ),
+    },
+    {
+      header: "Organization",
+      accessorKey: "organization_id",
+      cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
+    },
+    {
+      header: "Team ID",
+      accessorKey: "team_id",
+      cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
+    },
+    {
+      header: "Key Alias",
+      accessorKey: "key_alias",
+      cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
+    },
+    {
+      header: "Secret Key",
+      accessorKey: "key_name",
+      cell: (info) => <span className="font-mono text-xs">{info.getValue()}</span>,
+    },
+    {
+      header: "Created",
+      accessorKey: "created_at",
+      cell: (info) => {
+        const value = info.getValue();
+        return value ? new Date(value).toLocaleDateString() : "-";
+      },
+    },
+    {
+      header: "Expires",
+      accessorKey: "expires",
+      cell: (info) => {
+        const value = info.getValue();
+        return value ? new Date(value).toLocaleDateString() : "Never";
+      },
+    },
+    {
+      header: "Spend (USD)",
+      accessorKey: "spend",
+      cell: (info) => Number(info.getValue()).toFixed(4),
+    },
+    {
+      header: "Budget (USD)",
+      accessorKey: "max_budget",
+      cell: (info) =>
+        info.getValue() !== null && info.getValue() !== undefined
+          ? info.getValue()
+          : "Unlimited",
+    },
+    {
+      header: "Budget Reset",
+      accessorKey: "budget_reset_at",
+      cell: (info) => {
+        const value = info.getValue();
+        return value ? new Date(value).toLocaleString() : "Never";
+      },
+    },
+    {
+      header: "Models",
+      accessorKey: "models",
+      cell: (info) => {
+        const models = info.getValue() as string[];
+        return (
+          <div className="flex flex-wrap gap-1">
+            {models && models.length > 0 ? (
+              models.map((model, index) => (
+                <span
+                  key={index}
+                  className="px-2 py-1 bg-blue-100 rounded text-xs"
+                >
+                  {model}
+                </span>
+              ))
+            ) : (
+              "-"
+            )}
+          </div>
+        );
+      },
+    },
+    {
+      header: "Rate Limits",
+      cell: ({ row }) => {
+        const key = row.original;
+        return (
+          <div>
+            <div>TPM: {key.tpm_limit !== null ? key.tpm_limit : "Unlimited"}</div>
+            <div>RPM: {key.rpm_limit !== null ? key.rpm_limit : "Unlimited"}</div>
+          </div>
+        );
+      },
+    },
+  ];
+  
   return (
     <div className="w-full">
-      <div className="border-b py-4">
-      <div className="flex items-center justify-between w-full">
-  <TeamFilter 
-    teams={teams} 
-    selectedTeam={selectedTeam} 
-    setSelectedTeam={setSelectedTeam} 
-  />
-  <div className="flex items-center gap-4">
-  <span className="inline-flex text-sm text-gray-700">
-    Showing {isLoading ? "..." : `${(pagination.currentPage - 1) * pageSize + 1} - ${Math.min(pagination.currentPage * pageSize, pagination.totalCount)}`} of {isLoading ? "..." : pagination.totalCount} results
-  </span>
-  
-  <div className="inline-flex items-center gap-2">
-    <span className="text-sm text-gray-700">
-      Page {isLoading ? "..." : pagination.currentPage} of {isLoading ? "..." : pagination.totalPages}
-    </span>
-    
-    <button
-      onClick={() => onPageChange(pagination.currentPage - 1)}
-      disabled={isLoading || pagination.currentPage === 1}
-      className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-    >
-      Previous
-    </button>
-    
-    <button
-      onClick={() => onPageChange(pagination.currentPage + 1)} 
-      disabled={isLoading || pagination.currentPage === pagination.totalPages}
-      className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-    >
-      Next
-    </button>
-    </div>
-  </div>
-</div>
-      </div>
+      {selectedKeyId ? (
+        <KeyInfoView 
+          keyId={selectedKeyId} 
+          onClose={() => setSelectedKeyId(null)}
+          keyData={keys.find(k => k.token === selectedKeyId)}
+        />
+      ) : (
+        <div className="border-b py-4">
+          <div className="flex items-center justify-between w-full">
+            <TeamFilter 
+              teams={teams} 
+              selectedTeam={selectedTeam} 
+              setSelectedTeam={setSelectedTeam} 
+            />
+            <div className="flex items-center gap-4">
+              <span className="inline-flex text-sm text-gray-700">
+                Showing {isLoading ? "..." : `${(pagination.currentPage - 1) * pageSize + 1} - ${Math.min(pagination.currentPage * pageSize, pagination.totalCount)}`} of {isLoading ? "..." : pagination.totalCount} results
+              </span>
+              
+              <div className="inline-flex items-center gap-2">
+                <span className="text-sm text-gray-700">
+                  Page {isLoading ? "..." : pagination.currentPage} of {isLoading ? "..." : pagination.totalPages}
+                </span>
+                
+                <button
+                  onClick={() => onPageChange(pagination.currentPage - 1)}
+                  disabled={isLoading || pagination.currentPage === 1}
+                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                
+                <button
+                  onClick={() => onPageChange(pagination.currentPage + 1)} 
+                  disabled={isLoading || pagination.currentPage === pagination.totalPages}
+                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       <DataTable
         columns={columns}
         data={keys}
