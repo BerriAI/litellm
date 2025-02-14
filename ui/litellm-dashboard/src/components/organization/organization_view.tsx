@@ -15,7 +15,7 @@ import {
 import { Button, Form, Input, Select, message, InputNumber, Tooltip } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
-import { Organization } from "../networking";
+import { Organization, organizationInfoCall } from "../networking";
 
 
 
@@ -49,14 +49,8 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     try {
       setLoading(true);
       if (!accessToken) return;
-      const response = await fetch(`/organization/info?organization_id=${organizationId}`, {
-        headers: {
-          'Authorization': `Bearer ${accessToken}`
-        }
-      });
-      if (!response.ok) throw new Error('Failed to fetch organization info');
-      const data = await response.json();
-      setOrgData(data);
+      const response = await organizationInfoCall(accessToken, organizationId);
+      setOrgData(response);
     } catch (error) {
       message.error("Failed to load organization information");
       console.error("Error fetching organization info:", error);
@@ -114,7 +108,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   }
 
   return (
-    <div className="p-4">
+    <div className="w-full h-screen p-4 bg-white">
       <div className="flex justify-between items-center mb-6">
         <div>
           <Button onClick={onClose} className="mb-4">← Back</Button>
@@ -126,80 +120,62 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       <TabGroup defaultIndex={editOrg ? 2 : 0}>
         <TabList className="mb-4">
           <Tab>Overview</Tab>
-          <Tab>Budget</Tab>
+          <Tab>Members</Tab>
           <Tab>Settings</Tab>
         </TabList>
 
         <TabPanels>
           {/* Overview Panel */}
           <TabPanel>
-            <Grid numItems={1} numItemsSm={2} numItemsLg={3} className="gap-6">
-              <Card>
+          <Grid numItems={1} numItemsSm={2} numItemsLg={3} className="gap-6">
+            <Card>
                 <Text>Organization Details</Text>
                 <div className="mt-2">
-                  <Text>Created: {new Date(orgData.created_at).toLocaleDateString()}</Text>
-                  <Text>Updated: {new Date(orgData.updated_at).toLocaleDateString()}</Text>
-                  <Text>Created By: {orgData.created_by}</Text>
+                <Text>Created: {new Date(orgData.created_at).toLocaleDateString()}</Text>
+                <Text>Updated: {new Date(orgData.updated_at).toLocaleDateString()}</Text>
+                <Text>Created By: {orgData.created_by}</Text>
                 </div>
-              </Card>
+            </Card>
 
-              <Card>
+            <Card>
+                <Text>Budget Status</Text>
+                <div className="mt-2">
+                <Title>${orgData.spend.toFixed(6)}</Title>
+                <Text>of {orgData.litellm_budget_table.max_budget === null ? "Unlimited" : `$${orgData.litellm_budget_table.max_budget}`}</Text>
+                {orgData.litellm_budget_table.budget_duration && (
+                    <Text className="text-gray-500">Reset: {orgData.litellm_budget_table.budget_duration}</Text>
+                )}
+                </div>
+            </Card>
+
+            <Card>
                 <Text>Rate Limits</Text>
                 <div className="mt-2">
-                  <Text>TPM: {orgData.litellm_budget_table.tpm_limit || 'Unlimited'}</Text>
-                  <Text>RPM: {orgData.litellm_budget_table.rpm_limit || 'Unlimited'}</Text>
-                  {orgData.litellm_budget_table.max_parallel_requests && (
+                <Text>TPM: {orgData.litellm_budget_table.tpm_limit || 'Unlimited'}</Text>
+                <Text>RPM: {orgData.litellm_budget_table.rpm_limit || 'Unlimited'}</Text>
+                {orgData.litellm_budget_table.max_parallel_requests && (
                     <Text>Max Parallel Requests: {orgData.litellm_budget_table.max_parallel_requests}</Text>
-                  )}
+                )}
                 </div>
-              </Card>
+            </Card>
 
-              <Card>
+            <Card>
                 <Text>Models</Text>
                 <div className="mt-2 flex flex-wrap gap-2">
-                  {orgData.models.map((model, index) => (
+                {orgData.models.map((model, index) => (
                     <Badge key={index} color="red">
-                      {model}
+                    {model}
                     </Badge>
-                  ))}
+                ))}
                 </div>
-              </Card>
+            </Card>
             </Grid>
           </TabPanel>
 
           {/* Budget Panel */}
           <TabPanel>
             <Card>
-              <Title>Budget Information</Title>
-              <div className="mt-4 space-y-4">
-                <div>
-                  <Text className="font-medium">Current Spend</Text>
-                  <Title className="mt-2">${orgData.spend.toFixed(6)}</Title>
-                </div>
-
-                <div>
-                  <Text className="font-medium">Budget Limits</Text>
-                  <div className="mt-2">
-                    <Text>Max Budget: {orgData.litellm_budget_table.max_budget === null ? "Unlimited" : `$${orgData.litellm_budget_table.max_budget}`}</Text>
-                    <Text>Soft Budget: {orgData.litellm_budget_table.soft_budget === null ? "Not Set" : `$${orgData.litellm_budget_table.soft_budget}`}</Text>
-                    {orgData.litellm_budget_table.budget_duration && (
-                      <Text>Reset Period: {orgData.litellm_budget_table.budget_duration}</Text>
-                    )}
-                  </div>
-                </div>
-
-                <div>
-                  <Text className="font-medium">Model Spend</Text>
-                  <div className="mt-2">
-                    {Object.entries(orgData.model_spend).map(([model, spend]) => (
-                      <div key={model} className="flex justify-between">
-                        <Text>{model}</Text>
-                        <Text>${spend.toFixed(6)}</Text>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
+              <h1>Members</h1>
             </Card>
           </TabPanel>
 
