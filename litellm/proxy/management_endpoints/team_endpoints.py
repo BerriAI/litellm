@@ -1191,6 +1191,30 @@ async def delete_team(
     return deleted_teams
 
 
+def validate_membership(
+    user_api_key_dict: UserAPIKeyAuth, team_table: LiteLLM_TeamTable
+):
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+
+    if (
+        user_api_key_dict.team_id == team_table.team_id
+    ):  # allow team keys to check their info
+        return
+
+    if user_api_key_dict.user_id not in [
+        m.user_id for m in team_table.members_with_roles
+    ]:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "User={} not authorized to access this team={}".format(
+                    user_api_key_dict.user_id, team_table.team_id
+                )
+            },
+        )
+
+
 @router.get(
     "/team/info", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
