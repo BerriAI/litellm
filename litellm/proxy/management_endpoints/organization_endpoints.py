@@ -19,6 +19,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_endpoints.budget_management_endpoints import (
+    new_budget,
+    update_budget,
+)
 from litellm.proxy.management_helpers.utils import (
     get_new_internal_user_defaults,
     management_endpoint_wrapper,
@@ -491,6 +495,154 @@ async def organization_member_add(
             param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+@router.patch(
+    "/organization/member_update",
+    tags=["organization management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=LiteLLM_OrganizationMembershipTable,
+)
+@management_endpoint_wrapper
+async def organization_member_update(
+    data: OrganizationMemberUpdateRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Update a member's role in an organization
+    """
+    try:
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+
+        # Check if organization exists
+        existing_organization_row = (
+            await prisma_client.db.litellm_organizationtable.find_unique(
+                where={"organization_id": data.organization_id}
+            )
+        )
+        if existing_organization_row is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Organization not found for organization_id={getattr(data, 'organization_id', None)}"
+                },
+            )
+
+        # Check if member exists in organization
+        if data.user_email is not None and data.user_id is None:
+            existing_user_email_row = (
+                await prisma_client.db.litellm_usertable.find_unique(
+                    where={"user_email": data.user_email}
+                )
+            )
+            if existing_user_email_row is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"Unique user not found for user_email={data.user_email}. Potential duplicate OR non-existent user_email in LiteLLM_UserTable. Use 'user_id' instead."
+                    },
+                )
+            data.user_id = existing_user_email_row.user_id
+
+        try:
+            existing_organization_membership = (
+                await prisma_client.db.litellm_organizationmembership.find_unique(
+                    where={
+                        "user_id_organization_id": {
+                            "user_id": data.user_id,
+                            "organization_id": data.organization_id,
+                        }
+                    }
+                )
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Error finding organization membership for user_id={data.user_id} in organization={data.organization_id}: {e}"
+                },
+            )
+        if existing_organization_membership is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": f"Member not found in organization for user_id={data.user_id}"
+                },
+            )
+
+        # Update member role
+        if data.role is not None:
+            await prisma_client.db.litellm_organizationmembership.update(
+                where={
+                    "user_id_organization_id": {
+                        "user_id": data.user_id,
+                        "organization_id": data.organization_id,
+                    }
+                },
+                data={"user_role": data.role},
+            )
+        if data.max_budget_in_organization is not None:
+            # if budget_id is None, create a new budget
+            budget_id = existing_organization_membership.budget_id or str(uuid.uuid4())
+            if existing_organization_membership.budget_id is None:
+                new_budget_obj = BudgetNewRequest(
+                    budget_id=budget_id, max_budget=data.max_budget_in_organization
+                )
+                await new_budget(
+                    budget_obj=new_budget_obj, user_api_key_dict=user_api_key_dict
+                )
+            else:
+                # update budget table with new max_budget
+                await update_budget(
+                    budget_obj=BudgetNewRequest(
+                        budget_id=budget_id, max_budget=data.max_budget_in_organization
+                    ),
+                    user_api_key_dict=user_api_key_dict,
+                )
+
+            # update organization membership with new budget_id
+            await prisma_client.db.litellm_organizationmembership.update(
+                where={
+                    "user_id_organization_id": {
+                        "user_id": data.user_id,
+                        "organization_id": data.organization_id,
+                    }
+                },
+                data={"budget_id": budget_id},
+            )
+        final_organization_membership: Optional[BaseModel] = (
+            await prisma_client.db.litellm_organizationmembership.find_unique(
+                where={
+                    "user_id_organization_id": {
+                        "user_id": data.user_id,
+                        "organization_id": data.organization_id,
+                    }
+                },
+                include={"litellm_budget_table": True},
+            )
+        )
+
+        if final_organization_membership is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Member not found in organization={data.organization_id} for user_id={data.user_id}"
+                },
+            )
+
+        final_organization_membership_pydantic = LiteLLM_OrganizationMembershipTable(
+            **final_organization_membership.model_dump(exclude_none=True)
+        )
+        return final_organization_membership_pydantic
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error updating member in organization: {e}")
+        raise e
 
 
 async def add_member_to_organization(

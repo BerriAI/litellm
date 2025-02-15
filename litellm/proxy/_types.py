@@ -5,7 +5,14 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, Json, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    Json,
+    field_validator,
+    model_validator,
+)
 from typing_extensions import Required, TypedDict
 
 from litellm.types.integrations.slack_alerting import AlertType
@@ -393,6 +400,7 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/info",
         "/organization/delete",
         "/organization/member_add",
+        "/organization/member_update",
     ]
 
     # All routes accesible by an Org Admin
@@ -2113,8 +2121,26 @@ class OrganizationMemberDeleteRequest(MemberDeleteRequest):
     organization_id: str
 
 
+ROLES_WITHIN_ORG = [
+    LitellmUserRoles.ORG_ADMIN,
+    LitellmUserRoles.INTERNAL_USER,
+    LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+]
+
+
 class OrganizationMemberUpdateRequest(OrganizationMemberDeleteRequest):
-    max_budget_in_organization: float
+    max_budget_in_organization: Optional[float] = None
+    role: Optional[LitellmUserRoles] = None
+
+    @field_validator("role")
+    def validate_role(
+        cls, value: Optional[LitellmUserRoles]
+    ) -> Optional[LitellmUserRoles]:
+        if value is not None and value not in ROLES_WITHIN_ORG:
+            raise ValueError(
+                f"Invalid role. Must be one of: {[role.value for role in ROLES_WITHIN_ORG]}"
+            )
+        return value
 
 
 class OrganizationMemberUpdateResponse(MemberUpdateResponse):
