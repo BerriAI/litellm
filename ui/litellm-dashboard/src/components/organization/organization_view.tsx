@@ -24,7 +24,7 @@ import { InfoCircleOutlined } from '@ant-design/icons';
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { Organization, organizationInfoCall } from "../networking";
-
+import UserSearchModal from "../common_components/user_search_modal";
 
 
 interface OrganizationInfoProps {
@@ -50,6 +50,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   const [loading, setLoading] = useState(true);
   const [form] = Form.useForm();
   const [isEditing, setIsEditing] = useState(false);
+  const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
 
   const canEditOrg = is_org_admin || is_proxy_admin;
 
@@ -237,7 +238,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                 </Card>
                 {canEditOrg && (
                 <TremorButton onClick={() => {
-                    // TODO: Implement add member functionality
+                    setIsAddMemberModalVisible(true);
                 }}>
                     Add Member
                 </TremorButton>
@@ -366,6 +367,19 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
           </TabPanel>
         </TabPanels>
       </TabGroup>
+      <UserSearchModal
+        isVisible={isAddMemberModalVisible}
+        onCancel={() => setIsAddMemberModalVisible(false)}
+        onSubmit={() => {}}
+        accessToken={accessToken}
+        title="Add Organization Member"
+        roles={[
+          { label: "org_admin", value: "org_admin", description: "Can add and remove members, and change their roles." },
+          { label: "internal_user", value: "internal_user", description: "Can view/create keys for themselves within organization." },
+          { label: "internal_user_viewer", value: "internal_user_viewer", description: "Can only view their keys within organization." }
+        ]}
+        defaultRole="internal_user"
+      />
     </div>
   );
 };
