@@ -183,6 +183,7 @@ def create_fine_tuning_job(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
+                client=optional_params.client,
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":
@@ -388,6 +389,7 @@ def cancel_fine_tuning_job(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
+                client=optional_params.client,
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":
@@ -550,6 +552,7 @@ def list_fine_tuning_jobs(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
+                client=optional_params.client,
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":
@@ -701,6 +704,7 @@ def retrieve_fine_tuning_job(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
+                client=optional_params.client,
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":
