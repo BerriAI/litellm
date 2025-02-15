@@ -273,7 +273,6 @@ export default function CreateKeyPage() {
                   accessToken={accessToken}
                   userID={userID}
                   userRole={userRole}
-                  currentOrg={currentOrg}
                 />
               ) : page == "organizations" ? (
                 <Organizations
