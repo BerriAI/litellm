@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
+from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
@@ -1885,7 +1886,9 @@ async def _list_key_helper(
     """
 
     # Prepare filter conditions
-    where: Dict[str, Union[str, Dict[str, str]]] = {}
+    where: Dict[str, Union[str, Dict[str, str]]] = {
+        "team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}
+    }
     if user_id and isinstance(user_id, str):
         where["user_id"] = user_id
     if team_id and isinstance(team_id, str):
