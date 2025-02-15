@@ -5,12 +5,13 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LiteLLM_VerificationToken,
 )
-from litellm.proxy.utils import PrismaClient, ProxyLogging, duration_in_seconds
+from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.types.services import ServiceTypes
 
 
