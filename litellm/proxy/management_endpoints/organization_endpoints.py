@@ -220,7 +220,7 @@ async def update_organization(
     return response
 
 
-@router.post(
+@router.delete(
     "/organization/delete",
     tags=["organization management"],
     dependencies=[Depends(user_api_key_auth)],

@@ -35,7 +35,7 @@ async def delete_organization(session, i, organization_id):
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {"organization_ids": [organization_id]}
 
-    async with session.post(url, headers=headers, json=data) as response:
+    async with session.delete(url, headers=headers, json=data) as response:
         status = response.status
         response_text = await response.text()
 
