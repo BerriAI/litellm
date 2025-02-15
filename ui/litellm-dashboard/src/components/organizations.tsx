@@ -24,8 +24,9 @@ import { InfoCircleOutlined } from '@ant-design/icons';
 import { PencilAltIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
 import { TextInput } from "@tremor/react";
 import { getModelDisplayName } from './key_team_helpers/fetch_available_models_team_key';
+import { message } from 'antd';
 import OrganizationInfoView from './organization/organization_view';
-import { Organization, organizationListCall, organizationCreateCall } from './networking';
+import { Organization, organizationListCall, organizationCreateCall, organizationDeleteCall } from './networking';
 interface OrganizationsTableProps {
   organizations: Organization[];
   userRole: string;
@@ -80,18 +81,13 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
     if (!orgToDelete || !accessToken) return;
 
     try {
-      const response = await fetch(`/organization/delete?organization_id=${orgToDelete}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`
-        }
-      });
+      await organizationDeleteCall(accessToken, orgToDelete);
+      message.success('Organization deleted successfully');
 
-      if (!response.ok) throw new Error('Failed to delete organization');
-      
       setIsDeleteModalOpen(false);
       setOrgToDelete(null);
       // Refresh organizations list
+      fetchOrganizations(accessToken, setOrganizations);
     } catch (error) {
       console.error('Error deleting organization:', error);
     }
