@@ -156,19 +156,6 @@ class GenericLiteLLMParams(BaseModel):
     organization: Optional[str] = None  # for openai orgs
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
 
-    # for passing in custom OpenAI / Azure OpenAI clients
-    client: Optional[
-        Union[
-            OpenAI,
-            AsyncOpenAI,
-            AzureOpenAI,
-            AsyncAzureOpenAI,
-            AsyncClient,
-            Client,
-            AsyncHTTPHandler,
-            HTTPHandler,
-        ]
-    ] = None
     ## LOGGING PARAMS ##
     litellm_trace_id: Optional[str] = None
     ## UNIFIED PROJECT/REGION ##
