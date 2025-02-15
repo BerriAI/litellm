@@ -239,9 +239,9 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                               </TableCell>
                               <TableCell>
                                 <Text>
-                                  TPM: {org.tpm_limit ? org.tpm_limit : "Unlimited"}
+                                  TPM: {org.litellm_budget_table?.tpm_limit ? org.litellm_budget_table?.tpm_limit : "Unlimited"}
                                   <br />
-                                  RPM: {org.rpm_limit ? org.rpm_limit : "Unlimited"}
+                                  RPM: {org.litellm_budget_table?.rpm_limit ? org.litellm_budget_table?.rpm_limit : "Unlimited"}
                                 </Text>
                               </TableCell>
                               <TableCell>
