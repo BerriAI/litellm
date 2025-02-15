@@ -23,7 +23,7 @@ import { Button, Form, Input, Select, message, InputNumber, Tooltip } from "antd
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
-import { Member, Organization, organizationInfoCall, organizationMemberAddCall, organizationMemberUpdateCall } from "../networking";
+import { Member, Organization, organizationInfoCall, organizationMemberAddCall, organizationMemberUpdateCall, organizationMemberDeleteCall } from "../networking";
 import UserSearchModal from "../common_components/user_search_modal";
 import MemberModal from "../team/edit_membership";
 
@@ -115,6 +115,21 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     } catch (error) {
       message.error("Failed to update organization member");  
       console.error("Error updating organization member:", error);
+    }
+  };
+
+  const handleMemberDelete = async (values: any) => {
+    try {
+      if (!accessToken) return;
+
+      await organizationMemberDeleteCall(accessToken, organizationId, values.user_id);
+      message.success("Organization member deleted successfully");
+      setIsEditMemberModalVisible(false);
+      form.resetFields();
+      fetchOrgInfo();
+    } catch (error) {
+      message.error("Failed to delete organization member");
+      console.error("Error deleting organization member:", error);
     }
   };
 
@@ -276,7 +291,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                                 icon={TrashIcon}
                                 size="sm"
                                 onClick={() => {
-                                    // TODO: Implement delete member functionality
+                                    handleMemberDelete(member);
                                 }}
                                 />
                             </>
