@@ -16,6 +16,7 @@ from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_helpers.utils import (
@@ -250,14 +251,46 @@ async def list_organization(
     return response
 
 
+@router.get(
+    "/organization/info",
+    tags=["organization management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=LiteLLM_OrganizationTableWithMembers,
+)
+async def info_organization(organization_id: str):
+    """
+    Get the org specific information
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    response: Optional[LiteLLM_OrganizationTableWithMembers] = (
+        await prisma_client.db.litellm_organizationtable.find_unique(
+            where={"organization_id": organization_id},
+            include={"litellm_budget_table": True, "members": True, "teams": True},
+        )
+    )
+
+    if response is None:
+        raise HTTPException(status_code=404, detail={"error": "Organization not found"})
+
+    response_pydantic_obj = LiteLLM_OrganizationTableWithMembers(
+        **response.model_dump()
+    )
+
+    return response_pydantic_obj
+
+
 @router.post(
     "/organization/info",
     tags=["organization management"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def info_organization(data: OrganizationRequest):
+async def deprecated_info_organization(data: OrganizationRequest):
     """
-    Get the org specific information
+    DEPRECATED: Use GET /organization/info instead
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -378,6 +411,7 @@ async def organization_member_add(
             updated_organization_memberships=updated_organization_memberships,
         )
     except Exception as e:
+        verbose_proxy_logger.exception(f"Error adding member to organization: {e}")
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
@@ -418,12 +452,17 @@ async def add_member_to_organization(
                 where={"user_id": member.user_id}
             )
 
-        if member.user_email is not None:
-            existing_user_email_row = (
-                await prisma_client.db.litellm_usertable.find_unique(
-                    where={"user_email": member.user_email}
+        if existing_user_id_row is None and member.user_email is not None:
+            try:
+                existing_user_email_row = (
+                    await prisma_client.db.litellm_usertable.find_unique(
+                        where={"user_email": member.user_email}
+                    )
                 )
-            )
+            except Exception as e:
+                raise ValueError(
+                    f"Potential NON-Existent or Duplicate user email in DB: Error finding a unique instance of user_email={member.user_email} in LiteLLM_UserTable.: {e}"
+                )
 
         ## If user does not exist, create a new user
         if existing_user_id_row is None and existing_user_email_row is None:
@@ -477,4 +516,9 @@ async def add_member_to_organization(
         return user_object, organization_membership
 
     except Exception as e:
-        raise ValueError(f"Error adding member to organization: {e}")
+        import traceback
+
+        traceback.print_exc()
+        raise ValueError(
+            f"Error adding member={member} to organization={organization_id}: {e}"
+        )

@@ -17,6 +17,7 @@ export interface Model {
   model_info: Object | null;
 }
 
+
 export interface Organization {
   organization_id: string | null;
   organization_alias: string;
@@ -828,6 +829,40 @@ export const organizationListCall = async (accessToken: String) => {
 
     const data = await response.json();
     return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const organizationInfoCall = async (
+  accessToken: String,
+  organizationID: String
+) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/organization/info` : `/organization/info`;
+    if (organizationID) {
+      url = `${url}?organization_id=${organizationID}`;
+    }
+    console.log("in teamInfoCall");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("API Response:", data);
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
