@@ -23,7 +23,6 @@ from unittest.mock import MagicMock, patch
 
 import asyncio
 import pytest
-import psutil
 import os
 import litellm
 from typing import Callable, Any
@@ -38,6 +37,8 @@ from litellm.proxy.proxy_server import app
 
 async def get_memory_usage() -> float:
     """Get current memory usage of the process in MB"""
+    import psutil
+
     process = psutil.Process(os.getpid())
     return process.memory_info().rss / 1024 / 1024
 
