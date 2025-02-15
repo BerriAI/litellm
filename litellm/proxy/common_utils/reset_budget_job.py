@@ -58,23 +58,36 @@ class ResetBudgetJob:
                 "Keys to reset %s", json.dumps(keys_to_reset, indent=4, default=str)
             )
             updated_keys: List[LiteLLM_VerificationToken] = []
+            failed_keys = []
             if keys_to_reset is not None and len(keys_to_reset) > 0:
                 for key in keys_to_reset:
-                    updated_key = await ResetBudgetJob._reset_budget_for_key(
-                        key=key, current_time=now
-                    )
-                    if updated_key is not None:
-                        updated_keys.append(updated_key)
+                    try:
+                        updated_key = await ResetBudgetJob._reset_budget_for_key(
+                            key=key, current_time=now
+                        )
+                        if updated_key is not None:
+                            updated_keys.append(updated_key)
+                        else:
+                            failed_keys.append(
+                                {"key": key, "error": "Returned None without exception"}
+                            )
+                    except Exception as e:
+                        failed_keys.append({"key": key, "error": str(e)})
+                        verbose_proxy_logger.exception(
+                            "Failed to reset budget for key: %s", key
+                        )
 
                 verbose_proxy_logger.debug(
                     "Updated keys %s", json.dumps(updated_keys, indent=4, default=str)
                 )
 
-                await self.prisma_client.update_data(
-                    query_type="update_many", data_list=updated_keys, table_name="key"
-                )
+                if updated_keys:
+                    await self.prisma_client.update_data(
+                        query_type="update_many",
+                        data_list=updated_keys,
+                        table_name="key",
+                    )
 
-            # Log success
             end_time = time.time()
             asyncio.create_task(
                 self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
@@ -88,11 +101,12 @@ class ResetBudgetJob:
                         "keys_found": json.dumps(keys_to_reset, indent=4, default=str),
                         "num_keys_updated": len(updated_keys),
                         "keys_updated": json.dumps(updated_keys, indent=4, default=str),
+                        "num_keys_failed": len(failed_keys),
+                        "keys_failed": json.dumps(failed_keys, indent=4, default=str),
                     },
                 )
             )
         except Exception as e:
-            # Log failure
             end_time = time.time()
             asyncio.create_task(
                 self.proxy_logging_obj.service_logging_obj.async_service_failure_hook(
@@ -122,22 +136,38 @@ class ResetBudgetJob:
                 table_name="user", query_type="find_all", reset_at=now
             )
             updated_users: List[LiteLLM_UserTable] = []
+            failed_users = []
             if users_to_reset is not None and len(users_to_reset) > 0:
                 for user in users_to_reset:
-                    updated_user = await ResetBudgetJob._reset_budget_for_user(
-                        user=user, current_time=now
-                    )
-                    if updated_user is not None:
-                        updated_users.append(updated_user)
+                    try:
+                        updated_user = await ResetBudgetJob._reset_budget_for_user(
+                            user=user, current_time=now
+                        )
+                        if updated_user is not None:
+                            updated_users.append(updated_user)
+                        else:
+                            failed_users.append(
+                                {
+                                    "user": user,
+                                    "error": "Returned None without exception",
+                                }
+                            )
+                    except Exception as e:
+                        failed_users.append({"user": user, "error": str(e)})
+                        verbose_proxy_logger.exception(
+                            "Failed to reset budget for user: %s", user
+                        )
 
                 verbose_proxy_logger.debug(
                     "Updated users %s", json.dumps(updated_users, indent=4, default=str)
                 )
-                await self.prisma_client.update_data(
-                    query_type="update_many", data_list=updated_users, table_name="user"
-                )
+                if updated_users:
+                    await self.prisma_client.update_data(
+                        query_type="update_many",
+                        data_list=updated_users,
+                        table_name="user",
+                    )
 
-            # Log success
             end_time = time.time()
             asyncio.create_task(
                 self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
@@ -155,11 +185,12 @@ class ResetBudgetJob:
                         "users_updated": json.dumps(
                             updated_users, indent=4, default=str
                         ),
+                        "num_users_failed": len(failed_users),
+                        "users_failed": json.dumps(failed_users, indent=4, default=str),
                     },
                 )
             )
         except Exception as e:
-            # Log failure
             end_time = time.time()
             asyncio.create_task(
                 self.proxy_logging_obj.service_logging_obj.async_service_failure_hook(
@@ -191,22 +222,38 @@ class ResetBudgetJob:
                 table_name="team", query_type="find_all", reset_at=now
             )
             updated_teams: List[LiteLLM_TeamTable] = []
+            failed_teams = []
             if teams_to_reset is not None and len(teams_to_reset) > 0:
                 for team in teams_to_reset:
-                    updated_team = await ResetBudgetJob._reset_budget_for_team(
-                        team=team, current_time=now
-                    )
-                    if updated_team is not None:
-                        updated_teams.append(updated_team)
+                    try:
+                        updated_team = await ResetBudgetJob._reset_budget_for_team(
+                            team=team, current_time=now
+                        )
+                        if updated_team is not None:
+                            updated_teams.append(updated_team)
+                        else:
+                            failed_teams.append(
+                                {
+                                    "team": team,
+                                    "error": "Returned None without exception",
+                                }
+                            )
+                    except Exception as e:
+                        failed_teams.append({"team": team, "error": str(e)})
+                        verbose_proxy_logger.exception(
+                            "Failed to reset budget for team: %s", team
+                        )
 
                 verbose_proxy_logger.debug(
                     "Updated teams %s", json.dumps(updated_teams, indent=4, default=str)
                 )
-                await self.prisma_client.update_data(
-                    query_type="update_many", data_list=updated_teams, table_name="team"
-                )
+                if updated_teams:
+                    await self.prisma_client.update_data(
+                        query_type="update_many",
+                        data_list=updated_teams,
+                        table_name="team",
+                    )
 
-            # Log success
             end_time = time.time()
             asyncio.create_task(
                 self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
@@ -224,11 +271,12 @@ class ResetBudgetJob:
                         "teams_updated": json.dumps(
                             updated_teams, indent=4, default=str
                         ),
+                        "num_teams_failed": len(failed_teams),
+                        "teams_failed": json.dumps(failed_teams, indent=4, default=str),
                     },
                 )
             )
         except Exception as e:
-            # Log failure
             end_time = time.time()
             asyncio.create_task(
                 self.proxy_logging_obj.service_logging_obj.async_service_failure_hook(
@@ -253,9 +301,7 @@ class ResetBudgetJob:
         item: Union[LiteLLM_TeamTable, LiteLLM_UserTable, LiteLLM_VerificationToken],
         current_time: datetime,
         item_type: str,
-    ) -> Optional[
-        Union[LiteLLM_TeamTable, LiteLLM_UserTable, LiteLLM_VerificationToken]
-    ]:
+    ) -> Union[LiteLLM_TeamTable, LiteLLM_UserTable, LiteLLM_VerificationToken]:
         """
         Common logic for resetting budget for a team, user, or key
         """
@@ -267,9 +313,9 @@ class ResetBudgetJob:
             return item
         except Exception as e:
             verbose_proxy_logger.exception(
-                f"Error resetting budget for {item_type}: %s %s", item, e
+                "Error resetting budget for %s: %s. Item: %s", item_type, e, item
             )
-            return None
+            raise e
 
     @staticmethod
     async def _reset_budget_for_team(
