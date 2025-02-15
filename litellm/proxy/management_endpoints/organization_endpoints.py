@@ -253,6 +253,19 @@ async def delete_organization(
 
     deleted_orgs = []
     for organization_id in data.organization_ids:
+        # delete all teams in the organization
+        await prisma_client.db.litellm_teamtable.delete_many(
+            where={"organization_id": organization_id}
+        )
+        # delete all members in the organization
+        await prisma_client.db.litellm_organizationmembership.delete_many(
+            where={"organization_id": organization_id}
+        )
+        # delete all keys in the organization
+        await prisma_client.db.litellm_verificationtoken.delete_many(
+            where={"organization_id": organization_id}
+        )
+        # delete the organization
         deleted_org = await prisma_client.db.litellm_organizationtable.delete(
             where={"organization_id": organization_id},
             include={"members": True, "teams": True, "litellm_budget_table": True},

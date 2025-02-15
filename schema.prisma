@@ -95,7 +95,7 @@ model LiteLLM_TeamTable {
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
     model_id Int? @unique // id for LiteLLM_ModelTable -> stores team-level model aliases
-    litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id], onDelete: Cascade)
+    litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     litellm_model_table LiteLLM_ModelTable? @relation(fields: [model_id], references: [id])
 }
 
@@ -163,7 +163,7 @@ model LiteLLM_VerificationToken {
     created_at      DateTime?               @default(now()) @map("created_at")
     updated_at      DateTime?               @default(now()) @updatedAt @map("updated_at")
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
-    litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id], onDelete: Cascade)
+    litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
 }
 
 model LiteLLM_EndUserTable {
@@ -260,7 +260,7 @@ model LiteLLM_OrganizationMembership {
 
   // relations
   user LiteLLM_UserTable @relation(fields: [user_id], references: [user_id])
-  organization LiteLLM_OrganizationTable @relation("OrganizationToMembership", fields: [organization_id], references: [organization_id], onDelete: Cascade)
+  organization LiteLLM_OrganizationTable @relation("OrganizationToMembership", fields: [organization_id], references: [organization_id])
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
   
   
