@@ -494,9 +494,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         mode="edit"
         config={{
           title: "Edit Member",
+          showEmail: true,
+          showUserId: true,
           roleOptions: [
             { label: "Admin", value: "admin" },
-            { label: "Member", value: "member" }
+            { label: "User", value: "user" }
           ]
         }}
       />

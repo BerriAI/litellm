@@ -46,11 +46,27 @@ const MemberModal = <T extends BaseMember>({
 }: MemberModalProps<T>) => {
   const [form] = Form.useForm();
 
+  console.log("Initial Data:", initialData);
+
+  // Reset form and set initial values when modal becomes visible or initialData changes
   useEffect(() => {
-    if (initialData) {
-      form.setFieldsValue(initialData);
+    if (visible) {
+      if (mode === 'edit' && initialData) {
+        // For edit mode, use the initialData values
+        form.setFieldsValue({
+          ...initialData,
+          // Ensure role is set correctly for editing
+          role: initialData.role || config.defaultRole
+        });
+      } else {
+        // For add mode, reset to defaults
+        form.resetFields();
+        form.setFieldsValue({
+          role: config.defaultRole || config.roleOptions[0]?.value
+        });
+      }
     }
-  }, [initialData, form]);
+  }, [visible, initialData, mode, form, config.defaultRole, config.roleOptions]);
 
   const handleSubmit = async (values: any) => {
     try {
@@ -67,6 +83,11 @@ const MemberModal = <T extends BaseMember>({
       message.error('Failed to submit form');
       console.error('Form submission error:', error);
     }
+  };
+
+  // Helper function to get role label from value
+  const getRoleLabel = (value: string) => {
+    return config.roleOptions.find(option => option.value === value)?.label || value;
   };
 
   const renderField = (field: {
@@ -115,10 +136,6 @@ const MemberModal = <T extends BaseMember>({
         labelCol={{ span: 8 }}
         wrapperCol={{ span: 16 }}
         labelAlign="left"
-        initialValues={{
-          ...initialData,
-          role: initialData?.role || config.defaultRole || config.roleOptions[0]?.value
-        }}
       >
         {config.showEmail && (
           <Form.Item 
@@ -162,7 +179,16 @@ const MemberModal = <T extends BaseMember>({
         )}
 
         <Form.Item 
-          label="Role" 
+          label={
+            <div className="flex items-center gap-2">
+              <span>Role</span>
+              {mode === 'edit' && initialData && (
+                <span className="text-gray-500 text-sm">
+                  (Current: {getRoleLabel(initialData.role)})
+                </span>
+              )}
+            </div>
+          }
           name="role"
           className="mb-4"
           rules={[
@@ -170,11 +196,22 @@ const MemberModal = <T extends BaseMember>({
           ]}
         >
           <AntSelect>
-            {config.roleOptions.map(option => (
-              <AntSelect.Option key={option.value} value={option.value}>
-                {option.label}
-              </AntSelect.Option>
-            ))}
+            {mode === 'edit' && initialData
+              ? [
+                  // Current role first
+                  ...config.roleOptions.filter(option => option.value === initialData.role),
+                  // Then all other roles
+                  ...config.roleOptions.filter(option => option.value !== initialData.role)
+                ].map(option => (
+                  <AntSelect.Option key={option.value} value={option.value}>
+                    {option.label}
+                  </AntSelect.Option>
+                ))
+              : config.roleOptions.map(option => (
+                  <AntSelect.Option key={option.value} value={option.value}>
+                    {option.label}
+                  </AntSelect.Option>
+                ))}
           </AntSelect>
         </Form.Item>
 

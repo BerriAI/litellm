@@ -2673,6 +2673,46 @@ export const organizationMemberAddCall = async (
   }
 };
 
+export const organizationMemberUpdateCall = async (
+  accessToken: string,
+  organizationId: string,
+  formValues: Member // Assuming formValues is an object
+) => {
+  try {
+    console.log("Form Values in organizationMemberUpdateCall:", formValues); // Log the form values before making the API call
+
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/organization/member_update`
+      : `/organization/member_update`;
+
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        organization_id: organizationId,
+        ...formValues, // Include formValues in the request body
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      console.error("Error response from the server:", errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("API Response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to update organization member:", error);
+    throw error;
+  }
+};
+
 export const userUpdateUserCall = async (
   accessToken: string,
   formValues: any, // Assuming formValues is an object

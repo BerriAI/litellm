@@ -23,7 +23,7 @@ import { Button, Form, Input, Select, message, InputNumber, Tooltip } from "antd
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
-import { Member, Organization, organizationInfoCall, organizationMemberAddCall } from "../networking";
+import { Member, Organization, organizationInfoCall, organizationMemberAddCall, organizationMemberUpdateCall } from "../networking";
 import UserSearchModal from "../common_components/user_search_modal";
 import MemberModal from "../team/edit_membership";
 
@@ -94,6 +94,27 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     } catch (error) {
       message.error("Failed to add organization member");
       console.error("Error adding organization member:", error);
+    }
+  };
+
+  const handleMemberUpdate = async (values: any) => {
+    try {
+      if (!accessToken) return;
+
+      const member: Member = {
+        user_email: values.user_email,
+        user_id: values.user_id,
+        role: values.role,
+      }
+
+      const response = await organizationMemberUpdateCall(accessToken, organizationId, member);
+      message.success("Organization member updated successfully");
+      setIsEditMemberModalVisible(false);
+      form.resetFields();
+      fetchOrgInfo();
+    } catch (error) {
+      message.error("Failed to update organization member");  
+      console.error("Error updating organization member:", error);
     }
   };
 
@@ -243,7 +264,11 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                                 icon={PencilAltIcon}
                                 size="sm"
                                 onClick={() => {
-                                    setSelectedEditMember(member);
+                                    setSelectedEditMember({
+                                      "role": member.user_role,
+                                      "user_email": member.user_email,
+                                      "user_id": member.user_id
+                                    });
                                     setIsEditMemberModalVisible(true);
                                 }}
                                 />
@@ -409,11 +434,13 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       <MemberModal
         visible={isEditMemberModalVisible}
         onCancel={() => setIsEditMemberModalVisible(false)}
-        onSubmit={() => {}}
+        onSubmit={handleMemberUpdate}
         initialData={selectedEditMember}
         mode="edit"
         config={{
           title: "Edit Member",
+          showEmail: true,
+          showUserId: true,
           roleOptions: [
             { label: "Org Admin", value: "org_admin" },
             { label: "Internal User", value: "internal_user" },
