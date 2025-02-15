@@ -1495,9 +1495,13 @@ class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
 
 
 class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
+    """Returned by the /organization/info endpoint and /organization/list endpoint"""
+
     members: List[LiteLLM_OrganizationMembershipTable] = []
     teams: List[LiteLLM_TeamTable] = []
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class NewOrganizationResponse(LiteLLM_OrganizationTable):
