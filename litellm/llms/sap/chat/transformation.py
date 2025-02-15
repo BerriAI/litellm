@@ -70,17 +70,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
-    def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
-        # groq is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.groq.com/openai/v1
-        api_base = (
-            api_base
-            or get_secret_str("GROQ_API_BASE")
-            or "https://api.groq.com/openai/v1"
-        )  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("GROQ_API_KEY")
-        return api_base, dynamic_api_key
 
     def _should_fake_stream(self, optional_params: dict) -> bool:
         """
@@ -91,6 +80,32 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
         return False
 
+    def get_supported_openai_params(self, model):
+        return [
+            'frequency_penalty',
+            'logit_bias',
+            'logprobs',
+            'top_logprobs',
+            'max_tokens',
+            'max_completion_tokens',
+            'prediction',
+            'n',
+            'presence_penalty',
+            'seed',
+            'stop',
+            'stream',
+            'stream_options',
+            'temperature',
+            'top_p',
+            'tools',
+            'tool_choice',
+            'function_call',
+            'functions',
+            'extra_headers',
+            'parallel_tool_calls',
+            'response_format',
+        ]
+
 
     def _transform_request(
         self,
@@ -99,18 +114,23 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> OrchestrationConfig:
+        supported_params = self.get_supported_openai_params(model)
+        model_params = {k: v for k, v in optional_params.items() if k in supported_params}
         messages_ = [Message(**kwargs) for kwargs in messages]
         model_version = optional_params.pop('model_version', 'latest')
         tools = optional_params.pop("tools", None)
         response_format = optional_params.pop("response_format", None)
         if isinstance(response_format, dict):
-            print(response_format)
-            response_format = ResponseFormatJsonSchema(**response_format['json_schema'])
-            print([*response_format.to_dict()['json_schema'].keys()])
-        return OrchestrationConfig(
+            schema = response_format['json_schema']
+            if not schema.get('description', None):
+                schema["description"] = ""
+            response_format = ResponseFormatJsonSchema(**schema)
+        config = OrchestrationConfig(
             template=Template(messages=messages_, response_format=response_format),
-            llm=LLM(name=model, parameters=optional_params, version=model_version),
+            llm=LLM(name=model, parameters=model_params, version=model_version),
         )
+        
+        return config
 
     def _transform_response(
         self,
@@ -118,7 +138,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         response,
         model_response: ModelResponse,
         config: OrchestrationConfig,
-        stream: bool,
         logging_obj: Optional[LiteLLMLoggingObject],
         optional_params: dict,
         print_verbose,
@@ -133,3 +152,19 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         obj['model'] = llm_response.model
         obj["usage"] = Usage(**asdict(llm_response.usage))
         return ModelResponse.model_validate(obj)
+    
+
+
+import json
+
+def remove_keys(dictionary, keys_to_remove):
+    if isinstance(dictionary, dict):
+        return {
+            key: remove_keys(value, keys_to_remove)
+            for key, value in dictionary.items()
+            if key not in keys_to_remove
+        }
+    elif isinstance(dictionary, list):
+        return [remove_keys(item, keys_to_remove) for item in dictionary]
+    else:
+        return dictionary
