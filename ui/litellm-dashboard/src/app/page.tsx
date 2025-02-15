@@ -27,6 +27,8 @@ import CacheDashboard from "@/components/cache_dashboard";
 import { setGlobalLitellmHeaderName } from "@/components/networking";
 import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
+import { fetchUserModels } from "@/components/create_key_button";
+
 function getCookie(name: string) {
   const cookieValue = document.cookie
     .split("; ")
@@ -81,6 +83,7 @@ export default function CreateKeyPage() {
   const [keys, setKeys] = useState<null | any[]>(null);
   const [currentOrg, setCurrentOrg] = useState<Organization>(defaultOrg);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [userModels, setUserModels] = useState<string[]>([]);
   const [proxySettings, setProxySettings] = useState<ProxySettings>({
     PROXY_BASE_URL: "",
     PROXY_LOGOUT_URL: "",
@@ -171,6 +174,12 @@ export default function CreateKeyPage() {
       }
     }
   }, [token]);
+  
+  useEffect(() => {
+    if (accessToken && userID && userRole) {
+      fetchUserModels(userID, userRole, accessToken, setUserModels);
+    }
+  }, [accessToken, userID, userRole]);
 
   const handleOrgChange = (org: Organization) => {
     setCurrentOrg(org);
@@ -283,11 +292,10 @@ export default function CreateKeyPage() {
                 />
               ) : page == "organizations" ? (
                 <Organizations
-                  teams={teams}
-                  setTeams={setTeams}
-                  searchParams={searchParams}
+                  organizations={organizations}
+                  setOrganizations={setOrganizations}
+                  userModels={userModels}
                   accessToken={accessToken}
-                  userID={userID}
                   userRole={userRole}
                   premiumUser={premiumUser}
                 />
