@@ -69,7 +69,9 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
     }
   }, [organizations, accessToken]);
 
-  const handleDelete = (orgId: string) => {
+  const handleDelete = (orgId: string | null) => {
+    if (!orgId) return;
+    
     setOrgToDelete(orgId);
     setIsDeleteModalOpen(true);
   };
