@@ -236,6 +236,10 @@ async def delete_organization(
 ):
     """
     Delete an organization
+
+    # Parameters:
+
+    - organization_ids: List[str] - The organization ids to delete.
     """
     from litellm.proxy.proxy_server import prisma_client
 
