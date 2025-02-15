@@ -25,7 +25,7 @@ import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { Member, Organization, organizationInfoCall, organizationMemberAddCall } from "../networking";
 import UserSearchModal from "../common_components/user_search_modal";
-
+import MemberModal from "../team/edit_membership";
 
 interface OrganizationInfoProps {
   organizationId: string;
@@ -51,6 +51,8 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   const [form] = Form.useForm();
   const [isEditing, setIsEditing] = useState(false);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
+  const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
+  const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
 
   const canEditOrg = is_org_admin || is_proxy_admin;
 
@@ -241,7 +243,8 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                                 icon={PencilAltIcon}
                                 size="sm"
                                 onClick={() => {
-                                    // TODO: Implement edit member functionality
+                                    setSelectedEditMember(member);
+                                    setIsEditMemberModalVisible(true);
                                 }}
                                 />
                                 <Icon
@@ -402,6 +405,21 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
           { label: "internal_user_viewer", value: "internal_user_viewer", description: "Can only view their keys within organization." }
         ]}
         defaultRole="internal_user"
+      />
+      <MemberModal
+        visible={isEditMemberModalVisible}
+        onCancel={() => setIsEditMemberModalVisible(false)}
+        onSubmit={() => {}}
+        initialData={selectedEditMember}
+        mode="edit"
+        config={{
+          title: "Edit Member",
+          roleOptions: [
+            { label: "Org Admin", value: "org_admin" },
+            { label: "Internal User", value: "internal_user" },
+            { label: "Internal User Viewer", value: "internal_user_viewer" }
+          ]
+        }}
       />
     </div>
   );
