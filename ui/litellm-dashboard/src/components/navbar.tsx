@@ -89,7 +89,7 @@ const Navbar: React.FC<NavbarProps> = ({
       key: "note",
       label: (
         <div className="flex items-center justify-between py-1 px-2 bg-gray-50 text-gray-500 text-xs italic">
-          <span>Switching between organizations on the UI is currently in beta.<br/><br/>Currently just impacts "Virtual Keys" and "Teams" tab.</span>
+          <span>Switching between organizations on the UI is currently in beta.</span>
         </div>
       ),
       disabled: true
