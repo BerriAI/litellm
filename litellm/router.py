@@ -3057,7 +3057,7 @@ class Router:
 
             if hasattr(original_exception, "message"):
                 # add the available fallbacks to the exception
-                original_exception.message += "\nReceived Model Group={}\nAvailable Model Group Fallbacks={}".format(  # type: ignore
+                original_exception.message += ". Received Model Group={}\nAvailable Model Group Fallbacks={}".format(  # type: ignore
                     model_group,
                     fallback_model_group,
                 )
@@ -3122,9 +3122,7 @@ class Router:
             )
 
     async def async_function_with_retries(self, *args, **kwargs):  # noqa: PLR0915
-        verbose_router_logger.debug(
-            f"Inside async function with retries: args - {args}; kwargs - {kwargs}"
-        )
+        verbose_router_logger.debug("Inside async function with retries.")
         original_function = kwargs.pop("original_function")
         fallbacks = kwargs.pop("fallbacks", self.fallbacks)
         parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
