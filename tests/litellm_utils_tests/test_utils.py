@@ -721,6 +721,14 @@ def test_duration_in_seconds():
     assert value - expected_duration < 2
 
 
+def test_duration_in_seconds_basic():
+    assert duration_in_seconds(duration="3s") == 3
+    assert duration_in_seconds(duration="3m") == 180
+    assert duration_in_seconds(duration="3h") == 10800
+    assert duration_in_seconds(duration="3d") == 259200
+    assert duration_in_seconds(duration="3w") == 1814400
+
+
 def test_get_llm_provider_ft_models():
     """
     All ft prefixed models should map to OpenAI
