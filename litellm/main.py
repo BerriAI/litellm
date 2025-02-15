@@ -3360,7 +3360,6 @@ def embedding(  # noqa: PLR0915
 
         if azure is True or custom_llm_provider == "azure":
             # azure configs
-            api_type = get_secret_str("AZURE_API_TYPE") or "azure"
 
             api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
 
