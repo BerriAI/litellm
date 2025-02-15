@@ -94,6 +94,29 @@ export const getTeamModels = (team: Team | null, allAvailableModels: string[]): 
   return unfurlWildcardModelsInList(tempModelsToPick, allAvailableModels);
 };
 
+export const fetchUserModels = async (userID: string, userRole: string, accessToken: string, setUserModels: (models: string[]) => void) => {
+  try {
+    if (userID === null || userRole === null) {
+      return;
+    }
+
+    if (accessToken !== null) {
+      const model_available = await modelAvailableCall(
+        accessToken,
+        userID,
+        userRole
+      );
+      let available_model_names = model_available["data"].map(
+        (element: { id: string }) => element.id
+      );
+      console.log("available_model_names:", available_model_names);
+      setUserModels(available_model_names);
+    }
+  } catch (error) {
+    console.error("Error fetching user models:", error);
+  }
+};
+
 const CreateKey: React.FC<CreateKeyProps> = ({
   userID,
   team,
@@ -126,30 +149,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   };
 
   useEffect(() => {
-    const fetchUserModels = async () => {
-      try {
-        if (userID === null || userRole === null) {
-          return;
-        }
-
-        if (accessToken !== null) {
-          const model_available = await modelAvailableCall(
-            accessToken,
-            userID,
-            userRole
-          );
-          let available_model_names = model_available["data"].map(
-            (element: { id: string }) => element.id
-          );
-          console.log("available_model_names:", available_model_names);
-          setUserModels(available_model_names);
-        }
-      } catch (error) {
-        console.error("Error fetching user models:", error);
-      }
-    };
-
-    fetchUserModels();
+    if (userID && userRole && accessToken) {
+      fetchUserModels(userID, userRole, accessToken, setUserModels);
+    }
   }, [accessToken, userID, userRole]);
 
   useEffect(() => {
