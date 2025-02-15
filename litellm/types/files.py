@@ -275,7 +275,7 @@ GEMINI_1_5_ACCEPTED_FILE_TYPES: Set[FileType] = {
     FileType.THREE_GPP,
     # PDF
     FileType.PDF,
-    FileType.text,
+    FileType.TXT,
 }
 
 
