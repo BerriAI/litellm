@@ -1494,8 +1494,8 @@ class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
 
 
 class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
-    members: List[LiteLLM_OrganizationMembershipTable]
-    teams: List[LiteLLM_TeamTable]
+    members: List[LiteLLM_OrganizationMembershipTable] = []
+    teams: List[LiteLLM_TeamTable] = []
 
 
 class NewOrganizationResponse(LiteLLM_OrganizationTable):

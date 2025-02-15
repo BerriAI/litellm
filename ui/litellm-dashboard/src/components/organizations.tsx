@@ -158,8 +158,8 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                 <Table>
                   <TableHead>
                     <TableRow>
-                      <TableHeaderCell>Organization Name</TableHeaderCell>
                       <TableHeaderCell>Organization ID</TableHeaderCell>
+                      <TableHeaderCell>Organization Name</TableHeaderCell>
                       <TableHeaderCell>Created</TableHeaderCell>
                       <TableHeaderCell>Spend (USD)</TableHeaderCell>
                       <TableHeaderCell>Budget (USD)</TableHeaderCell>
@@ -176,7 +176,6 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                           .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
                           .map((org: Organization) => (
                             <TableRow key={org.organization_id}>
-                              <TableCell>{org.organization_alias}</TableCell>
                               <TableCell>
                                 <div className="overflow-hidden">
                                   <Tooltip title={org.organization_id}>
@@ -191,6 +190,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                                   </Tooltip>
                                 </div>
                               </TableCell>
+                              <TableCell>{org.organization_alias}</TableCell>
                               <TableCell>
                                 {org.created_at ? new Date(org.created_at).toLocaleDateString() : "N/A"}
                               </TableCell>

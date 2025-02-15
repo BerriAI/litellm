@@ -254,6 +254,7 @@ async def list_organization(
     "/organization/info",
     tags=["organization management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=LiteLLM_OrganizationTableWithMembers,
 )
 async def info_organization(organization_id: str):
     """
@@ -264,12 +265,21 @@ async def info_organization(organization_id: str):
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
-    response = await prisma_client.db.litellm_organizationtable.find_unique(
-        where={"organization_id": organization_id},
-        include={"litellm_budget_table": True},
+    response: Optional[LiteLLM_OrganizationTableWithMembers] = (
+        await prisma_client.db.litellm_organizationtable.find_unique(
+            where={"organization_id": organization_id},
+            include={"litellm_budget_table": True, "members": True, "teams": True},
+        )
     )
 
-    return response
+    if response is None:
+        raise HTTPException(status_code=404, detail={"error": "Organization not found"})
+
+    response_pydantic_obj = LiteLLM_OrganizationTableWithMembers(
+        **response.model_dump()
+    )
+
+    return response_pydantic_obj
 
 
 @router.post(
