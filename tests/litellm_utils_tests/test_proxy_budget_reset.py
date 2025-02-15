@@ -345,3 +345,326 @@ async def test_reset_budget_continues_other_categories_on_failure():
     teams_call = calls[2]
     assert teams_call.kwargs.get("table_name") == "team"
     assert len(teams_call.kwargs.get("data_list", [])) == 2
+
+
+# ---------------------------------------------------------------------------
+# Additional tests for service logger behavior (keys, users, teams)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_service_logger_keys_success():
+    """
+    Test that when resetting keys succeeds (all keys are updated) the service
+    logger success hook is called with the correct event metadata and no exception is logged.
+    """
+    keys = [
+        {"id": "key1", "spend": 10.0, "budget_duration": 60},
+        {"id": "key2", "spend": 15.0, "budget_duration": 60},
+    ]
+    prisma_client = MagicMock()
+    prisma_client.get_data = AsyncMock(return_value=keys)
+    prisma_client.update_data = AsyncMock()
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
+    proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock()
+
+    job = ResetBudgetJob(proxy_logging_obj, prisma_client)
+
+    async def fake_reset_key(key, current_time):
+        key["spend"] = 0.0
+        key["budget_reset_at"] = (
+            current_time + timedelta(seconds=key["budget_duration"])
+        ).isoformat()
+        return key
+
+    with patch.object(
+        ResetBudgetJob,
+        "_reset_budget_for_key",
+        side_effect=fake_reset_key,
+    ):
+        with patch(
+            "litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception"
+        ) as mock_verbose_exc:
+            await job.reset_budget_for_litellm_keys()
+            # Allow async logging task to complete
+            await asyncio.sleep(0.1)
+            mock_verbose_exc.assert_not_called()
+
+    # Verify success hook call
+    proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_called_once()
+    args, kwargs = (
+        proxy_logging_obj.service_logging_obj.async_service_success_hook.call_args
+    )
+    event_metadata = kwargs.get("event_metadata", {})
+    assert event_metadata.get("num_keys_found") == len(keys)
+    assert event_metadata.get("num_keys_updated") == len(keys)
+    assert event_metadata.get("num_keys_failed") == 0
+    # Failure hook should not be executed.
+    proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_service_logger_keys_failure():
+    """
+    Test that when a key reset fails the service logger failure hook is called,
+    the event metadata reflects the number of keys processed, and that the verbose
+    logger exception is called.
+    """
+    keys = [
+        {"id": "key1", "spend": 10.0, "budget_duration": 60},
+        {"id": "key2", "spend": 15.0, "budget_duration": 60},
+    ]
+    prisma_client = MagicMock()
+    prisma_client.get_data = AsyncMock(return_value=keys)
+    prisma_client.update_data = AsyncMock()
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
+    proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock()
+
+    job = ResetBudgetJob(proxy_logging_obj, prisma_client)
+
+    async def fake_reset_key(key, current_time):
+        if key["id"] == "key1":
+            raise Exception("Simulated failure for key1")
+        key["spend"] = 0.0
+        key["budget_reset_at"] = (
+            current_time + timedelta(seconds=key["budget_duration"])
+        ).isoformat()
+        return key
+
+    with patch.object(
+        ResetBudgetJob,
+        "_reset_budget_for_key",
+        side_effect=fake_reset_key,
+    ):
+        with patch(
+            "litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception"
+        ) as mock_verbose_exc:
+            await job.reset_budget_for_litellm_keys()
+            await asyncio.sleep(0.1)
+            # Expect at least one exception logged (the inner error and the outer catch)
+            assert mock_verbose_exc.call_count >= 1
+
+    proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_called_once()
+    args, kwargs = (
+        proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args
+    )
+    event_metadata = kwargs.get("event_metadata", {})
+    assert event_metadata.get("num_keys_found") == len(keys)
+    keys_found_str = event_metadata.get("keys_found", "")
+    assert "key1" in keys_found_str
+    # Success hook should not be called.
+    proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_service_logger_users_success():
+    """
+    Test that when resetting users succeeds the service logger success hook is called with
+    the correct metadata and no exception is logged.
+    """
+    users = [
+        {"id": "user1", "spend": 20.0, "budget_duration": 120},
+        {"id": "user2", "spend": 25.0, "budget_duration": 120},
+    ]
+    prisma_client = MagicMock()
+    prisma_client.get_data = AsyncMock(return_value=users)
+    prisma_client.update_data = AsyncMock()
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
+    proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock()
+
+    job = ResetBudgetJob(proxy_logging_obj, prisma_client)
+
+    async def fake_reset_user(user, current_time):
+        user["spend"] = 0.0
+        user["budget_reset_at"] = (
+            current_time + timedelta(seconds=user["budget_duration"])
+        ).isoformat()
+        return user
+
+    with patch.object(
+        ResetBudgetJob,
+        "_reset_budget_for_user",
+        side_effect=fake_reset_user,
+    ):
+        with patch(
+            "litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception"
+        ) as mock_verbose_exc:
+            await job.reset_budget_for_litellm_users()
+            await asyncio.sleep(0.1)
+            mock_verbose_exc.assert_not_called()
+
+    proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_called_once()
+    args, kwargs = (
+        proxy_logging_obj.service_logging_obj.async_service_success_hook.call_args
+    )
+    event_metadata = kwargs.get("event_metadata", {})
+    assert event_metadata.get("num_users_found") == len(users)
+    assert event_metadata.get("num_users_updated") == len(users)
+    assert event_metadata.get("num_users_failed") == 0
+    proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_service_logger_users_failure():
+    """
+    Test that a failure during user reset calls the failure hook with appropriate metadata,
+    logs the exception, and does not call the success hook.
+    """
+    users = [
+        {"id": "user1", "spend": 20.0, "budget_duration": 120},
+        {"id": "user2", "spend": 25.0, "budget_duration": 120},
+    ]
+    prisma_client = MagicMock()
+    prisma_client.get_data = AsyncMock(return_value=users)
+    prisma_client.update_data = AsyncMock()
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
+    proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock()
+
+    job = ResetBudgetJob(proxy_logging_obj, prisma_client)
+
+    async def fake_reset_user(user, current_time):
+        if user["id"] == "user1":
+            raise Exception("Simulated failure for user1")
+        user["spend"] = 0.0
+        user["budget_reset_at"] = (
+            current_time + timedelta(seconds=user["budget_duration"])
+        ).isoformat()
+        return user
+
+    with patch.object(
+        ResetBudgetJob,
+        "_reset_budget_for_user",
+        side_effect=fake_reset_user,
+    ):
+        with patch(
+            "litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception"
+        ) as mock_verbose_exc:
+            await job.reset_budget_for_litellm_users()
+            await asyncio.sleep(0.1)
+            assert mock_verbose_exc.call_count >= 1
+
+    proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_called_once()
+    args, kwargs = (
+        proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args
+    )
+    event_metadata = kwargs.get("event_metadata", {})
+    assert event_metadata.get("num_users_found") == len(users)
+    users_found_str = event_metadata.get("users_found", "")
+    assert "user1" in users_found_str
+    proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_service_logger_teams_success():
+    """
+    Test that when resetting teams is successful the service logger success hook is called with
+    the proper metadata and nothing is logged as an exception.
+    """
+    teams = [
+        {"id": "team1", "spend": 30.0, "budget_duration": 180},
+        {"id": "team2", "spend": 35.0, "budget_duration": 180},
+    ]
+    prisma_client = MagicMock()
+    prisma_client.get_data = AsyncMock(return_value=teams)
+    prisma_client.update_data = AsyncMock()
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
+    proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock()
+
+    job = ResetBudgetJob(proxy_logging_obj, prisma_client)
+
+    async def fake_reset_team(team, current_time):
+        team["spend"] = 0.0
+        team["budget_reset_at"] = (
+            current_time + timedelta(seconds=team["budget_duration"])
+        ).isoformat()
+        return team
+
+    with patch.object(
+        ResetBudgetJob,
+        "_reset_budget_for_team",
+        side_effect=fake_reset_team,
+    ):
+        with patch(
+            "litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception"
+        ) as mock_verbose_exc:
+            await job.reset_budget_for_litellm_teams()
+            await asyncio.sleep(0.1)
+            mock_verbose_exc.assert_not_called()
+
+    proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_called_once()
+    args, kwargs = (
+        proxy_logging_obj.service_logging_obj.async_service_success_hook.call_args
+    )
+    event_metadata = kwargs.get("event_metadata", {})
+    assert event_metadata.get("num_teams_found") == len(teams)
+    assert event_metadata.get("num_teams_updated") == len(teams)
+    assert event_metadata.get("num_teams_failed") == 0
+    proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_service_logger_teams_failure():
+    """
+    Test that a failure during team reset triggers the failure hook with proper metadata,
+    results in an exception log and no success hook call.
+    """
+    teams = [
+        {"id": "team1", "spend": 30.0, "budget_duration": 180},
+        {"id": "team2", "spend": 35.0, "budget_duration": 180},
+    ]
+    prisma_client = MagicMock()
+    prisma_client.get_data = AsyncMock(return_value=teams)
+    prisma_client.update_data = AsyncMock()
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
+    proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock()
+
+    job = ResetBudgetJob(proxy_logging_obj, prisma_client)
+
+    async def fake_reset_team(team, current_time):
+        if team["id"] == "team1":
+            raise Exception("Simulated failure for team1")
+        team["spend"] = 0.0
+        team["budget_reset_at"] = (
+            current_time + timedelta(seconds=team["budget_duration"])
+        ).isoformat()
+        return team
+
+    with patch.object(
+        ResetBudgetJob,
+        "_reset_budget_for_team",
+        side_effect=fake_reset_team,
+    ):
+        with patch(
+            "litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception"
+        ) as mock_verbose_exc:
+            await job.reset_budget_for_litellm_teams()
+            await asyncio.sleep(0.1)
+            assert mock_verbose_exc.call_count >= 1
+
+    proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_called_once()
+    args, kwargs = (
+        proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args
+    )
+    event_metadata = kwargs.get("event_metadata", {})
+    assert event_metadata.get("num_teams_found") == len(teams)
+    teams_found_str = event_metadata.get("teams_found", "")
+    assert "team1" in teams_found_str
+    proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_not_called()
