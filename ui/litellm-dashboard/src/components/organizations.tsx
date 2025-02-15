@@ -25,7 +25,7 @@ import { PencilAltIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline"
 import { TextInput } from "@tremor/react";
 import { getModelDisplayName } from './key_team_helpers/fetch_available_models_team_key';
 import OrganizationInfoView from './organization/organization_view';
-import { Organization, organizationListCall } from './networking';
+import { Organization, organizationListCall, organizationCreateCall } from './networking';
 interface OrganizationsTableProps {
   organizations: Organization[];
   userRole: string;
@@ -38,6 +38,11 @@ interface OrganizationsTableProps {
   setOrganizations: (organizations: Organization[]) => void;
   premiumUser: boolean;
 }
+
+const fetchOrganizations = async (accessToken: string, setOrganizations: (organizations: Organization[]) => void) => {
+  const organizations = await organizationListCall(accessToken);
+  setOrganizations(organizations);
+};
 
 const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
   organizations,
@@ -60,11 +65,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
 
   useEffect(() => {
     if (organizations.length === 0 && accessToken) {
-      const fetchOrganizations = async () => {
-        const organizations = await organizationListCall(accessToken);
-        setOrganizations(organizations);
-      };
-      fetchOrganizations();
+      fetchOrganizations(accessToken, setOrganizations);
     }
   }, [organizations, accessToken]);
 
@@ -103,20 +104,11 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
     try {
       if (!accessToken) return;
 
-      const response = await fetch('/organization/new', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(values)
-      });
-
-      if (!response.ok) throw new Error('Failed to create organization');
-
+      await organizationCreateCall(accessToken, values);
       setIsOrgModalVisible(false);
       form.resetFields();
       // Refresh organizations list
+      fetchOrganizations(accessToken, setOrganizations);
     } catch (error) {
       console.error('Error creating organization:', error);
     }
