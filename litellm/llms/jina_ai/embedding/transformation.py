@@ -21,7 +21,7 @@ class JinaAIEmbeddingConfig:
     def __init__(
         self,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)

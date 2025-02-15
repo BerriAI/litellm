@@ -1,9 +1,10 @@
 import asyncio
 import json
+import re
 import time
 import traceback
 import uuid
-from typing import Dict, Iterable, List, Literal, Optional, Union
+from typing import Dict, Iterable, List, Literal, Optional, Tuple, Union
 
 import litellm
 from litellm._logging import verbose_logger
@@ -221,6 +222,27 @@ def _handle_invalid_parallel_tool_calls(
         return tool_calls
 
 
+def _parse_content_for_reasoning(
+    message_text: Optional[str],
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Parse the content for reasoning
+
+    Returns:
+    - reasoning_content: The content of the reasoning
+    - content: The content of the message
+    """
+    if not message_text:
+        return None, message_text
+
+    reasoning_match = re.match(r"<think>(.*?)</think>(.*)", message_text, re.DOTALL)
+
+    if reasoning_match:
+        return reasoning_match.group(1), reasoning_match.group(2)
+
+    return None, message_text
+
+
 class LiteLLMResponseObjectHandler:
 
     @staticmethod
@@ -432,8 +454,20 @@ def convert_to_model_response_object(  # noqa: PLR0915
                     for field in choice["message"].keys():
                         if field not in message_keys:
                             provider_specific_fields[field] = choice["message"][field]
+
+                    # Handle reasoning models that display `reasoning_content` within `content`
+
+                    reasoning_content, content = _parse_content_for_reasoning(
+                        choice["message"].get("content")
+                    )
+
+                    if reasoning_content:
+                        provider_specific_fields["reasoning_content"] = (
+                            reasoning_content
+                        )
+
                     message = Message(
-                        content=choice["message"].get("content", None),
+                        content=content,
                         role=choice["message"]["role"] or "assistant",
                         function_call=choice["message"].get("function_call", None),
                         tool_calls=tool_calls,

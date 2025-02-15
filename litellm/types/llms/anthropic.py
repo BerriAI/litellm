@@ -92,10 +92,17 @@ class AnthropicMessagesImageParam(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
+class CitationsObject(TypedDict):
+    enabled: bool
+
+
 class AnthropicMessagesDocumentParam(TypedDict, total=False):
     type: Required[Literal["document"]]
     source: Required[AnthropicContentParamSource]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+    title: str
+    context: str
+    citations: Optional[CitationsObject]
 
 
 class AnthropicMessagesToolResultContent(TypedDict):
@@ -173,6 +180,11 @@ class ContentTextBlockDelta(TypedDict):
     text: str
 
 
+class ContentCitationsBlockDelta(TypedDict):
+    type: Literal["citations"]
+    citation: dict
+
+
 class ContentJsonBlockDelta(TypedDict):
     """
     "delta": {"type": "input_json_delta","partial_json": "{\"location\": \"San Fra"}}
@@ -185,7 +197,9 @@ class ContentJsonBlockDelta(TypedDict):
 class ContentBlockDelta(TypedDict):
     type: Literal["content_block_delta"]
     index: int
-    delta: Union[ContentTextBlockDelta, ContentJsonBlockDelta]
+    delta: Union[
+        ContentTextBlockDelta, ContentJsonBlockDelta, ContentCitationsBlockDelta
+    ]
 
 
 class ContentBlockStop(TypedDict):

@@ -5,10 +5,11 @@ import time
 from typing import Any, Callable, Dict, List, Literal, Optional, Union
 
 import httpx  # type: ignore
-from openai import AsyncAzureOpenAI, AzureOpenAI
+from openai import APITimeoutError, AsyncAzureOpenAI, AzureOpenAI
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -98,14 +99,6 @@ class AzureOpenAIAssistantsAPIConfig:
 
 
 def select_azure_base_url_or_endpoint(azure_client_params: dict):
-    # azure_client_params = {
-    #     "api_version": api_version,
-    #     "azure_endpoint": api_base,
-    #     "azure_deployment": model,
-    #     "http_client": litellm.client_session,
-    #     "max_retries": max_retries,
-    #     "timeout": timeout,
-    # }
     azure_endpoint = azure_client_params.get("azure_endpoint", None)
     if azure_endpoint is not None:
         # see : https://github.com/openai/openai-python/blob/3d61ed42aba652b547029095a7eb269ad4e1e957/src/openai/lib/azure.py#L192
@@ -312,6 +305,7 @@ class AzureChatCompletion(BaseLLM):
         - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
         - call chat.completions.create by default
         """
+        start_time = time.time()
         try:
             raw_response = await azure_client.chat.completions.with_raw_response.create(
                 **data, timeout=timeout
@@ -320,6 +314,11 @@ class AzureChatCompletion(BaseLLM):
             headers = dict(raw_response.headers)
             response = raw_response.parse()
             return headers, response
+        except APITimeoutError as e:
+            end_time = time.time()
+            time_delta = round(end_time - start_time, 2)
+            e.message += f" - timeout value={timeout}, time taken={time_delta} seconds"
+            raise e
         except Exception as e:
             raise e
 
@@ -353,7 +352,9 @@ class AzureChatCompletion(BaseLLM):
                     status_code=422, message="Missing model or messages"
                 )
 
-            max_retries = optional_params.pop("max_retries", 2)
+            max_retries = optional_params.pop("max_retries", None)
+            if max_retries is None:
+                max_retries = DEFAULT_MAX_RETRIES
             json_mode: Optional[bool] = optional_params.pop("json_mode", False)
 
             ### CHECK IF CLOUDFLARE AI GATEWAY ###
@@ -415,6 +416,7 @@ class AzureChatCompletion(BaseLLM):
                         azure_ad_token_provider=azure_ad_token_provider,
                         timeout=timeout,
                         client=client,
+                        max_retries=max_retries,
                     )
                 else:
                     return self.acompletion(
@@ -430,6 +432,7 @@ class AzureChatCompletion(BaseLLM):
                         timeout=timeout,
                         client=client,
                         logging_obj=logging_obj,
+                        max_retries=max_retries,
                         convert_tool_call_to_json_mode=json_mode,
                     )
             elif "stream" in optional_params and optional_params["stream"] is True:
@@ -445,6 +448,7 @@ class AzureChatCompletion(BaseLLM):
                     azure_ad_token_provider=azure_ad_token_provider,
                     timeout=timeout,
                     client=client,
+                    max_retries=max_retries,
                 )
             else:
                 ## LOGGING
@@ -553,6 +557,7 @@ class AzureChatCompletion(BaseLLM):
         dynamic_params: bool,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
+        max_retries: int,
         azure_ad_token: Optional[str] = None,
         azure_ad_token_provider: Optional[Callable] = None,
         convert_tool_call_to_json_mode: Optional[bool] = None,
@@ -560,12 +565,6 @@ class AzureChatCompletion(BaseLLM):
     ):
         response = None
         try:
-            max_retries = data.pop("max_retries", 2)
-            if not isinstance(max_retries, int):
-                raise AzureOpenAIError(
-                    status_code=422, message="max retries must be an int"
-                )
-
             # init AzureOpenAI Client
             azure_client_params = {
                 "api_version": api_version,
@@ -649,6 +648,7 @@ class AzureChatCompletion(BaseLLM):
             )
             raise AzureOpenAIError(status_code=500, message=str(e))
         except Exception as e:
+            message = getattr(e, "message", str(e))
             ## LOGGING
             logging_obj.post_call(
                 input=data["messages"],
@@ -659,7 +659,7 @@ class AzureChatCompletion(BaseLLM):
             if hasattr(e, "status_code"):
                 raise e
             else:
-                raise AzureOpenAIError(status_code=500, message=str(e))
+                raise AzureOpenAIError(status_code=500, message=message)
 
     def streaming(
         self,
@@ -671,15 +671,11 @@ class AzureChatCompletion(BaseLLM):
         data: dict,
         model: str,
         timeout: Any,
+        max_retries: int,
         azure_ad_token: Optional[str] = None,
         azure_ad_token_provider: Optional[Callable] = None,
         client=None,
     ):
-        max_retries = data.pop("max_retries", 2)
-        if not isinstance(max_retries, int):
-            raise AzureOpenAIError(
-                status_code=422, message="max retries must be an int"
-            )
         # init AzureOpenAI Client
         azure_client_params = {
             "api_version": api_version,
@@ -742,6 +738,7 @@ class AzureChatCompletion(BaseLLM):
         data: dict,
         model: str,
         timeout: Any,
+        max_retries: int,
         azure_ad_token: Optional[str] = None,
         azure_ad_token_provider: Optional[Callable] = None,
         client=None,
@@ -753,7 +750,7 @@ class AzureChatCompletion(BaseLLM):
                 "azure_endpoint": api_base,
                 "azure_deployment": model,
                 "http_client": litellm.aclient_session,
-                "max_retries": data.pop("max_retries", 2),
+                "max_retries": max_retries,
                 "timeout": timeout,
             }
             azure_client_params = select_azure_base_url_or_endpoint(
@@ -807,10 +804,11 @@ class AzureChatCompletion(BaseLLM):
             status_code = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
             error_response = getattr(e, "response", None)
+            message = getattr(e, "message", str(e))
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise AzureOpenAIError(
-                status_code=status_code, message=str(e), headers=error_headers
+                status_code=status_code, message=message, headers=error_headers
             )
 
     async def aembedding(

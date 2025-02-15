@@ -163,10 +163,12 @@ scope: "litellm-proxy-admin ..."
 
 ```yaml
 general_settings:
-  master_key: sk-1234
+  enable_jwt_auth: True
   litellm_jwtauth:
     user_id_jwt_field: "sub"
     team_ids_jwt_field: "groups" 
+    user_id_upsert: true # add user_id to the db if they don't exist
+    enforce_team_based_model_access: true # don't allow users to access models unless the team has access
 ```
 
 This is assuming your token looks like this:
@@ -352,11 +354,11 @@ environment_variables:
 
 ### Example Token 
 
-```
+```bash
 {
   "aud": "api://LiteLLM_Proxy",
   "oid": "eec236bd-0135-4b28-9354-8fc4032d543e",
-  "roles": ["litellm.api.consumer"]
+  "roles": ["litellm.api.consumer"] 
 }
 ```
 
@@ -371,3 +373,67 @@ Supported internal roles:
 - `proxy_admin`: Proxy admin will be used for RBAC spend tracking. Use this for granting admin access to a token.
 
 ### [Architecture Diagram (Control Model Access)](./jwt_auth_arch)
+
+## [BETA] Control Model Access with Scopes
+
+Control which models a JWT can access. Set `enforce_scope_based_access: true` to enforce scope-based access control.
+
+### 1. Setup config.yaml with scope mappings.
+
+
+```yaml
+model_list:
+  - model_name: anthropic-claude
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: gpt-3.5-turbo-testing
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+general_settings:
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    team_id_jwt_field: "client_id" # 👈 set the field in the JWT token that contains the team id
+    team_id_upsert: true # 👈 upsert the team to db, if team id is not found in db
+    scope_mappings:
+      - scope: litellm.api.consumer
+        models: ["anthropic-claude"]
+      - scope: litellm.api.gpt_3_5_turbo
+        models: ["gpt-3.5-turbo-testing"]
+    enforce_scope_based_access: true # 👈 enforce scope-based access control
+    enforce_rbac: true # 👈 enforces only a Team/User/ProxyAdmin can access the proxy.
+```
+
+#### Scope Mapping Spec 
+
+- `scope`: The scope to be used for the JWT token.
+- `models`: The models that the JWT token can access. Value is the `model_name` in `model_list`. Note: Wildcard routes are not currently supported.
+
+### 2. Create a JWT with the correct scopes.
+
+Expected Token:
+
+```bash
+{
+  "scope": ["litellm.api.consumer", "litellm.api.gpt_3_5_turbo"] # can be a list or a space-separated string
+}
+```
+
+### 3. Test the flow.
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer eyJhbGci...' \
+-d '{
+  "model": "gpt-3.5-turbo-testing",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hey, how'\''s it going 1234?"
+    }
+  ]
+}'
+```

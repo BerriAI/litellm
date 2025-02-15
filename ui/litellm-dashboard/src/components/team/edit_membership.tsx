@@ -129,7 +129,7 @@ const TeamMemberModal: React.FC<TeamMemberModalProps> = ({
             Cancel
           </AntButton>
           <AntButton 
-            type="primary" 
+            type="default" 
             htmlType="submit"
           >
             {mode === 'add' ? 'Add Member' : 'Save Changes'}
