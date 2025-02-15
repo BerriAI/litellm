@@ -488,12 +488,12 @@ router_settings:
 | SLACK_DAILY_REPORT_FREQUENCY | Frequency of daily Slack reports (e.g., daily, weekly)
 | SLACK_WEBHOOK_URL | Webhook URL for Slack integration
 | SMTP_HOST | Hostname for the SMTP server
-| SMTP_PASSWORD | Password for SMTP authentication
+| SMTP_PASSWORD | Password for SMTP authentication (do not set if SMTP does not require auth)
 | SMTP_PORT | Port number for SMTP server
 | SMTP_SENDER_EMAIL | Email address used as the sender in SMTP transactions
 | SMTP_SENDER_LOGO | Logo used in emails sent via SMTP
 | SMTP_TLS | Flag to enable or disable TLS for SMTP connections
-| SMTP_USERNAME | Username for SMTP authentication
+| SMTP_USERNAME | Username for SMTP authentication (do not set if SMTP does not require auth)
 | SPEND_LOGS_URL | URL for retrieving spend logs
 | SSL_CERTIFICATE | Path to the SSL certificate file
 | SSL_VERIFY | Flag to enable or disable SSL certificate verification

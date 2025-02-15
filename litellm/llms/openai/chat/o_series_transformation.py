@@ -1,5 +1,5 @@
 """
-Support for o1 model family 
+Support for o1/o3 model family 
 
 https://platform.openai.com/docs/guides/reasoning
 
@@ -35,22 +35,13 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
-    def should_fake_stream(
-        self,
-        model: Optional[str],
-        stream: Optional[bool],
-        custom_llm_provider: Optional[str] = None,
-    ) -> bool:
-        if stream is not True:
-            return False
-
-        if model is None:
-            return True
-        supported_stream_models = ["o1-mini", "o1-preview"]
-        for supported_model in supported_stream_models:
-            if supported_model in model:
-                return False
-        return True
+    def translate_developer_role_to_system_role(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
+        """
+        O-series models support `developer` role.
+        """
+        return messages
 
     def get_supported_openai_params(self, model: str) -> list:
         """
@@ -66,6 +57,10 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
             "frequency_penalty",
             "top_logprobs",
         ]
+
+        o_series_only_param = ["reasoning_effort"]
+
+        all_openai_params.extend(o_series_only_param)
 
         try:
             model, custom_llm_provider, api_base, api_key = get_llm_provider(
@@ -118,7 +113,7 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
                         pass
                     else:
                         raise litellm.utils.UnsupportedParamsError(
-                            message="O-1 doesn't support temperature={}. To drop unsupported openai params from the call, set `litellm.drop_params = True`".format(
+                            message="O-series models don't support temperature={}. Only temperature=1 is supported. To drop unsupported openai params from the call, set `litellm.drop_params = True`".format(
                                 temperature_value
                             ),
                             status_code=400,

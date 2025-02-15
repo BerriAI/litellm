@@ -2,16 +2,27 @@
 Support for gpt model family 
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Iterator,
+    List,
+    Optional,
+    Union,
+    cast,
+)
 
 import httpx
 
 import litellm
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, ModelResponseStream
+from litellm.utils import convert_to_model_response_object
 
 from ..common_utils import OpenAIError
 
@@ -210,7 +221,36 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         Returns:
             dict: The transformed response.
         """
-        raise NotImplementedError
+
+        ## LOGGING
+        logging_obj.post_call(
+            input=messages,
+            api_key=api_key,
+            original_response=raw_response.text,
+            additional_args={"complete_input_dict": request_data},
+        )
+
+        ## RESPONSE OBJECT
+        try:
+            completion_response = raw_response.json()
+        except Exception as e:
+            response_headers = getattr(raw_response, "headers", None)
+            raise OpenAIError(
+                message="Unable to get json response - {}, Original Response: {}".format(
+                    str(e), raw_response.text
+                ),
+                status_code=raw_response.status_code,
+                headers=response_headers,
+            )
+        raw_response_headers = dict(raw_response.headers)
+        final_response_obj = convert_to_model_response_object(
+            response_object=completion_response,
+            model_response_object=model_response,
+            hidden_params={"headers": raw_response_headers},
+            _response_headers=raw_response_headers,
+        )
+
+        return cast(ModelResponse, final_response_obj)
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
@@ -221,6 +261,30 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             headers=cast(httpx.Headers, headers),
         )
 
+    def get_complete_url(
+        self,
+        api_base: str,
+        model: str,
+        optional_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        """
+        Get the complete URL for the API call.
+
+        Returns:
+            str: The complete URL for the API call.
+        """
+        endpoint = "chat/completions"
+
+        # Remove trailing slash from api_base if present
+        api_base = api_base.rstrip("/")
+
+        # Check if endpoint is already in the api_base
+        if endpoint in api_base:
+            return api_base
+
+        return f"{api_base}/{endpoint}"
+
     def validate_environment(
         self,
         headers: dict,
@@ -230,7 +294,14 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        raise NotImplementedError
+        if api_key is not None:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        # Ensure Content-Type is set to application/json
+        if "content-type" not in headers and "Content-Type" not in headers:
+            headers["Content-Type"] = "application/json"
+
+        return headers
 
     def get_models(
         self, api_key: Optional[str] = None, api_base: Optional[str] = None
@@ -272,3 +343,34 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             or get_secret_str("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
+
+    @staticmethod
+    def get_base_model(model: str) -> str:
+        return model
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
+        return OpenAIChatCompletionStreamingHandler(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
+
+class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
+
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+        try:
+            return ModelResponseStream(
+                id=chunk["id"],
+                object="chat.completion.chunk",
+                created=chunk["created"],
+                model=chunk["model"],
+                choices=chunk["choices"],
+            )
+        except Exception as e:
+            raise e

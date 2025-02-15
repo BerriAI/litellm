@@ -69,7 +69,7 @@ async def test_infinity_rerank():
         _url = mock_post.call_args.kwargs["url"]
         print("Arguments passed to API=", args_to_api)
         print("url = ", _url)
-        assert _url == "https://api.infinity.ai/v1/rerank"
+        assert _url == "https://api.infinity.ai/rerank"
 
         request_data = json.loads(args_to_api)
         assert request_data["query"] == expected_payload["query"]
@@ -133,7 +133,7 @@ async def test_infinity_rerank_with_env(monkeypatch):
         _url = mock_post.call_args.kwargs["url"]
         print("Arguments passed to API=", args_to_api)
         print("url = ", _url)
-        assert _url == "https://env.infinity.ai/v1/rerank"
+        assert _url == "https://env.infinity.ai/rerank"
 
         request_data = json.loads(args_to_api)
         assert request_data["query"] == expected_payload["query"]

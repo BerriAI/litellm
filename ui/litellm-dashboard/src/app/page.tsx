@@ -4,7 +4,8 @@ import React, { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-
+import { defaultOrg } from "@/components/common_components/default_org";
+import { Team } from "@/components/key_team_helpers/key_list";
 import Navbar from "@/components/navbar";
 import UserDashboard from "@/components/user_dashboard";
 import ModelDashboard from "@/components/model_dashboard";
@@ -24,6 +25,9 @@ import Sidebar from "@/components/leftnav";
 import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
 import { setGlobalLitellmHeaderName } from "@/components/networking";
+import { Organization } from "@/components/networking";
+import GuardrailsPanel from "@/components/guardrails";
+import { fetchUserModels } from "@/components/create_key_button";
 
 function getCookie(name: string) {
   const cookieValue = document.cookie
@@ -49,6 +53,8 @@ function formatUserRole(userRole: string) {
       return "Admin";
     case "proxy_admin_viewer":
       return "Admin Viewer";
+    case "org_admin":
+      return "Org Admin";
     case "internal_user":
       return "Internal User";
     case "internal_viewer":
@@ -73,8 +79,11 @@ export default function CreateKeyPage() {
   const [disabledPersonalKeyCreation, setDisabledPersonalKeyCreation] =
     useState(false);
   const [userEmail, setUserEmail] = useState<null | string>(null);
-  const [teams, setTeams] = useState<null | any[]>(null);
+  const [teams, setTeams] = useState<Team[] | null>(null);
   const [keys, setKeys] = useState<null | any[]>(null);
+  const [currentOrg, setCurrentOrg] = useState<Organization>(defaultOrg);
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [userModels, setUserModels] = useState<string[]>([]);
   const [proxySettings, setProxySettings] = useState<ProxySettings>({
     PROXY_BASE_URL: "",
     PROXY_LOGOUT_URL: "",
@@ -165,6 +174,27 @@ export default function CreateKeyPage() {
       }
     }
   }, [token]);
+  
+  useEffect(() => {
+    if (accessToken && userID && userRole) {
+      fetchUserModels(userID, userRole, accessToken, setUserModels);
+    }
+  }, [accessToken, userID, userRole]);
+
+  const handleOrgChange = (org: Organization) => {
+    setCurrentOrg(org);
+    console.log(`org: ${JSON.stringify(org)}`)
+    if (org.members && userRole != "Admin") { // don't change user role if user is admin
+      for (const member of org.members) {
+        console.log(`member: ${JSON.stringify(member)}`)
+        if (member.user_id == userID) {
+          console.log(`member.user_role: ${member.user_role}`)
+          setUserRole(formatUserRole(member.user_role));
+        }
+      }
+    }
+    setTeams(null);
+  }
 
   return (
     <Suspense fallback={<div>Loading...</div>}>
@@ -181,6 +211,8 @@ export default function CreateKeyPage() {
             setUserEmail={setUserEmail}
             setTeams={setTeams}
             setKeys={setKeys}
+            setOrganizations={setOrganizations}
+            currentOrg={currentOrg}
           />
         ) : (
           <div className="flex flex-col min-h-screen">
@@ -191,6 +223,9 @@ export default function CreateKeyPage() {
               premiumUser={premiumUser}
               setProxySettings={setProxySettings}
               proxySettings={proxySettings}
+              currentOrg={currentOrg}
+              organizations={organizations}
+              onOrgChange={handleOrgChange}
             />
             <div className="flex flex-1 overflow-auto">
               <div className="mt-8">
@@ -213,6 +248,8 @@ export default function CreateKeyPage() {
                   setUserEmail={setUserEmail}
                   setTeams={setTeams}
                   setKeys={setKeys}
+                  setOrganizations={setOrganizations}
+                  currentOrg={currentOrg}
                 />
               ) : page == "models" ? (
                 <ModelDashboard
@@ -251,14 +288,14 @@ export default function CreateKeyPage() {
                   accessToken={accessToken}
                   userID={userID}
                   userRole={userRole}
+                  currentOrg={currentOrg}
                 />
               ) : page == "organizations" ? (
                 <Organizations
-                  teams={teams}
-                  setTeams={setTeams}
-                  searchParams={searchParams}
+                  organizations={organizations}
+                  setOrganizations={setOrganizations}
+                  userModels={userModels}
                   accessToken={accessToken}
-                  userID={userID}
                   userRole={userRole}
                   premiumUser={premiumUser}
                 />
@@ -281,6 +318,8 @@ export default function CreateKeyPage() {
                 />
               ) : page == "budgets" ? (
                 <BudgetPanel accessToken={accessToken} />
+              ) : page == "guardrails" ? (
+                <GuardrailsPanel accessToken={accessToken} />
               ) : page == "general-settings" ? (
                 <GeneralSettings
                   userID={userID}
