@@ -84,12 +84,18 @@ async def make_text_completion_request():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(
+    reason="This test is too slow to run on every commit. We can use this after nightly release"
+)
 async def test_acompletion_memory():
     """Test memory usage for litellm.acompletion"""
     await run_memory_test(make_completion_request, "acompletion")
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(
+    reason="This test is too slow to run on every commit. We can use this after nightly release"
+)
 async def test_atext_completion_memory():
     """Test memory usage for litellm.atext_completion"""
     await run_memory_test(make_text_completion_request, "atext_completion")
@@ -127,6 +133,9 @@ async def make_router_atext_completion_request():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(
+    reason="This test is too slow to run on every commit. We can use this after nightly release"
+)
 async def test_router_atext_completion_memory():
     """Test memory usage for litellm.atext_completion"""
     await run_memory_test(
