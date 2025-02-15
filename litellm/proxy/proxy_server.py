@@ -3250,11 +3250,14 @@ class ProxyStartupEvent:
 
         ### RESET BUDGET ###
         if general_settings.get("disable_reset_budget", False) is False:
+            budget_reset_job = ResetBudgetJob(
+                proxy_logging_obj=proxy_logging_obj,
+                prisma_client=prisma_client,
+            )
             scheduler.add_job(
-                ResetBudgetJob.reset_budget,
+                budget_reset_job.reset_budget,
                 "interval",
                 seconds=interval,
-                args=[prisma_client],
             )
 
         ### UPDATE SPEND ###
