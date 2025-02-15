@@ -449,6 +449,11 @@ async def test_service_logger_keys_failure():
             await asyncio.sleep(0.1)
             # Expect at least one exception logged (the inner error and the outer catch)
             assert mock_verbose_exc.call_count >= 1
+            # Verify exception was logged with correct message
+            assert any(
+                "Failed to reset budget for key" in str(call.args)
+                for call in mock_verbose_exc.call_args_list
+            )
 
     proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_called_once()
     args, kwargs = (
@@ -553,7 +558,13 @@ async def test_service_logger_users_failure():
         ) as mock_verbose_exc:
             await job.reset_budget_for_litellm_users()
             await asyncio.sleep(0.1)
+            # Verify exception logging
             assert mock_verbose_exc.call_count >= 1
+            # Verify exception was logged with correct message
+            assert any(
+                "Failed to reset budget for user" in str(call.args)
+                for call in mock_verbose_exc.call_args_list
+            )
 
     proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_called_once()
     args, kwargs = (
@@ -657,7 +668,13 @@ async def test_service_logger_teams_failure():
         ) as mock_verbose_exc:
             await job.reset_budget_for_litellm_teams()
             await asyncio.sleep(0.1)
+            # Verify exception logging
             assert mock_verbose_exc.call_count >= 1
+            # Verify exception was logged with correct message
+            assert any(
+                "Failed to reset budget for team" in str(call.args)
+                for call in mock_verbose_exc.call_args_list
+            )
 
     proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_called_once()
     args, kwargs = (
