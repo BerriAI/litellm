@@ -13,7 +13,6 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union, overload
 
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
     CommonProxyErrors,
@@ -49,7 +48,6 @@ from litellm.proxy._types import (
     CallInfo,
     LiteLLM_VerificationTokenView,
     Member,
-    ResetTeamBudgetRequest,
     UserAPIKeyAuth,
 )
 from litellm.proxy.db.create_views import (
