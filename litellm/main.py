@@ -3037,8 +3037,8 @@ def completion(  # type: ignore # noqa: PLR0915
                     custom_handler = item["custom_handler"]
 
             if custom_handler is None:
-                raise ValueError(
-                    f"Unable to map your input to a model. Check your input - {args}"
+                raise LiteLLMUnknownProvider(
+                    model=model, custom_llm_provider=custom_llm_provider
                 )
 
             ## ROUTE LLM CALL ##
@@ -3076,8 +3076,8 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
 
         else:
-            raise ValueError(
-                f"Unable to map your input to a model. Check your input - {args}"
+            raise LiteLLMUnknownProvider(
+                model=model, custom_llm_provider=custom_llm_provider
             )
         return response
     except Exception as e:
@@ -4670,8 +4670,8 @@ def image_generation(  # noqa: PLR0915
                     custom_handler = item["custom_handler"]
 
             if custom_handler is None:
-                raise ValueError(
-                    f"Unable to map your input to a model. Check your input - {args}"
+                raise LiteLLMUnknownProvider(
+                    model=model, custom_llm_provider=custom_llm_provider
                 )
 
             ## ROUTE LLM CALL ##
