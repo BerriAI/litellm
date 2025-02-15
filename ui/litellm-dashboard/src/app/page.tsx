@@ -28,7 +28,7 @@ import { setGlobalLitellmHeaderName } from "@/components/networking";
 import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
 import { fetchUserModels } from "@/components/create_key_button";
-
+import { fetchTeams } from "@/components/common_components/fetch_teams";
 function getCookie(name: string) {
   const cookieValue = document.cookie
     .split("; ")
@@ -81,7 +81,7 @@ export default function CreateKeyPage() {
   const [userEmail, setUserEmail] = useState<null | string>(null);
   const [teams, setTeams] = useState<Team[] | null>(null);
   const [keys, setKeys] = useState<null | any[]>(null);
-  const [currentOrg, setCurrentOrg] = useState<Organization>(defaultOrg);
+  const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [userModels, setUserModels] = useState<string[]>([]);
   const [proxySettings, setProxySettings] = useState<ProxySettings>({
@@ -179,22 +179,11 @@ export default function CreateKeyPage() {
     if (accessToken && userID && userRole) {
       fetchUserModels(userID, userRole, accessToken, setUserModels);
     }
+    if (accessToken && userID && userRole) {
+      fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
+    }
   }, [accessToken, userID, userRole]);
 
-  const handleOrgChange = (org: Organization) => {
-    setCurrentOrg(org);
-    console.log(`org: ${JSON.stringify(org)}`)
-    if (org.members && userRole != "Admin") { // don't change user role if user is admin
-      for (const member of org.members) {
-        console.log(`member: ${JSON.stringify(member)}`)
-        if (member.user_id == userID) {
-          console.log(`member.user_role: ${member.user_role}`)
-          setUserRole(formatUserRole(member.user_role));
-        }
-      }
-    }
-    setTeams(null);
-  }
 
   return (
     <Suspense fallback={<div>Loading...</div>}>
@@ -219,13 +208,9 @@ export default function CreateKeyPage() {
             <Navbar
               userID={userID}
               userRole={userRole}
-              userEmail={userEmail}
               premiumUser={premiumUser}
               setProxySettings={setProxySettings}
               proxySettings={proxySettings}
-              currentOrg={currentOrg}
-              organizations={organizations}
-              onOrgChange={handleOrgChange}
             />
             <div className="flex flex-1 overflow-auto">
               <div className="mt-8">

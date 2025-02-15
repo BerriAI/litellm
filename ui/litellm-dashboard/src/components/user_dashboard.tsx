@@ -5,7 +5,6 @@ import {
   modelAvailableCall,
   getTotalSpendCall,
   getProxyUISettings,
-  teamListCall,
   Organization,
   organizationListCall,
   DEFAULT_ORGANIZATION

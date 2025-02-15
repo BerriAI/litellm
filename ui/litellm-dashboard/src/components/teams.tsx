@@ -66,7 +66,6 @@ interface TeamProps {
   setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
   userID: string | null;
   userRole: string | null;
-  currentOrg: Organization | null;  
 }
 
 interface EditTeamModalProps {
@@ -86,26 +85,18 @@ import {
 } from "./networking";
 
 
-const Team: React.FC<TeamProps> = ({
+const Teams: React.FC<TeamProps> = ({
   teams,
   searchParams,
   accessToken,
   setTeams,
   userID,
   userRole,
-  currentOrg
 }) => {
   const [lastRefreshed, setLastRefreshed] = useState("");
+  const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
+  console.log(`currentOrg: ${JSON.stringify(currentOrg)}`)
 
-
-  useEffect(() => {
-    console.log(`inside useeffect - ${teams}`)
-    if (teams === null && accessToken) {
-      // Call your function here
-      fetchTeams(accessToken, userID, userRole, currentOrg, setTeams)
-    }
-  }, [teams]);
-  
   useEffect(() => {
     console.log(`inside useeffect - ${lastRefreshed}`)
     if (accessToken) {
@@ -200,10 +191,7 @@ const Team: React.FC<TeamProps> = ({
     try {
       await teamDeleteCall(accessToken, teamToDelete);
       // Successfully completed the deletion. Update the state to trigger a rerender.
-      const filteredData = teams.filter(
-        (item) => item.team_id !== teamToDelete
-      );
-      setTeams(filteredData);
+      fetchTeams(accessToken, userID, userRole, currentOrg, setTeams)
     } catch (error) {
       console.error("Error deleting the team:", error);
       // Handle any error situations, such as displaying an error message to the user.
@@ -235,41 +223,7 @@ const Team: React.FC<TeamProps> = ({
       }
     };
 
-    const fetchTeamInfo = async () => {
-      try {
-        if (userID === null || userRole === null || accessToken === null) {
-          return;
-        }
-
-        if (teams === null) {
-          return;
-        }
-
-        let _team_id_to_info: Record<string, any> = {};
-        let teamList;
-        if (userRole != "Admin" && userRole != "Admin Viewer") {
-          teamList = await teamListCall(accessToken, currentOrg?.organization_id || DEFAULT_ORGANIZATION, userID)
-        } else {
-          teamList = await teamListCall(accessToken, currentOrg?.organization_id || DEFAULT_ORGANIZATION)
-        }
-        
-        for (let i = 0; i < teamList.length; i++) {
-          let team = teamList[i];
-          let _team_id = team.team_id;
-      
-          // Use the team info directly from the teamList
-          if (team !== null) {
-              _team_id_to_info = { ..._team_id_to_info, [_team_id]: team };
-          }
-        }
-        setPerTeamInfo(_team_id_to_info);
-      } catch (error) {
-        console.error("Error fetching team info:", error);
-      }
-    };
-
     fetchUserModels();
-    fetchTeamInfo();
   }, [accessToken, userID, userRole, teams]);
 
   const handleCreate = async (formValues: Record<string, any>) => {
@@ -339,7 +293,7 @@ const Team: React.FC<TeamProps> = ({
 
 
   return (
-    <div className="w-full mx-4">
+    <div className="w-full mx-4 h-[75vh]">
       {selectedTeamId ? (
         <TeamInfoView 
         teamId={selectedTeamId} 
@@ -378,7 +332,7 @@ const Team: React.FC<TeamProps> = ({
       </Text>
       <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
         <Col numColSpan={1}>
-          <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
+          <Card className="w-full mx-auto flex-auto overflow-hidden overflow-y-auto max-h-[50vh]">
             <Table>
               <TableHead>
                 <TableRow>
@@ -388,7 +342,7 @@ const Team: React.FC<TeamProps> = ({
                   <TableHeaderCell>Spend (USD)</TableHeaderCell>
                   <TableHeaderCell>Budget (USD)</TableHeaderCell>
                   <TableHeaderCell>Models</TableHeaderCell>
-                  <TableHeaderCell>TPM / RPM Limits</TableHeaderCell>
+                  <TableHeaderCell>Organization</TableHeaderCell>
                   <TableHeaderCell>Info</TableHeaderCell>
                 </TableRow>
               </TableHead>
@@ -396,10 +350,10 @@ const Team: React.FC<TeamProps> = ({
               <TableBody>
                 {teams && teams.length > 0
                   ? teams
-                      .filter((team) => {
-                        const targetOrgId = currentOrg ? currentOrg.organization_id : null;
-                        return team.organization_id === targetOrgId;
-                      })                  
+                    .filter((team) => {
+                      if (!currentOrg) return true;
+                      return team.organization_id === currentOrg.organization_id;
+                    })            
                       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
                       .map((team: any) => (
                       <TableRow key={team.team_id}>
@@ -510,18 +464,8 @@ const Team: React.FC<TeamProps> = ({
                           ) : null}
                         </TableCell>
 
-                        <TableCell
-                          style={{
-                            maxWidth: "4px",
-                            whiteSpace: "pre-wrap",
-                            overflow: "hidden",
-                          }}
-                        >
-                          <Text>
-                            TPM: {team.tpm_limit ? team.tpm_limit : "Unlimited"}{" "}
-                            <br></br>RPM:{" "}
-                            {team.rpm_limit ? team.rpm_limit : "Unlimited"}
-                          </Text>
+                        <TableCell>
+                          {team.organization_id}
                         </TableCell>
                         <TableCell>
                           <Text>
@@ -774,4 +718,4 @@ const Team: React.FC<TeamProps> = ({
   );
 };
 
-export default Team;
+export default Teams;
