@@ -26,7 +26,7 @@ import {
   Select as Select2,
 } from "antd";
 import { PencilAltIcon, PlusIcon, TrashIcon } from "@heroicons/react/outline";
-import TeamMemberModal from "./edit_membership";
+import MemberModal from "./edit_membership";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import ModelAliasesCard from "./model_aliases_card";
@@ -486,12 +486,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         </TabPanels>
       </TabGroup>
 
-      <TeamMemberModal
+      <MemberModal
         visible={isEditMemberModalVisible}
         onCancel={() => setIsEditMemberModalVisible(false)}
         onSubmit={handleMemberUpdate}
         initialData={selectedEditMember}
         mode="edit"
+        config={{
+          title: "Edit Member",
+          showEmail: true,
+          showUserId: true,
+          roleOptions: [
+            { label: "Admin", value: "admin" },
+            { label: "User", value: "user" }
+          ]
+        }}
       />
 
       <UserSearchModal
