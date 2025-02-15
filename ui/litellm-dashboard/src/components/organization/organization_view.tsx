@@ -23,9 +23,9 @@ import { Button, Form, Input, Select, message, InputNumber, Tooltip } from "antd
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
-import { Member, Organization, organizationInfoCall, organizationMemberAddCall } from "../networking";
+import { Member, Organization, organizationInfoCall, organizationMemberAddCall, organizationMemberUpdateCall, organizationMemberDeleteCall } from "../networking";
 import UserSearchModal from "../common_components/user_search_modal";
-
+import MemberModal from "../team/edit_membership";
 
 interface OrganizationInfoProps {
   organizationId: string;
@@ -51,6 +51,8 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   const [form] = Form.useForm();
   const [isEditing, setIsEditing] = useState(false);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
+  const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
+  const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
 
   const canEditOrg = is_org_admin || is_proxy_admin;
 
@@ -92,6 +94,42 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     } catch (error) {
       message.error("Failed to add organization member");
       console.error("Error adding organization member:", error);
+    }
+  };
+
+  const handleMemberUpdate = async (values: any) => {
+    try {
+      if (!accessToken) return;
+
+      const member: Member = {
+        user_email: values.user_email,
+        user_id: values.user_id,
+        role: values.role,
+      }
+
+      const response = await organizationMemberUpdateCall(accessToken, organizationId, member);
+      message.success("Organization member updated successfully");
+      setIsEditMemberModalVisible(false);
+      form.resetFields();
+      fetchOrgInfo();
+    } catch (error) {
+      message.error("Failed to update organization member");  
+      console.error("Error updating organization member:", error);
+    }
+  };
+
+  const handleMemberDelete = async (values: any) => {
+    try {
+      if (!accessToken) return;
+
+      await organizationMemberDeleteCall(accessToken, organizationId, values.user_id);
+      message.success("Organization member deleted successfully");
+      setIsEditMemberModalVisible(false);
+      form.resetFields();
+      fetchOrgInfo();
+    } catch (error) {
+      message.error("Failed to delete organization member");
+      console.error("Error deleting organization member:", error);
     }
   };
 
@@ -241,14 +279,19 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                                 icon={PencilAltIcon}
                                 size="sm"
                                 onClick={() => {
-                                    // TODO: Implement edit member functionality
+                                    setSelectedEditMember({
+                                      "role": member.user_role,
+                                      "user_email": member.user_email,
+                                      "user_id": member.user_id
+                                    });
+                                    setIsEditMemberModalVisible(true);
                                 }}
                                 />
                                 <Icon
                                 icon={TrashIcon}
                                 size="sm"
                                 onClick={() => {
-                                    // TODO: Implement delete member functionality
+                                    handleMemberDelete(member);
                                 }}
                                 />
                             </>
@@ -402,6 +445,23 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
           { label: "internal_user_viewer", value: "internal_user_viewer", description: "Can only view their keys within organization." }
         ]}
         defaultRole="internal_user"
+      />
+      <MemberModal
+        visible={isEditMemberModalVisible}
+        onCancel={() => setIsEditMemberModalVisible(false)}
+        onSubmit={handleMemberUpdate}
+        initialData={selectedEditMember}
+        mode="edit"
+        config={{
+          title: "Edit Member",
+          showEmail: true,
+          showUserId: true,
+          roleOptions: [
+            { label: "Org Admin", value: "org_admin" },
+            { label: "Internal User", value: "internal_user" },
+            { label: "Internal User Viewer", value: "internal_user_viewer" }
+          ]
+        }}
       />
     </div>
   );
