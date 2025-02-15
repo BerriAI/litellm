@@ -28,71 +28,6 @@ interface AllKeysTableProps {
 
 // Define columns similar to our logs table
 
-function KeyViewer({ row }: { row: Row<KeyResponse> }) {
-  return (
-    <div className="p-4 bg-gray-50">
-      <div className="bg-white rounded-lg shadow p-4">
-        <h3 className="text-lg font-medium">Key Details</h3>
-        <div className="mt-2 space-y-1">
-          <p>
-            <strong>Key Alias:</strong> {row.original.key_alias || "Not Set"}
-          </p>
-          <p>
-            <strong>Secret Key:</strong> {row.original.key_name}
-          </p>
-          <p>
-            <strong>Created:</strong>{" "}
-            {new Date(row.original.created_at).toLocaleString()}
-          </p>
-          <p>
-            <strong>Expires:</strong>{" "}
-            {row.original.expires
-              ? new Date(row.original.expires).toLocaleString()
-              : "Never"}
-          </p>
-          <p>
-            <strong>Spend:</strong> {Number(row.original.spend).toFixed(4)}
-          </p>
-          <p>
-            <strong>Budget:</strong>{" "}
-            {row.original.max_budget !== null
-              ? row.original.max_budget
-              : "Unlimited"}
-          </p>
-          <p>
-            <strong>Budget Reset:</strong>{" "}
-            {row.original.budget_reset_at
-              ? new Date(row.original.budget_reset_at).toLocaleString()
-              : "Never"}
-          </p>
-          <p>
-            <strong>Models:</strong>{" "}
-            {row.original.models && row.original.models.length > 0
-              ? row.original.models.join(", ")
-              : "-"}
-          </p>
-          <p>
-            <strong>Rate Limits:</strong> TPM:{" "}
-            {row.original.tpm_limit !== null
-              ? row.original.tpm_limit
-              : "Unlimited"}
-            , RPM:{" "}
-            {row.original.rpm_limit !== null
-              ? row.original.rpm_limit
-              : "Unlimited"}
-          </p>
-          <p>
-            <strong>Metadata:</strong>
-          </p>
-          <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto">
-            {JSON.stringify(row.original.metadata, null, 2)}
-          </pre>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 const TeamFilter = ({ 
   teams, 
   selectedTeam, 
@@ -183,9 +118,9 @@ export function AllKeysTable({
       ),
     },
     {
-      header: "Organization",
-      accessorKey: "organization_id",
-      cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
+      header: "Secret Key",
+      accessorKey: "key_name",
+      cell: (info) => <span className="font-mono text-xs">{info.getValue() as string}</span>,
     },
     {
       header: "Team ID",
@@ -198,9 +133,9 @@ export function AllKeysTable({
       cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
     },
     {
-      header: "Secret Key",
-      accessorKey: "key_name",
-      cell: (info) => <span className="font-mono text-xs">{info.getValue() as string}</span>,
+      header: "Organization ID",
+      accessorKey: "organization_id",
+      cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
     },
     {
       header: "Created",
