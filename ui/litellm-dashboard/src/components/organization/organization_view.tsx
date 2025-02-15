@@ -23,7 +23,7 @@ import { Button, Form, Input, Select, message, InputNumber, Tooltip } from "antd
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
-import { Organization, organizationInfoCall } from "../networking";
+import { Member, Organization, organizationInfoCall, organizationMemberAddCall } from "../networking";
 import UserSearchModal from "../common_components/user_search_modal";
 
 
@@ -71,6 +71,29 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   useEffect(() => {
     fetchOrgInfo();
   }, [organizationId, accessToken]);
+
+  const handleMemberAdd = async (values: any) => {
+    try {
+      if (accessToken == null) {
+        return;
+      }
+
+      const member: Member = {
+        user_email: values.user_email,
+        user_id: values.user_id,
+        role: values.role,
+      }
+      const response = await organizationMemberAddCall(accessToken, organizationId, member);
+
+      message.success("Organization member added successfully");
+      setIsAddMemberModalVisible(false);
+      form.resetFields();
+      fetchOrgInfo();
+    } catch (error) {
+      message.error("Failed to add organization member");
+      console.error("Error adding organization member:", error);
+    }
+  };
 
   const handleOrgUpdate = async (values: any) => {
     try {
@@ -189,6 +212,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                     <TableHead>
                     <TableRow>
                         <TableHeaderCell>User ID</TableHeaderCell>
+                        <TableHeaderCell>User Email</TableHeaderCell>
                         <TableHeaderCell>Role</TableHeaderCell>
                         <TableHeaderCell>Spend</TableHeaderCell>
                         <TableHeaderCell>Created At</TableHeaderCell>
@@ -197,10 +221,13 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                     </TableHead>
 
                     <TableBody>
-                    {orgData.members.map((member, index) => (
+                    {orgData.members?.map((member, index) => (
                         <TableRow key={index}>
                         <TableCell>
                             <Text className="font-mono">{member.user_id}</Text>
+                        </TableCell>
+                        <TableCell>
+                            <Text className="font-mono">{member.user_email}</Text>
                         </TableCell>
                         <TableCell>
                             <Text className="font-mono">{member.user_role}</Text>
@@ -370,7 +397,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       <UserSearchModal
         isVisible={isAddMemberModalVisible}
         onCancel={() => setIsAddMemberModalVisible(false)}
-        onSubmit={() => {}}
+        onSubmit={handleMemberAdd}
         accessToken={accessToken}
         title="Add Organization Member"
         roles={[

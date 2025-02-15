@@ -17,6 +17,7 @@ export interface Model {
   model_info: Object | null;
 }
 
+
 export interface Organization {
   organization_id: string | null;
   organization_alias: string;
