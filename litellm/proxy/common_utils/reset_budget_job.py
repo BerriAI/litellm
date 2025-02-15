@@ -89,6 +89,11 @@ class ResetBudgetJob:
                     )
 
             end_time = time.time()
+            if len(failed_keys) > 0:  # If any keys failed to reset
+                raise Exception(
+                    f"Failed to reset {len(failed_keys)} keys: {json.dumps(failed_keys, default=str)}"
+                )
+
             asyncio.create_task(
                 self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
                     service=ServiceTypes.RESET_BUDGET_JOB,
@@ -169,6 +174,11 @@ class ResetBudgetJob:
                     )
 
             end_time = time.time()
+            if len(failed_users) > 0:  # If any users failed to reset
+                raise Exception(
+                    f"Failed to reset {len(failed_users)} users: {json.dumps(failed_users, default=str)}"
+                )
+
             asyncio.create_task(
                 self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
                     service=ServiceTypes.RESET_BUDGET_JOB,
@@ -255,6 +265,11 @@ class ResetBudgetJob:
                     )
 
             end_time = time.time()
+            if len(failed_teams) > 0:  # If any teams failed to reset
+                raise Exception(
+                    f"Failed to reset {len(failed_teams)} teams: {json.dumps(failed_teams, default=str)}"
+                )
+
             asyncio.create_task(
                 self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
                     service=ServiceTypes.RESET_BUDGET_JOB,
