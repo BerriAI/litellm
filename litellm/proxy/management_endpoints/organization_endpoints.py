@@ -497,6 +497,32 @@ async def organization_member_add(
         )
 
 
+async def find_member_if_email(
+    user_email: str, prisma_client: PrismaClient
+) -> LiteLLM_UserTable:
+    """
+    Find a member if the user_email is in LiteLLM_UserTable
+    """
+
+    try:
+        existing_user_email_row: BaseModel = (
+            await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_email": user_email}
+            )
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Unique user not found for user_email={user_email}. Potential duplicate OR non-existent user_email in LiteLLM_UserTable. Use 'user_id' instead."
+            },
+        )
+    existing_user_email_row_pydantic = LiteLLM_UserTable(
+        **existing_user_email_row.model_dump()
+    )
+    return existing_user_email_row_pydantic
+
+
 @router.patch(
     "/organization/member_update",
     tags=["organization management"],
@@ -536,18 +562,9 @@ async def organization_member_update(
 
         # Check if member exists in organization
         if data.user_email is not None and data.user_id is None:
-            existing_user_email_row = (
-                await prisma_client.db.litellm_usertable.find_unique(
-                    where={"user_email": data.user_email}
-                )
+            existing_user_email_row = await find_member_if_email(
+                data.user_email, prisma_client
             )
-            if existing_user_email_row is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": f"Unique user not found for user_email={data.user_email}. Potential duplicate OR non-existent user_email in LiteLLM_UserTable. Use 'user_id' instead."
-                    },
-                )
             data.user_id = existing_user_email_row.user_id
 
         try:
@@ -642,6 +659,48 @@ async def organization_member_update(
         return final_organization_membership_pydantic
     except Exception as e:
         verbose_proxy_logger.exception(f"Error updating member in organization: {e}")
+        raise e
+
+
+@router.delete(
+    "/organization/member_delete",
+    tags=["organization management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def organization_member_delete(
+    data: OrganizationMemberDeleteRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Delete a member from an organization
+    """
+    try:
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+
+        if data.user_email is not None and data.user_id is None:
+            existing_user_email_row = await find_member_if_email(
+                data.user_email, prisma_client
+            )
+            data.user_id = existing_user_email_row.user_id
+
+        member_to_delete = await prisma_client.db.litellm_organizationmembership.delete(
+            where={
+                "user_id_organization_id": {
+                    "user_id": data.user_id,
+                    "organization_id": data.organization_id,
+                }
+            }
+        )
+        return member_to_delete
+
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error deleting member from organization: {e}")
         raise e
 
 
