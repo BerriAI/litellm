@@ -1,13 +1,12 @@
 import json
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LiteLLM_VerificationToken,
-    ResetTeamBudgetRequest,
 )
 from litellm.proxy.utils import PrismaClient, duration_in_seconds
 
@@ -123,58 +122,45 @@ class ResetBudgetJob:
             )
 
     @staticmethod
+    async def _reset_budget_common(
+        item: Union[LiteLLM_TeamTable, LiteLLM_UserTable, LiteLLM_VerificationToken],
+        current_time: datetime,
+        item_type: str,
+    ) -> Optional[
+        Union[LiteLLM_TeamTable, LiteLLM_UserTable, LiteLLM_VerificationToken]
+    ]:
+        """
+        Common logic for resetting budget for a team, user, or key
+        """
+        try:
+            item.spend = 0.0
+            if hasattr(item, "budget_duration") and item.budget_duration is not None:
+                duration_s = duration_in_seconds(duration=item.budget_duration)
+                item.budget_reset_at = current_time + timedelta(seconds=duration_s)
+            return item
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"Error resetting budget for {item_type}: %s %s", item, e
+            )
+            return None
+
+    @staticmethod
     async def _reset_budget_for_team(
         team: LiteLLM_TeamTable, current_time: datetime
     ) -> Optional[LiteLLM_TeamTable]:
-        """
-        Resets the budget for a single team
-        """
-        try:
-            team.spend = 0.0
-            if team.budget_duration is not None:
-                duration_s = duration_in_seconds(duration=team.budget_duration)
-                team.budget_reset_at = current_time + timedelta(seconds=duration_s)
-            return team
-        except Exception as e:
-            verbose_proxy_logger.exception(
-                "Error resetting budget for team: %s %s", team, e
-            )
-            return None
+        result = await ResetBudgetJob._reset_budget_common(team, current_time, "team")
+        return result if isinstance(result, LiteLLM_TeamTable) else None
 
     @staticmethod
     async def _reset_budget_for_user(
         user: LiteLLM_UserTable, current_time: datetime
     ) -> Optional[LiteLLM_UserTable]:
-        """
-        Resets the budget for a single user
-        """
-        try:
-            user.spend = 0.0
-            # if user.budget_duration is not None:
-            #     duration_s = duration_in_seconds(duration=user.budget_duration)
-            #     user.budget_reset_at = current_time + timedelta(seconds=duration_s)
-            return user
-        except Exception as e:
-            verbose_proxy_logger.exception(
-                "Error resetting budget for user: %s %s", user, e
-            )
-            return None
+        result = await ResetBudgetJob._reset_budget_common(user, current_time, "user")
+        return result if isinstance(result, LiteLLM_UserTable) else None
 
     @staticmethod
     async def _reset_budget_for_key(
         key: LiteLLM_VerificationToken, current_time: datetime
     ) -> Optional[LiteLLM_VerificationToken]:
-        """
-        Resets the budget for a single key
-        """
-        try:
-            key.spend = 0.0
-            if key.budget_duration is not None:
-                duration_s = duration_in_seconds(duration=key.budget_duration)
-                key.budget_reset_at = current_time + timedelta(seconds=duration_s)
-            return key
-        except Exception as e:
-            verbose_proxy_logger.exception(
-                "Error resetting budget for key: %s %s", key, e
-            )
-            return None
+        result = await ResetBudgetJob._reset_budget_common(key, current_time, "key")
+        return result if isinstance(result, LiteLLM_VerificationToken) else None
