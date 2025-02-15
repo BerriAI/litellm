@@ -46,6 +46,8 @@ class ResetBudgetJob:
     async def reset_budget_for_litellm_keys(self):
         """
         Resets the budget for all the litellm keys
+
+        Catches Exceptions and logs them
         """
         now = datetime.utcnow()
         start_time = time.time()
@@ -127,7 +129,7 @@ class ResetBudgetJob:
                     },
                 )
             )
-            raise e
+            verbose_proxy_logger.exception("Failed to reset budget for keys: %s", e)
 
     async def reset_budget_for_litellm_users(self):
         """
@@ -218,7 +220,7 @@ class ResetBudgetJob:
                     },
                 )
             )
-            raise e
+            verbose_proxy_logger.exception("Failed to reset budget for users: %s", e)
 
     async def reset_budget_for_litellm_teams(self):
         """
@@ -309,7 +311,7 @@ class ResetBudgetJob:
                     },
                 )
             )
-            raise e
+            verbose_proxy_logger.exception("Failed to reset budget for teams: %s", e)
 
     @staticmethod
     async def _reset_budget_common(
