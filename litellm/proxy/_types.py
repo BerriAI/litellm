@@ -1110,6 +1110,10 @@ class OrganizationRequest(LiteLLMPydanticObjectBase):
     organizations: List[str]
 
 
+class DeleteOrganizationRequest(LiteLLMPydanticObjectBase):
+    organization_ids: List[str]  # required
+
+
 class KeyManagementSystem(enum.Enum):
     GOOGLE_KMS = "google_kms"
     AZURE_KEY_VAULT = "azure_key_vault"
