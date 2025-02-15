@@ -84,8 +84,10 @@ class ResetBudgetJob:
                     start_time=start_time,
                     end_time=end_time,
                     event_metadata={
-                        "keys_found": len(keys_to_reset) if keys_to_reset else 0,
-                        "keys_updated": len(updated_keys),
+                        "num_keys_found": len(keys_to_reset) if keys_to_reset else 0,
+                        "keys_found": json.dumps(keys_to_reset, indent=4, default=str),
+                        "num_keys_updated": len(updated_keys),
+                        "keys_updated": json.dumps(updated_keys, indent=4, default=str),
                     },
                 )
             )
@@ -101,7 +103,8 @@ class ResetBudgetJob:
                     start_time=start_time,
                     end_time=end_time,
                     event_metadata={
-                        "keys_found": len(keys_to_reset) if keys_to_reset else 0
+                        "num_keys_found": len(keys_to_reset) if keys_to_reset else 0,
+                        "keys_found": json.dumps(keys_to_reset, indent=4, default=str),
                     },
                 )
             )
@@ -144,8 +147,14 @@ class ResetBudgetJob:
                     start_time=start_time,
                     end_time=end_time,
                     event_metadata={
-                        "users_found": len(users_to_reset) if users_to_reset else 0,
-                        "users_updated": len(updated_users),
+                        "num_users_found": len(users_to_reset) if users_to_reset else 0,
+                        "users_found": json.dumps(
+                            users_to_reset, indent=4, default=str
+                        ),
+                        "num_users_updated": len(updated_users),
+                        "users_updated": json.dumps(
+                            updated_users, indent=4, default=str
+                        ),
                     },
                 )
             )
@@ -161,7 +170,10 @@ class ResetBudgetJob:
                     start_time=start_time,
                     end_time=end_time,
                     event_metadata={
-                        "users_found": len(users_to_reset) if users_to_reset else 0
+                        "num_users_found": len(users_to_reset) if users_to_reset else 0,
+                        "users_found": json.dumps(
+                            users_to_reset, indent=4, default=str
+                        ),
                     },
                 )
             )
@@ -204,8 +216,14 @@ class ResetBudgetJob:
                     start_time=start_time,
                     end_time=end_time,
                     event_metadata={
-                        "teams_found": len(teams_to_reset) if teams_to_reset else 0,
-                        "teams_updated": len(updated_teams),
+                        "num_teams_found": len(teams_to_reset) if teams_to_reset else 0,
+                        "teams_found": json.dumps(
+                            teams_to_reset, indent=4, default=str
+                        ),
+                        "num_teams_updated": len(updated_teams),
+                        "teams_updated": json.dumps(
+                            updated_teams, indent=4, default=str
+                        ),
                     },
                 )
             )
@@ -221,7 +239,10 @@ class ResetBudgetJob:
                     start_time=start_time,
                     end_time=end_time,
                     event_metadata={
-                        "teams_found": len(teams_to_reset) if teams_to_reset else 0
+                        "num_teams_found": len(teams_to_reset) if teams_to_reset else 0,
+                        "teams_found": json.dumps(
+                            teams_to_reset, indent=4, default=str
+                        ),
                     },
                 )
             )
