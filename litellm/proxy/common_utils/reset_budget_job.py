@@ -1,4 +1,6 @@
+import asyncio
 import json
+import time
 from datetime import datetime, timedelta
 from typing import List, Optional, Union
 
@@ -8,7 +10,8 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     LiteLLM_VerificationToken,
 )
-from litellm.proxy.utils import PrismaClient, duration_in_seconds
+from litellm.proxy.utils import PrismaClient, ProxyLogging, duration_in_seconds
+from litellm.types.services import ServiceTypes
 
 
 class ResetBudgetJob:
@@ -16,8 +19,13 @@ class ResetBudgetJob:
     Resets the budget for all the keys, users, and teams that need it
     """
 
-    @staticmethod
-    async def reset_budget(prisma_client: PrismaClient):
+    def __init__(self, proxy_logging_obj: ProxyLogging, prisma_client: PrismaClient):
+        self.proxy_logging_obj: ProxyLogging = proxy_logging_obj
+        self.prisma_client: PrismaClient = prisma_client
+
+    async def reset_budget(
+        self,
+    ):
         """
         Gets all the non-expired keys for a db, which need spend to be reset
 
@@ -25,101 +33,199 @@ class ResetBudgetJob:
 
         Updates db
         """
-        if prisma_client is not None:
+        if self.prisma_client is not None:
             ### RESET KEY BUDGET ###
-            await ResetBudgetJob.reset_budget_for_litellm_keys(
-                prisma_client=prisma_client
-            )
+            await self.reset_budget_for_litellm_keys()
 
             ### RESET USER BUDGET ###
-            await ResetBudgetJob.reset_budget_for_litellm_users(
-                prisma_client=prisma_client
-            )
+            await self.reset_budget_for_litellm_users()
 
             ## Reset Team Budget
-            await ResetBudgetJob.reset_budget_for_litellm_teams(
-                prisma_client=prisma_client
-            )
+            await self.reset_budget_for_litellm_teams()
 
-    @staticmethod
-    async def reset_budget_for_litellm_keys(prisma_client: PrismaClient):
+    async def reset_budget_for_litellm_keys(self):
         """
         Resets the budget for all the litellm keys
         """
         now = datetime.utcnow()
-        keys_to_reset = await prisma_client.get_data(
-            table_name="key", query_type="find_all", expires=now, reset_at=now
-        )
-        verbose_proxy_logger.debug(
-            "Keys to reset %s", json.dumps(keys_to_reset, indent=4, default=str)
-        )
-        updated_keys: List[LiteLLM_VerificationToken] = []
-        if keys_to_reset is not None and len(keys_to_reset) > 0:
-            for key in keys_to_reset:
-                updated_key = await ResetBudgetJob._reset_budget_for_key(
-                    key=key, current_time=now
-                )
-                if updated_key is not None:
-                    updated_keys.append(updated_key)
-
+        start_time = time.time()
+        keys_to_reset: Optional[List[LiteLLM_VerificationToken]] = None
+        try:
+            keys_to_reset = await self.prisma_client.get_data(
+                table_name="key", query_type="find_all", expires=now, reset_at=now
+            )
             verbose_proxy_logger.debug(
-                "Updated keys %s", json.dumps(updated_keys, indent=4, default=str)
+                "Keys to reset %s", json.dumps(keys_to_reset, indent=4, default=str)
             )
+            updated_keys: List[LiteLLM_VerificationToken] = []
+            if keys_to_reset is not None and len(keys_to_reset) > 0:
+                for key in keys_to_reset:
+                    updated_key = await ResetBudgetJob._reset_budget_for_key(
+                        key=key, current_time=now
+                    )
+                    if updated_key is not None:
+                        updated_keys.append(updated_key)
 
-            await prisma_client.update_data(
-                query_type="update_many", data_list=updated_keys, table_name="key"
+                verbose_proxy_logger.debug(
+                    "Updated keys %s", json.dumps(updated_keys, indent=4, default=str)
+                )
+
+                await self.prisma_client.update_data(
+                    query_type="update_many", data_list=updated_keys, table_name="key"
+                )
+
+            # Log success
+            end_time = time.time()
+            asyncio.create_task(
+                self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
+                    service=ServiceTypes.RESET_BUDGET_JOB,
+                    duration=end_time - start_time,
+                    call_type="reset_budget_keys",
+                    start_time=start_time,
+                    end_time=end_time,
+                    event_metadata={
+                        "keys_found": len(keys_to_reset) if keys_to_reset else 0,
+                        "keys_updated": len(updated_keys),
+                    },
+                )
             )
-        pass
+        except Exception as e:
+            # Log failure
+            end_time = time.time()
+            asyncio.create_task(
+                self.proxy_logging_obj.service_logging_obj.async_service_failure_hook(
+                    service=ServiceTypes.RESET_BUDGET_JOB,
+                    duration=end_time - start_time,
+                    error=e,
+                    call_type="reset_budget_keys",
+                    start_time=start_time,
+                    end_time=end_time,
+                    event_metadata={
+                        "keys_found": len(keys_to_reset) if keys_to_reset else 0
+                    },
+                )
+            )
+            raise e
 
-    @staticmethod
-    async def reset_budget_for_litellm_users(prisma_client: PrismaClient):
+    async def reset_budget_for_litellm_users(self):
         """
         Resets the budget for all LiteLLM Internal Users if their budget has expired
         """
         now = datetime.utcnow()
-        users_to_reset = await prisma_client.get_data(
-            table_name="user", query_type="find_all", reset_at=now
-        )
-        if users_to_reset is not None and len(users_to_reset) > 0:
+        start_time = time.time()
+        users_to_reset: Optional[List[LiteLLM_UserTable]] = None
+        try:
+            users_to_reset = await self.prisma_client.get_data(
+                table_name="user", query_type="find_all", reset_at=now
+            )
             updated_users: List[LiteLLM_UserTable] = []
-            for user in users_to_reset:
-                updated_user = await ResetBudgetJob._reset_budget_for_user(
-                    user=user, current_time=now
+            if users_to_reset is not None and len(users_to_reset) > 0:
+                for user in users_to_reset:
+                    updated_user = await ResetBudgetJob._reset_budget_for_user(
+                        user=user, current_time=now
+                    )
+                    if updated_user is not None:
+                        updated_users.append(updated_user)
+
+                verbose_proxy_logger.debug(
+                    "Updated users %s", json.dumps(updated_users, indent=4, default=str)
                 )
-                if updated_user is not None:
-                    updated_users.append(updated_user)
+                await self.prisma_client.update_data(
+                    query_type="update_many", data_list=updated_users, table_name="user"
+                )
 
-            verbose_proxy_logger.debug(
-                "Updated users %s", json.dumps(updated_users, indent=4, default=str)
+            # Log success
+            end_time = time.time()
+            asyncio.create_task(
+                self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
+                    service=ServiceTypes.RESET_BUDGET_JOB,
+                    duration=end_time - start_time,
+                    call_type="reset_budget_users",
+                    start_time=start_time,
+                    end_time=end_time,
+                    event_metadata={
+                        "users_found": len(users_to_reset) if users_to_reset else 0,
+                        "users_updated": len(updated_users),
+                    },
+                )
             )
-            await prisma_client.update_data(
-                query_type="update_many", data_list=updated_users, table_name="user"
+        except Exception as e:
+            # Log failure
+            end_time = time.time()
+            asyncio.create_task(
+                self.proxy_logging_obj.service_logging_obj.async_service_failure_hook(
+                    service=ServiceTypes.RESET_BUDGET_JOB,
+                    duration=end_time - start_time,
+                    error=e,
+                    call_type="reset_budget_users",
+                    start_time=start_time,
+                    end_time=end_time,
+                    event_metadata={
+                        "users_found": len(users_to_reset) if users_to_reset else 0
+                    },
+                )
             )
+            raise e
 
-    @staticmethod
-    async def reset_budget_for_litellm_teams(prisma_client: PrismaClient):
+    async def reset_budget_for_litellm_teams(self):
         """
         Resets the budget for all LiteLLM Internal Teams if their budget has expired
         """
         now = datetime.utcnow()
-        teams_to_reset = await prisma_client.get_data(
-            table_name="team", query_type="find_all", reset_at=now
-        )
-        if teams_to_reset is not None and len(teams_to_reset) > 0:
+        start_time = time.time()
+        teams_to_reset: Optional[List[LiteLLM_TeamTable]] = None
+        try:
+            teams_to_reset = await self.prisma_client.get_data(
+                table_name="team", query_type="find_all", reset_at=now
+            )
             updated_teams: List[LiteLLM_TeamTable] = []
-            for team in teams_to_reset:
-                updated_team = await ResetBudgetJob._reset_budget_for_team(
-                    team=team, current_time=now
-                )
-                if updated_team is not None:
-                    updated_teams.append(updated_team)
+            if teams_to_reset is not None and len(teams_to_reset) > 0:
+                for team in teams_to_reset:
+                    updated_team = await ResetBudgetJob._reset_budget_for_team(
+                        team=team, current_time=now
+                    )
+                    if updated_team is not None:
+                        updated_teams.append(updated_team)
 
-            verbose_proxy_logger.debug(
-                "Updated teams %s", json.dumps(updated_teams, indent=4, default=str)
+                verbose_proxy_logger.debug(
+                    "Updated teams %s", json.dumps(updated_teams, indent=4, default=str)
+                )
+                await self.prisma_client.update_data(
+                    query_type="update_many", data_list=updated_teams, table_name="team"
+                )
+
+            # Log success
+            end_time = time.time()
+            asyncio.create_task(
+                self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
+                    service=ServiceTypes.RESET_BUDGET_JOB,
+                    duration=end_time - start_time,
+                    call_type="reset_budget_teams",
+                    start_time=start_time,
+                    end_time=end_time,
+                    event_metadata={
+                        "teams_found": len(teams_to_reset) if teams_to_reset else 0,
+                        "teams_updated": len(updated_teams),
+                    },
+                )
             )
-            await prisma_client.update_data(
-                query_type="update_many", data_list=updated_teams, table_name="team"
+        except Exception as e:
+            # Log failure
+            end_time = time.time()
+            asyncio.create_task(
+                self.proxy_logging_obj.service_logging_obj.async_service_failure_hook(
+                    service=ServiceTypes.RESET_BUDGET_JOB,
+                    duration=end_time - start_time,
+                    error=e,
+                    call_type="reset_budget_teams",
+                    start_time=start_time,
+                    end_time=end_time,
+                    event_metadata={
+                        "teams_found": len(teams_to_reset) if teams_to_reset else 0
+                    },
+                )
             )
+            raise e
 
     @staticmethod
     async def _reset_budget_common(
