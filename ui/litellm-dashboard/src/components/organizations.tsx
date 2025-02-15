@@ -36,6 +36,7 @@ interface OrganizationsTableProps {
   currentOrg?: any;
   guardrailsList?: string[];
   setOrganizations: (organizations: Organization[]) => void;
+  premiumUser: boolean;
 }
 
 const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
@@ -47,7 +48,8 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
   handleRefreshClick,
   currentOrg,
   guardrailsList = [],
-  setOrganizations
+  setOrganizations,
+  premiumUser
 }) => {
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
   const [editOrg, setEditOrg] = useState(false);
@@ -124,6 +126,14 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
     setIsOrgModalVisible(false);
     form.resetFields();
   };
+
+  if (!premiumUser) {
+    return (
+      <div>
+        <Text>This is a LiteLLM Enterprise feature, and requires a valid key to use. Get a trial key <a href="https://litellm.ai/pricing" target="_blank" rel="noopener noreferrer">here</a>.</Text>
+      </div>
+    );
+  }
 
   if (selectedOrgId) {
     return (
