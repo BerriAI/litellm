@@ -1487,6 +1487,7 @@ class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
     organization_id: Optional[str] = None
     organization_alias: Optional[str] = None
     budget_id: str
+    spend: float = 0.0
     metadata: Optional[dict] = None
     models: List[str]
     created_by: str
@@ -1496,6 +1497,7 @@ class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
 class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
     members: List[LiteLLM_OrganizationMembershipTable] = []
     teams: List[LiteLLM_TeamTable] = []
+    litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
 
 
 class NewOrganizationResponse(LiteLLM_OrganizationTable):

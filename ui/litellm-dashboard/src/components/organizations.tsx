@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Table,
   TableHead,
@@ -25,7 +25,7 @@ import { PencilAltIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline"
 import { TextInput } from "@tremor/react";
 import { getModelDisplayName } from './key_team_helpers/fetch_available_models_team_key';
 import OrganizationInfoView from './organization/organization_view';
-import { Organization } from './networking';
+import { Organization, organizationListCall } from './networking';
 interface OrganizationsTableProps {
   organizations: Organization[];
   userRole: string;
@@ -35,6 +35,7 @@ interface OrganizationsTableProps {
   handleRefreshClick?: () => void;
   currentOrg?: any;
   guardrailsList?: string[];
+  setOrganizations: (organizations: Organization[]) => void;
 }
 
 const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
@@ -45,7 +46,8 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
   lastRefreshed,
   handleRefreshClick,
   currentOrg,
-  guardrailsList = []
+  guardrailsList = [],
+  setOrganizations
 }) => {
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
   const [editOrg, setEditOrg] = useState(false);
@@ -53,6 +55,16 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
   const [orgToDelete, setOrgToDelete] = useState<string | null>(null);
   const [isOrgModalVisible, setIsOrgModalVisible] = useState(false);
   const [form] = Form.useForm();
+
+  useEffect(() => {
+    if (organizations.length === 0 && accessToken) {
+      const fetchOrganizations = async () => {
+        const organizations = await organizationListCall(accessToken);
+        setOrganizations(organizations);
+      };
+      fetchOrganizations();
+    }
+  }, [organizations, accessToken]);
 
   const handleDelete = (orgId: string) => {
     setOrgToDelete(orgId);
@@ -185,7 +197,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                                       className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
                                       onClick={() => setSelectedOrgId(org.organization_id)}
                                     >
-                                      {org.organization_id.slice(0, 7)}...
+                                      {org.organization_id?.slice(0, 7)}...
                                     </Button>
                                   </Tooltip>
                                 </div>
@@ -196,7 +208,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                               </TableCell>
                               <TableCell>{org.spend}</TableCell>
                               <TableCell>
-                                {org.max_budget !== null && org.max_budget !== undefined ? org.max_budget : "No limit"}
+                                {org.litellm_budget_table?.max_budget !== null && org.litellm_budget_table?.max_budget !== undefined ? org.litellm_budget_table?.max_budget : "No limit"}
                               </TableCell>
                               <TableCell>
                                 {Array.isArray(org.models) && (

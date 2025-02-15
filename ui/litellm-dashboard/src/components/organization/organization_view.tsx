@@ -10,10 +10,18 @@ import {
   TabPanels,
   Grid,
   Badge,
+  Table,
+  TableHead,
+  TableRow,
+  TableHeaderCell,
+  TableBody,
+  TableCell,
   Button as TremorButton,
+  Icon
 } from "@tremor/react";
 import { Button, Form, Input, Select, message, InputNumber, Tooltip } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
+import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { Organization, organizationInfoCall } from "../networking";
 
@@ -174,9 +182,67 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
 
           {/* Budget Panel */}
           <TabPanel>
-            <Card>
-              <h1>Members</h1>
-            </Card>
+            <div className="space-y-4">
+                <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[75vh]">
+                <Table>
+                    <TableHead>
+                    <TableRow>
+                        <TableHeaderCell>User ID</TableHeaderCell>
+                        <TableHeaderCell>Role</TableHeaderCell>
+                        <TableHeaderCell>Spend</TableHeaderCell>
+                        <TableHeaderCell>Created At</TableHeaderCell>
+                        <TableHeaderCell></TableHeaderCell>
+                    </TableRow>
+                    </TableHead>
+
+                    <TableBody>
+                    {orgData.members.map((member, index) => (
+                        <TableRow key={index}>
+                        <TableCell>
+                            <Text className="font-mono">{member.user_id}</Text>
+                        </TableCell>
+                        <TableCell>
+                            <Text className="font-mono">{member.user_role}</Text>
+                        </TableCell>
+                        <TableCell>
+                            <Text>${member.spend.toFixed(6)}</Text>
+                        </TableCell>
+                        <TableCell>
+                            <Text>{new Date(member.created_at).toLocaleString()}</Text>
+                        </TableCell>
+                        <TableCell>
+                            {canEditOrg && (
+                            <>
+                                <Icon
+                                icon={PencilAltIcon}
+                                size="sm"
+                                onClick={() => {
+                                    // TODO: Implement edit member functionality
+                                }}
+                                />
+                                <Icon
+                                icon={TrashIcon}
+                                size="sm"
+                                onClick={() => {
+                                    // TODO: Implement delete member functionality
+                                }}
+                                />
+                            </>
+                            )}
+                        </TableCell>
+                        </TableRow>
+                    ))}
+                    </TableBody>
+                </Table>
+                </Card>
+                {canEditOrg && (
+                <TremorButton onClick={() => {
+                    // TODO: Implement add member functionality
+                }}>
+                    Add Member
+                </TremorButton>
+                )}
+            </div>
           </TabPanel>
 
           {/* Settings Panel */}
