@@ -179,20 +179,52 @@ async def new_organization(
     return response
 
 
-@router.post(
+@router.patch(
     "/organization/update",
     tags=["organization management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=LiteLLM_OrganizationTableWithMembers,
 )
-async def update_organization():
-    """[TODO] Not Implemented yet. Let us know if you need this - https://github.com/BerriAI/litellm/issues"""
-    raise NotImplementedError("Not Implemented Yet")
+async def update_organization(
+    data: LiteLLM_OrganizationTableUpdate,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Update an organization
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if user_api_key_dict.user_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Cannot associate a user_id to this action. Check `/key/info` to validate if 'user_id' is set."
+            },
+        )
+
+    if data.updated_by is None:
+        data.updated_by = user_api_key_dict.user_id
+
+    response = await prisma_client.db.litellm_organizationtable.update(
+        where={"organization_id": data.organization_id},
+        data=data.model_dump(exclude_none=True),
+        include={"members": True, "teams": True, "litellm_budget_table": True},
+    )
+
+    return response
 
 
 @router.post(
     "/organization/delete",
     tags=["organization management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=List[LiteLLM_OrganizationTableWithMembers],
 )
 async def delete_organization(
     data: DeleteOrganizationRequest,
@@ -218,7 +250,8 @@ async def delete_organization(
     deleted_orgs = []
     for organization_id in data.organization_ids:
         deleted_org = await prisma_client.db.litellm_organizationtable.delete(
-            where={"organization_id": organization_id}
+            where={"organization_id": organization_id},
+            include={"members": True, "teams": True, "litellm_budget_table": True},
         )
         if deleted_org is None:
             raise HTTPException(
@@ -227,10 +260,7 @@ async def delete_organization(
             )
         deleted_orgs.append(deleted_org)
 
-    return {
-        "message": "Organizations deleted successfully",
-        "deleted_orgs": deleted_orgs,
-    }
+    return deleted_orgs
 
 
 @router.get(
