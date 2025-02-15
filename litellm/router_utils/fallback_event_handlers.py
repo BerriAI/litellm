@@ -4,7 +4,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.router_utils.add_retry_headers import add_fallback_headers_to_response
+from litellm.router_utils.add_retry_fallback_headers import (
+    add_fallback_headers_to_response,
+)
 from litellm.types.router import LiteLLMParamsTypedDict
 
 if TYPE_CHECKING:
