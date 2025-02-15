@@ -4,7 +4,7 @@ CRUD ENDPOINTS FOR GUARDRAILS
 
 from typing import Dict, List, Optional, cast
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.guardrails import GuardrailInfoResponse, ListGuardrailsResponse
@@ -25,6 +25,7 @@ def _get_guardrails_list_response(
         guardrail_configs.append(
             GuardrailInfoResponse(
                 guardrail_name=guardrail.get("guardrail_name"),
+                litellm_params=guardrail.get("litellm_params"),
                 guardrail_info=guardrail.get("guardrail_info"),
             )
         )
@@ -79,9 +80,6 @@ async def list_guardrails():
     _guardrails_config = cast(Optional[list[dict]], config.get("guardrails"))
 
     if _guardrails_config is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": "No guardrails found in config"},
-        )
+        return _get_guardrails_list_response([])
 
     return _get_guardrails_list_response(_guardrails_config)

@@ -19,6 +19,7 @@ import {
 import ConditionalPublicModelName from "./add_model/conditional_public_model_name";
 import LiteLLMModelNameField from "./add_model/litellm_model_name";
 import AdvancedSettings from "./add_model/advanced_settings";
+import ProviderSpecificFields from "./add_model/provider_specific_fields";
 import { handleAddModelSubmit } from "./add_model/handle_add_model_submit";
 import EditModelModal from "./edit_model/edit_model_modal";
 import {
@@ -65,7 +66,7 @@ import {
   Popover,
   Form,
   Input,
-  Select as Select2,
+  Select as AntdSelect,
   InputNumber,
   message,
   Descriptions,
@@ -99,7 +100,7 @@ import { Upload } from "antd";
 import TimeToFirstToken from "./model_metrics/time_to_first_token";
 import DynamicFields from "./model_add/dynamic_form";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { Providers, provider_map, providerLogoMap, getProviderLogoAndName, getPlaceholder } from "./provider_info_helpers";
+import { Providers, provider_map, providerLogoMap, getProviderLogoAndName, getPlaceholder, getProviderModels } from "./provider_info_helpers";
 
 interface ModelDashboardProps {
   accessToken: string | null;
@@ -178,7 +179,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [providerSettings, setProviderSettings] = useState<ProviderSettings[]>(
     []
   );
-  const [selectedProvider, setSelectedProvider] = useState<String>("OpenAI");
+  const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
   const [healthCheckResponse, setHealthCheckResponse] = useState<string>("");
   const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
   const [infoModalVisible, setInfoModalVisible] = useState<boolean>(false);
@@ -225,6 +226,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
   // Add state for advanced settings visibility
   const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
+
+  const setProviderModelsFn = (provider: Providers) => {
+    const _providerModels = getProviderModels(provider, modelMap);
+    setProviderModels(_providerModels);
+    console.log(`providerModels: ${_providerModels}`);
+  };
 
   const updateModelMetrics = async (
     modelGroup: string | null,
@@ -411,17 +418,21 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
     for (const [key, value] of Object.entries(formValues)) {
       if (key !== "model_id") {
-        newLiteLLMParams[key] = value;
+        // Empty string means user wants to null the value
+        newLiteLLMParams[key] = value === "" ? null : value;
       } else {
-        model_info_model_id = value;
+        model_info_model_id = value === "" ? null : value;
       }
     }
-
-    let payload = {
-      litellm_params: newLiteLLMParams,
-      model_info: {
+    
+    let payload: {
+      litellm_params: Record<string, any> | undefined;
+      model_info: { id: any } | undefined;
+    } = {
+      litellm_params: Object.keys(newLiteLLMParams).length > 0 ? newLiteLLMParams : undefined,
+      model_info: model_info_model_id !== undefined ? {
         id: model_info_model_id,
-      },
+      } : undefined,
     };
 
     console.log("handleEditSubmit payload:", payload);
@@ -439,7 +450,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     }
   };
 
-  const props: UploadProps = {
+  const uploadProps: UploadProps = {
     name: "file",
     accept: ".json",
     beforeUpload: (file) => {
@@ -786,8 +797,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       }
     });
   }
-
-
   if (userRole && userRole == "Admin Viewer") {
     const { Title, Paragraph } = Typography;
     return (
@@ -799,48 +808,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       </div>
     );
   }
-
-  const setProviderModelsFn = (provider: string) => {
-    console.log(`received provider string: ${provider}`);
-    let providerKey = provider;
-    if (providerKey) {
-      let _providerModels: Array<string> = [];
-      if (typeof modelMap === "object") {
-        Object.entries(modelMap).forEach(([key, value]) => {
-          if (
-            value !== null &&
-            typeof value === "object" &&
-            "litellm_provider" in (value as object) &&
-            ((value as any)["litellm_provider"] === providerKey ||
-              (value as any)["litellm_provider"].includes(providerKey))
-          ) {
-            _providerModels.push(key);
-          }
-        });
-
-        // Special case for cohere_chat
-        // we need both cohere_chat and cohere models to show on dropdown
-        if (providerKey == Providers.Cohere) {
-          console.log("adding cohere chat model")
-          Object.entries(modelMap).forEach(([key, value]) => {
-            if (
-              value !== null &&
-              typeof value === "object" &&
-              "litellm_provider" in (value as object) &&
-              ((value as any)["litellm_provider"] === "cohere")
-            ) {
-              _providerModels.push(key);
-            }
-          });
-        }
-      }
-
-      
-
-      setProviderModels(_providerModels);
-      console.log(`providerModels: ${providerModels}`);
-    }
-  };
 
   const runHealthCheck = async () => {
     try {
@@ -1068,7 +1035,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     form
       .validateFields()
       .then((values) => {
-        handleAddModelSubmit(values, accessToken, form);
+        handleAddModelSubmit(values, accessToken, form, handleRefreshClick);
         // form.resetFields();
       })
       .catch((error) => {
@@ -1487,6 +1454,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                 <DeleteModelButton
                                   modelID={model.model_info.id}
                                   accessToken={accessToken}
+                                  callback={handleRefreshClick}
                                 />
                               </Col>
                             </Grid>
@@ -1536,32 +1504,27 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     labelCol={{ span: 10 }}
                     labelAlign="left"
                   >
-                    <Select
-                      value={selectedProvider as string}
+                    <AntdSelect
+                      showSearch={true}
+                      value={selectedProvider}
                       onChange={(value) => {
-                        // Set the selected provider
-                        setSelectedProvider(value as unknown as string);
-                        // Update provider-specific models
-                        setProviderModelsFn(provider_map[value as unknown as string]);
-                        // Reset the 'model' field
-                        form.setFieldsValue({ model: [] });
-                        // Reset the 'model_name' field
-                        form.setFieldsValue({ model_name: undefined });
+                        setSelectedProvider(value);
+                        setProviderModelsFn(value);
+                        form.setFieldsValue({ 
+                          model: [],
+                          model_name: undefined 
+                        });
                       }}
                     >
-                      {Object.keys(Providers).map((providerKey) => (
-                        <SelectItem
-                          key={providerKey}
-                          value={Providers[providerKey as keyof typeof Providers]}
-                          onClick={() => {
-                            setProviderModelsFn(provider_map[providerKey as keyof typeof Providers]);
-                            setSelectedProvider(Providers[providerKey as keyof typeof Providers]);
-                          }}
+                      {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => (
+                        <AntdSelect.Option
+                          key={providerEnum}
+                          value={providerEnum}
                         >
                           <div className="flex items-center space-x-2">
                             <img
-                              src={providerLogoMap[Providers[providerKey as keyof typeof Providers]]}
-                              alt={`${Providers[providerKey as keyof typeof Providers]} logo`}
+                              src={providerLogoMap[providerDisplayName]}
+                              alt={`${providerEnum} logo`}
                               className="w-5 h-5"
                               onError={(e) => {
                                 // Create a div with provider initial as fallback
@@ -1570,19 +1533,19 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                 if (parent) {
                                   const fallbackDiv = document.createElement('div');
                                   fallbackDiv.className = 'w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs';
-                                  fallbackDiv.textContent = Providers[providerKey as keyof typeof Providers].charAt(0);
+                                  fallbackDiv.textContent = providerDisplayName.charAt(0);
                                   parent.replaceChild(fallbackDiv, target);
                                 }
                               }}
                             />
-                            <span>{Providers[providerKey as keyof typeof Providers]}</span>
+                            <span>{providerDisplayName}</span>
                           </div>
-                        </SelectItem>
+                        </AntdSelect.Option>
                       ))}
-                    </Select>
+                    </AntdSelect>
                   </Form.Item>
                   <LiteLLMModelNameField
-                      selectedProvider={selectedProvider as string}
+                      selectedProvider={selectedProvider}
                       providerModels={providerModels}
                       getPlaceholder={getPlaceholder}
                     />
@@ -1590,153 +1553,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   {/* Conditionally Render "Public Model Name" */}
                   <ConditionalPublicModelName  />
 
-                  {/* Provider-specific fields */}
-                  {dynamicProviderForm !== undefined &&
-                    dynamicProviderForm.fields.length > 0 && (
-                      <DynamicFields
-                        fields={dynamicProviderForm.fields}
-                        selectedProvider={dynamicProviderForm.name}
-                      />
-                  )}
-
-                  {selectedProvider != Providers.Bedrock &&
-                    selectedProvider != Providers.Vertex_AI &&
-                    selectedProvider != Providers.Ollama &&
-                    (dynamicProviderForm === undefined ||
-                      dynamicProviderForm.fields.length == 0) && (
-                      <Form.Item
-                        rules={[{ required: true, message: "Required" }]}
-                        label="API Key"
-                        name="api_key"
-                        tooltip="LLM API Credentials"
-                      >
-                        <TextInput placeholder="sk-" type="password" />
-                      </Form.Item>
-                    )}
-                  {selectedProvider == Providers.OpenAI && (
-                    <Form.Item label="Organization ID" name="organization">
-                      <TextInput placeholder="[OPTIONAL] my-unique-org" />
-                    </Form.Item>
-                  )}
-                  {selectedProvider == Providers.Vertex_AI && (
-                    <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
-                      label="Vertex Project"
-                      name="vertex_project"
-                    >
-                      <TextInput placeholder="adroit-cadet-1234.." />
-                    </Form.Item>
-                  )}
-                  {selectedProvider == Providers.Vertex_AI && (
-                    <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
-                      label="Vertex Location"
-                      name="vertex_location"
-                    >
-                      <TextInput placeholder="us-east-1" />
-                    </Form.Item>
-                  )}
-                  {selectedProvider == Providers.Vertex_AI && (
-                    <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
-                      label="Vertex Credentials"
-                      name="vertex_credentials"
-                      className="mb-0"
-                    >
-                      <Upload {...props}>
-                        <Button2 icon={<UploadOutlined />}>
-                          Click to Upload
-                        </Button2>
-                      </Upload>
-                    </Form.Item>
-                  )}
-                  {selectedProvider == Providers.Vertex_AI && (
-                    <Row>
-                      <Col span={10}></Col>
-                      <Col span={10}>
-                        <Text className="mb-3 mt-1">
-                          Give litellm a gcp service account(.json file), so it
-                          can make the relevant calls
-                        </Text>
-                      </Col>
-                    </Row>
-                  )}
-                  {(selectedProvider == Providers.Azure ||
-                    selectedProvider == Providers.OpenAI_Compatible) && (
-                    <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
-                      label="API Base"
-                      name="api_base"
-                    >
-                      <TextInput placeholder="https://..." />
-                    </Form.Item>
-                  )}
-                  {selectedProvider == Providers.Azure && (
-                    <Form.Item
-                      label="API Version"
-                      name="api_version"
-                      tooltip="By default litellm will use the latest version. If you want to use a different version, you can specify it here"
-                    >
-                      <TextInput placeholder="2023-07-01-preview" />
-                    </Form.Item>
-                  )}
-                  {selectedProvider == Providers.Azure && (
-                    <div>
-                      <Form.Item
-                        label="Base Model"
-                        name="base_model"
-                        className="mb-0"
-                      >
-                        <TextInput placeholder="azure/gpt-3.5-turbo" />
-                      </Form.Item>
-                      <Row>
-                        <Col span={10}></Col>
-                        <Col span={10}>
-                          <Text className="mb-2">
-                            The actual model your azure deployment uses. Used
-                            for accurate cost tracking. Select name from{" "}
-                            <Link
-                              href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
-                              target="_blank"
-                            >
-                              here
-                            </Link>
-                          </Text>
-                        </Col>
-                      </Row>
-                    </div>
-                  )}
-                  {selectedProvider == Providers.Bedrock && (
-                    <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
-                      label="AWS Access Key ID"
-                      name="aws_access_key_id"
-                      tooltip="You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
-                    >
-                      <TextInput placeholder="" />
-                    </Form.Item>
-                  )}
-                  {selectedProvider == Providers.Bedrock && (
-                    <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
-                      label="AWS Secret Access Key"
-                      name="aws_secret_access_key"
-                      tooltip="You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
-                    >
-                      <TextInput placeholder="" />
-                    </Form.Item>
-                  )}
-                  {selectedProvider == Providers.Bedrock && (
-                    <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
-                      label="AWS Region Name"
-                      name="aws_region_name"
-                      tooltip="You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
-                    >
-                      <TextInput placeholder="us-east-1" />
-                    </Form.Item>
-                  )}
-
+                  <ProviderSpecificFields
+                    selectedProvider={selectedProvider}
+                    uploadProps={uploadProps}
+                  />
                   <AdvancedSettings 
                     showAdvancedSettings={showAdvancedSettings}
                     setShowAdvancedSettings={setShowAdvancedSettings}

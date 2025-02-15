@@ -39,6 +39,7 @@ from litellm.proxy._types import (
     NewTeamRequest,
     ProxyErrorTypes,
     ProxyException,
+    SpecialManagementEndpointEnums,
     TeamAddMemberResponse,
     TeamInfoResponseObject,
     TeamListResponseObject,
@@ -1190,6 +1191,30 @@ async def delete_team(
     return deleted_teams
 
 
+def validate_membership(
+    user_api_key_dict: UserAPIKeyAuth, team_table: LiteLLM_TeamTable
+):
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+
+    if (
+        user_api_key_dict.team_id == team_table.team_id
+    ):  # allow team keys to check their info
+        return
+
+    if user_api_key_dict.user_id not in [
+        m.user_id for m in team_table.members_with_roles
+    ]:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "User={} not authorized to access this team={}".format(
+                    user_api_key_dict.user_id, team_table.team_id
+                )
+            },
+        )
+
+
 @router.get(
     "/team/info", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
@@ -1482,6 +1507,7 @@ async def list_team(
     user_id: Optional[str] = fastapi.Query(
         default=None, description="Only return teams which this 'user_id' belongs to"
     ),
+    organization_id: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -1492,6 +1518,7 @@ async def list_team(
 
     Parameters:
     - user_id: str - Optional. If passed will only return teams that the user_id is a member of.
+    - organization_id: str - Optional. If passed will only return teams that belong to the organization_id. Pass 'default_organization' to get all teams without organization_id.
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -1513,7 +1540,11 @@ async def list_team(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    response = await prisma_client.db.litellm_teamtable.find_many()
+    response = await prisma_client.db.litellm_teamtable.find_many(
+        include={
+            "litellm_model_table": True,
+        }
+    )
 
     filtered_response = []
     if user_id:
@@ -1565,6 +1596,19 @@ async def list_team(
             continue
     # Sort the responses by team_alias
     returned_responses.sort(key=lambda x: (getattr(x, "team_alias", "") or ""))
+
+    if organization_id is not None:
+        if organization_id == SpecialManagementEndpointEnums.DEFAULT_ORGANIZATION.value:
+            returned_responses = [
+                team for team in returned_responses if team.organization_id is None
+            ]
+        else:
+            returned_responses = [
+                team
+                for team in returned_responses
+                if team.organization_id == organization_id
+            ]
+
     return returned_responses
 
 
@@ -1637,3 +1681,81 @@ def _set_team_metadata_field(
         _premium_user_check()
     team_data.metadata = team_data.metadata or {}
     team_data.metadata[field_name] = value
+
+
+@router.get(
+    "/team/filter/ui",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+    responses={
+        200: {"model": List[LiteLLM_TeamTable]},
+    },
+)
+async def ui_view_teams(
+    team_id: Optional[str] = fastapi.Query(
+        default=None, description="Team ID in the request parameters"
+    ),
+    team_alias: Optional[str] = fastapi.Query(
+        default=None, description="Team alias in the request parameters"
+    ),
+    page: int = fastapi.Query(
+        default=1, description="Page number for pagination", ge=1
+    ),
+    page_size: int = fastapi.Query(
+        default=50, description="Number of items per page", ge=1, le=100
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    [PROXY-ADMIN ONLY] Filter teams based on partial match of team_id or team_alias with pagination.
+
+    Args:
+        user_id (Optional[str]): Partial user ID to search for
+        user_email (Optional[str]): Partial email to search for
+        page (int): Page number for pagination (starts at 1)
+        page_size (int): Number of items per page (max 100)
+        user_api_key_dict (UserAPIKeyAuth): User authentication information
+
+    Returns:
+        List[LiteLLM_SpendLogs]: Paginated list of matching user records
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    try:
+        # Calculate offset for pagination
+        skip = (page - 1) * page_size
+
+        # Build where conditions based on provided parameters
+        where_conditions = {}
+
+        if team_id:
+            where_conditions["team_id"] = {
+                "contains": team_id,
+                "mode": "insensitive",  # Case-insensitive search
+            }
+
+        if team_alias:
+            where_conditions["team_alias"] = {
+                "contains": team_alias,
+                "mode": "insensitive",  # Case-insensitive search
+            }
+
+        # Query users with pagination and filters
+        teams = await prisma_client.db.litellm_teamtable.find_many(
+            where=where_conditions,
+            skip=skip,
+            take=page_size,
+            order={"created_at": "desc"},
+        )
+
+        if not teams:
+            return []
+
+        return teams
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error searching teams: {str(e)}")

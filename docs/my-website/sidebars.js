@@ -45,7 +45,7 @@ const sidebars = {
             "proxy/health",
             "proxy/debugging",
             "proxy/spending_monitoring",
-        ],
+          ],
         },
         "proxy/demo",
         {
@@ -142,7 +142,7 @@ const sidebars = {
             "proxy/guardrails/secret_detection",
             "proxy/guardrails/custom_guardrail",
             "prompt_injection"
-        ],
+          ],
         },
         {
           type: "category",
@@ -162,7 +162,6 @@ const sidebars = {
           ]
         },
         "proxy/caching",
-
       ]
     },
     {
@@ -181,6 +180,7 @@ const sidebars = {
         "providers/openai_compatible",
         "providers/azure",
         "providers/azure_ai",
+        "providers/aiml",
         "providers/vertex",
         "providers/gemini",
         "providers/anthropic",
@@ -305,6 +305,7 @@ const sidebars = {
             "pass_through/cohere",
             "pass_through/anthropic_completion",
             "pass_through/bedrock",
+            "pass_through/assembly_ai",
             "pass_through/langfuse",
             "proxy/pass_through",
           ],
@@ -327,7 +328,7 @@ const sidebars = {
         description: "Learn how to load balance, route, and set fallbacks for your LLM requests",
         slug: "/routing-load-balancing",
       },
-      items: ["routing", "scheduler", "proxy/load_balancing", "proxy/reliability", "proxy/timeout", "proxy/tag_routing", "proxy/provider_budget_routing",  "wildcard_routing"],
+      items: ["routing", "scheduler", "proxy/load_balancing", "proxy/reliability", "proxy/timeout", "proxy/tag_routing", "proxy/provider_budget_routing", "wildcard_routing"],
     },
     {
       type: "category",
