@@ -8,6 +8,7 @@ import uuid
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, get_type_hints
 
 import httpx
+from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Required, TypedDict
 
@@ -151,6 +152,9 @@ class GenericLiteLLMParams(BaseModel):
     max_retries: Optional[int] = None
     organization: Optional[str] = None  # for openai orgs
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
+
+    # for passing in custom OpenAI / Azure OpenAI clients
+    client: Optional[Union[OpenAI, AsyncOpenAI, AzureOpenAI, AsyncAzureOpenAI]] = None
     ## LOGGING PARAMS ##
     litellm_trace_id: Optional[str] = None
     ## UNIFIED PROJECT/REGION ##
