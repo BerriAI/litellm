@@ -510,7 +510,7 @@ async def find_member_if_email(
                 where={"user_email": user_email}
             )
         )
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=400,
             detail={
