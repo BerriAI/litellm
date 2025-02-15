@@ -212,7 +212,6 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                     <TableHead>
                     <TableRow>
                         <TableHeaderCell>User ID</TableHeaderCell>
-                        <TableHeaderCell>User Email</TableHeaderCell>
                         <TableHeaderCell>Role</TableHeaderCell>
                         <TableHeaderCell>Spend</TableHeaderCell>
                         <TableHeaderCell>Created At</TableHeaderCell>
@@ -225,9 +224,6 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                         <TableRow key={index}>
                         <TableCell>
                             <Text className="font-mono">{member.user_id}</Text>
-                        </TableCell>
-                        <TableCell>
-                            <Text className="font-mono">{member.user_email}</Text>
                         </TableCell>
                         <TableCell>
                             <Text className="font-mono">{member.user_role}</Text>
