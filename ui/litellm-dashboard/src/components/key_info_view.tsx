@@ -30,7 +30,6 @@ interface KeyInfoViewProps {
   userID: string | null;
   userRole: string | null;
   teams: any[] | null;
-  premiumUser: boolean;
 }
 
 export default function KeyInfoView({ keyId, onClose, keyData, accessToken, userID, userRole, teams }: KeyInfoViewProps) {
