@@ -592,6 +592,18 @@ const Teams: React.FC<TeamProps> = ({
                 >
                   <TextInput placeholder="" />
                 </Form.Item>
+                <Form.Item
+                  label="Organization ID"
+                  name="organization_id"
+                  help="Assign team to an organization. Found in the 'Organization' tab."
+                >
+                  <TextInput 
+                    placeholder="" 
+                    onChange={(e) => {
+                      e.target.value = e.target.value.trim();
+                    }} 
+                  />
+                </Form.Item>
                 <Form.Item label="Models" name="models">
                   <Select2
                     mode="multiple"
@@ -649,18 +661,6 @@ const Teams: React.FC<TeamProps> = ({
                       help="ID of the team you want to create. If not provided, it will be generated automatically."
                     >
                       <TextInput 
-                        onChange={(e) => {
-                          e.target.value = e.target.value.trim();
-                        }} 
-                      />
-                    </Form.Item>
-                    <Form.Item
-                      label="Organization ID"
-                      name="organization_id"
-                      help="Assign team to an organization. Found in the 'Organization' tab."
-                    >
-                      <TextInput 
-                        placeholder="" 
                         onChange={(e) => {
                           e.target.value = e.target.value.trim();
                         }} 
