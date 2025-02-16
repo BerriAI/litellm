@@ -2519,8 +2519,6 @@ def test_redis_caching_multiple_namespaces():
             model="gpt-3.5-turbo", 
             messages=messages, 
             caching=True, 
-            api_base="https://litellm8397336933.services.ai.azure.com/models/chat/completions",
-            api_key="my-fake-api-key",
             extra_body = {
                 "cache": {
                     "namespace": namespace_1
@@ -2547,6 +2545,7 @@ def test_redis_caching_multiple_namespaces():
                 }
             })
 
+        # We expect the hashed keys sent to the redis client to be the same between the first and third call
         assert(mock_redis_client_get.call_args_list[0] == mock_redis_client_get.call_args_list[2])
         assert(mock_redis_client_get.call_args_list[0] != mock_redis_client_get.call_args_list[1])
 
