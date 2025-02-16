@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
+from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
@@ -1888,7 +1889,9 @@ async def _list_key_helper(
     """
 
     # Prepare filter conditions
-    where: Dict[str, Union[str, Dict[str, str]]] = {}
+    where: Dict[str, Union[str, Dict[str, Any]]] = {}
+    where.update(_get_condition_to_filter_out_ui_session_tokens())
+
     if user_id and isinstance(user_id, str):
         where["user_id"] = user_id
     if team_id and isinstance(team_id, str):
@@ -1941,6 +1944,20 @@ async def _list_key_helper(
         current_page=page,
         total_pages=total_pages,
     )
+
+
+def _get_condition_to_filter_out_ui_session_tokens() -> Dict[str, Any]:
+    """
+    Condition to filter out UI session tokens
+    """
+    return {
+        "OR": [
+            {"team_id": None},  # Include records where team_id is null
+            {
+                "team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}
+            },  # Include records where team_id != UI_SESSION_TOKEN_TEAM_ID
+        ]
+    }
 
 
 @router.post(
