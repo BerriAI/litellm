@@ -25,6 +25,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
@@ -38,7 +39,6 @@ from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import (
     PrismaClient,
     _hash_token_if_needed,
-    duration_in_seconds,
     handle_exception_on_proxy,
 )
 from litellm.router import Router

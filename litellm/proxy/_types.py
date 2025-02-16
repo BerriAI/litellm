@@ -5,7 +5,14 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, Json, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    Json,
+    field_validator,
+    model_validator,
+)
 from typing_extensions import Required, TypedDict
 
 from litellm.types.integrations.slack_alerting import AlertType
@@ -393,6 +400,7 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/info",
         "/organization/delete",
         "/organization/member_add",
+        "/organization/member_update",
     ]
 
     # All routes accesible by an Org Admin
@@ -1110,6 +1118,10 @@ class OrganizationRequest(LiteLLMPydanticObjectBase):
     organizations: List[str]
 
 
+class DeleteOrganizationRequest(LiteLLMPydanticObjectBase):
+    organization_ids: List[str]  # required
+
+
 class KeyManagementSystem(enum.Enum):
     GOOGLE_KMS = "google_kms"
     AZURE_KEY_VAULT = "azure_key_vault"
@@ -1494,6 +1506,18 @@ class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
     updated_by: str
 
 
+class LiteLLM_OrganizationTableUpdate(LiteLLMPydanticObjectBase):
+    """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
+
+    organization_id: Optional[str] = None
+    organization_alias: Optional[str] = None
+    budget_id: Optional[str] = None
+    spend: Optional[float] = None
+    metadata: Optional[dict] = None
+    models: Optional[List[str]] = None
+    updated_by: Optional[str] = None
+
+
 class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
     """Returned by the /organization/info endpoint and /organization/list endpoint"""
 
@@ -1524,6 +1548,8 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     organization_memberships: Optional[List[LiteLLM_OrganizationMembershipTable]] = None
     teams: List[str] = []
     sso_user_id: Optional[str] = None
+    budget_duration: Optional[str] = None
+    budget_reset_at: Optional[datetime] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -2097,8 +2123,26 @@ class OrganizationMemberDeleteRequest(MemberDeleteRequest):
     organization_id: str
 
 
+ROLES_WITHIN_ORG = [
+    LitellmUserRoles.ORG_ADMIN,
+    LitellmUserRoles.INTERNAL_USER,
+    LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+]
+
+
 class OrganizationMemberUpdateRequest(OrganizationMemberDeleteRequest):
-    max_budget_in_organization: float
+    max_budget_in_organization: Optional[float] = None
+    role: Optional[LitellmUserRoles] = None
+
+    @field_validator("role")
+    def validate_role(
+        cls, value: Optional[LitellmUserRoles]
+    ) -> Optional[LitellmUserRoles]:
+        if value is not None and value not in ROLES_WITHIN_ORG:
+            raise ValueError(
+                f"Invalid role. Must be one of: {[role.value for role in ROLES_WITHIN_ORG]}"
+            )
+        return value
 
 
 class OrganizationMemberUpdateResponse(MemberUpdateResponse):

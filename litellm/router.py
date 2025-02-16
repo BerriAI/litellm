@@ -57,7 +57,10 @@ from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.router_strategy.simple_shuffle import simple_shuffle
 from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
-from litellm.router_utils.add_retry_headers import add_retry_headers_to_response
+from litellm.router_utils.add_retry_fallback_headers import (
+    add_fallback_headers_to_response,
+    add_retry_headers_to_response,
+)
 from litellm.router_utils.batch_utils import (
     _get_router_metadata_variable_name,
     replace_model_in_jsonl,
@@ -2888,6 +2891,10 @@ class Router:
             else:
                 response = await self.async_function_with_retries(*args, **kwargs)
             verbose_router_logger.debug(f"Async Response: {response}")
+            response = add_fallback_headers_to_response(
+                response=response,
+                attempted_fallbacks=0,
+            )
             return response
         except Exception as e:
             verbose_router_logger.debug(f"Traceback{traceback.format_exc()}")
