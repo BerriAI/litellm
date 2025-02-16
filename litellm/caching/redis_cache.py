@@ -136,12 +136,13 @@ class RedisCache(BaseCache):
             connection_pool=self.async_redis_conn_pool, **self.redis_kwargs
         )
 
-    def check_and_fix_namespace(self, key: str) -> str:
+    def check_and_fix_namespace(self, key: str, **kwargs) -> str:
         """
         Make sure each key starts with the given namespace
         """
-        if self.namespace is not None and not key.startswith(self.namespace):
-            key = self.namespace + ":" + key
+        namespace = kwargs.get("metadata", {}).get("redis_namespace") or kwargs.get("extra_body", {}).get("cache", {}).get("namespace") or self.namespace
+        if namespace is not None and not ":" in key:
+            key = namespace + ":" + key
 
         return key
 
@@ -150,7 +151,7 @@ class RedisCache(BaseCache):
         print_verbose(
             f"Set Redis Cache: key: {key}\nValue {value}\nttl={ttl}, redis_version={self.redis_version}"
         )
-        key = self.check_and_fix_namespace(key=key)
+        key = self.check_and_fix_namespace(key=key, **kwargs)
         try:
             start_time = time.time()
             self.redis_client.set(name=key, value=str(value), ex=ttl)
@@ -300,7 +301,7 @@ class RedisCache(BaseCache):
             )
             raise e
 
-        key = self.check_and_fix_namespace(key=key)
+        key = self.check_and_fix_namespace(key=key, **kwargs)
         async with _redis_client as redis_client:
             ttl = self.get_ttl(**kwargs)
             print_verbose(
@@ -488,7 +489,7 @@ class RedisCache(BaseCache):
             )
             raise e
 
-        key = self.check_and_fix_namespace(key=key)
+        key = self.check_and_fix_namespace(key=key, **kwargs)
         async with _redis_client as redis_client:
             print_verbose(
                 f"Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}"
@@ -537,7 +538,7 @@ class RedisCache(BaseCache):
         print_verbose(
             f"in batch cache writing for redis buffer size={len(self.redis_batch_writing_buffer)}",
         )
-        key = self.check_and_fix_namespace(key=key)
+        key = self.check_and_fix_namespace(key=key, **kwargs)
         self.redis_batch_writing_buffer.append((key, value))
         if len(self.redis_batch_writing_buffer) >= self.redis_flush_size:
             await self.flush_cache_buffer()  # logging done in here
@@ -626,8 +627,10 @@ class RedisCache(BaseCache):
 
     def get_cache(self, key, parent_otel_span: Optional[Span] = None, **kwargs):
         try:
-            key = self.check_and_fix_namespace(key=key)
-            print_verbose(f"Get Redis Cache: key: {key}")
+            print("GOT HERE")
+            print(kwargs, "get_cache")
+            key = self.check_and_fix_namespace(key=key, **kwargs)
+            print(f"Get Redis Cache: key: {key}")
             start_time = time.time()
             cached_response = self.redis_client.get(key)
             end_time = time.time()
@@ -694,7 +697,7 @@ class RedisCache(BaseCache):
         from redis.asyncio import Redis
 
         _redis_client: Redis = self.init_async_client()  # type: ignore
-        key = self.check_and_fix_namespace(key=key)
+        key = self.check_and_fix_namespace(key=key, **kwargs)
         start_time = time.time()
         async with _redis_client as redis_client:
             try:
@@ -913,11 +916,12 @@ class RedisCache(BaseCache):
         self,
         pipe: pipeline,
         increment_list: List[RedisPipelineIncrementOperation],
+        **kwargs
     ) -> Optional[List[float]]:
         """Helper function for pipeline increment operations"""
         # Iterate through each increment operation and add commands to pipeline
         for increment_op in increment_list:
-            cache_key = self.check_and_fix_namespace(key=increment_op["key"])
+            cache_key = self.check_and_fix_namespace(key=increment_op["key"], **kwargs)
             print_verbose(
                 f"Increment ASYNC Redis Cache PIPELINE: key: {cache_key}\nValue {increment_op['increment_value']}\nttl={increment_op['ttl']}"
             )
@@ -958,7 +962,7 @@ class RedisCache(BaseCache):
             async with _redis_client as redis_client:
                 async with redis_client.pipeline(transaction=False) as pipe:
                     results = await self._pipeline_increment_helper(
-                        pipe, increment_list
+                        pipe, increment_list, kwargs
                     )
 
             print_verbose(f"pipeline increment results: {results}")

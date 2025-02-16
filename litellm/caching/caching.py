@@ -283,6 +283,9 @@ class Cache:
         self._set_preset_cache_key_in_kwargs(
             preset_cache_key=hashed_cache_key, **kwargs
         )
+        print(kwargs)
+        print("HASHED_KEY")
+        print(hashed_cache_key)
         return hashed_cache_key
 
     def _get_param_value(
@@ -466,7 +469,7 @@ class Cache:
         Returns:
             str: The final hashed cache key with the redis namespace.
         """
-        namespace = kwargs.get("metadata", {}).get("redis_namespace") or self.namespace
+        namespace = kwargs.get("metadata", {}).get("redis_namespace") or kwargs.get("extra_body", {}).get("cache", {}).get("namespace") or self.namespace
         if namespace:
             hash_hex = f"{namespace}:{hash_hex}"
         verbose_logger.debug("Final hashed key: %s", hash_hex)
@@ -545,11 +548,13 @@ class Cache:
                 cache_key = kwargs["cache_key"]
             else:
                 cache_key = self.get_cache_key(**kwargs)
+
             if cache_key is not None:
                 cache_control_args = kwargs.get("cache", {})
                 max_age = cache_control_args.get(
                     "s-max-age", cache_control_args.get("s-maxage", float("inf"))
                 )
+                # Need to add kwargs here
                 cached_result = self.cache.get_cache(cache_key, messages=messages)
                 return self._get_cache_logic(
                     cached_result=cached_result, max_age=max_age

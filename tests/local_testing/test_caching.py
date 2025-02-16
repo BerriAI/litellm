@@ -6,6 +6,9 @@ import uuid
 
 from dotenv import load_dotenv
 
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.types.caching import LiteLLMCacheType
+
 load_dotenv()
 import os
 
@@ -2478,3 +2481,96 @@ async def test_redis_get_ttl():
     except Exception as e:
         print(f"Error occurred: {str(e)}")
         raise e
+
+def test_redis_caching_multiple_namespaces():
+    import json
+
+    client = HTTPHandler()
+    messages = [
+        {"role": "user", "content": "who is ishaan CTO of litellm from litellm 2023"}
+    ]
+    litellm.cache = Cache(type="redis", host="exmple", url="redis://example", namespace="hey_there")
+    # litellm.set_verbose = True
+    cached_text = json.dumps({
+            "choices": [
+                {
+                    "message": {
+                        "content": "Hello! This text is cached!",
+                        "role": "assistant",
+                    }
+                }
+            ],
+            "usage": {
+                "completion_tokens": 43,
+                "prompt_tokens": 13,
+                "total_tokens": 56,
+            }
+    })
+
+    llm_call_text = json.dumps({
+            "choices": [
+                {
+                    "message": {
+                        "content": "Hello! This text is not cached!",
+                        "role": "assistant",
+                    }
+                }
+            ],
+            "usage": {
+                "completion_tokens": 43,
+                "prompt_tokens": 13,
+                "total_tokens": 56,
+            }
+    })
+
+    with patch.object(litellm.cache.cache.redis_client, "get", return_value=cached_text.encode()) as mock_redis_client_get, \
+            patch.object(client, "post") as mock_post:
+    
+        mock_response = MagicMock()
+        mock_response.text = llm_call_text
+        mock_response.status_code = 200
+        # Add required response attributes
+        mock_response.headers = {"Content-Type": "application/json"}
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response1 = completion(
+            model="gpt-3.5-turbo", 
+            messages=messages, 
+            caching=True, 
+            extra_body = {
+                "cache": {
+                    "namespace": "org-id1"
+                }
+            },
+            client=client)
+
+        response2 = completion(
+            model="gpt-3.5-turbo", 
+            messages=messages, 
+            caching=True, 
+            extra_body = {
+                "cache": {
+                    "namespace": "org-id2"
+                }
+            },
+            client=client)
+        
+        response3 = completion(
+            model="gpt-3.5-turbo", 
+            messages=messages, 
+            caching=True, 
+            extra_body = {
+                "cache": {
+                    "namespace": "org-id1"
+                }
+            },
+            client=client)
+
+
+        # print(litellm.cache.get_cache_key(model="gpt-3.5-turbo", 
+        #     messages=messages, 
+        #     caching=True))
+        assert(mock_redis_client_get.call_args_list[0] == mock_redis_client_get.call_args_list[2])
+        assert(mock_redis_client_get.call_args_list[0] != mock_redis_client_get.call_args_list[1])
+

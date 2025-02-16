@@ -150,6 +150,10 @@ def test_add_redis_namespace_to_cache_key():
     result = cache._add_redis_namespace_to_cache_key(hashed_key, **kwargs)
     assert result == "custom_namespace:abcdef1234567890"
 
+    # Test with extra_body namespace
+    kwargs = {"extra_body": {"cache": {"namespace": "custom_namespace_2"}}}
+    result = cache._add_redis_namespace_to_cache_key(hashed_key, **kwargs)
+    assert result == "custom_namespace_2:abcdef1234567890"
 
 def test_get_model_param_value():
     cache = Cache()
