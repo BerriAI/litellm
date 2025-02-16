@@ -283,9 +283,6 @@ class Cache:
         self._set_preset_cache_key_in_kwargs(
             preset_cache_key=hashed_cache_key, **kwargs
         )
-        print(kwargs)
-        print("HASHED_KEY")
-        print(hashed_cache_key)
         return hashed_cache_key
 
     def _get_param_value(
@@ -555,7 +552,7 @@ class Cache:
                     "s-max-age", cache_control_args.get("s-maxage", float("inf"))
                 )
                 # Need to add kwargs here
-                cached_result = self.cache.get_cache(cache_key, messages=messages)
+                cached_result = self.cache.get_cache(cache_key, **kwargs)
                 return self._get_cache_logic(
                     cached_result=cached_result, max_age=max_age
                 )

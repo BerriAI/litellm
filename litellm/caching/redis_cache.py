@@ -627,10 +627,8 @@ class RedisCache(BaseCache):
 
     def get_cache(self, key, parent_otel_span: Optional[Span] = None, **kwargs):
         try:
-            print("GOT HERE")
-            print(kwargs, "get_cache")
             key = self.check_and_fix_namespace(key=key, **kwargs)
-            print(f"Get Redis Cache: key: {key}")
+            print_verbose(f"Get Redis Cache: key: {key}")
             start_time = time.time()
             cached_response = self.redis_client.get(key)
             end_time = time.time()

@@ -2485,92 +2485,71 @@ async def test_redis_get_ttl():
 def test_redis_caching_multiple_namespaces():
     import json
 
-    client = HTTPHandler()
     messages = [
         {"role": "user", "content": "who is ishaan CTO of litellm from litellm 2023"}
     ]
-    litellm.cache = Cache(type="redis", host="exmple", url="redis://example", namespace="hey_there")
-    # litellm.set_verbose = True
-    cached_text = json.dumps({
+    litellm.cache = Cache(type="redis", host="example", url="redis://example", namespace="hey_there")
+    namespace_1 = "org-id1"
+    namespace_2 = "org-id2"
+
+    def cached_text(namespace):
+        return json.dumps({
             "choices": [
                 {
                     "message": {
-                        "content": "Hello! This text is cached!",
+                        "content": f"Cached with {namespace}",
                         "role": "assistant",
                     }
                 }
             ],
-            "usage": {
-                "completion_tokens": 43,
-                "prompt_tokens": 13,
-                "total_tokens": 56,
-            }
     })
 
-    llm_call_text = json.dumps({
-            "choices": [
-                {
-                    "message": {
-                        "content": "Hello! This text is not cached!",
-                        "role": "assistant",
-                    }
-                }
-            ],
-            "usage": {
-                "completion_tokens": 43,
-                "prompt_tokens": 13,
-                "total_tokens": 56,
-            }
-    })
+    def side_effect(*args, **kwargs):
+        if args[0].startswith(namespace_1):
+            return cached_text(namespace_1).encode()
+        if args[0].startswith(namespace_2):
+            return cached_text(namespace_2).encode()
+        return "".encode()
 
-    with patch.object(litellm.cache.cache.redis_client, "get", return_value=cached_text.encode()) as mock_redis_client_get, \
-            patch.object(client, "post") as mock_post:
+    with patch.object(litellm.cache.cache.redis_client, "get") as mock_redis_client_get:
     
-        mock_response = MagicMock()
-        mock_response.text = llm_call_text
-        mock_response.status_code = 200
-        # Add required response attributes
-        mock_response.headers = {"Content-Type": "application/json"}
-        mock_response.json = lambda: json.loads(mock_response.text)
-        mock_post.return_value = mock_response
+        mock_redis_client_get.side_effect = side_effect
 
-        response1 = completion(
+        response_1 = completion(
+            model="gpt-3.5-turbo", 
+            messages=messages, 
+            caching=True, 
+            api_base="https://litellm8397336933.services.ai.azure.com/models/chat/completions",
+            api_key="my-fake-api-key",
+            extra_body = {
+                "cache": {
+                    "namespace": namespace_1
+                }
+            })
+
+        response_2 = completion(
             model="gpt-3.5-turbo", 
             messages=messages, 
             caching=True, 
             extra_body = {
                 "cache": {
-                    "namespace": "org-id1"
+                    "namespace": namespace_2
                 }
-            },
-            client=client)
-
-        response2 = completion(
-            model="gpt-3.5-turbo", 
-            messages=messages, 
-            caching=True, 
-            extra_body = {
-                "cache": {
-                    "namespace": "org-id2"
-                }
-            },
-            client=client)
+            })
         
-        response3 = completion(
+        response_3 = completion(
             model="gpt-3.5-turbo", 
             messages=messages, 
             caching=True, 
             extra_body = {
                 "cache": {
-                    "namespace": "org-id1"
+                    "namespace": namespace_1
                 }
-            },
-            client=client)
+            })
 
-
-        # print(litellm.cache.get_cache_key(model="gpt-3.5-turbo", 
-        #     messages=messages, 
-        #     caching=True))
         assert(mock_redis_client_get.call_args_list[0] == mock_redis_client_get.call_args_list[2])
         assert(mock_redis_client_get.call_args_list[0] != mock_redis_client_get.call_args_list[1])
 
+        assert(response_1.choices[0].message.content == f"Cached with {namespace_1}")        
+        assert(response_2.choices[0].message.content == f"Cached with {namespace_2}")        
+        assert(response_3.choices[0].message.content == f"Cached with {namespace_1}")        
