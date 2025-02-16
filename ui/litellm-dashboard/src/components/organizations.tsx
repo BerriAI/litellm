@@ -40,7 +40,7 @@ interface OrganizationsTableProps {
   premiumUser: boolean;
 }
 
-const fetchOrganizations = async (accessToken: string, setOrganizations: (organizations: Organization[]) => void) => {
+export const fetchOrganizations = async (accessToken: string, setOrganizations: (organizations: Organization[]) => void) => {
   const organizations = await organizationListCall(accessToken);
   setOrganizations(organizations);
 };

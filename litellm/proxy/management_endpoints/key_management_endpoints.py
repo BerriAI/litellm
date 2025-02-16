@@ -1790,6 +1790,7 @@ async def list_keys(
             "team_id",
             "key_alias",
             "return_full_object",
+            "organization_id",
         }
         unsupported_params = set(request.query_params.keys()) - supported_params
         if unsupported_params:
@@ -1829,6 +1830,7 @@ async def list_keys(
             team_id=team_id,
             key_alias=key_alias,
             return_full_object=return_full_object,
+            organization_id=organization_id,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -1860,6 +1862,7 @@ async def _list_key_helper(
     size: int,
     user_id: Optional[str],
     team_id: Optional[str],
+    organization_id: Optional[str],
     key_alias: Optional[str],
     exclude_team_id: Optional[str] = None,
     return_full_object: bool = False,
@@ -1897,6 +1900,8 @@ async def _list_key_helper(
         where["key_alias"] = key_alias
     if exclude_team_id and isinstance(exclude_team_id, str):
         where["team_id"] = {"not": exclude_team_id}
+    if organization_id and isinstance(organization_id, str):
+        where["organization_id"] = organization_id
 
     verbose_proxy_logger.debug(f"Filter conditions: {where}")
 

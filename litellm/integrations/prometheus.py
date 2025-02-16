@@ -1442,6 +1442,7 @@ class PrometheusLogger(CustomLogger):
                 key_alias=None,
                 exclude_team_id=UI_SESSION_TOKEN_TEAM_ID,
                 return_full_object=True,
+                organization_id=None,
             )
             keys = key_list_response.get("keys", [])
             total_count = key_list_response.get("total_count")
