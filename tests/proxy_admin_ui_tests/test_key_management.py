@@ -1011,6 +1011,7 @@ async def test_list_key_helper_team_filtering(prisma_client):
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _list_key_helper,
     )
+    import uuid
 
     # Setup
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
@@ -1024,7 +1025,7 @@ async def test_list_key_helper_team_filtering(prisma_client):
     for i in range(3):
         key = await generate_key_fn(
             data=GenerateKeyRequest(
-                key_alias=f"no_team_key_{i}",
+                key_alias=f"no_team_key_{i}.{uuid.uuid4()}",
             ),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -1039,7 +1040,7 @@ async def test_list_key_helper_team_filtering(prisma_client):
         key = await generate_key_fn(
             data=GenerateKeyRequest(
                 team_id="litellm-dashboard",
-                key_alias=f"dashboard_key_{i}",
+                key_alias=f"dashboard_key_{i}.{uuid.uuid4()}",
             ),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -1055,7 +1056,7 @@ async def test_list_key_helper_team_filtering(prisma_client):
         key = await generate_key_fn(
             data=GenerateKeyRequest(
                 team_id=other_team_id,
-                key_alias=f"other_team_key_{i}",
+                key_alias=f"other_team_key_{i}.{uuid.uuid4()}",
             ),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
