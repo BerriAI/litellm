@@ -121,6 +121,19 @@ export function AllKeysTable({
     }
   };
 
+  const handleFilterReset = () => {
+    // Reset filters state
+    setFilters({
+      'Team ID': '',
+      'Organization ID': ''
+    });
+    
+    // Reset team and org selections
+    setSelectedTeam(null); // or whatever your default value should be
+    setCurrentOrg(null); // or whatever your default value should be
+  };
+  
+
   const columns: ColumnDef<KeyResponse>[] = [
     {
       id: "expander",
@@ -268,7 +281,7 @@ export function AllKeysTable({
       ) : (
         <div className="border-b py-4 flex-1 overflow-hidden">
           <div className="flex items-center justify-between w-full mb-2">
-            <FilterComponent options={filterOptions} onApplyFilters={handleFilterChange} initialValues={filters}/>
+            <FilterComponent options={filterOptions} onApplyFilters={handleFilterChange} initialValues={filters} onResetFilters={handleFilterReset}/>
             <div className="flex items-center gap-4">
               <span className="inline-flex text-sm text-gray-700">
                 Showing {isLoading ? "..." : `${(pagination.currentPage - 1) * pageSize + 1} - ${Math.min(pagination.currentPage * pageSize, pagination.totalCount)}`} of {isLoading ? "..." : pagination.totalCount} results

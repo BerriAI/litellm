@@ -23,11 +23,13 @@ interface FilterComponentProps {
   onApplyFilters: (filters: FilterValues) => void;
   initialValues?: FilterValues;
   buttonLabel?: string;
+  onResetFilters: () => void;
 }
 
 const FilterComponent: React.FC<FilterComponentProps> = ({
   options,
   onApplyFilters,
+  onResetFilters,
   initialValues = {},
   buttonLabel = "Filter",
 }) => {
@@ -145,6 +147,11 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
               <Button
                 onClick={() => {
                   clearFilters();
+                  const emptyValues: FilterValues = {};
+                  options.forEach(option => {
+                    emptyValues[option.name] = '';
+                  });
+                  onResetFilters();
                   setShowFilters(false);
                 }}
               >
