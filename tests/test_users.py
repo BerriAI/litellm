@@ -129,7 +129,7 @@ async def test_user_info():
     """
     Get user info
     - as admin
-    - as user themself
+    - as user themselves
     - as random
     """
     get_user = f"krrish_{time.time()}@berri.ai"
@@ -142,7 +142,7 @@ async def test_user_info():
         )
         assert isinstance(resp["user_info"], dict)
         assert len(resp["user_info"]) > 0
-        ## as user themself ##
+        ## as user themselves ##
         resp = await get_user_info(session=session, get_user=get_user, call_user=key)
         assert isinstance(resp["user_info"], dict)
         assert len(resp["user_info"]) > 0
