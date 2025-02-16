@@ -20,6 +20,7 @@ import { keyDeleteCall, keyUpdateCall } from "./networking";
 import { KeyResponse } from "./key_team_helpers/key_list";
 import { Form, Input, InputNumber, message, Select } from "antd";
 import { KeyEditView } from "./key_edit_view";
+import { RegenerateKeyModal } from "./regenerate_key_modal";
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -29,12 +30,14 @@ interface KeyInfoViewProps {
   userID: string | null;
   userRole: string | null;
   teams: any[] | null;
+  premiumUser: boolean;
 }
 
-export default function KeyInfoView({ keyId, onClose, keyData, accessToken, userID, userRole, teams }: KeyInfoViewProps) {
+export default function KeyInfoView({ keyId, onClose, keyData, accessToken, userID, userRole, teams, premiumUser }: KeyInfoViewProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isRegenerateModalOpen, setIsRegenerateModalOpen] = useState(false);
 
   if (!keyData) {
     return (
@@ -126,15 +129,35 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
           <Title>{keyData.key_alias || "API Key"}</Title>
           <Text className="text-gray-500 font-mono">{keyData.token}</Text>
         </div>
-        <Button
-          icon={TrashIcon}
-          variant="light"
-          color="red"
-          onClick={() => setIsDeleteModalOpen(true)}
-        >
-          Delete Key
-        </Button>
+        <div className="space-x-2">
+          <Button
+            variant="light"
+            onClick={() => setIsRegenerateModalOpen(true)}
+          >
+            Regenerate Key
+          </Button>
+          <Button
+            icon={TrashIcon}
+            variant="light"
+            color="red"
+            onClick={() => setIsDeleteModalOpen(true)}
+          >
+            Delete Key
+          </Button>
+        </div>
       </div>
+
+      {/* Add RegenerateKeyModal */}
+      <RegenerateKeyModal
+        selectedToken={keyData}
+        visible={isRegenerateModalOpen}
+        onClose={() => setIsRegenerateModalOpen(false)}
+        accessToken={accessToken}
+        onSuccess={(newKeyData) => {
+          // Handle the updated key data here if needed
+          setIsRegenerateModalOpen(false);
+        }}
+      />
 
       {/* Delete Confirmation Modal */}
       {isDeleteModalOpen && (
