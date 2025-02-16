@@ -1493,6 +1493,11 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 labelCol={{ span: 10 }}
                 wrapperCol={{ span: 16 }}
                 labelAlign="left"
+                initialValues={{
+                  model: "",
+                  model_name: "",
+                  custom_llm_provider: ""
+                }}
               >
                 <>
                   {/* Provider Selection */}
@@ -1510,10 +1515,23 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       onChange={(value) => {
                         setSelectedProvider(value);
                         setProviderModelsFn(value);
-                        form.setFieldsValue({ 
-                          model: [],
-                          model_name: undefined 
-                        });
+                        if (value) {
+                          // Update both model and model_name fields with the wildcard pattern
+                          const litellmProvider = provider_map[value]?.toLowerCase();
+                          if (litellmProvider) {
+                            const providerLiteLLMName = `${litellmProvider}/*`;
+                            form.setFieldsValue({ 
+                              model: providerLiteLLMName,
+                              model_name: providerLiteLLMName 
+                            });
+                          }
+                        } else {
+                          // Clear the fields if no provider is selected
+                          form.setFieldsValue({ 
+                            model: "",
+                            model_name: "" 
+                          });
+                        }
                       }}
                     >
                       {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => (

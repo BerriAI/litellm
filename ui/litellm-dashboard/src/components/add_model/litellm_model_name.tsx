@@ -2,7 +2,7 @@ import React from "react";
 import { Form, Select as AntSelect } from "antd";
 import { TextInput, Text } from "@tremor/react";
 import { Row, Col } from "antd";
-import { Providers } from "../provider_info_helpers";
+import { Providers, provider_map } from "../provider_info_helpers";
 
 interface LiteLLMModelNameFieldProps {
   selectedProvider: string;
@@ -17,10 +17,33 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
 }) => {
   const form = Form.useFormInstance();
 
-  const handleModelChange = (value: string[]) => {
-    // If "all-wildcard" is selected, clear the model_name field
-    if (value.includes("all-wildcard")) {
-      form.setFieldsValue({ model_name: undefined });
+  const handleModelChange = (value: string) => {
+    console.log("VALUE:", "|", value, value == 'all-wildcard',"|", selectedProvider);
+    if (value == 'all-wildcard' && selectedProvider) {
+      // Get the litellm provider name from provider_map
+      const litellmProvider = provider_map[selectedProvider]?.toLowerCase();
+      if (litellmProvider) {
+        const providerLiteLLMName = `${litellmProvider}/*`;
+        form.setFieldsValue({ 
+          model: providerLiteLLMName,
+          model_name: providerLiteLLMName 
+        });
+      }
+    } else if (value === 'custom') {
+      form.setFieldsValue({ 
+        model: value,
+        model_name: "" 
+      });
+    } else if (value && selectedProvider) {
+      // For specific model selection, prefix with provider name
+      const litellmProvider = provider_map[selectedProvider]?.toLowerCase();
+      if (litellmProvider) {
+        const modelName = `${litellmProvider}/${value}`;
+        form.setFieldsValue({ 
+          model: modelName,
+          model_name: modelName 
+        });
+      }
     }
   };
 
@@ -79,8 +102,8 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
           }
         >
           {({ getFieldValue }) => {
-            const selectedModels = getFieldValue('model') || [];
-            return selectedModels.includes('custom') && (
+            const model = getFieldValue('model') || "";
+            return model === 'custom' && (
               <Form.Item
                 name="custom_model_name"
                 rules={[{ required: true, message: "Please enter a custom model name." }]}
