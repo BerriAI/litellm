@@ -1000,6 +1000,121 @@ async def test_list_key_helper(prisma_client):
 
 
 @pytest.mark.asyncio
+async def test_list_key_helper_team_filtering(prisma_client):
+    """
+    Test _list_key_helper function's team filtering behavior:
+    1. Create keys with different team_ids (None, litellm-dashboard, other)
+    2. Verify filtering excludes litellm-dashboard keys
+    3. Verify keys with team_id=None are included
+    4. Test with pagination to ensure behavior is consistent across pages
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _list_key_helper,
+    )
+
+    # Setup
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # Create test data with different team_ids
+    test_keys = []
+
+    # Create 3 keys with team_id=None
+    for i in range(3):
+        key = await generate_key_fn(
+            data=GenerateKeyRequest(
+                key_alias=f"no_team_key_{i}",
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="admin",
+            ),
+        )
+        test_keys.append(key)
+
+    # Create 2 keys with team_id=litellm-dashboard
+    for i in range(2):
+        key = await generate_key_fn(
+            data=GenerateKeyRequest(
+                team_id="litellm-dashboard",
+                key_alias=f"dashboard_key_{i}",
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="admin",
+            ),
+        )
+        test_keys.append(key)
+
+    # Create 2 keys with a different team_id
+    other_team_id = f"other_team_{uuid.uuid4()}"
+    for i in range(2):
+        key = await generate_key_fn(
+            data=GenerateKeyRequest(
+                team_id=other_team_id,
+                key_alias=f"other_team_key_{i}",
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="admin",
+            ),
+        )
+        test_keys.append(key)
+
+    try:
+        # Test 1: Get all keys with pagination (exclude litellm-dashboard)
+        all_keys = []
+        page = 1
+        while True:
+            result = await _list_key_helper(
+                prisma_client=prisma_client,
+                size=100,
+                page=page,
+                user_id=None,
+                team_id=None,
+                key_alias=None,
+                return_full_object=True,
+            )
+
+            all_keys.extend(result["keys"])
+
+            if page >= result["total_pages"]:
+                break
+            page += 1
+
+        # Verify results
+        print(f"Total keys found: {len(all_keys)}")
+        for key in all_keys:
+            print(f"Key team_id: {key.team_id}, alias: {key.key_alias}")
+
+        # Verify no litellm-dashboard keys are present
+        dashboard_keys = [k for k in all_keys if k.team_id == "litellm-dashboard"]
+        assert len(dashboard_keys) == 0, "Should not include litellm-dashboard keys"
+
+        # Verify keys with team_id=None are included
+        no_team_keys = [k for k in all_keys if k.team_id is None]
+        assert (
+            len(no_team_keys) > 0
+        ), f"Expected more than 0 keys with no team, got {len(no_team_keys)}"
+
+    finally:
+        # Clean up test keys
+        for key in test_keys:
+            await delete_key_fn(
+                data=KeyRequest(keys=[key.key]),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                    api_key="sk-1234",
+                    user_id="admin",
+                ),
+            )
+
+
+@pytest.mark.asyncio
 @patch("litellm.proxy.management_endpoints.key_management_endpoints.get_team_object")
 async def test_key_generate_always_db_team(mock_get_team_object):
     from litellm.proxy.management_endpoints.key_management_endpoints import (
