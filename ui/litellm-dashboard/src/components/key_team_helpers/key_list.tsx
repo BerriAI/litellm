@@ -121,8 +121,7 @@ const useKeyList = ({
     const fetchKeys = async (params: Record<string, unknown> = {}): Promise<void> => {
         try {
             console.log("calling fetchKeys");
-            if (!currentOrg || !accessToken) {
-                console.log("currentOrg", currentOrg);
+            if (!accessToken) {
                 console.log("accessToken", accessToken);
                 return;
             }
@@ -130,7 +129,7 @@ const useKeyList = ({
 
             const data = await keyListCall(
                 accessToken,
-                currentOrg.organization_id,
+                currentOrg?.organization_id || null,
                 selectedTeam?.team_id || "",
                 params.page as number || 1,
                 50
