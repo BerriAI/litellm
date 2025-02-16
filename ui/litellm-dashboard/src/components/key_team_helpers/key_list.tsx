@@ -29,6 +29,7 @@ export interface KeyResponse {
     metadata: Record<string, unknown>;
     tpm_limit: number;
     rpm_limit: number;
+    duration: string;
     budget_duration: string;
     budget_reset_at: string;
     allowed_cache_controls: string[];
