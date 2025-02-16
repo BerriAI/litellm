@@ -82,7 +82,6 @@ export default function CreateKeyPage() {
   const [userEmail, setUserEmail] = useState<null | string>(null);
   const [teams, setTeams] = useState<Team[] | null>(null);
   const [keys, setKeys] = useState<null | any[]>(null);
-  const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [userModels, setUserModels] = useState<string[]>([]);
   const [proxySettings, setProxySettings] = useState<ProxySettings>({
@@ -181,7 +180,7 @@ export default function CreateKeyPage() {
       fetchUserModels(userID, userRole, accessToken, setUserModels);
     }
     if (accessToken && userID && userRole) {
-      fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
+      fetchTeams(accessToken, userID, userRole, null, setTeams);
     }
     if (accessToken) {
       fetchOrganizations(accessToken, setOrganizations);
@@ -204,8 +203,7 @@ export default function CreateKeyPage() {
             setUserEmail={setUserEmail}
             setTeams={setTeams}
             setKeys={setKeys}
-            setOrganizations={setOrganizations}
-            currentOrg={currentOrg}
+            organizations={organizations}
           />
         ) : (
           <div className="flex flex-col min-h-screen">
@@ -237,8 +235,7 @@ export default function CreateKeyPage() {
                   setUserEmail={setUserEmail}
                   setTeams={setTeams}
                   setKeys={setKeys}
-                  setOrganizations={setOrganizations}
-                  currentOrg={currentOrg}
+                  organizations={organizations}
                 />
               ) : page == "models" ? (
                 <ModelDashboard

@@ -7,7 +7,8 @@ import { Button } from "@tremor/react"
 import KeyInfoView from "./key_info_view";
 import { Tooltip } from "antd";
 import { Team, KeyResponse } from "./key_team_helpers/key_list";
-
+import FilterComponent from "./common_components/filter";
+import { Organization } from "./networking";
 interface AllKeysTableProps {
   keys: KeyResponse[];
   isLoading?: boolean;
@@ -24,6 +25,8 @@ interface AllKeysTableProps {
   accessToken: string | null;
   userID: string | null;
   userRole: string | null;
+  organizations: Organization[] | null;
+  setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>;
 }
 
 // Define columns similar to our logs table
@@ -81,9 +84,42 @@ export function AllKeysTable({
   setSelectedTeam,
   accessToken,
   userID,
-  userRole
+  userRole,
+  organizations,
+  setCurrentOrg
 }: AllKeysTableProps) {
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
+  const [filters, setFilters] = useState<{
+    'Team ID': string;
+    'Organization ID': string;
+  }>({
+    'Team ID': '',
+    'Organization ID': ''
+  });
+
+  const handleFilterChange = (newFilters: Record<string, string>) => {
+    // Update filters state
+    setFilters({
+      'Team ID': newFilters['Team ID'] || '',
+      'Organization ID': newFilters['Organization ID'] || ''
+    });
+  
+    // Handle Team change
+    if (newFilters['Team ID']) {
+      const selectedTeamData = teams?.find(team => team.team_id === newFilters['Team ID']);
+      if (selectedTeamData) {
+        setSelectedTeam(selectedTeamData);
+      }
+    }
+  
+    // Handle Org change
+    if (newFilters['Organization ID']) {
+      const selectedOrg = organizations?.find(org => org.organization_id === newFilters['Organization ID']);
+      if (selectedOrg) {
+        setCurrentOrg(selectedOrg);
+      }
+    }
+  };
 
   const columns: ColumnDef<KeyResponse>[] = [
     {
@@ -210,6 +246,12 @@ export function AllKeysTable({
       },
     },
   ];
+
+  const filterOptions = [
+    { name: 'Team ID', label: 'Team ID' },
+    { name: 'Organization ID', label: 'Organization ID' }
+  ];
+  
   
   return (
     <div className="w-full h-full overflow-hidden">
@@ -225,12 +267,8 @@ export function AllKeysTable({
         />
       ) : (
         <div className="border-b py-4 flex-1 overflow-hidden">
-          <div className="flex items-center justify-between w-full">
-            <TeamFilter 
-              teams={teams} 
-              selectedTeam={selectedTeam} 
-              setSelectedTeam={setSelectedTeam} 
-            />
+          <div className="flex items-center justify-between w-full mb-2">
+            <FilterComponent options={filterOptions} onApplyFilters={handleFilterChange} initialValues={filters}/>
             <div className="flex items-center gap-4">
               <span className="inline-flex text-sm text-gray-700">
                 Showing {isLoading ? "..." : `${(pagination.currentPage - 1) * pageSize + 1} - ${Math.min(pagination.currentPage * pageSize, pagination.totalCount)}`} of {isLoading ? "..." : pagination.totalCount} results
@@ -260,6 +298,7 @@ export function AllKeysTable({
             </div>
           </div>
           <div className="h-[32rem] overflow-auto">
+            
             <DataTable
               columns={columns.filter(col => col.id !== 'expander')}
               data={keys}

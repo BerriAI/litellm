@@ -105,6 +105,8 @@ interface ViewKeyTableProps {
   teams: Team[] | null;
   premiumUser: boolean;
   currentOrg: Organization | null;
+  organizations: Organization[] | null;
+  setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>;
 }
 
 interface ItemData {
@@ -150,7 +152,9 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   setData,
   teams,
   premiumUser,
-  currentOrg
+  currentOrg,
+  organizations,
+  setCurrentOrg
 }) => {
   const [isButtonClicked, setIsButtonClicked] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -170,22 +174,6 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   }, [selectedTeam]);
 
   // Build a memoized filters object for the backend call.
-  const filters = useMemo(
-    () => {
-      const f: { team_id?: string; key_alias?: string } = {};
-      
-      if (teamFilter) {
-        f.team_id = teamFilter;
-      }
-      
-      if (keyAliasFilter) {
-        f.key_alias = keyAliasFilter;
-      }
-      
-      return f;
-    },
-    [teamFilter, keyAliasFilter]
-  );
 
   // Pass filters into the hook so the API call includes these query parameters.
   const { keys, isLoading, error, pagination, refresh } = useKeyList({
@@ -416,11 +404,6 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     }
   };
 
-  // New filter UI rendered above the table.
-  // For the team filter we use the teams prop, and for key alias we compute unique aliases from the keys.
-  const uniqueKeyAliases = Array.from(
-    new Set(keys.map((k) => (k.key_alias ? k.key_alias : "Not Set")))
-  );
 
   return (
     <div>
@@ -436,6 +419,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         accessToken={accessToken}
         userID={userID}
         userRole={userRole}
+        organizations={organizations}
+        setCurrentOrg={setCurrentOrg}
       />
 
       {isDeleteModalOpen && (
