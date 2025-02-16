@@ -15,7 +15,7 @@ import {
   TextInput,
   Select as TremorSelect
 } from "@tremor/react";
-import { ArrowLeftIcon, TrashIcon } from "@heroicons/react/outline";
+import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
 import { keyDeleteCall, keyUpdateCall } from "./networking";
 import { KeyResponse } from "./key_team_helpers/key_list";
 import { Form, Input, InputNumber, message, Select } from "antd";
@@ -129,18 +129,20 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
           <Title>{keyData.key_alias || "API Key"}</Title>
           <Text className="text-gray-500 font-mono">{keyData.token}</Text>
         </div>
-        <div className="space-x-2">
+        <div className="flex gap-2">
           <Button
-            variant="light"
+            icon={RefreshIcon}
+            variant="secondary"
             onClick={() => setIsRegenerateModalOpen(true)}
+            className="flex items-center"
           >
             Regenerate Key
           </Button>
           <Button
             icon={TrashIcon}
-            variant="light"
-            color="red"
+            variant="secondary"
             onClick={() => setIsDeleteModalOpen(true)}
+            className="flex items-center"
           >
             Delete Key
           </Button>
