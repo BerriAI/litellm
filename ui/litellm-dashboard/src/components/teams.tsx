@@ -22,7 +22,7 @@ import {
   message,
   Tooltip
 } from "antd";
-import { fetchAvailableModelsForTeamOrKey, getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import { fetchAvailableModelsForTeamOrKey, getModelDisplayName, unfurlWildcardModelsInList } from "./key_team_helpers/fetch_available_models_team_key";
 import { Select, SelectItem } from "@tremor/react";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { getGuardrailsList } from "./networking";
@@ -66,6 +66,7 @@ interface TeamProps {
   setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
   userID: string | null;
   userRole: string | null;
+  organizations: Organization[] | null;
 }
 
 interface EditTeamModalProps {
@@ -84,6 +85,24 @@ import {
   teamListCall
 } from "./networking";
 
+const getOrganizationModels = (organization: Organization | null, userModels: string[]) => {
+  let tempModelsToPick = [];
+
+  if (organization) {
+    if (organization.models.length > 0) {
+      console.log(`organization.models: ${organization.models}`);
+      tempModelsToPick = organization.models;
+    } else {
+      // show all available models if the team has no models set
+      tempModelsToPick = userModels;
+    }
+  } else {
+    // no team set, show all available models
+    tempModelsToPick = userModels;
+  }
+
+  return unfurlWildcardModelsInList(tempModelsToPick, userModels);
+}
 
 const Teams: React.FC<TeamProps> = ({
   teams,
@@ -92,10 +111,11 @@ const Teams: React.FC<TeamProps> = ({
   setTeams,
   userID,
   userRole,
+  organizations
 }) => {
   const [lastRefreshed, setLastRefreshed] = useState("");
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
-  console.log(`currentOrg: ${JSON.stringify(currentOrg)}`)
+  const [currentOrgForCreateTeam, setCurrentOrgForCreateTeam] = useState<Organization | null>(null);
 
   useEffect(() => {
     console.log(`inside useeffect - ${lastRefreshed}`)
@@ -124,6 +144,7 @@ const Teams: React.FC<TeamProps> = ({
   const [userModels, setUserModels] = useState<string[]>([]);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [teamToDelete, setTeamToDelete] = useState<string | null>(null);
+  const [modelsToPick, setModelsToPick] = useState<string[]>([]);
   
 
 
@@ -131,6 +152,14 @@ const Teams: React.FC<TeamProps> = ({
 
   // Add this state near the other useState declarations
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+
+  useEffect(() => {
+    console.log(`currentOrgForCreateTeam: ${currentOrgForCreateTeam}`);
+    const models = getOrganizationModels(currentOrgForCreateTeam, userModels);
+    console.log(`models: ${models}`);
+    setModelsToPick(models);
+    form.setFieldValue('models', []);
+  }, [currentOrgForCreateTeam, userModels]);
 
   // Add this useEffect to fetch guardrails
   useEffect(() => {
@@ -593,18 +622,41 @@ const Teams: React.FC<TeamProps> = ({
                   <TextInput placeholder="" />
                 </Form.Item>
                 <Form.Item
-                  label="Organization ID"
+                  label="Organization"
                   name="organization_id"
-                  help="Assign team to an organization. Found in the 'Organization' tab."
+                  initialValue={currentOrg ? currentOrg.organization_id : null}
+                  className="mt-8"
                 >
-                  <TextInput 
-                    placeholder="" 
-                    onChange={(e) => {
-                      e.target.value = e.target.value.trim();
-                    }} 
-                  />
+                  <Select2
+                    showSearch
+                    placeholder="Search or select a team"
+                    onChange={(value) => {
+                      form.setFieldValue('organization_id', value);
+                      setCurrentOrgForCreateTeam(organizations?.find((org) => org.organization_id === value) || null);
+                    }}
+                    filterOption={(input, option) => {
+                      if (!option) return false;
+                      const optionValue = option.children?.toString() || '';
+                      return optionValue.toLowerCase().includes(input.toLowerCase());
+                    }}
+                    optionFilterProp="children"
+                  >
+                    {organizations?.map((org) => (
+                      <Select2.Option key={org.organization_id} value={org.organization_id}>
+                        <span className="font-medium">{org.organization_alias}</span>{" "}
+                        <span className="text-gray-500">({org.organization_id})</span>
+                      </Select2.Option>
+                    ))}
+                  </Select2>
                 </Form.Item>
-                <Form.Item label="Models" name="models">
+                <Form.Item label={
+                    <span>
+                      Models{' '}
+                      <Tooltip title="These are the models that your selected organization has access to">
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </span>
+                  } name="models">
                   <Select2
                     mode="multiple"
                     placeholder="Select models"
@@ -616,7 +668,7 @@ const Teams: React.FC<TeamProps> = ({
                     >
                       All Proxy Models
                     </Select2.Option>
-                    {userModels.map((model) => (
+                    {modelsToPick.map((model) => (
                       <Select2.Option key={model} value={model}>
                         {getModelDisplayName(model)}
                       </Select2.Option>

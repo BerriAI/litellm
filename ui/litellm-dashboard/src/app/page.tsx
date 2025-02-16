@@ -12,6 +12,7 @@ import ModelDashboard from "@/components/model_dashboard";
 import ViewUserDashboard from "@/components/view_users";
 import Teams from "@/components/teams";
 import Organizations from "@/components/organizations";
+import { fetchOrganizations } from "@/components/organizations";
 import AdminPanel from "@/components/admins";
 import Settings from "@/components/settings";
 import GeneralSettings from "@/components/general_settings";
@@ -182,6 +183,9 @@ export default function CreateKeyPage() {
     if (accessToken && userID && userRole) {
       fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
     }
+    if (accessToken) {
+      fetchOrganizations(accessToken, setOrganizations);
+    }
   }, [accessToken, userID, userRole]);
 
 
@@ -273,6 +277,7 @@ export default function CreateKeyPage() {
                   accessToken={accessToken}
                   userID={userID}
                   userRole={userRole}
+                  organizations={organizations}
                 />
               ) : page == "organizations" ? (
                 <Organizations
