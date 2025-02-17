@@ -101,6 +101,7 @@ import TimeToFirstToken from "./model_metrics/time_to_first_token";
 import DynamicFields from "./model_add/dynamic_form";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { Team } from "./key_team_helpers/key_list";
+import TeamInfoView from "./team/team_info";
 import { Providers, provider_map, providerLogoMap, getProviderLogoAndName, getPlaceholder, getProviderModels } from "./provider_info_helpers";
 import ModelInfoView from "./model_info_view";
 
@@ -233,6 +234,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   // Add these state variables
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [editModel, setEditModel] = useState<boolean>(false);
+
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
 
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelMap);
@@ -1064,6 +1067,23 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     );
   }
 
+  // If a team is selected, render TeamInfoView in full page layout
+  if (selectedTeamId) {
+    return (
+      <div className="w-full h-full">
+        <TeamInfoView 
+          teamId={selectedTeamId} 
+          onClose={() => setSelectedTeamId(null)}
+          accessToken={accessToken}
+          is_team_admin={userRole === "Admin"}
+          is_proxy_admin={userRole === "Proxy Admin"}
+          userModels={all_models_on_proxy}
+          editTeam={false}
+        />
+      </div>
+    );
+  }
+
   return (
     <div style={{ width: "100%", height: "100%" }}>
       {selectedModelId ? (
@@ -1336,23 +1356,24 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               }}
                             >
                               <div className="overflow-hidden">
-                                {model.model_info.team_id ? (
-                                  <Tooltip title={model.model_info.team_id}>
-                                    <Button 
-                                      size="xs"
-                                      variant="light"
-                                      className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-                                      onClick={() => {
-                                        // Navigate to team page with team ID
-                                        window.location.href = `/team/${model.model_info.team_id}`;
-                                      }}
-                                    >
-                                      {model.model_info.team_id.slice(0, 7)}...
-                                    </Button>
-                                  </Tooltip>
-                                ) : (
-                                  "-"
-                                )}
+                              {model.model_info.team_id ? (
+                              <Tooltip title={model.model_info.team_id}>
+                                <Button 
+                                  size="xs"
+                                  variant="light"
+                                  className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+                                  onClick={() => {
+                                    setSelectedTeamId(model.model_info.team_id);
+                                  }}
+                                >
+                                  {model.model_info.team_id.slice(0, 7)}...
+                                </Button>
+                              </Tooltip>
+                              ) : (
+                                "-"
+                              )}
+
+                              
                               </div>
                             </TableCell>
                             <TableCell
