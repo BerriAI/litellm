@@ -1,6 +1,6 @@
 import React, { useEffect } from "react";
 import { Form, Table, Input } from "antd";
-import { Text } from "@tremor/react";
+import { Text, TextInput } from "@tremor/react";
 import { Row, Col } from "antd";
 
 const ConditionalPublicModelName: React.FC = () => {
@@ -31,7 +31,7 @@ const ConditionalPublicModelName: React.FC = () => {
       key: 'public_name',
       render: (text: string, record: any, index: number) => {
         return (
-          <Input
+          <TextInput
             defaultValue={text}
             onChange={(e) => {
               const newMappings = [...form.getFieldValue('model_mappings')];
