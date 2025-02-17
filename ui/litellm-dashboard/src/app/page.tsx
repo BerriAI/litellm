@@ -247,7 +247,6 @@ export default function CreateKeyPage() {
                   modelData={modelData}
                   setModelData={setModelData}
                   premiumUser={premiumUser}
-                  teams={teams}
                 />
               ) : page == "llm-playground" ? (
                 <ChatUI
