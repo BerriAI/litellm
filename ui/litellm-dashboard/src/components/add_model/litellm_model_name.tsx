@@ -23,7 +23,15 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
     
     // If "all-wildcard" is selected, clear the model_name field
     if (values.includes("all-wildcard")) {
-      form.setFieldsValue({ model_name: undefined });
+      form.setFieldsValue({ model_name: undefined, model_mappings: [] });
+    } else {
+      // Update model mappings immediately for each selected model
+      const mappings = values
+        .map(model => ({
+          public_name: model,
+          litellm_model: model
+        }));
+      form.setFieldsValue({ model_mappings: mappings });
     }
   };
 
