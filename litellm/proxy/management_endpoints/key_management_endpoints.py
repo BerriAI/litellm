@@ -1798,6 +1798,9 @@ async def list_keys(
     ),
     key_alias: Optional[str] = Query(None, description="Filter keys by key alias"),
     return_full_object: bool = Query(False, description="Return full key object"),
+    include_team_keys: bool = Query(
+        False, description="Include all keys for teams that user is an admin of."
+    ),
 ) -> KeyListResponseObject:
     """
     List all keys for a given user / team / organization.
@@ -1812,25 +1815,6 @@ async def list_keys(
     """
     try:
         from litellm.proxy.proxy_server import prisma_client
-
-        # Check for unsupported parameters
-        supported_params = {
-            "page",
-            "size",
-            "user_id",
-            "team_id",
-            "key_alias",
-            "return_full_object",
-            "organization_id",
-        }
-        unsupported_params = set(request.query_params.keys()) - supported_params
-        if unsupported_params:
-            raise ProxyException(
-                message=f"Unsupported parameter(s): {', '.join(unsupported_params)}. Supported parameters: {', '.join(supported_params)}",
-                type=ProxyErrorTypes.bad_request_error,
-                param=", ".join(unsupported_params),
-                code=status.HTTP_400_BAD_REQUEST,
-            )
 
         verbose_proxy_logger.debug("Entering list_keys function")
 
@@ -1847,11 +1831,14 @@ async def list_keys(
             prisma_client=prisma_client,
         )
 
-        admin_team_ids = await get_admin_team_ids(
-            complete_user_info=complete_user_info,
-            user_api_key_dict=user_api_key_dict,
-            prisma_client=prisma_client,
-        )
+        if include_team_keys:
+            admin_team_ids = await get_admin_team_ids(
+                complete_user_info=complete_user_info,
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+            )
+        else:
+            admin_team_ids = None
 
         if user_id is None and user_api_key_dict.user_role not in [
             LitellmUserRoles.PROXY_ADMIN.value,
