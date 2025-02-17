@@ -119,7 +119,7 @@ export const modelCreateCall = async (
     const data = await response.json();
     console.log("API Response:", data);
     message.success(
-      "Model created successfully"
+      `Model ${formValues.model_name} created successfully`
     );
     return data;
   } catch (error) {
