@@ -7,7 +7,7 @@ ALL Bedrock models (Anthropic, Meta, Deepseek, Mistral, Amazon, etc.) are Suppor
 | Property | Details |
 |-------|-------|
 | Description | Amazon Bedrock is a fully managed service that offers a choice of high-performing foundation models (FMs). |
-| Provider Route on LiteLLM | `bedrock/`, [`bedrock/converse/`](#set-converse--invoke-route), [`bedrock/invoke/`](#set-invoke-route), [`bedrock/converse_like/`](#calling-via-internal-proxy), [`bedrock/llama/`](#bedrock-imported-models-deepseek) |
+| Provider Route on LiteLLM | `bedrock/`, [`bedrock/converse/`](#set-converse--invoke-route), [`bedrock/invoke/`](#set-invoke-route), [`bedrock/converse_like/`](#calling-via-internal-proxy), [`bedrock/llama/`](#deepseek-not-r1), [`bedrock/deepseek_r1/`](#deepseek-r1) |
 | Provider Doc | [Amazon Bedrock ↗](https://docs.aws.amazon.com/bedrock/latest/userguide/what-is-bedrock.html) |
 | Supported OpenAI Endpoints | `/chat/completions`, `/completions`, `/embeddings`, `/images/generations` |
 | Pass-through Endpoint | [Supported](../pass_through/bedrock.md) |
@@ -1277,12 +1277,82 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 https://some-api-url/models
 ```
 
-## Bedrock Imported Models (Deepseek)
+## Bedrock Imported Models (Deepseek, Deepseek R1)
+
+### Deepseek R1
+
+This is a separate route, as the chat template is different.
+
+| Property | Details |
+|----------|---------|
+| Provider Route | `bedrock/deepseek_r1/{model_arn}` |
+| Provider Documentation | [Bedrock Imported Models](https://docs.aws.amazon.com/bedrock/latest/userguide/model-customization-import-model.html), [Deepseek Bedrock Imported Model](https://aws.amazon.com/blogs/machine-learning/deploy-deepseek-r1-distilled-llama-models-with-amazon-bedrock-custom-model-import/) |
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+response = completion(
+    model="bedrock/deepseek_r1/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n",  # bedrock/deepseek_r1/{your-model-arn}
+    messages=[{"role": "user", "content": "Tell me a joke"}],
+)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="Proxy">
+
+
+**1. Add to config**
+
+```yaml
+model_list:
+    - model_name: DeepSeek-R1-Distill-Llama-70B
+      litellm_params:
+        model: bedrock/deepseek_r1/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n
+
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING at http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Authorization: Bearer sk-1234' \
+      --header 'Content-Type: application/json' \
+      --data '{
+            "model": "DeepSeek-R1-Distill-Llama-70B", # 👈 the 'model_name' in config
+            "messages": [
+                {
+                "role": "user",
+                "content": "what llm are you"
+                }
+            ],
+        }'
+```
+
+</TabItem>
+</Tabs>
+
+
+### Deepseek (not R1)
 
 | Property | Details |
 |----------|---------|
 | Provider Route | `bedrock/llama/{model_arn}` |
 | Provider Documentation | [Bedrock Imported Models](https://docs.aws.amazon.com/bedrock/latest/userguide/model-customization-import-model.html), [Deepseek Bedrock Imported Model](https://aws.amazon.com/blogs/machine-learning/deploy-deepseek-r1-distilled-llama-models-with-amazon-bedrock-custom-model-import/) |
+
+
 
 Use this route to call Bedrock Imported Models that follow the `llama` Invoke Request / Response spec
 

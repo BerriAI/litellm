@@ -18,9 +18,7 @@ import pytest
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, headers
-from litellm.proxy.utils import (
-    duration_in_seconds,
-)
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.duration_parser import (
     get_last_day_of_month,
     _extract_from_regex,
@@ -719,6 +717,14 @@ def test_duration_in_seconds():
     value = duration_in_seconds(duration="1mo")
 
     assert value - expected_duration < 2
+
+
+def test_duration_in_seconds_basic():
+    assert duration_in_seconds(duration="3s") == 3
+    assert duration_in_seconds(duration="3m") == 180
+    assert duration_in_seconds(duration="3h") == 10800
+    assert duration_in_seconds(duration="3d") == 259200
+    assert duration_in_seconds(duration="3w") == 1814400
 
 
 def test_get_llm_provider_ft_models():

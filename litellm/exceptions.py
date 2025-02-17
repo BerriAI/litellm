@@ -14,6 +14,8 @@ from typing import Optional
 import httpx
 import openai
 
+from litellm.types.utils import LiteLLMCommonStrings
+
 
 class AuthenticationError(openai.AuthenticationError):  # type: ignore
     def __init__(
@@ -790,3 +792,16 @@ class MockException(openai.APIError):
         if request is None:
             request = httpx.Request(method="POST", url="https://api.openai.com/v1")
         super().__init__(self.message, request=request, body=None)  # type: ignore
+
+
+class LiteLLMUnknownProvider(BadRequestError):
+    def __init__(self, model: str, custom_llm_provider: Optional[str] = None):
+        self.message = LiteLLMCommonStrings.llm_provider_not_provided.value.format(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        super().__init__(
+            self.message, model=model, llm_provider=custom_llm_provider, response=None
+        )
+
+    def __str__(self):
+        return self.message

@@ -12,10 +12,28 @@ import {
   DateRangePickerValue,
   MultiSelect,
   MultiSelectItem,
+  Button,
+  TabPanel,
+  TabPanels,
+  TabGroup,
+  TabList,
+  Tab,
+  TextInput,
+  Icon,
+  Text,
 } from "@tremor/react";
 
 import {
+  Button as Button2,
+  message,
+} from "antd";
+import {
+  RefreshIcon,
+} from "@heroicons/react/outline";
+import {
     adminGlobalCacheActivity,
+    cachingHealthCheckCall,
+    healthCheckCall,
 } from "./networking";
 
 const formatDateWithoutTZ = (date: Date | undefined) => {
@@ -86,6 +104,8 @@ const CacheDashboard: React.FC<CachePageProps> = ({
     to: new Date(),
   });
 
+  const [lastRefreshed, setLastRefreshed] = useState("");
+  const [healthCheckResponse, setHealthCheckResponse] = useState<string>("");
 
   useEffect(() => {
     if (!accessToken || !dateValue) {
@@ -96,6 +116,9 @@ const CacheDashboard: React.FC<CachePageProps> = ({
       setData(response);
     };
     fetchData();
+
+    const currentDate = new Date();
+    setLastRefreshed(currentDate.toLocaleString());
   }, [accessToken]);
 
     const uniqueApiKeys = Array.from(new Set(data.map((item) => item?.api_key ?? "")));
@@ -208,8 +231,50 @@ const CacheDashboard: React.FC<CachePageProps> = ({
 
   }, [selectedApiKeys, selectedModels, dateValue, data]);
 
+
+const handleRefreshClick = () => {
+  // Update the 'lastRefreshed' state to the current date and time
+  const currentDate = new Date();
+  setLastRefreshed(currentDate.toLocaleString());
+};
+
+const runCachingHealthCheck = async () => {
+  try {
+    message.info("Running cache health check...");
+    setHealthCheckResponse("");
+    const response = await cachingHealthCheckCall(accessToken !== null ? accessToken : "");
+    console.log("CACHING HEALTH CHECK RESPONSE", response);
+    setHealthCheckResponse(response);
+  } catch (error) {
+    console.error("Error running health check:", error);
+    setHealthCheckResponse("Error running health check");
+  }
+};
+
   return (        
-      <Card>      
+    <TabGroup className="gap-2 p-8 h-full w-full mt-2 mb-8">
+        <TabList className="flex justify-between mt-2 w-full items-center">
+          <div className="flex">
+            <Tab>Cache Analytics</Tab>
+            <Tab>
+              <pre>Cache Health</pre>
+            </Tab>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
+            <Icon
+              icon={RefreshIcon} // Modify as necessary for correct icon name
+              variant="shadow"
+              size="xs"
+              className="self-center"
+              onClick={handleRefreshClick}
+            />
+          </div>
+        </TabList>
+        <TabPanels>
+          <TabPanel>
+          <Card>      
       <Grid numItems={3} className="gap-4 mt-4">
         <Col>
           <MultiSelect
@@ -251,7 +316,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({
       </Grid>
 
       <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 mt-4">
-      <Card>
+          <Card>
             <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
               Cache Hit Ratio
             </p>
@@ -314,11 +379,28 @@ const CacheDashboard: React.FC<CachePageProps> = ({
 
 
       </Card>
+          </TabPanel>
+          <TabPanel>
+            <Card className="mt-4">
+              <Text>
+                Cache health will run a very small request through API /cache/ping
+                configured on litellm
+              </Text>
 
-
-    
-
-
+              <Button onClick={runCachingHealthCheck} className="mt-4">Run cache health</Button>
+              {healthCheckResponse && (
+                <pre className="mt-4" style={{ 
+                  whiteSpace: 'pre-wrap',
+                  wordWrap: 'break-word',
+                  maxWidth: '100%'
+                }}>
+                  {JSON.stringify(healthCheckResponse, null, 2)}
+                </pre>
+              )}
+            </Card>
+          </TabPanel>
+        </TabPanels>
+      </TabGroup>
   );
 };
 

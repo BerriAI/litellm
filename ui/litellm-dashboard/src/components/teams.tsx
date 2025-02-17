@@ -22,7 +22,7 @@ import {
   message,
   Tooltip
 } from "antd";
-import { fetchAvailableModelsForTeamOrKey, getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import { fetchAvailableModelsForTeamOrKey, getModelDisplayName, unfurlWildcardModelsInList } from "./key_team_helpers/fetch_available_models_team_key";
 import { Select, SelectItem } from "@tremor/react";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { getGuardrailsList } from "./networking";
@@ -53,19 +53,20 @@ import {
 } from "@tremor/react";
 import { CogIcon } from "@heroicons/react/outline";
 import AvailableTeamsPanel from "@/components/team/available_teams";
+import type { Team } from "./key_team_helpers/key_list";
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 if (isLocal != true) {
   console.log = function() {};
 }
 interface TeamProps {
-  teams: any[] | null;
+  teams: Team[] | null;
   searchParams: any;
   accessToken: string | null;
-  setTeams: React.Dispatch<React.SetStateAction<Object[] | null>>;
+  setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
   userID: string | null;
   userRole: string | null;
-  currentOrg: Organization | null;  
+  organizations: Organization[] | null;
 }
 
 interface EditTeamModalProps {
@@ -84,27 +85,38 @@ import {
   teamListCall
 } from "./networking";
 
+const getOrganizationModels = (organization: Organization | null, userModels: string[]) => {
+  let tempModelsToPick = [];
 
-const Team: React.FC<TeamProps> = ({
+  if (organization) {
+    if (organization.models.length > 0) {
+      console.log(`organization.models: ${organization.models}`);
+      tempModelsToPick = organization.models;
+    } else {
+      // show all available models if the team has no models set
+      tempModelsToPick = userModels;
+    }
+  } else {
+    // no team set, show all available models
+    tempModelsToPick = userModels;
+  }
+
+  return unfurlWildcardModelsInList(tempModelsToPick, userModels);
+}
+
+const Teams: React.FC<TeamProps> = ({
   teams,
   searchParams,
   accessToken,
   setTeams,
   userID,
   userRole,
-  currentOrg
+  organizations
 }) => {
   const [lastRefreshed, setLastRefreshed] = useState("");
+  const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
+  const [currentOrgForCreateTeam, setCurrentOrgForCreateTeam] = useState<Organization | null>(null);
 
-
-  useEffect(() => {
-    console.log(`inside useeffect - ${teams}`)
-    if (teams === null && accessToken) {
-      // Call your function here
-      fetchTeams(accessToken, userID, userRole, currentOrg, setTeams)
-    }
-  }, [teams]);
-  
   useEffect(() => {
     console.log(`inside useeffect - ${lastRefreshed}`)
     if (accessToken) {
@@ -132,6 +144,7 @@ const Team: React.FC<TeamProps> = ({
   const [userModels, setUserModels] = useState<string[]>([]);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [teamToDelete, setTeamToDelete] = useState<string | null>(null);
+  const [modelsToPick, setModelsToPick] = useState<string[]>([]);
   
 
 
@@ -139,6 +152,14 @@ const Team: React.FC<TeamProps> = ({
 
   // Add this state near the other useState declarations
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+
+  useEffect(() => {
+    console.log(`currentOrgForCreateTeam: ${currentOrgForCreateTeam}`);
+    const models = getOrganizationModels(currentOrgForCreateTeam, userModels);
+    console.log(`models: ${models}`);
+    setModelsToPick(models);
+    form.setFieldValue('models', []);
+  }, [currentOrgForCreateTeam, userModels]);
 
   // Add this useEffect to fetch guardrails
   useEffect(() => {
@@ -199,10 +220,7 @@ const Team: React.FC<TeamProps> = ({
     try {
       await teamDeleteCall(accessToken, teamToDelete);
       // Successfully completed the deletion. Update the state to trigger a rerender.
-      const filteredData = teams.filter(
-        (item) => item.team_id !== teamToDelete
-      );
-      setTeams(filteredData);
+      fetchTeams(accessToken, userID, userRole, currentOrg, setTeams)
     } catch (error) {
       console.error("Error deleting the team:", error);
       // Handle any error situations, such as displaying an error message to the user.
@@ -234,41 +252,7 @@ const Team: React.FC<TeamProps> = ({
       }
     };
 
-    const fetchTeamInfo = async () => {
-      try {
-        if (userID === null || userRole === null || accessToken === null) {
-          return;
-        }
-
-        if (teams === null) {
-          return;
-        }
-
-        let _team_id_to_info: Record<string, any> = {};
-        let teamList;
-        if (userRole != "Admin" && userRole != "Admin Viewer") {
-          teamList = await teamListCall(accessToken, currentOrg?.organization_id || DEFAULT_ORGANIZATION, userID)
-        } else {
-          teamList = await teamListCall(accessToken, currentOrg?.organization_id || DEFAULT_ORGANIZATION)
-        }
-        
-        for (let i = 0; i < teamList.length; i++) {
-          let team = teamList[i];
-          let _team_id = team.team_id;
-      
-          // Use the team info directly from the teamList
-          if (team !== null) {
-              _team_id_to_info = { ..._team_id_to_info, [_team_id]: team };
-          }
-        }
-        setPerTeamInfo(_team_id_to_info);
-      } catch (error) {
-        console.error("Error fetching team info:", error);
-      }
-    };
-
     fetchUserModels();
-    fetchTeamInfo();
   }, [accessToken, userID, userRole, teams]);
 
   const handleCreate = async (formValues: Record<string, any>) => {
@@ -338,7 +322,7 @@ const Team: React.FC<TeamProps> = ({
 
 
   return (
-    <div className="w-full mx-4">
+    <div className="w-full mx-4 h-[75vh]">
       {selectedTeamId ? (
         <TeamInfoView 
         teamId={selectedTeamId} 
@@ -377,7 +361,7 @@ const Team: React.FC<TeamProps> = ({
       </Text>
       <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
         <Col numColSpan={1}>
-          <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
+          <Card className="w-full mx-auto flex-auto overflow-hidden overflow-y-auto max-h-[50vh]">
             <Table>
               <TableHead>
                 <TableRow>
@@ -387,7 +371,7 @@ const Team: React.FC<TeamProps> = ({
                   <TableHeaderCell>Spend (USD)</TableHeaderCell>
                   <TableHeaderCell>Budget (USD)</TableHeaderCell>
                   <TableHeaderCell>Models</TableHeaderCell>
-                  <TableHeaderCell>TPM / RPM Limits</TableHeaderCell>
+                  <TableHeaderCell>Organization</TableHeaderCell>
                   <TableHeaderCell>Info</TableHeaderCell>
                 </TableRow>
               </TableHead>
@@ -395,10 +379,10 @@ const Team: React.FC<TeamProps> = ({
               <TableBody>
                 {teams && teams.length > 0
                   ? teams
-                      .filter((team) => {
-                        const targetOrgId = currentOrg ? currentOrg.organization_id : null;
-                        return team.organization_id === targetOrgId;
-                      })                  
+                    .filter((team) => {
+                      if (!currentOrg) return true;
+                      return team.organization_id === currentOrg.organization_id;
+                    })            
                       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
                       .map((team: any) => (
                       <TableRow key={team.team_id}>
@@ -509,18 +493,8 @@ const Team: React.FC<TeamProps> = ({
                           ) : null}
                         </TableCell>
 
-                        <TableCell
-                          style={{
-                            maxWidth: "4px",
-                            whiteSpace: "pre-wrap",
-                            overflow: "hidden",
-                          }}
-                        >
-                          <Text>
-                            TPM: {team.tpm_limit ? team.tpm_limit : "Unlimited"}{" "}
-                            <br></br>RPM:{" "}
-                            {team.rpm_limit ? team.rpm_limit : "Unlimited"}
-                          </Text>
+                        <TableCell>
+                          {team.organization_id}
                         </TableCell>
                         <TableCell>
                           <Text>
@@ -647,7 +621,42 @@ const Team: React.FC<TeamProps> = ({
                 >
                   <TextInput placeholder="" />
                 </Form.Item>
-                <Form.Item label="Models" name="models">
+                <Form.Item
+                  label="Organization"
+                  name="organization_id"
+                  initialValue={currentOrg ? currentOrg.organization_id : null}
+                  className="mt-8"
+                >
+                  <Select2
+                    showSearch
+                    placeholder="Search or select a team"
+                    onChange={(value) => {
+                      form.setFieldValue('organization_id', value);
+                      setCurrentOrgForCreateTeam(organizations?.find((org) => org.organization_id === value) || null);
+                    }}
+                    filterOption={(input, option) => {
+                      if (!option) return false;
+                      const optionValue = option.children?.toString() || '';
+                      return optionValue.toLowerCase().includes(input.toLowerCase());
+                    }}
+                    optionFilterProp="children"
+                  >
+                    {organizations?.map((org) => (
+                      <Select2.Option key={org.organization_id} value={org.organization_id}>
+                        <span className="font-medium">{org.organization_alias}</span>{" "}
+                        <span className="text-gray-500">({org.organization_id})</span>
+                      </Select2.Option>
+                    ))}
+                  </Select2>
+                </Form.Item>
+                <Form.Item label={
+                    <span>
+                      Models{' '}
+                      <Tooltip title="These are the models that your selected organization has access to">
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </span>
+                  } name="models">
                   <Select2
                     mode="multiple"
                     placeholder="Select models"
@@ -659,7 +668,7 @@ const Team: React.FC<TeamProps> = ({
                     >
                       All Proxy Models
                     </Select2.Option>
-                    {userModels.map((model) => (
+                    {modelsToPick.map((model) => (
                       <Select2.Option key={model} value={model}>
                         {getModelDisplayName(model)}
                       </Select2.Option>
@@ -704,18 +713,6 @@ const Team: React.FC<TeamProps> = ({
                       help="ID of the team you want to create. If not provided, it will be generated automatically."
                     >
                       <TextInput 
-                        onChange={(e) => {
-                          e.target.value = e.target.value.trim();
-                        }} 
-                      />
-                    </Form.Item>
-                    <Form.Item
-                      label="Organization ID"
-                      name="organization_id"
-                      help="Assign team to an organization. Found in the 'Organization' tab."
-                    >
-                      <TextInput 
-                        placeholder="" 
                         onChange={(e) => {
                           e.target.value = e.target.value.trim();
                         }} 
@@ -773,4 +770,4 @@ const Team: React.FC<TeamProps> = ({
   );
 };
 
-export default Team;
+export default Teams;

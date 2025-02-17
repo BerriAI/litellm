@@ -143,7 +143,8 @@ def test_all_model_configs():
     )
 
     assert (
-        "max_completion_tokens" in VertexAILlama3Config().get_supported_openai_params()
+        "max_completion_tokens"
+        in VertexAILlama3Config().get_supported_openai_params(model="llama3")
     )
     assert VertexAILlama3Config().map_openai_params(
         {"max_completion_tokens": 10}, {}, "llama3", drop_params=False
