@@ -76,9 +76,6 @@ export const handleAddModelSubmit = async (
             // Add key-value pair to model_info dictionary
             modelInfoObj[key] = value;
           }
-          else if (key === "team_id") {
-            modelInfoObj["team_id"] = value;
-          }
           else if (key === "custom_model_name") {
             litellmParamsObj["model"] = value;
           } else if (key == "litellm_extra_params") {
