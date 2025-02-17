@@ -16,6 +16,7 @@ import { ArrowLeftIcon, TrashIcon } from "@heroicons/react/outline";
 import { modelDeleteCall, modelUpdateCall } from "./networking";
 import { Button, Form, Input, InputNumber, message, Select } from "antd";
 import EditModelModal from "./edit_model/edit_model_modal";
+import { getProviderLogoAndName } from "./provider_info_helpers";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -121,24 +122,39 @@ export default function ModelInfoView({
             <Grid numItems={1} numItemsSm={2} numItemsLg={3} className="gap-6 mb-6">
               <Card>
                 <Text>Provider</Text>
-                <div className="mt-2">
+                <div className="mt-2 flex items-center space-x-2">
+                  {modelData.provider && (
+                    <img
+                      src={getProviderLogoAndName(modelData.provider).logo}
+                      alt={`${modelData.provider} logo`}
+                      className="w-4 h-4"
+                      onError={(e) => {
+                        // Create a div with provider initial as fallback
+                        const target = e.target as HTMLImageElement;
+                        const parent = target.parentElement;
+                        if (parent) {
+                          const fallbackDiv = document.createElement('div');
+                          fallbackDiv.className = 'w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                          fallbackDiv.textContent = modelData.provider?.charAt(0) || '-';
+                          parent.replaceChild(fallbackDiv, target);
+                        }
+                      }}
+                    />
+                  )}
                   <Title>{modelData.provider || "Not Set"}</Title>
                 </div>
               </Card>
-
+              <Card>
+                <Text>LiteLLM Model</Text>
+                <pre>
+                  <Title>{modelData.litellm_model_name || "Not Set"}</Title>
+                </pre>
+              </Card>
               <Card>
                 <Text>Pricing</Text>
                 <div className="mt-2">
                   <Text>Input: ${modelData.input_cost}/1M tokens</Text>
                   <Text>Output: ${modelData.output_cost}/1M tokens</Text>
-                </div>
-              </Card>
-
-              <Card>
-                <Text>Token Limits</Text>
-                <div className="mt-2">
-                  <Text>Max Tokens: {modelData.max_tokens || "Not Set"}</Text>
-                  <Text>Max Input Tokens: {modelData.max_input_tokens || "Not Set"}</Text>
                 </div>
               </Card>
             </Grid>
