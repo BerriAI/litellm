@@ -30,6 +30,7 @@ import {
   modelAvailableCall,
   getGuardrailsList,
 } from "./networking";
+import { Team } from "./key_team_helpers/key_list";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Tooltip } from 'antd';
 
@@ -37,11 +38,12 @@ const { Option } = Select;
 
 interface CreateKeyProps {
   userID: string;
-  team: any | null;
+  team: Team | null;
   userRole: string | null;
   accessToken: string;
   data: any[] | null;
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
+  teams: Team[] | null;
 }
 
 const getPredefinedTags = (data: any[] | null) => {
@@ -68,10 +70,57 @@ const getPredefinedTags = (data: any[] | null) => {
   return uniqueTags;
 }
 
+export const getTeamModels = (team: Team | null, allAvailableModels: string[]): string[] => {
+  let tempModelsToPick = [];
+
+  if (team) {
+    if (team.models.length > 0) {
+      if (team.models.includes("all-proxy-models")) {
+        // if the team has all-proxy-models show all available models
+        tempModelsToPick = allAvailableModels;
+      } else {
+        // show team models
+        tempModelsToPick = team.models;
+      }
+    } else {
+      // show all available models if the team has no models set
+      tempModelsToPick = allAvailableModels;
+    }
+  } else {
+    // no team set, show all available models
+    tempModelsToPick = allAvailableModels;
+  }
+
+  return unfurlWildcardModelsInList(tempModelsToPick, allAvailableModels);
+};
+
+export const fetchUserModels = async (userID: string, userRole: string, accessToken: string, setUserModels: (models: string[]) => void) => {
+  try {
+    if (userID === null || userRole === null) {
+      return;
+    }
+
+    if (accessToken !== null) {
+      const model_available = await modelAvailableCall(
+        accessToken,
+        userID,
+        userRole
+      );
+      let available_model_names = model_available["data"].map(
+        (element: { id: string }) => element.id
+      );
+      console.log("available_model_names:", available_model_names);
+      setUserModels(available_model_names);
+    }
+  } catch (error) {
+    console.error("Error fetching user models:", error);
+  }
+};
 
 const CreateKey: React.FC<CreateKeyProps> = ({
   userID,
   team,
+  teams,
   userRole,
   accessToken,
   data,
@@ -86,6 +135,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [keyOwner, setKeyOwner] = useState("you");
   const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
 
   const handleOk = () => {
     setIsModalVisible(false);
@@ -99,30 +149,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   };
 
   useEffect(() => {
-    const fetchUserModels = async () => {
-      try {
-        if (userID === null || userRole === null) {
-          return;
-        }
-
-        if (accessToken !== null) {
-          const model_available = await modelAvailableCall(
-            accessToken,
-            userID,
-            userRole
-          );
-          let available_model_names = model_available["data"].map(
-            (element: { id: string }) => element.id
-          );
-          console.log("available_model_names:", available_model_names);
-          setUserModels(available_model_names);
-        }
-      } catch (error) {
-        console.error("Error fetching user models:", error);
-      }
-    };
-
-    fetchUserModels();
+    if (userID && userRole && accessToken) {
+      fetchUserModels(userID, userRole, accessToken, setUserModels);
+    }
   }, [accessToken, userID, userRole]);
 
   useEffect(() => {
@@ -197,30 +226,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   };
 
   useEffect(() => {
-    let tempModelsToPick = [];
-
-    if (team) {
-      if (team.models.length > 0) {
-        if (team.models.includes("all-proxy-models")) {
-          // if the team has all-proxy-models show all available models
-          tempModelsToPick = userModels;
-        } else {
-          // show team models
-          tempModelsToPick = team.models;
-        }
-      } else {
-        // show all available models if the team has no models set
-        tempModelsToPick = userModels;
-      }
-    } else {
-      // no team set, show all available models
-      tempModelsToPick = userModels;
-    }
-
-    tempModelsToPick = unfurlWildcardModelsInList(tempModelsToPick, userModels);
-
-    setModelsToPick(tempModelsToPick);
-  }, [team, userModels]);
+    const models = getTeamModels(selectedCreateKeyTeam, userModels);
+    setModelsToPick(models);
+    form.setFieldValue('models', []);
+  }, [selectedCreateKeyTeam, userModels]);
 
   return (
     <div>
@@ -278,18 +287,44 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               <TextInput placeholder="" />
             </Form.Item>
             <Form.Item
-              label="Team ID"
+              label="Team"
               name="team_id"
-              hidden={keyOwner !== "another_user"}
-              initialValue={team ? team["team_id"] : null}
-              valuePropName="team_id"
+              initialValue={team ? team.team_id : null}
               className="mt-8"
             >
-              <TextInput defaultValue={team ? team["team_id"] : null} onChange={(e) => form.setFieldValue('team_id', e.target.value)}/>
+              <Select
+                showSearch
+                placeholder="Search or select a team"
+                onChange={(value) => {
+                  form.setFieldValue('team_id', value);
+                  const selectedTeam = teams?.find(team => team.team_id === value);
+                  setSelectedCreateKeyTeam(selectedTeam || null);
+                }}
+                filterOption={(input, option) => {
+                  if (!option) return false;
+                  const optionValue = option.children?.toString() || '';
+                  return optionValue.toLowerCase().includes(input.toLowerCase());
+                }}
+                optionFilterProp="children"
+              >
+                {teams?.map((team) => (
+                  <Select.Option key={team.team_id} value={team.team_id}>
+                    <span className="font-medium">{team.team_alias}</span>{" "}
+                    <span className="text-gray-500">({team.team_id})</span>
+                  </Select.Option>
+                ))}
+              </Select>
             </Form.Item>
 
             <Form.Item
-              label="Models"
+              label={
+                <span>
+                  Models{' '}
+                  <Tooltip title="These are the models that your selected team has access to">
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              }
               name="models"
               rules={[{ required: true, message: "Please select a model" }]}
               help="required"
@@ -299,15 +334,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 placeholder="Select models"
                 style={{ width: "100%" }}
                 onChange={(values) => {
-                  // Check if "All Team Models" is selected
-                  const isAllTeamModelsSelected =
-                    values.includes("all-team-models");
-
-                  // If "All Team Models" is selected, deselect all other models
-                  if (isAllTeamModelsSelected) {
-                    const newValues = ["all-team-models"];
-                    // You can call the form's setFieldsValue method to update the value
-                    form.setFieldsValue({ models: newValues });
+                  if (values.includes("all-team-models")) {
+                    form.setFieldsValue({ models: ["all-team-models"] });
                   }
                 }}
               >

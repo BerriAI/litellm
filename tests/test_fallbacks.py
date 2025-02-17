@@ -157,6 +157,29 @@ async def test_chat_completion_with_retries():
 
 
 @pytest.mark.asyncio
+async def test_chat_completion_with_fallbacks():
+    """
+    make chat completion call with prompt > context window. expect it to work with fallback
+    """
+    async with aiohttp.ClientSession() as session:
+        model = "badly-configured-openai-endpoint"
+        messages = [
+            {"role": "system", "content": text},
+            {"role": "user", "content": "Who was Alexander?"},
+        ]
+        response, headers = await chat_completion(
+            session=session,
+            key="sk-1234",
+            model=model,
+            messages=messages,
+            fallbacks=["fake-openai-endpoint-5"],
+            return_headers=True,
+        )
+        print(f"headers: {headers}")
+        assert headers["x-litellm-attempted-fallbacks"] == "1"
+
+
+@pytest.mark.asyncio
 async def test_chat_completion_with_timeout():
     """
     make chat completion call with low timeout and `mock_timeout`: true. Expect it to fail and correct timeout to be set in headers.
