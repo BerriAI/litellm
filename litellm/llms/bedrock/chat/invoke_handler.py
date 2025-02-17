@@ -1,5 +1,5 @@
 """
-Manages calling Bedrock's `/converse` API + `/invoke` API 
+TODO: DELETE FILE. Bedrock LLM is no longer used. Goto `litellm/llms/bedrock/chat/invoke_transformations/base_invoke_transformation.py`
 """
 
 import copy

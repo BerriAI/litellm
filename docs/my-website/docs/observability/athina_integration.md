@@ -78,7 +78,7 @@ Following are the allowed fields in metadata, their types, and their description
 * `context: Optional[Union[dict, str]]` - This is the context used as information for the prompt. For RAG applications, this is the "retrieved" data. You may log context as a string or as an object (dictionary).
 * `expected_response: Optional[str]` - This is the reference response to compare against for evaluation purposes. This is useful for segmenting inference calls by expected response.
 * `user_query: Optional[str]` - This is the user's query. For conversational applications, this is the user's last message.
-
+* `custom_attributes: Optional[dict]` - This is a dictionary of custom attributes. This is useful for additional information about the inference.
 
 ## Using a self hosted deployment of Athina
 

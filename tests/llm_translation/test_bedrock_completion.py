@@ -2092,6 +2092,7 @@ def test_bedrock_prompt_caching_message(messages, expected_cache_control):
         ("bedrock/mistral.mistral-7b-instruct-v0.1:0", True),
         ("bedrock/meta.llama3-1-8b-instruct:0", True),
         ("bedrock/meta.llama3-2-70b-instruct:0", True),
+        ("bedrock/meta.llama3-3-70b-instruct-v1:0", True),
         ("bedrock/amazon.titan-embed-text-v1:0", False),
     ],
 )
