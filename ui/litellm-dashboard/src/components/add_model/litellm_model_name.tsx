@@ -17,10 +17,26 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
 }) => {
   const form = Form.useFormInstance();
 
-  const handleModelChange = (value: string[]) => {
+  const handleModelChange = (value: string | string[]) => {
+    // Ensure value is always treated as an array
+    const values = Array.isArray(value) ? value : [value];
+    
     // If "all-wildcard" is selected, clear the model_name field
-    if (value.includes("all-wildcard")) {
+    if (values.includes("all-wildcard")) {
       form.setFieldsValue({ model_name: undefined });
+    } else {
+      // Get the current auto-match setting
+      const autoMatch = form.getFieldValue('auto_match_model_name');
+      
+      if (autoMatch) {
+        // If auto-match is enabled, set the model_name to match the selected model(s)
+        if (values.length === 1 && !values.includes('custom')) {
+          form.setFieldsValue({ model_name: values[0] });
+        } else if (values.length > 1) {
+          // For multiple models, set each one to match itself
+          form.setFieldsValue({ model_name: values.join(',') });
+        }
+      }
     }
   };
 
@@ -42,6 +58,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
             <TextInput placeholder={getPlaceholder(selectedProvider)} />
           ) : providerModels.length > 0 ? (
             <AntSelect
+              mode="multiple"
               allowClear
               showSearch
               placeholder="Select models"
