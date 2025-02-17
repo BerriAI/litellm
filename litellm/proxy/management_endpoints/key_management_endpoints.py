@@ -35,6 +35,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
+from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import (
     PrismaClient,
@@ -1684,10 +1685,10 @@ async def validate_key_list_check(
     organization_id: Optional[str],
     key_alias: Optional[str],
     prisma_client: PrismaClient,
-):
+) -> Optional[LiteLLM_UserTable]:
 
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
-        return
+        return None
 
     if user_api_key_dict.user_id is None:
         raise ProxyException(
@@ -1747,6 +1748,36 @@ async def validate_key_list_check(
                 param="organization_id",
                 code=status.HTTP_403_FORBIDDEN,
             )
+    return complete_user_info
+
+
+async def get_admin_team_ids(
+    complete_user_info: Optional[LiteLLM_UserTable],
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+) -> List[str]:
+    """
+    Get all team IDs where the user is an admin.
+    """
+    if complete_user_info is None:
+        return []
+    # Get all teams that user is an admin of
+    teams: Optional[List[BaseModel]] = (
+        await prisma_client.db.litellm_teamtable.find_many(
+            where={"team_id": {"in": complete_user_info.teams}}
+        )
+    )
+    if teams is None:
+        return []
+
+    teams_pydantic_obj = [LiteLLM_TeamTable(**team.model_dump()) for team in teams]
+
+    admin_team_ids = [
+        team.team_id
+        for team in teams_pydantic_obj
+        if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)
+    ]
+    return admin_team_ids
 
 
 @router.get(
@@ -1807,12 +1838,18 @@ async def list_keys(
             verbose_proxy_logger.error("Database not connected")
             raise Exception("Database not connected")
 
-        await validate_key_list_check(
+        complete_user_info = await validate_key_list_check(
             user_api_key_dict=user_api_key_dict,
             user_id=user_id,
             team_id=team_id,
             organization_id=organization_id,
             key_alias=key_alias,
+            prisma_client=prisma_client,
+        )
+
+        await get_admin_team_ids(
+            complete_user_info=complete_user_info,
+            user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
         )
 
