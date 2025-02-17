@@ -1,105 +1,81 @@
-import React, { useState, useEffect } from "react";
-import { Form, Space, Table, Input, Tag, Select } from "antd";
-import { Text, TextInput } from "@tremor/react";
-
-interface ModelMapping {
-  litellmModel: string;
-  publicNames: string[];
-  key: string;
-}
+import React, { useEffect } from "react";
+import { Form, Table, Input } from "antd";
+import { Text } from "@tremor/react";
+import { Row, Col } from "antd";
 
 const ConditionalPublicModelName: React.FC = () => {
+  // Access the form instance
   const form = Form.useFormInstance();
+
+  // Watch the 'model' field for changes
   const selectedModels = Form.useWatch('model', form) || [];
-  const [mappings, setMappings] = useState<ModelMapping[]>([]);
+  const showPublicModelName = !selectedModels.includes('all-wildcard');
 
-  // Sync mappings with selected models
+  // Auto-populate model mappings when selected models change
   useEffect(() => {
-    const validModels = selectedModels.filter(model => 
-      model !== 'custom' && model !== 'all-wildcard'
-    );
-
-    // Remove mappings for models that are no longer selected
-    const updatedMappings = mappings.filter(mapping =>
-      validModels.includes(mapping.litellmModel)
-    );
-
-    // Add new mappings for newly selected models
-    const existingModelSet = new Set(updatedMappings.map(m => m.litellmModel));
-    const newMappings = validModels
-      .filter(model => !existingModelSet.has(model))
-      .map(model => ({
-        key: Date.now().toString() + model,
-        litellmModel: model,
-        publicNames: [model]
+    if (selectedModels.length > 0 && !selectedModels.includes('all-wildcard')) {
+      const mappings = selectedModels.map(model => ({
+        public_name: model,
+        litellm_model: model
       }));
+      form.setFieldValue('model_mappings', mappings);
+    }
+  }, [selectedModels, form]);
 
-    // Update mappings state with both kept and new mappings
-    setMappings([...updatedMappings, ...newMappings]);
-  }, [selectedModels]);
-
-  // Update form value whenever mappings change
-  useEffect(() => {
-    const modelNameValue = mappings
-      .map(m => m.publicNames.map(name => `${m.litellmModel}:${name}`).join(','))
-      .join(',');
-    form.setFieldsValue({ model_name: modelNameValue });
-  }, [mappings]);
+  if (!showPublicModelName) return null;
 
   const columns = [
     {
-      title: 'Public Names',
-      dataIndex: 'publicNames',
-      key: 'publicNames',
-      render: (names: string[], record: ModelMapping) => (
-        <Select
-          mode="tags"
-          style={{ width: '100%' }}
-          placeholder="Enter public model names"
-          defaultValue={names}
-          onChange={(newNames) => updateMapping(record.key, newNames)}
-          tokenSeparators={[',']}
-        />
-      )
+      title: 'Public Name',
+      dataIndex: 'public_name',
+      key: 'public_name',
+      render: (text: string, record: any, index: number) => {
+        return (
+          <Input
+            defaultValue={text}
+            onChange={(e) => {
+              const newMappings = [...form.getFieldValue('model_mappings')];
+              newMappings[index].public_name = e.target.value;
+              form.setFieldValue('model_mappings', newMappings);
+            }}
+          />
+        );
+      }
     },
     {
       title: 'LiteLLM Model',
-      dataIndex: 'litellmModel',
-      key: 'litellmModel',
-      render: (text: string) => <Tag color="blue">{text}</Tag>
+      dataIndex: 'litellm_model',
+      key: 'litellm_model',
     }
   ];
 
-  const updateMapping = (key: string, newPublicNames: string[]) => {
-    setMappings(mappings.map(m => 
-      m.key === key ? { ...m, publicNames: newPublicNames } : m
-    ));
-  };
-
-  // Don't show anything if no models are selected or if all-wildcard is selected
-  if (selectedModels.includes('all-wildcard') || selectedModels.length === 0) {
-    return null;
-  }
-
   return (
-    <Form.Item
-      label="Model Mappings"
-      required={false}
-      className="mb-0"
-    >
-      <Space direction="vertical" style={{ width: '100%' }}>
+    <>
+      <Form.Item
+        label="Model Mappings"
+        name="model_mappings"
+        tooltip="Map public model names to LiteLLM model names for load balancing"
+        labelCol={{ span: 10 }}
+        wrapperCol={{ span: 16 }}
+        labelAlign="left"
+        required={true}
+      >
         <Table 
-          columns={columns}
-          dataSource={mappings}
-          size="small"
+          dataSource={form.getFieldValue('model_mappings')} 
+          columns={columns} 
           pagination={false}
-          className="mt-2"
+          size="small"
         />
-        <Text className="mt-1" style={{ fontSize: '13px', color: '#666' }}>
-          Map LiteLLM models to custom public names for load balancing and user requests
-        </Text>
-      </Space>
-    </Form.Item>
+      </Form.Item>
+      <Row>
+        <Col span={10}></Col>
+        <Col span={10}>
+          <Text className="mb-2">
+            Model name your users will pass in.
+          </Text>
+        </Col>
+      </Row>
+    </>
   );
 };
 
