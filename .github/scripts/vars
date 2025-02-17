@@ -2,7 +2,7 @@
 
 set -e
 
-[ "$(git branch --show-current)" = bxnlabs ] || SUFFIX="-dev"
+[ "$(git branch --show-current)" = main ] || SUFFIX="-dev"
 cat << EOF > "${GITHUB_OUTPUT}"
 image=ghcr.io/${GITHUB_REPOSITORY_OWNER}/$(basename "${PWD}")${SUFFIX}
 version=$("$(dirname $0)"/version)
