@@ -39,6 +39,7 @@ from litellm.proxy._types import (
     NewTeamRequest,
     ProxyErrorTypes,
     ProxyException,
+    SpecialManagementEndpointEnums,
     TeamAddMemberResponse,
     TeamInfoResponseObject,
     TeamListResponseObject,
@@ -1190,6 +1191,30 @@ async def delete_team(
     return deleted_teams
 
 
+def validate_membership(
+    user_api_key_dict: UserAPIKeyAuth, team_table: LiteLLM_TeamTable
+):
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+
+    if (
+        user_api_key_dict.team_id == team_table.team_id
+    ):  # allow team keys to check their info
+        return
+
+    if user_api_key_dict.user_id not in [
+        m.user_id for m in team_table.members_with_roles
+    ]:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "User={} not authorized to access this team={}".format(
+                    user_api_key_dict.user_id, team_table.team_id
+                )
+            },
+        )
+
+
 @router.get(
     "/team/info", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
@@ -1482,6 +1507,7 @@ async def list_team(
     user_id: Optional[str] = fastapi.Query(
         default=None, description="Only return teams which this 'user_id' belongs to"
     ),
+    organization_id: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -1492,6 +1518,7 @@ async def list_team(
 
     Parameters:
     - user_id: str - Optional. If passed will only return teams that the user_id is a member of.
+    - organization_id: str - Optional. If passed will only return teams that belong to the organization_id. Pass 'default_organization' to get all teams without organization_id.
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -1513,7 +1540,11 @@ async def list_team(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    response = await prisma_client.db.litellm_teamtable.find_many()
+    response = await prisma_client.db.litellm_teamtable.find_many(
+        include={
+            "litellm_model_table": True,
+        }
+    )
 
     filtered_response = []
     if user_id:
@@ -1565,6 +1596,19 @@ async def list_team(
             continue
     # Sort the responses by team_alias
     returned_responses.sort(key=lambda x: (getattr(x, "team_alias", "") or ""))
+
+    if organization_id is not None:
+        if organization_id == SpecialManagementEndpointEnums.DEFAULT_ORGANIZATION.value:
+            returned_responses = [
+                team for team in returned_responses if team.organization_id is None
+            ]
+        else:
+            returned_responses = [
+                team
+                for team in returned_responses
+                if team.organization_id == organization_id
+            ]
+
     return returned_responses
 
 

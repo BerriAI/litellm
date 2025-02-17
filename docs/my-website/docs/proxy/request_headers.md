@@ -12,3 +12,10 @@ Special headers that are supported by LiteLLM.
 
 `anthropic-version` Optional[str]: The version of the Anthropic API to use.  
 `anthropic-beta` Optional[str]: The beta version of the Anthropic API to use.
+
+## OpenAI Headers
+
+`openai-organization` Optional[str]: The organization to use for the OpenAI API. (currently needs to be enabled via `general_settings::forward_openai_org_id: true`)
+
+
+

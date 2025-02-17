@@ -17,6 +17,7 @@ import {
   FileTextOutlined,
   LineOutlined,
   LineChartOutlined,
+  SafetyOutlined,
   ExperimentOutlined
 } from '@ant-design/icons';
 
@@ -56,6 +57,9 @@ const menuItems: MenuItem[] = [
   { key: "5", page: "users", label: "Internal Users", icon: <UserOutlined />, roles: all_admin_roles },
   { key: "14", page: "api_ref", label: "API Reference", icon: <ApiOutlined /> },
   { key: "16", page: "model-hub", label: "Model Hub", icon: <AppstoreOutlined /> },
+  { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined />, roles: all_admin_roles },
+
+  
   { 
     key: "experimental", 
     page: "experimental",
@@ -63,9 +67,10 @@ const menuItems: MenuItem[] = [
     icon: <ExperimentOutlined />,
     roles: all_admin_roles,
     children: [
-      { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined />, roles: all_admin_roles },
       { key: "9", page: "caching", label: "Caching", icon: <DatabaseOutlined />, roles: all_admin_roles },
       { key: "10", page: "budgets", label: "Budgets", icon: <BankOutlined />, roles: all_admin_roles },
+      { key: "11", page: "guardrails", label: "Guardrails", icon: <SafetyOutlined />, roles: all_admin_roles },
+      
     ]
   },
   {

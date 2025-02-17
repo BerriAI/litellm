@@ -5,10 +5,11 @@ import {
   modelAvailableCall,
   getTotalSpendCall,
   getProxyUISettings,
-  teamListCall,
   Organization,
-  organizationListCall
+  organizationListCall,
+  DEFAULT_ORGANIZATION
 } from "./networking";
+import { fetchTeams } from "./common_components/fetch_teams";
 import { Grid, Col, Card, Text, Title } from "@tremor/react";
 import CreateKey from "./create_key_button";
 import ViewKeyTable from "./view_key_table";
@@ -17,6 +18,7 @@ import ViewUserTeam from "./view_user_team";
 import DashboardTeam from "./dashboard_default_team";
 import Onboarding from "../app/onboarding/page";
 import { useSearchParams, useRouter } from "next/navigation";
+import { Team } from "./key_team_helpers/key_list";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
 const isLocal = process.env.NODE_ENV === "development";
@@ -54,14 +56,14 @@ interface UserDashboardProps {
   userID: string | null;
   userRole: string | null;
   userEmail: string | null;
-  teams: any[] | null;
+  teams: Team[] | null;
   keys: any[] | null;
   setUserRole: React.Dispatch<React.SetStateAction<string>>;
   setUserEmail: React.Dispatch<React.SetStateAction<string | null>>;
-  setTeams: React.Dispatch<React.SetStateAction<Object[] | null>>;
+  setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
   setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
-  setOrganizations: React.Dispatch<React.SetStateAction<Organization[]>>;
   premiumUser: boolean;
+  organizations: Organization[] | null;
 }
 
 type TeamInterface = {
@@ -80,17 +82,16 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   setUserEmail,
   setTeams,
   setKeys,
-  setOrganizations,
   premiumUser,
+  organizations
 }) => {
   const [userSpendData, setUserSpendData] = useState<UserInfo | null>(
     null
   );
+  const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
 
   // Assuming useSearchParams() hook exists and works in your setup
   const searchParams = useSearchParams()!;
-  const viewSpend = searchParams.get("viewSpend");
-  const router = useRouter();
 
   const token = getCookie('token');
 
@@ -105,9 +106,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     team_alias: "Default Team",
     team_id: null,
   };
-  const [selectedTeam, setSelectedTeam] = useState<any | null>(
-    teams ? teams[0] : defaultTeam
-  );
+  const [selectedTeam, setSelectedTeam] = useState<any | null>(null);
   // check if window is not undefined
   if (typeof window !== "undefined") {
     window.addEventListener("beforeunload", function () {
@@ -173,22 +172,11 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       }
     }
     if (userID && accessToken && userRole && !keys && !userSpendData) {
-      // const cachedUserModels = sessionStorage.getItem("userModels" + userID);
-      // if (cachedUserModels) {
-      //   setUserModels(JSON.parse(cachedUserModels));
-      // } else {
-        const fetchTeams = async () => {
-          let givenTeams;
-          if (userRole != "Admin" && userRole != "Admin Viewer") {
-            givenTeams = await teamListCall(accessToken, userID)
-          } else {
-            givenTeams = await teamListCall(accessToken)
-          }
-          
-          console.log(`givenTeams: ${givenTeams}`)
-
-          setTeams(givenTeams)
-        }
+      const cachedUserModels = sessionStorage.getItem("userModels" + userID);
+      if (cachedUserModels) {
+        setUserModels(JSON.parse(cachedUserModels));
+      } else {
+        console.log(`currentOrg: ${JSON.stringify(currentOrg)}`)
         const fetchData = async () => {
           try {
             const proxy_settings: ProxySettings = await getProxyUISettings(accessToken);
@@ -205,12 +193,10 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
             setUserSpendData(response["user_info"]);
             console.log(`userSpendData: ${JSON.stringify(userSpendData)}`)
-
-            console.log(`response["user_info"]["organization_memberships"]: ${JSON.stringify(response["user_info"]["organization_memberships"])}`)
             
 
             // set keys for admin and users
-            if (!response?.teams?.[0]?.keys) {
+            if (!response?.teams[0].keys) {
               setKeys(response["keys"]); 
             } else {
               setKeys(
@@ -223,16 +209,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
               
             }
 
-            const teamsArray = [...response["teams"]];
-            if (teamsArray.length > 0) {
-              console.log(`response['teams']: ${JSON.stringify(teamsArray)}`);
-              setSelectedTeam(teamsArray[0]);
-            } else {
-              setSelectedTeam(defaultTeam);
-              
-            }
-
-            
             sessionStorage.setItem(
               "userData" + userID,
               JSON.stringify(response["keys"])
@@ -265,16 +241,19 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             // Optionally, update your UI to reflect the error state here as well
           }
         };
-        const fetchOrganizations = async () => {
-          const organizations = await organizationListCall(accessToken);
-          setOrganizations(organizations);
-        }
         fetchData();
-        fetchTeams();
-        fetchOrganizations();
+        fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
       }
-    // }
+    }
   }, [userID, token, accessToken, keys, userRole]);
+
+  useEffect(() => {
+    console.log(`currentOrg: ${JSON.stringify(currentOrg)}, accessToken: ${accessToken}, userID: ${userID}, userRole: ${userRole}`)
+    if (accessToken) {
+      console.log(`fetching teams`)
+      fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
+    }
+  }, [currentOrg]);
 
   useEffect(() => {
     // This code will run every time selectedTeam changes
@@ -348,22 +327,18 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
   console.log("inside user dashboard, selected team", selectedTeam);
   return (
-    <div className="w-full mx-4">
-      <Grid numItems={1} className="gap-2 p-8 h-[75vh] w-full mt-2">
-        <Col numColSpan={1}>
-          <ViewUserTeam
+    <div className="w-full mx-4 h-[75vh]">
+      <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
+        <Col numColSpan={1} className="flex flex-col gap-2">
+        <CreateKey
+            key={selectedTeam ? selectedTeam.team_id : null}
             userID={userID}
+            team={selectedTeam as Team | null}
+            teams={teams as Team[]}
             userRole={userRole}
-            selectedTeam={selectedTeam ? selectedTeam : null}
             accessToken={accessToken}
-          />
-          <ViewUserSpend
-            userID={userID}
-            userRole={userRole}
-            userMaxBudget={userSpendData?.max_budget || null}
-            accessToken={accessToken}
-            userSpend={teamSpend}
-            selectedTeam={selectedTeam ? selectedTeam : null}
+            data={keys}
+            setData={setKeys}
           />
 
           <ViewKeyTable
@@ -371,29 +346,14 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             userRole={userRole}
             accessToken={accessToken}
             selectedTeam={selectedTeam ? selectedTeam : null}
+            setSelectedTeam={setSelectedTeam}
             data={keys}
             setData={setKeys}
             premiumUser={premiumUser}
             teams={teams}
-          />
-          <CreateKey
-            key={selectedTeam ? selectedTeam.team_id : null}
-            userID={userID}
-            team={selectedTeam ? selectedTeam : null}
-            userRole={userRole}
-            accessToken={accessToken}
-            data={keys}
-            setData={setKeys}
-          />
-          <DashboardTeam
-            teams={teams}
-            setSelectedTeam={setSelectedTeam}
-            userRole={userRole}
-            proxySettings={proxySettings}
-            setProxySettings={setProxySettings}
-            userInfo={userSpendData}
-            accessToken={accessToken}
-            setKeys={setKeys}
+            currentOrg={currentOrg}
+            setCurrentOrg={setCurrentOrg}
+            organizations={organizations}
           />
         </Col>
       </Grid>

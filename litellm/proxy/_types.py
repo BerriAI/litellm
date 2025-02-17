@@ -5,7 +5,14 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, Json, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    Json,
+    field_validator,
+    model_validator,
+)
 from typing_extensions import Required, TypedDict
 
 from litellm.types.integrations.slack_alerting import AlertType
@@ -268,10 +275,11 @@ class LiteLLMRoutes(enum.Enum):
         "/v2/key/info",
         "/model_group/info",
         "/health",
+        "/key/list",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
-    master_key_only_routes = ["/global/spend/reset", "/key/list"]
+    master_key_only_routes = ["/global/spend/reset"]
 
     management_routes = [  # key
         "/key/generate",
@@ -280,6 +288,7 @@ class LiteLLMRoutes(enum.Enum):
         "/key/delete",
         "/key/info",
         "/key/health",
+        "/key/list",
         # user
         "/user/new",
         "/user/update",
@@ -391,6 +400,7 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/info",
         "/organization/delete",
         "/organization/member_add",
+        "/organization/member_update",
     ]
 
     # All routes accesible by an Org Admin
@@ -1042,6 +1052,9 @@ class LiteLLM_TeamTable(TeamBase):
             "model_aliases",
         ]
 
+        if isinstance(values, BaseModel):
+            values = values.model_dump()
+
         if (
             isinstance(values.get("members_with_roles"), dict)
             and not values["members_with_roles"]
@@ -1103,6 +1116,10 @@ class NewOrganizationRequest(LiteLLM_BudgetTable):
 
 class OrganizationRequest(LiteLLMPydanticObjectBase):
     organizations: List[str]
+
+
+class DeleteOrganizationRequest(LiteLLMPydanticObjectBase):
+    organization_ids: List[str]  # required
 
 
 class KeyManagementSystem(enum.Enum):
@@ -1345,7 +1362,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     key_alias: Optional[str] = None
     spend: float = 0.0
     max_budget: Optional[float] = None
-    expires: Optional[str] = None
+    expires: Optional[Union[str, datetime]] = None
     models: List = []
     aliases: Dict = {}
     config: Dict = {}
@@ -1428,6 +1445,7 @@ class UserAPIKeyAuth(
     tpm_limit_per_model: Optional[Dict[str, int]] = None
     user_tpm_limit: Optional[int] = None
     user_rpm_limit: Optional[int] = None
+    user_email: Optional[str] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -1481,14 +1499,33 @@ class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
     organization_id: Optional[str] = None
     organization_alias: Optional[str] = None
     budget_id: str
+    spend: float = 0.0
     metadata: Optional[dict] = None
     models: List[str]
     created_by: str
     updated_by: str
 
 
+class LiteLLM_OrganizationTableUpdate(LiteLLMPydanticObjectBase):
+    """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
+
+    organization_id: Optional[str] = None
+    organization_alias: Optional[str] = None
+    budget_id: Optional[str] = None
+    spend: Optional[float] = None
+    metadata: Optional[dict] = None
+    models: Optional[List[str]] = None
+    updated_by: Optional[str] = None
+
+
 class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
-    members: List[LiteLLM_OrganizationMembershipTable]
+    """Returned by the /organization/info endpoint and /organization/list endpoint"""
+
+    members: List[LiteLLM_OrganizationMembershipTable] = []
+    teams: List[LiteLLM_TeamTable] = []
+    litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class NewOrganizationResponse(LiteLLM_OrganizationTable):
@@ -1511,6 +1548,8 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     organization_memberships: Optional[List[LiteLLM_OrganizationMembershipTable]] = None
     teams: List[str] = []
     sso_user_id: Optional[str] = None
+    budget_duration: Optional[str] = None
+    budget_reset_at: Optional[datetime] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1790,6 +1829,7 @@ class SpendLogsMetadata(TypedDict):
         dict
     ]  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: Optional[str]
+    applied_guardrails: Optional[List[str]]
 
 
 class SpendLogsPayload(TypedDict):
@@ -2083,8 +2123,26 @@ class OrganizationMemberDeleteRequest(MemberDeleteRequest):
     organization_id: str
 
 
+ROLES_WITHIN_ORG = [
+    LitellmUserRoles.ORG_ADMIN,
+    LitellmUserRoles.INTERNAL_USER,
+    LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+]
+
+
 class OrganizationMemberUpdateRequest(OrganizationMemberDeleteRequest):
-    max_budget_in_organization: float
+    max_budget_in_organization: Optional[float] = None
+    role: Optional[LitellmUserRoles] = None
+
+    @field_validator("role")
+    def validate_role(
+        cls, value: Optional[LitellmUserRoles]
+    ) -> Optional[LitellmUserRoles]:
+        if value is not None and value not in ROLES_WITHIN_ORG:
+            raise ValueError(
+                f"Invalid role. Must be one of: {[role.value for role in ROLES_WITHIN_ORG]}"
+            )
+        return value
 
 
 class OrganizationMemberUpdateResponse(MemberUpdateResponse):
@@ -2424,3 +2482,7 @@ class PrismaCompatibleUpdateDBModel(TypedDict, total=False):
     model_info: str
     updated_at: str
     updated_by: str
+
+
+class SpecialManagementEndpointEnums(enum.Enum):
+    DEFAULT_ORGANIZATION = "default_organization"

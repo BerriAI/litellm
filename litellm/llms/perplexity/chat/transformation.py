@@ -20,3 +20,23 @@ class PerplexityChatConfig(OpenAIGPTConfig):
             or get_secret_str("PERPLEXITY_API_KEY")
         )
         return api_base, dynamic_api_key
+
+    def get_supported_openai_params(self, model: str) -> list:
+        """
+        Perplexity supports a subset of OpenAI params
+
+        Ref: https://docs.perplexity.ai/api-reference/chat-completions
+
+        Eg. Perplexity does not support tools, tool_choice, function_call, functions, etc.
+        """
+        return [
+            "frequency_penalty",
+            "max_tokens",
+            "max_completion_tokens",
+            "presence_penalty",
+            "response_format",
+            "stream",
+            "temperature",
+            "top_p" "max_retries",
+            "extra_headers",
+        ]
