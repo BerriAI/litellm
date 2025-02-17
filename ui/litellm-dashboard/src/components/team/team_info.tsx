@@ -384,17 +384,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           <Button onClick={onClose}>←</Button>
           <div>
             <Title className="text-2xl/7">{info.team_alias}</Title>
-            <Text className="text-gray-500 font-mono">Team Id: {info.team_id}</Text>
-            <Text className="text-gray-500 font-mono">Created At: {info.created_at}</Text>
-
+            <Text className="text-gray-500 font-mono">{info.team_id}</Text>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Text className="font-medium text-[14px]">Status:</Text>
-          <Badge color={info.blocked ? 'red' : 'green'}>
-            {info.blocked ? 'Blocked' : 'Active'}
-          </Badge>
-        </div>
+    
       </div>
 
       <TabGroup defaultIndex={editTeam ? 2 : 0}>
@@ -610,21 +603,29 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               ) : (
                 <div className="grid grid-cols-2 gap-6">
                   <div className="p-4 border rounded-lg">
-                    <Text className="font-medium">Team Name</Text>
-                    <div className="mt-2">{info.team_alias}</div>
+                    <Text className="font-medium">Team Info</Text>
+                    <div className="mt-1">Team id : <span className="text-gray-500">{info.team_id}</span></div>
+                    <div className="mt-1">Team name : <span className="text-gray-500">{info.team_alias}</span></div>
+                    <div className="mt-1">Created at : <span className="text-gray-500">{info.created_at}</span></div>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="">Status:</span>
+                      <Badge color={info.blocked ? 'red' : 'green'}>
+                       {info.blocked ? 'Blocked' : 'Active'}
+                      </Badge>
+                    </div>
                   </div>
                   <div className="p-4 border rounded-lg">
                     <Text className="font-medium">Rate Limits</Text>
-                    <div className="mt-2">
-                      <div>TPM: {info.tpm_limit || 'Unlimited'}</div>
-                      <div>RPM: {info.rpm_limit || 'Unlimited'}</div>
+                    <div className="mt-1">
+                      <div className="mt-1">TPM: {info.tpm_limit || 'Unlimited'}</div>
+                      <div className="mt-1">RPM: {info.rpm_limit || 'Unlimited'}</div>
                     </div>
                   </div>
                   <div className="p-4 border rounded-lg">
                     <Text className="font-medium">Budget</Text>
-                    <div className="mt-2">
-                      <div>Max: {info.max_budget !== null ? `$${info.max_budget}` : 'No Limit'}</div>
-                      <div>Reset: {info.budget_duration || 'Never'}</div>
+                    <div className="mt-1">
+                      <div className="mt-1">Max: {info.max_budget !== null ? `$${info.max_budget}` : 'No Limit'}</div>
+                      <div className="mt-1">Reset: {info.budget_duration || 'Never'}</div>
                     </div>
                   </div>
                   <div className="p-4 border rounded-lg">
