@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from "react";
-import { Form, Space, Table, Input, Tag } from "antd";
+import { Form, Space, Table, Input, Tag, Select } from "antd";
 import { Text, TextInput } from "@tremor/react";
 
 interface ModelMapping {
   litellmModel: string;
-  publicName: string;
+  publicNames: string[];
   key: string;
 }
 
@@ -31,7 +31,7 @@ const ConditionalPublicModelName: React.FC = () => {
       .map(model => ({
         key: Date.now().toString() + model,
         litellmModel: model,
-        publicName: model
+        publicNames: [model]
       }));
 
     // Update mappings state with both kept and new mappings
@@ -41,22 +41,24 @@ const ConditionalPublicModelName: React.FC = () => {
   // Update form value whenever mappings change
   useEffect(() => {
     const modelNameValue = mappings
-      .map(m => `${m.litellmModel}:${m.publicName}`)
+      .map(m => m.publicNames.map(name => `${m.litellmModel}:${name}`).join(','))
       .join(',');
     form.setFieldsValue({ model_name: modelNameValue });
   }, [mappings]);
 
   const columns = [
     {
-      title: 'Public Name',
-      dataIndex: 'publicName',
-      key: 'publicName',
-      render: (text: string, record: ModelMapping) => (
-        <TextInput 
-          defaultValue={text}
-          onChange={(e) => updateMapping(record.key, e.target.value)}
+      title: 'Public Names',
+      dataIndex: 'publicNames',
+      key: 'publicNames',
+      render: (names: string[], record: ModelMapping) => (
+        <Select
+          mode="tags"
           style={{ width: '100%' }}
-          placeholder="Enter public model name"
+          placeholder="Enter public model names"
+          defaultValue={names}
+          onChange={(newNames) => updateMapping(record.key, newNames)}
+          tokenSeparators={[',']}
         />
       )
     },
@@ -68,9 +70,9 @@ const ConditionalPublicModelName: React.FC = () => {
     }
   ];
 
-  const updateMapping = (key: string, newPublicName: string) => {
+  const updateMapping = (key: string, newPublicNames: string[]) => {
     setMappings(mappings.map(m => 
-      m.key === key ? { ...m, publicName: newPublicName } : m
+      m.key === key ? { ...m, publicNames: newPublicNames } : m
     ));
   };
 
