@@ -1847,7 +1847,7 @@ async def list_keys(
             prisma_client=prisma_client,
         )
 
-        await get_admin_team_ids(
+        admin_team_ids = await get_admin_team_ids(
             complete_user_info=complete_user_info,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
@@ -1868,6 +1868,7 @@ async def list_keys(
             key_alias=key_alias,
             return_full_object=return_full_object,
             organization_id=organization_id,
+            admin_team_ids=admin_team_ids,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -1903,6 +1904,9 @@ async def _list_key_helper(
     key_alias: Optional[str],
     exclude_team_id: Optional[str] = None,
     return_full_object: bool = False,
+    admin_team_ids: Optional[
+        List[str]
+    ] = None,  # New parameter for teams where user is admin
 ) -> KeyListResponseObject:
     """
     Helper function to list keys
@@ -1914,6 +1918,7 @@ async def _list_key_helper(
         key_alias: Optional[str]
         exclude_team_id: Optional[str] # exclude a specific team_id
         return_full_object: bool # when true, will return UserAPIKeyAuth objects instead of just the token
+        admin_team_ids: Optional[List[str]] # list of team IDs where the user is an admin
 
     Returns:
         KeyListResponseObject
@@ -1926,19 +1931,37 @@ async def _list_key_helper(
     """
 
     # Prepare filter conditions
-    where: Dict[str, Union[str, Dict[str, Any]]] = {}
+    where: Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]] = {}
     where.update(_get_condition_to_filter_out_ui_session_tokens())
 
+    # Build the OR conditions for user's keys and admin team keys
+    or_conditions: List[Dict[str, Any]] = []
+
+    # Base conditions for user's own keys
+    user_condition: Dict[str, Any] = {}
     if user_id and isinstance(user_id, str):
-        where["user_id"] = user_id
+        user_condition["user_id"] = user_id
     if team_id and isinstance(team_id, str):
-        where["team_id"] = team_id
+        user_condition["team_id"] = team_id
     if key_alias and isinstance(key_alias, str):
-        where["key_alias"] = key_alias
+        user_condition["key_alias"] = key_alias
     if exclude_team_id and isinstance(exclude_team_id, str):
-        where["team_id"] = {"not": exclude_team_id}
+        user_condition["team_id"] = {"not": exclude_team_id}
     if organization_id and isinstance(organization_id, str):
-        where["organization_id"] = organization_id
+        user_condition["organization_id"] = organization_id
+
+    if user_condition:
+        or_conditions.append(user_condition)
+
+    # Add condition for admin team keys if provided
+    if admin_team_ids:
+        or_conditions.append({"team_id": {"in": admin_team_ids}})
+
+    # Combine conditions with OR if we have multiple conditions
+    if len(or_conditions) > 1:
+        where["OR"] = or_conditions
+    elif len(or_conditions) == 1:
+        where.update(or_conditions[0])
 
     verbose_proxy_logger.debug(f"Filter conditions: {where}")
 
