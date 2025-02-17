@@ -24,7 +24,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
   return (
     <>
       {selectedProviderEnum === Providers.OpenAI && (
-        <Form.Item label="Organization ID" name="organization">
+        <Form.Item label="OpenAI Organization ID" name="organization">
           <TextInput placeholder="[OPTIONAL] my-unique-org" />
         </Form.Item>
       )}
