@@ -5,9 +5,9 @@ import { Row, Col } from "antd";
 import { Providers } from "../provider_info_helpers";
 
 interface LiteLLMModelNameFieldProps {
-  selectedProvider: Providers;
+  selectedProvider: string;
   providerModels: string[];
-  getPlaceholder: (provider: Providers) => string;
+  getPlaceholder: (provider: string) => string;
 }
 
 const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
@@ -17,26 +17,10 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
 }) => {
   const form = Form.useFormInstance();
 
-  const handleModelChange = (value: string | string[]) => {
-    // Ensure value is always treated as an array
-    const values = Array.isArray(value) ? value : [value];
-    
+  const handleModelChange = (value: string[]) => {
     // If "all-wildcard" is selected, clear the model_name field
-    if (values.includes("all-wildcard")) {
+    if (value.includes("all-wildcard")) {
       form.setFieldsValue({ model_name: undefined });
-    } else {
-      // Get the current auto-match setting
-      const autoMatch = form.getFieldValue('auto_match_model_name');
-      
-      if (autoMatch) {
-        // If auto-match is enabled, set the model_name to match the selected model(s)
-        if (values.length === 1 && !values.includes('custom')) {
-          form.setFieldsValue({ model_name: values[0] });
-        } else if (values.length > 1) {
-          // For multiple models, set each one to match itself
-          form.setFieldsValue({ model_name: values.join(',') });
-        }
-      }
     }
   };
 
@@ -55,10 +39,9 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
           {(selectedProvider === Providers.Azure) || 
            (selectedProvider === Providers.OpenAI_Compatible) || 
            (selectedProvider === Providers.Ollama) ? (
-            <TextInput placeholder={getPlaceholder(selectedProvider)} />
+            <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
           ) : providerModels.length > 0 ? (
             <AntSelect
-              mode="multiple"
               allowClear
               showSearch
               placeholder="Select models"
@@ -84,7 +67,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
               style={{ width: '100%' }}
             />
           ) : (
-            <TextInput placeholder={getPlaceholder(selectedProvider)} />
+            <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
           )}
         </Form.Item>
 
