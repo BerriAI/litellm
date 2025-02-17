@@ -100,6 +100,7 @@ import { Upload } from "antd";
 import TimeToFirstToken from "./model_metrics/time_to_first_token";
 import DynamicFields from "./model_add/dynamic_form";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { Team } from "./key_team_helpers/key_list";
 import { Providers, provider_map, providerLogoMap, getProviderLogoAndName, getPlaceholder, getProviderModels } from "./provider_info_helpers";
 
 interface ModelDashboardProps {
@@ -111,6 +112,7 @@ interface ModelDashboardProps {
   keys: any[] | null;
   setModelData: any;
   premiumUser: boolean;
+  teams: Team[] | null;
 }
 
 interface EditModelModalProps {
@@ -164,6 +166,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   keys,
   setModelData,
   premiumUser,
+  teams,
 }) => {
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
   const [form] = Form.useForm();
@@ -1560,6 +1563,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   <AdvancedSettings 
                     showAdvancedSettings={showAdvancedSettings}
                     setShowAdvancedSettings={setShowAdvancedSettings}
+                    teams={teams}
                   />
                   
 

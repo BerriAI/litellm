@@ -3,16 +3,20 @@ import { Form, Switch, Select, Input } from "antd";
 import { Text, Button, Accordion, AccordionHeader, AccordionBody, TextInput } from "@tremor/react";
 import { Row, Col, Typography, Card } from "antd";
 import TextArea from "antd/es/input/TextArea";
+import { Team } from "../key_team_helpers/key_list";
+import TeamDropdown from "../common_components/team_dropdown";
 const { Link } = Typography;
 
 interface AdvancedSettingsProps {
   showAdvancedSettings: boolean;
   setShowAdvancedSettings: (show: boolean) => void;
+  teams?: Team[] | null;
 }
 
 const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
   showAdvancedSettings,
   setShowAdvancedSettings,
+  teams,
 }) => {
   const [form] = Form.useForm();
   const [customPricing, setCustomPricing] = React.useState(false);
@@ -87,6 +91,14 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
         </AccordionHeader>
         <AccordionBody>
           <div className="bg-white rounded-lg">
+            <Form.Item
+              label="Team"
+              name="team_id"
+              className="mb-4"
+            >
+              <TeamDropdown teams={teams} />
+            </Form.Item>
+
             <Form.Item
               label="Custom Pricing"
               name="custom_pricing"
