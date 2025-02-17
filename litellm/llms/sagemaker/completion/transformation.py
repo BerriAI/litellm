@@ -73,6 +73,7 @@ class SagemakerConfig(BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        optional_params.update(non_default_params)
         for param, value in non_default_params.items():
             if param == "temperature":
                 if value == 0.0 or value == 0:
@@ -95,7 +96,7 @@ class SagemakerConfig(BaseConfig):
                 optional_params["stream"] = value
             if param == "stop":
                 optional_params["stop"] = value
-            if param == "max_tokens":
+            if param == "max_new_tokens":
                 # HF TGI raises the following exception when max_new_tokens==0
                 # Failed: Error occurred: HuggingfaceException - Input validation error: `max_new_tokens` must be strictly positive
                 if value == 0:
@@ -110,6 +111,7 @@ class SagemakerConfig(BaseConfig):
         messages: List,
         custom_prompt_dict: dict,
         hf_model_name: Optional[str],
+        engine: Optional[str] = None,
     ) -> str:
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
@@ -143,7 +145,7 @@ class SagemakerConfig(BaseConfig):
             hf_model_name = (
                 hf_model_name or model
             )  # pass in hf model name for pulling it's prompt template - (e.g. `hf_model_name="meta-llama/Llama-2-7b-chat-hf` applies the llama2 chat template to the prompt)
-            prompt: str = prompt_factory(model=hf_model_name, messages=messages)  # type: ignore
+            prompt: str = prompt_factory(model=hf_model_name, messages=messages, engine=engine)  # type: ignore
 
         return prompt
 
@@ -157,9 +159,14 @@ class SagemakerConfig(BaseConfig):
     ) -> dict:
         inference_params = optional_params.copy()
         stream = inference_params.pop("stream", False)
-        data: Dict = {"parameters": inference_params}
         if stream is True:
             data["stream"] = True
+
+        engine = inference_params.pop("engine", "DJL")
+        if engine == "DJL":
+            data: Dict = {"parameters": inference_params}
+        else:
+            data: Dict = {**inference_params}
 
         custom_prompt_dict = (
             litellm_params.get("custom_prompt_dict", None) or litellm.custom_prompt_dict
@@ -172,8 +179,12 @@ class SagemakerConfig(BaseConfig):
             messages=messages,
             custom_prompt_dict=custom_prompt_dict,
             hf_model_name=hf_model_name,
+            engine=engine,
         )
-        data["inputs"] = prompt
+        if engine == "DJL":
+            data["inputs"] = prompt
+        else:
+            data["messages"] = prompt
 
         return data
 
@@ -212,7 +223,10 @@ class SagemakerConfig(BaseConfig):
             additional_args={"complete_input_dict": request_data},
         )
 
-        prompt = request_data["inputs"]
+        if request_data.get("inputs"):
+            prompt = request_data["inputs"]
+        else:
+            prompt = " ".join(message["content"] for message in messages)
 
         ## RESPONSE OBJECT
         try:
@@ -225,6 +239,10 @@ class SagemakerConfig(BaseConfig):
                 completion_output += completion_response_choices["generation"]
             elif "generated_text" in completion_response_choices:
                 completion_output += completion_response_choices["generated_text"]
+            elif "choices" in completion_response_choices:
+                completion_output += completion_response_choices["choices"][0][
+                    "message"
+                ]["content"]
 
             # check if the prompt template is part of output, if so - filter it out
             if completion_output.startswith(prompt) and "<s>" in prompt:

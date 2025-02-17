@@ -39,8 +39,16 @@ from .common_utils import convert_content_list_to_str, is_non_content_values_set
 from .image_handling import convert_url_to_base64
 
 
-def default_pt(messages):
-    return " ".join(message["content"] for message in messages)
+def default_pt(messages, engine):
+    if engine:
+        if engine == "DJL":
+            return " ".join(message["content"] for message in messages)
+        elif engine == "TGI":
+            return messages
+        else:
+            raise Excpetion(f"Unsupported engine: {engine}")
+    else:
+        return messages
 
 
 def prompt_injection_detection_default_pt():
@@ -3374,6 +3382,7 @@ def prompt_factory(
     messages: list,
     custom_llm_provider: Optional[str] = None,
     api_key: Optional[str] = None,
+    engine: Optional[str] = None,
 ):
     original_model_name = model
     model = model.lower()
@@ -3504,7 +3513,7 @@ def prompt_factory(
             return hf_chat_template(original_model_name, messages)
     except Exception:
         return default_pt(
-            messages=messages
+            messages=messages, engine=engine
         )  # default that covers Bloom, T-5, any non-chat tuned model (e.g. base Llama2)
 
 
