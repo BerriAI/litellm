@@ -14,34 +14,57 @@ interface DeleteModelProps {
     modelID: string;
     accessToken: string;
     callback?: ()=>void;
+    setModelData: (data: any) => void;
+    modelData: any;
 }
 
 const DeleteModelButton: React.FC<DeleteModelProps> = ({
     modelID,
     accessToken,
-    callback
+    callback,
+    setModelData,
+    modelData
 }) => {
-    const [isModalVisible, setIsModalVisible] = useState(false);
+     const [isModalVisible, setIsModalVisible] = useState(false);
+     const [modelToDelete, setModelToDelete] = useState<string | null>(null);
 
     const handleDelete = async () => {
+        if (modelToDelete == null || modelData == null || accessToken == null) {
+            return;
+        }
+
         try {
             message.info("Making API Call");
-            setIsModalVisible(true);
-            const response = await modelDeleteCall(accessToken, modelID);
-
+            const response = await modelDeleteCall(accessToken, modelToDelete);
             console.log("model delete Response:", response);
-            message.success(`Model ${modelID} deleted successfully`);
-            setIsModalVisible(false);
-            callback && setTimeout(callback, 4000) //added timeout  of 4 seconds as deleted model is taking time to reflect in get models
+            
+            const filteredData = modelData.data.filter(
+                (item: any) => item.model_info.id !== modelID
+            );
+            
+            setModelData({
+                ...modelData,
+                data: filteredData
+            });
+
+            message.success(`Model ${modelToDelete} deleted successfully`);
+            
         } catch (error) {
             console.error("Error deleting the model:", error);
+            message.error("Failed to delete model");
+        } finally {
+            setIsModalVisible(false);
+            setModelToDelete(null);
         }
     };
 
     return (
         <div>
             <Icon
-                onClick={() => setIsModalVisible(true)}
+                onClick={() => {
+                    setIsModalVisible(true);
+                    setModelToDelete(modelID);
+                }}
                 icon={TrashIcon}
                 size="sm"
             />
