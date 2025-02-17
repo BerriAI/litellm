@@ -604,9 +604,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <div className="grid grid-cols-2 gap-6">
                   <div className="p-4 border rounded-lg">
                     <Text className="font-medium">Team Info</Text>
-                    <div className="mt-1">Team id : <span className="text-gray-500">{info.team_id}</span></div>
-                    <div className="mt-1">Team name : <span className="text-gray-500">{info.team_alias}</span></div>
-                    <div className="mt-1">Created at : <span className="text-gray-500">{info.created_at}</span></div>
+                    <div className="mt-1">Team Id : <span className="text-gray-500">{info.team_id}</span></div>
+                    <div className="mt-1">Team Name : <span className="text-gray-500">{info.team_alias}</span></div>
+                    <div className="mt-1">Created At : <span className="text-gray-500">{new Date(info.created_at).toLocaleString()}</span></div>
                     <div className="flex items-center gap-2 mt-1">
                       <span className="">Status:</span>
                       <Badge color={info.blocked ? 'red' : 'green'}>
