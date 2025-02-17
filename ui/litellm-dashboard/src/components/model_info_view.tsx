@@ -109,17 +109,16 @@ export default function ModelInfoView({
         )}
       </div>
 
-      <TabGroup defaultIndex={editModel ? 2 : 0}>
-        <TabList className="mb-4">
+      <TabGroup>
+        <TabList className="mb-6">
           <Tab>Overview</Tab>
-          <Tab>Usage</Tab>
-          <Tab>Settings</Tab>
+          <Tab>Raw JSON</Tab>
         </TabList>
 
         <TabPanels>
-          {/* Overview Panel */}
           <TabPanel>
-            <Grid numItems={1} numItemsSm={2} numItemsLg={3} className="gap-6">
+            {/* Overview Grid */}
+            <Grid numItems={1} numItemsSm={2} numItemsLg={3} className="gap-6 mb-6">
               <Card>
                 <Text>Provider</Text>
                 <div className="mt-2">
@@ -143,20 +142,8 @@ export default function ModelInfoView({
                 </div>
               </Card>
             </Grid>
-          </TabPanel>
 
-          {/* Usage Panel */}
-          <TabPanel>
-            <Card>
-              <Title>Usage Statistics</Title>
-              <div className="mt-4">
-                <Text>Coming soon...</Text>
-              </div>
-            </Card>
-          </TabPanel>
-
-          {/* Settings Panel */}
-          <TabPanel>
+            {/* Settings Card */}
             <Card>
               <div className="flex justify-between items-center mb-4">
                 <Title>Model Settings</Title>
@@ -223,6 +210,14 @@ export default function ModelInfoView({
                   </div>
                 </div>
               )}
+            </Card>
+          </TabPanel>
+
+          <TabPanel>
+            <Card>
+              <pre className="bg-gray-100 p-4 rounded text-xs overflow-auto">
+                {JSON.stringify(modelData, null, 2)}
+              </pre>
             </Card>
           </TabPanel>
         </TabPanels>
