@@ -217,19 +217,6 @@ def test_databricks_optional_params():
     assert "user" not in optional_params
 
 
-def test_gemini_optional_params():
-    litellm.drop_params = True
-    optional_params = get_optional_params(
-        model="",
-        custom_llm_provider="gemini",
-        max_tokens=10,
-        frequency_penalty=10,
-    )
-    print(f"optional_params: {optional_params}")
-    assert len(optional_params) == 1
-    assert "frequency_penalty" not in optional_params
-
-
 def test_azure_ai_mistral_optional_params():
     litellm.drop_params = True
     optional_params = get_optional_params(
@@ -1063,6 +1050,7 @@ def test_is_vertex_anthropic_model():
         is False
     )
 
+
 def test_groq_response_format_json_schema():
     optional_params = get_optional_params(
         model="llama-3.1-70b-versatile",
@@ -1072,3 +1060,36 @@ def test_groq_response_format_json_schema():
     assert optional_params is not None
     assert "response_format" in optional_params
     assert optional_params["response_format"]["type"] == "json_object"
+
+
+def test_gemini_frequency_penalty():
+    optional_params = get_optional_params(
+        model="gemini-1.5-flash", custom_llm_provider="gemini", frequency_penalty=0.5
+    )
+    assert optional_params["frequency_penalty"] == 0.5
+
+
+
+def test_azure_prediction_param():
+    optional_params = get_optional_params(
+        model="chatgpt-v2",
+        custom_llm_provider="azure",
+        prediction={
+            "type": "content",
+            "content": "LiteLLM is a very useful way to connect to a variety of LLMs.",
+        },
+    )
+    assert optional_params["prediction"] == {
+        "type": "content",
+        "content": "LiteLLM is a very useful way to connect to a variety of LLMs.",
+    }
+
+def test_vertex_ai_ft_llama():
+    optional_params = get_optional_params(
+        model="1984786713414729728",
+        custom_llm_provider="vertex_ai",
+        frequency_penalty=0.5,
+        max_retries=10,
+    )
+    assert optional_params["frequency_penalty"] == 0.5
+    assert "max_retries" not in optional_params

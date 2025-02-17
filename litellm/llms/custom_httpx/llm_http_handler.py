@@ -40,6 +40,7 @@ class BaseLLMHTTPHandler:
         data: dict,
         timeout: Union[float, httpx.Timeout],
         litellm_params: dict,
+        logging_obj: LiteLLMLoggingObj,
         stream: bool = False,
     ) -> httpx.Response:
         """Common implementation across stream + non-stream calls. Meant to ensure consistent error-handling."""
@@ -56,6 +57,7 @@ class BaseLLMHTTPHandler:
                     data=json.dumps(data),
                     timeout=timeout,
                     stream=stream,
+                    logging_obj=logging_obj,
                 )
             except httpx.HTTPStatusError as e:
                 hit_max_retry = i + 1 == max_retry_on_unprocessable_entity_error
@@ -93,6 +95,7 @@ class BaseLLMHTTPHandler:
         data: dict,
         timeout: Union[float, httpx.Timeout],
         litellm_params: dict,
+        logging_obj: LiteLLMLoggingObj,
         stream: bool = False,
     ) -> httpx.Response:
 
@@ -110,6 +113,7 @@ class BaseLLMHTTPHandler:
                     data=json.dumps(data),
                     timeout=timeout,
                     stream=stream,
+                    logging_obj=logging_obj,
                 )
             except httpx.HTTPStatusError as e:
                 hit_max_retry = i + 1 == max_retry_on_unprocessable_entity_error
@@ -158,7 +162,8 @@ class BaseLLMHTTPHandler:
     ):
         if client is None:
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider)
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
             async_httpx_client = client
@@ -172,6 +177,7 @@ class BaseLLMHTTPHandler:
             timeout=timeout,
             litellm_params=litellm_params,
             stream=False,
+            logging_obj=logging_obj,
         )
         return provider_config.transform_response(
             model=model,
@@ -205,6 +211,7 @@ class BaseLLMHTTPHandler:
         headers: Optional[dict] = {},
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ):
+
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
         )
@@ -233,6 +240,15 @@ class BaseLLMHTTPHandler:
             headers=headers,
         )
 
+        headers = provider_config.sign_request(
+            headers=headers,
+            optional_params=optional_params,
+            request_data=data,
+            api_base=api_base,
+            stream=stream,
+            fake_stream=fake_stream,
+        )
+
         ## LOGGING
         logging_obj.pre_call(
             input=messages,
@@ -246,8 +262,11 @@ class BaseLLMHTTPHandler:
 
         if acompletion is True:
             if stream is True:
-                if fake_stream is not True:
-                    data["stream"] = stream
+                data = self._add_stream_param_to_request_body(
+                    data=data,
+                    provider_config=provider_config,
+                    fake_stream=fake_stream,
+                )
                 return self.acompletion_stream_function(
                     model=model,
                     messages=messages,
@@ -291,8 +310,22 @@ class BaseLLMHTTPHandler:
                 )
 
         if stream is True:
-            if fake_stream is not True:
-                data["stream"] = stream
+            data = self._add_stream_param_to_request_body(
+                data=data,
+                provider_config=provider_config,
+                fake_stream=fake_stream,
+            )
+            if provider_config.has_custom_stream_wrapper is True:
+                return provider_config.get_sync_custom_stream_wrapper(
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    logging_obj=logging_obj,
+                    api_base=api_base,
+                    headers=headers,
+                    data=data,
+                    messages=messages,
+                    client=client,
+                )
             completion_stream, headers = self.make_sync_call(
                 provider_config=provider_config,
                 api_base=api_base,
@@ -318,7 +351,9 @@ class BaseLLMHTTPHandler:
             )
 
         if client is None or not isinstance(client, HTTPHandler):
-            sync_httpx_client = _get_httpx_client()
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
         else:
             sync_httpx_client = client
 
@@ -330,6 +365,7 @@ class BaseLLMHTTPHandler:
             data=data,
             timeout=timeout,
             litellm_params=litellm_params,
+            logging_obj=logging_obj,
         )
         return provider_config.transform_response(
             model=model,
@@ -359,7 +395,11 @@ class BaseLLMHTTPHandler:
         client: Optional[HTTPHandler] = None,
     ) -> Tuple[Any, dict]:
         if client is None or not isinstance(client, HTTPHandler):
-            sync_httpx_client = _get_httpx_client()
+            sync_httpx_client = _get_httpx_client(
+                {
+                    "ssl_verify": litellm_params.get("ssl_verify", None),
+                }
+            )
         else:
             sync_httpx_client = client
         stream = True
@@ -375,6 +415,7 @@ class BaseLLMHTTPHandler:
             timeout=timeout,
             litellm_params=litellm_params,
             stream=stream,
+            logging_obj=logging_obj,
         )
 
         if fake_stream is True:
@@ -411,7 +452,19 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         client: Optional[AsyncHTTPHandler] = None,
     ):
-        completion_stream, _response_headers = await self.make_async_call(
+        if provider_config.has_custom_stream_wrapper is True:
+            return provider_config.get_async_custom_stream_wrapper(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging_obj,
+                api_base=api_base,
+                headers=headers,
+                data=data,
+                messages=messages,
+                client=client,
+            )
+
+        completion_stream, _response_headers = await self.make_async_call_stream_helper(
             custom_llm_provider=custom_llm_provider,
             provider_config=provider_config,
             api_base=api_base,
@@ -432,7 +485,7 @@ class BaseLLMHTTPHandler:
         )
         return streamwrapper
 
-    async def make_async_call(
+    async def make_async_call_stream_helper(
         self,
         custom_llm_provider: str,
         provider_config: BaseConfig,
@@ -446,9 +499,15 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         client: Optional[AsyncHTTPHandler] = None,
     ) -> Tuple[Any, httpx.Headers]:
+        """
+        Helper function for making an async call with stream.
+
+        Handles fake stream as well.
+        """
         if client is None:
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider)
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
             async_httpx_client = client
@@ -465,6 +524,7 @@ class BaseLLMHTTPHandler:
             timeout=timeout,
             litellm_params=litellm_params,
             stream=stream,
+            logging_obj=logging_obj,
         )
 
         if fake_stream is True:
@@ -484,6 +544,21 @@ class BaseLLMHTTPHandler:
         )
 
         return completion_stream, response.headers
+
+    def _add_stream_param_to_request_body(
+        self,
+        data: dict,
+        provider_config: BaseConfig,
+        fake_stream: bool,
+    ) -> dict:
+        """
+        Some providers like Bedrock invoke do not support the stream parameter in the request body, we only pass `stream` in the request body the provider supports it.
+        """
+        if fake_stream is True:
+            return data
+        if provider_config.supports_stream_param_in_request_body is True:
+            data["stream"] = True
+        return data
 
     def embedding(
         self,

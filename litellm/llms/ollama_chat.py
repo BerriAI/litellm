@@ -105,7 +105,7 @@ class OllamaChatConfig(OpenAIGPTConfig):
         system: Optional[str] = None,
         template: Optional[str] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -154,6 +154,8 @@ class OllamaChatConfig(OpenAIGPTConfig):
                 optional_params["stop"] = value
             if param == "response_format" and value["type"] == "json_object":
                 optional_params["format"] = "json"
+            if param == "response_format" and value["type"] == "json_schema":
+                optional_params["format"] = value["json_schema"]["schema"]
             ### FUNCTION CALLING LOGIC ###
             if param == "tools":
                 # ollama actually supports json output

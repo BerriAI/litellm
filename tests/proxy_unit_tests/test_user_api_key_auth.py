@@ -20,6 +20,9 @@ from litellm.proxy.auth.user_api_key_auth import (
     UserAPIKeyAuth,
     get_api_key_from_custom_header,
 )
+from fastapi import WebSocket, HTTPException, status
+
+from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
 
 
 class Request:
@@ -629,3 +632,301 @@ async def test_soft_budget_alert():
             "budget_alerts",
             original_budget_alerts,
         )
+
+
+def test_is_allowed_route():
+    from litellm.proxy.auth.user_api_key_auth import _is_allowed_route
+    from litellm.proxy._types import UserAPIKeyAuth
+    import datetime
+
+    request = MagicMock()
+
+    args = {
+        "route": "/embeddings",
+        "token_type": "api",
+        "request": request,
+        "request_data": {"input": ["hello world"], "model": "embedding-small"},
+        "api_key": "9644159bc181998825c44c788b1526341ed2e825d1b6f562e23173759e14bb86",
+        "valid_token": UserAPIKeyAuth(
+            token="9644159bc181998825c44c788b1526341ed2e825d1b6f562e23173759e14bb86",
+            key_name="sk-...CJjQ",
+            key_alias=None,
+            spend=0.0,
+            max_budget=None,
+            expires=None,
+            models=[],
+            aliases={},
+            config={},
+            user_id=None,
+            team_id=None,
+            max_parallel_requests=None,
+            metadata={},
+            tpm_limit=None,
+            rpm_limit=None,
+            budget_duration=None,
+            budget_reset_at=None,
+            allowed_cache_controls=[],
+            permissions={},
+            model_spend={},
+            model_max_budget={},
+            soft_budget_cooldown=False,
+            blocked=None,
+            litellm_budget_table=None,
+            org_id=None,
+            created_at=MagicMock(),
+            updated_at=MagicMock(),
+            team_spend=None,
+            team_alias=None,
+            team_tpm_limit=None,
+            team_rpm_limit=None,
+            team_max_budget=None,
+            team_models=[],
+            team_blocked=False,
+            soft_budget=None,
+            team_model_aliases=None,
+            team_member_spend=None,
+            team_member=None,
+            team_metadata=None,
+            end_user_id=None,
+            end_user_tpm_limit=None,
+            end_user_rpm_limit=None,
+            end_user_max_budget=None,
+            last_refreshed_at=1736990277.432638,
+            api_key=None,
+            user_role=None,
+            allowed_model_region=None,
+            parent_otel_span=None,
+            rpm_limit_per_model=None,
+            tpm_limit_per_model=None,
+            user_tpm_limit=None,
+            user_rpm_limit=None,
+        ),
+        "user_obj": None,
+    }
+
+    assert _is_allowed_route(**args)
+
+
+@pytest.mark.parametrize(
+    "user_obj, expected_result",
+    [
+        (None, False),  # Case 1: user_obj is None
+        (
+            LiteLLM_UserTable(
+                user_role=LitellmUserRoles.PROXY_ADMIN.value,
+                user_id="1234",
+                user_email="test@test.com",
+                max_budget=None,
+                spend=0.0,
+            ),
+            True,
+        ),  # Case 2: user_role is PROXY_ADMIN
+        (
+            LiteLLM_UserTable(
+                user_role="OTHER_ROLE",
+                user_id="1234",
+                user_email="test@test.com",
+                max_budget=None,
+                spend=0.0,
+            ),
+            False,
+        ),  # Case 3: user_role is not PROXY_ADMIN
+    ],
+)
+def test_is_user_proxy_admin(user_obj, expected_result):
+    from litellm.proxy.auth.user_api_key_auth import _is_user_proxy_admin
+
+    assert _is_user_proxy_admin(user_obj) == expected_result
+
+
+@pytest.mark.parametrize(
+    "user_obj, expected_role",
+    [
+        (None, None),  # Case 1: user_obj is None (should return None)
+        (
+            LiteLLM_UserTable(
+                user_role=LitellmUserRoles.PROXY_ADMIN.value,
+                user_id="1234",
+                user_email="test@test.com",
+                max_budget=None,
+                spend=0.0,
+            ),
+            LitellmUserRoles.PROXY_ADMIN,
+        ),  # Case 2: user_role is PROXY_ADMIN (should return LitellmUserRoles.PROXY_ADMIN)
+        (
+            LiteLLM_UserTable(
+                user_role="OTHER_ROLE",
+                user_id="1234",
+                user_email="test@test.com",
+                max_budget=None,
+                spend=0.0,
+            ),
+            LitellmUserRoles.INTERNAL_USER,
+        ),  # Case 3: invalid user_role (should return LitellmUserRoles.INTERNAL_USER)
+    ],
+)
+def test_get_user_role(user_obj, expected_role):
+    from litellm.proxy.auth.user_api_key_auth import _get_user_role
+
+    assert _get_user_role(user_obj) == expected_role
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_websocket():
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+
+    # Prepare a mock WebSocket object
+    mock_websocket = MagicMock(spec=WebSocket)
+    mock_websocket.query_params = {"model": "some_model"}
+    mock_websocket.headers = {"authorization": "Bearer some_api_key"}
+
+    # Mock the return value of `user_api_key_auth` when it's called within the `user_api_key_auth_websocket` function
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True
+    ) as mock_user_api_key_auth:
+
+        # Make the call to the WebSocket function
+        await user_api_key_auth_websocket(mock_websocket)
+
+        # Assert that `user_api_key_auth` was called with the correct parameters
+        mock_user_api_key_auth.assert_called_once()
+
+        assert (
+            mock_user_api_key_auth.call_args.kwargs["api_key"] == "Bearer some_api_key"
+        )
+
+
+@pytest.mark.parametrize("enforce_rbac", [True, False])
+@pytest.mark.asyncio
+async def test_jwt_user_api_key_auth_builder_enforce_rbac(enforce_rbac, monkeypatch):
+    from litellm.proxy.auth.handle_jwt import JWTHandler, JWTAuthManager
+    from unittest.mock import patch, Mock
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.caching import DualCache
+
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "my-fake-url")
+    monkeypatch.setenv("JWT_AUDIENCE", "api://LiteLLM_Proxy-dev")
+
+    local_cache = DualCache()
+
+    keys = [
+        {
+            "kty": "RSA",
+            "use": "sig",
+            "kid": "z1rsYHHJ9-8mggt4HsZu8BKkBPw",
+            "x5t": "z1rsYHHJ9-8mggt4HsZu8BKkBPw",
+            "n": "pOe4GbleFDT1u5ioOQjNMmhvkDVoVD9cBKvX7AlErtWA_D6wc1w1iwkd6arYVCPObZbAB4vLSXrlpBSOuP6VYnXw_cTgniv_c82ra-mfqCpM-SbqzZ3sVqlcE_bwxvci_4PrxAW4R85ok12NXyZ2371H3yGevabi35AlVm-bQ24azo1hLK_0DzB6TxsAIOTOcKfIugOfqP-B2R4vR4u6pYftS8MWcxegr9iJ5JNtubI1X2JHpxJhkRoMVwKFna2GXmtzdxLi3yS_GffVCKfTbFMhalbJS1lSmLqhmLZZL-lrQZ6fansTl1vcGcoxnzPTwBkZMks0iVV4yfym_gKBXQ",
+            "e": "AQAB",
+            "x5c": [
+                "MIIC/TCCAeWgAwIBAgIIQk8Qok6pfXkwDQYJKoZIhvcNAQELBQAwLTErMCkGA1UEAxMiYWNjb3VudHMuYWNjZXNzY29udHJvbC53aW5kb3dzLm5ldDAeFw0yNDExMjcwOTA0MzlaFw0yOTExMjcwOTA0MzlaMC0xKzApBgNVBAMTImFjY291bnRzLmFjY2Vzc2NvbnRyb2wud2luZG93cy5uZXQwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCk57gZuV4UNPW7mKg5CM0yaG+QNWhUP1wEq9fsCUSu1YD8PrBzXDWLCR3pqthUI85tlsAHi8tJeuWkFI64/pVidfD9xOCeK/9zzatr6Z+oKkz5JurNnexWqVwT9vDG9yL/g+vEBbhHzmiTXY1fJnbfvUffIZ69puLfkCVWb5tDbhrOjWEsr/QPMHpPGwAg5M5wp8i6A5+o/4HZHi9Hi7qlh+1LwxZzF6Cv2Inkk225sjVfYkenEmGRGgxXAoWdrYZea3N3EuLfJL8Z99UIp9NsUyFqVslLWVKYuqGYtlkv6WtBnp9qexOXW9wZyjGfM9PAGRkySzSJVXjJ/Kb+AoFdAgMBAAGjITAfMB0GA1UdDgQWBBSTO5FmUwwGS+1CNqg2uNgjxUjFijANBgkqhkiG9w0BAQsFAAOCAQEAok04z0ICMEHGqDTzx6eD7vvJP8itJTCSz8JcZcGVJofJpViGF3bNnyeSPa7vNDYP1Ps9XBvw3/n2s+yynZ8EwFxMyxCZRCSbLv0N+cAbH3rmZqGcgMJszZVwcFUtXQPTe1ZRyHtEyOB+PVFH7K7obysRVO/cC6EGqIF3pYWzez/dtMaXRAkdTNlz0ko62WoA4eMPwUFCITjW/Jxfxl0BNUbo82PXXKhaeVJb+EgFG5b/pWWPswWmBoQhmD5G1UODvEACHRl/cHsPPqe4YE+6D1/wMno/xqqyGltnk8v0d4TpNcQMn9oM19V+OGgrzWOvvXhvnhqUIVGMsRlyBGNHAw=="
+            ],
+            "cloud_instance_name": "microsoftonline.com",
+            "issuer": "https://login.microsoftonline.com/bdfd79b3-8401-47fb-a764-6e595c455b05/v2.0",
+        }
+    ]
+
+    local_cache.set_cache(
+        key="litellm_jwt_auth_keys",
+        value=keys,
+    )
+
+    litellm_jwtauth = LiteLLM_JWTAuth(
+        **{
+            "admin_jwt_scope": "litellm_proxy_endpoints_access",
+            "admin_allowed_routes": ["openai_routes", "info_routes"],
+            "public_key_ttl": 600,
+            "enforce_rbac": enforce_rbac,
+        }
+    )
+
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=local_cache,
+        litellm_jwtauth=litellm_jwtauth,
+        leeway=10000000000000,
+    )
+    args = {
+        "api_key": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsIng1dCI6InoxcnNZSEhKOS04bWdndDRIc1p1OEJLa0JQdyIsImtpZCI6InoxcnNZSEhKOS04bWdndDRIc1p1OEJLa0JQdyJ9.eyJhdWQiOiJhcGk6Ly9MaXRlTExNX1Byb3h5LWRldiIsImlzcyI6Imh0dHBzOi8vc3RzLndpbmRvd3MubmV0L2JkZmQ3OWIzLTg0MDEtNDdmYi1hNzY0LTZlNTk1YzQ1NWIwNS8iLCJpYXQiOjE3MzcyNDE3ODEsIm5iZiI6MTczNzI0MTc4MSwiZXhwIjoxNzM3MjQ1NjgxLCJhaW8iOiJrMlJnWUpBNE5hZGg4MGJQdXlyRmxlV1o3dHZiQUE9PSIsImFwcGlkIjoiOGNjZjNkMDItMmNkNi00N2I5LTgxODUtMGVkYjI0YWJjZjY5IiwiYXBwaWRhY3IiOiIxIiwiaWRwIjoiaHR0cHM6Ly9zdHMud2luZG93cy5uZXQvYmRmZDc5YjMtODQwMS00N2ZiLWE3NjQtNmU1OTVjNDU1YjA1LyIsIm9pZCI6IjQ0YTg3YTYzLWFiNTUtNDc4NS1iMmFmLTMzNjllZWM4ZTEzOSIsInJoIjoiMS5BYjBBczNuOXZRR0UtMGVuWkc1WlhFVmJCY0VDbkl6NHJxaE9wZ2E0UGZSZjBsbTlBQUM5QUEuIiwic3ViIjoiNDRhODdhNjMtYWI1NS00Nzg1LWIyYWYtMzM2OWVlYzhlMTM5IiwidGlkIjoiYmRmZDc5YjMtODQwMS00N2ZiLWE3NjQtNmU1OTVjNDU1YjA1IiwidXRpIjoiY3ltNVhlcmhIMHVMSlNZU1JyQmhBQSIsInZlciI6IjEuMCJ9.UooJjM9pS-wgYsExqgHdrYyQhp7NbwAsr7au9dWJaLpsufXeyHJSg-Xd5VJ4RsDVJiDes3jkC7WeoAiaCfzEHpAum-p_aqqLYXf1QIYbi1hLC0m7y_klFcqMp11WbDa9TSTvg-o8q3x2Y5su8X23ymlFih4OP17b7JA6a4_2MybU5QkCEW1tQK6VspuuXzeDHvbfGeGYcIptHFyfttHMHHXRtX1o9bX7gOR_dwFITAXD18T4ZdAN_0y6f1OtVF9TMWQhMXhKU8ahn8TSg_CXmPl9T_1gV3ZWLvVtcdVrWs82fDz3-2lEw28z4bQEr1Z5xoAz7srhx1WEBu_ioAcQiA",
+        "jwt_handler": jwt_handler,
+        "route": "/v1/chat/completions",
+        "prisma_client": None,
+        "user_api_key_cache": Mock(),
+        "parent_otel_span": None,
+        "proxy_logging_obj": Mock(),
+        "request_data": {},
+        "general_settings": {},
+    }
+
+    if enforce_rbac:
+        with pytest.raises(HTTPException):
+            await JWTAuthManager.auth_builder(**args)
+    else:
+        await JWTAuthManager.auth_builder(**args)
+
+
+def test_user_api_key_auth_end_user_str():
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+    user_api_key_args = {
+        "api_key": "sk-1234",
+        "parent_otel_span": None,
+        "user_role": LitellmUserRoles.PROXY_ADMIN,
+        "end_user_id": "1",
+        "user_id": "default_user_id",
+    }
+
+    user_api_key_auth = UserAPIKeyAuth(**user_api_key_args)
+    assert user_api_key_auth.end_user_id == "1"
+
+
+def test_can_rbac_role_call_model():
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+    from litellm.proxy._types import RoleBasedPermissions
+
+    roles_based_permissions = [
+        RoleBasedPermissions(
+            role=LitellmUserRoles.INTERNAL_USER,
+            models=["gpt-4"],
+        ),
+        RoleBasedPermissions(
+            role=LitellmUserRoles.PROXY_ADMIN,
+            models=["anthropic-claude"],
+        ),
+    ]
+
+    assert JWTAuthManager.can_rbac_role_call_model(
+        rbac_role=LitellmUserRoles.INTERNAL_USER,
+        general_settings={"role_permissions": roles_based_permissions},
+        model="gpt-4",
+    )
+
+    with pytest.raises(HTTPException):
+        JWTAuthManager.can_rbac_role_call_model(
+            rbac_role=LitellmUserRoles.INTERNAL_USER,
+            general_settings={"role_permissions": roles_based_permissions},
+            model="gpt-4o",
+        )
+
+    with pytest.raises(HTTPException):
+        JWTAuthManager.can_rbac_role_call_model(
+            rbac_role=LitellmUserRoles.PROXY_ADMIN,
+            general_settings={"role_permissions": roles_based_permissions},
+            model="gpt-4o",
+        )
+
+
+def test_can_rbac_role_call_model_no_role_permissions():
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+
+    assert JWTAuthManager.can_rbac_role_call_model(
+        rbac_role=LitellmUserRoles.INTERNAL_USER,
+        general_settings={},
+        model="gpt-4",
+    )
+
+    assert JWTAuthManager.can_rbac_role_call_model(
+        rbac_role=LitellmUserRoles.PROXY_ADMIN,
+        general_settings={"role_permissions": []},
+        model="anthropic-claude",
+    )

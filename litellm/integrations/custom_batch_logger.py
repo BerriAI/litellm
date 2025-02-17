@@ -1,7 +1,7 @@
 """
 Custom Logger that handles batching logic 
 
-Use this if you want your logs to be stored in memory and flushed periodically
+Use this if you want your logs to be stored in memory and flushed periodically.
 """
 
 import asyncio

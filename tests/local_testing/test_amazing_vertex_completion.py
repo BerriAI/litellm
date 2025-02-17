@@ -17,7 +17,7 @@ import asyncio
 import json
 import os
 import tempfile
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, ANY
 from respx import MockRouter
 import httpx
 
@@ -61,6 +61,8 @@ VERTEX_MODELS_TO_NOT_TEST = [
     "gemini-pro-flash",
     "gemini-1.5-flash-exp-0827",
     "gemini-2.0-flash-exp",
+    "gemini-2.0-flash-thinking-exp",
+    "gemini-2.0-flash-thinking-exp-01-21",
 ]
 
 
@@ -444,7 +446,11 @@ async def test_async_vertexai_response():
             f"model being tested in async call: {model}, litellm.vertex_language_models: {litellm.vertex_language_models}"
         )
         if model in VERTEX_MODELS_TO_NOT_TEST or (
-            "gecko" in model or "32k" in model or "ultra" in model or "002" in model
+            "gecko" in model
+            or "32k" in model
+            or "ultra" in model
+            or "002" in model
+            or "gemini-2.0-flash-thinking-exp" in model
         ):
             # our account does not have access to this model
             continue
@@ -486,7 +492,11 @@ async def test_async_vertexai_streaming_response():
     test_models += litellm.vertex_language_models  # always test gemini-pro
     for model in test_models:
         if model in VERTEX_MODELS_TO_NOT_TEST or (
-            "gecko" in model or "32k" in model or "ultra" in model or "002" in model
+            "gecko" in model
+            or "32k" in model
+            or "ultra" in model
+            or "002" in model
+            or "gemini-2.0-flash-thinking-exp" in model
         ):
             # our account does not have access to this model
             continue
@@ -1217,6 +1227,7 @@ Using this JSON schema:
             messages=messages,
             response_format={"type": "json_object"},
             client=client,
+            logging_obj=ANY,
         )
 
         assert response.choices[0].finish_reason == "content_filter"
@@ -1460,8 +1471,11 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
             httpx_response.side_effect = vertex_httpx_mock_post_valid_response_anthropic
         else:
             httpx_response.side_effect = vertex_httpx_mock_post_valid_response
+    resp = None
     with patch.object(client, "post", new=httpx_response) as mock_call:
-        print("SENDING CLIENT POST={}".format(client.post))
+        litellm.set_verbose = True
+        print(f"model entering completion: {model}")
+
         try:
             resp = completion(
                 model=model,
@@ -1502,6 +1516,9 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
                         "text"
                     ]
                 )
+        elif resp is not None:
+
+            assert resp.model == model.split("/")[1].split("@")[0]
 
 
 @pytest.mark.parametrize(

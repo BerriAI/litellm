@@ -297,3 +297,54 @@ async def test_perform_health_check_with_health_check_model():
         assert healthy_endpoints[0]["model"] == "openai/gpt-4o-mini"
         assert len(healthy_endpoints) == 1
         assert len(unhealthy_endpoints) == 0
+
+
+@pytest.mark.asyncio
+async def test_health_check_bad_model():
+    from litellm.proxy.health_check import _perform_health_check
+    import time
+
+    model_list = [
+        {
+            "model_name": "openai-gpt-4o",
+            "litellm_params": {
+                "api_key": "sk-1234",
+                "api_base": "https://exampleopenaiendpoint-production.up.railway.app",
+                "model": "openai/my-fake-openai-endpoint",
+                "mock_timeout": True,
+                "timeout": 60,
+            },
+            "model_info": {
+                "id": "ca27ca2eeea2f9e38bb274ead831948a26621a3738d06f1797253f0e6c4278c0",
+                "db_model": False,
+                "health_check_timeout": 1,
+            },
+        },
+    ]
+    details = None
+    healthy_endpoints, unhealthy_endpoints = await _perform_health_check(
+        model_list, details
+    )
+    print(f"healthy_endpoints: {healthy_endpoints}")
+    print(f"unhealthy_endpoints: {unhealthy_endpoints}")
+
+    # Track which model is actually used in the health check
+    health_check_calls = []
+
+    async def mock_health_check(litellm_params, **kwargs):
+        health_check_calls.append(litellm_params["model"])
+        await asyncio.sleep(10)
+        return {"status": "healthy"}
+
+    with patch(
+        "litellm.ahealth_check", side_effect=mock_health_check
+    ) as mock_health_check:
+        start_time = time.time()
+        healthy_endpoints, unhealthy_endpoints = await _perform_health_check(model_list)
+        end_time = time.time()
+        print("health check calls: ", health_check_calls)
+        assert len(healthy_endpoints) == 0
+        assert len(unhealthy_endpoints) == 1
+        assert (
+            end_time - start_time < 2
+        ), "Health check took longer than health_check_timeout"

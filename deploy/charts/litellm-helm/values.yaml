@@ -188,4 +188,9 @@ migrationJob:
   disableSchemaUpdate: false # Skip schema migrations for specific environments. When True, the job will exit with code 0.
   annotations: {}
 
+# Additional environment variables to be added to the deployment
+envVars: {
+    # USE_DDTRACE: "true"
+}
+
 

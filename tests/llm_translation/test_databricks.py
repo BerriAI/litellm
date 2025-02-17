@@ -381,6 +381,7 @@ def test_completions_streaming_with_sync_http_handler(monkeypatch):
             },
             data=ANY,
             stream=True,
+            timeout=ANY,
         )
 
         actual_data = json.loads(

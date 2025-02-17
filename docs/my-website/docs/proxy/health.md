@@ -245,6 +245,22 @@ general_settings:
   health_check_details: False
 ```
 
+## Health Check Timeout
+
+The health check timeout is set in `litellm/constants.py` and defaults to 60 seconds.
+
+This can be overridden in the config.yaml by setting `health_check_timeout` in the model_info section.
+
+```yaml
+model_list:
+  - model_name: openai/gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      health_check_timeout: 10 # 👈 OVERRIDE HEALTH CHECK TIMEOUT
+```
+
 ## `/health/readiness`
 
 Unprotected endpoint for checking if proxy is ready to accept requests
@@ -297,6 +313,17 @@ Example Response:
 ```json
 "I'm alive!"
 ```
+
+## `/health/services`
+
+Use this admin-only endpoint to check if a connected service (datadog/slack/langfuse/etc.) is healthy.
+
+```bash
+curl -L -X GET 'http://0.0.0.0:4000/health/services?service=datadog'     -H 'Authorization: Bearer sk-1234'
+```
+
+[**API Reference**](https://litellm-api.up.railway.app/#/health/health_services_endpoint_health_services_get)
+
 
 ## Advanced - Call specific models 
 

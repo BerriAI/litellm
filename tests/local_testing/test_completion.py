@@ -11,7 +11,7 @@ import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
+)  # Adds the parent directory to the system path
 
 
 import os
@@ -1005,7 +1005,7 @@ def test_completion_mistral_api_mistral_large_function_call():
     try:
         # test without max tokens
         response = completion(
-            model="mistral/mistral-large-latest",
+            model="mistral/open-mistral-7b",
             messages=messages,
             tools=tools,
             tool_choice="auto",
@@ -1754,6 +1754,23 @@ async def test_openai_compatible_custom_api_base(provider):
         print("Call KWARGS - {}".format(mock_call.call_args.kwargs))
 
         assert "hello" in mock_call.call_args.kwargs["extra_body"]
+
+
+def test_lm_studio_completion(monkeypatch):
+    monkeypatch.delenv("LM_STUDIO_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    try:
+        completion(
+            model="lm_studio/typhoon2-quen2.5-7b-instruct",
+            messages=[
+                {"role": "user", "content": "What's the weather like in San Francisco?"}
+            ],
+            api_base="https://exampleopenaiendpoint-production.up.railway.app/",
+        )
+    except litellm.AuthenticationError as e:
+        pytest.fail(f"Error occurred: {e}")
+    except litellm.APIError as e:
+        print(e)
 
 
 @pytest.mark.asyncio
@@ -2588,6 +2605,21 @@ def test_completion_openrouter1():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_completion_openrouter_reasoning_effort():
+    try:
+        litellm.set_verbose = True
+        response = completion(
+            model="openrouter/deepseek/deepseek-r1",
+            messages=messages,
+            include_reasoning=True,
+            max_tokens=5,
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 # test_completion_openrouter1()
 
 
@@ -3208,6 +3240,121 @@ def test_replicate_custom_prompt_dict():
         pytest.fail(f"An exception occurred - {str(e)}")
     print(f"response: {response}")
     litellm.custom_prompt_dict = {}  # reset
+
+
+def test_bedrock_deepseek_custom_prompt_dict():
+    model = "llama/arn:aws:bedrock:us-east-1:1234:imported-model/45d34re"
+    litellm.register_prompt_template(
+        model=model,
+        tokenizer_config={
+            "add_bos_token": True,
+            "add_eos_token": False,
+            "bos_token": {
+                "__type": "AddedToken",
+                "content": "<｜begin▁of▁sentence｜>",
+                "lstrip": False,
+                "normalized": True,
+                "rstrip": False,
+                "single_word": False,
+            },
+            "clean_up_tokenization_spaces": False,
+            "eos_token": {
+                "__type": "AddedToken",
+                "content": "<｜end▁of▁sentence｜>",
+                "lstrip": False,
+                "normalized": True,
+                "rstrip": False,
+                "single_word": False,
+            },
+            "legacy": True,
+            "model_max_length": 16384,
+            "pad_token": {
+                "__type": "AddedToken",
+                "content": "<｜end▁of▁sentence｜>",
+                "lstrip": False,
+                "normalized": True,
+                "rstrip": False,
+                "single_word": False,
+            },
+            "sp_model_kwargs": {},
+            "unk_token": None,
+            "tokenizer_class": "LlamaTokenizerFast",
+            "chat_template": "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% set ns = namespace(is_first=false, is_tool=false, is_output_first=true, system_prompt='') %}{%- for message in messages %}{%- if message['role'] == 'system' %}{% set ns.system_prompt = message['content'] %}{%- endif %}{%- endfor %}{{bos_token}}{{ns.system_prompt}}{%- for message in messages %}{%- if message['role'] == 'user' %}{%- set ns.is_tool = false -%}{{'<｜User｜>' + message['content']}}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is none %}{%- set ns.is_tool = false -%}{%- for tool in message['tool_calls']%}{%- if not ns.is_first %}{{'<｜Assistant｜><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\\n' + '```json' + '\\n' + tool['function']['arguments'] + '\\n' + '```' + '<｜tool▁call▁end｜>'}}{%- set ns.is_first = true -%}{%- else %}{{'\\n' + '<｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\\n' + '```json' + '\\n' + tool['function']['arguments'] + '\\n' + '```' + '<｜tool▁call▁end｜>'}}{{'<｜tool▁calls▁end｜><｜end▁of▁sentence｜>'}}{%- endif %}{%- endfor %}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is not none %}{%- if ns.is_tool %}{{'<｜tool▁outputs▁end｜>' + message['content'] + '<｜end▁of▁sentence｜>'}}{%- set ns.is_tool = false -%}{%- else %}{% set content = message['content'] %}{% if '</think>' in content %}{% set content = content.split('</think>')[-1] %}{% endif %}{{'<｜Assistant｜>' + content + '<｜end▁of▁sentence｜>'}}{%- endif %}{%- endif %}{%- if message['role'] == 'tool' %}{%- set ns.is_tool = true -%}{%- if ns.is_output_first %}{{'<｜tool▁outputs▁begin｜><｜tool▁output▁begin｜>' + message['content'] + '<｜tool▁output▁end｜>'}}{%- set ns.is_output_first = false %}{%- else %}{{'\\n<｜tool▁output▁begin｜>' + message['content'] + '<｜tool▁output▁end｜>'}}{%- endif %}{%- endif %}{%- endfor -%}{% if ns.is_tool %}{{'<｜tool▁outputs▁end｜>'}}{% endif %}{% if add_generation_prompt and not ns.is_tool %}{{'<｜Assistant｜><think>\\n'}}{% endif %}",
+        },
+    )
+    assert model in litellm.known_tokenizer_config
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    messages = [
+        {"role": "system", "content": "You are a good assistant"},
+        {"role": "user", "content": "What is the weather in Copenhagen?"},
+    ]
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            completion(
+                model="bedrock/" + model,
+                messages=messages,
+                client=client,
+            )
+        except Exception as e:
+            pass
+
+        mock_post.assert_called_once()
+        print(mock_post.call_args.kwargs)
+        json_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert (
+            json_data["prompt"].rstrip()
+            == """<｜begin▁of▁sentence｜>You are a good assistant<｜User｜>What is the weather in Copenhagen?<｜Assistant｜><think>"""
+        )
+
+
+def test_bedrock_deepseek_known_tokenizer_config():
+    model = "deepseek_r1/arn:aws:bedrock:us-east-1:1234:imported-model/45d34re"
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from unittest.mock import Mock
+    import httpx
+
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.headers = {
+        "x-amzn-bedrock-input-token-count": "20",
+        "x-amzn-bedrock-output-token-count": "30",
+    }
+
+    # The response format for deepseek_r1
+    response_data = {
+        "generation": "The weather in Copenhagen is currently sunny with a temperature of 20°C (68°F). The forecast shows clear skies throughout the day with a gentle breeze from the northwest.",
+        "stop_reason": "stop",
+        "stop_sequence": None,
+    }
+
+    mock_response.json.return_value = response_data
+    mock_response.text = json.dumps(response_data)
+
+    client = HTTPHandler()
+
+    messages = [
+        {"role": "system", "content": "You are a good assistant"},
+        {"role": "user", "content": "What is the weather in Copenhagen?"},
+    ]
+
+    with patch.object(client, "post", return_value=mock_response) as mock_post:
+        completion(
+            model="bedrock/" + model,
+            messages=messages,
+            client=client,
+        )
+
+        mock_post.assert_called_once()
+        print(mock_post.call_args.kwargs)
+        json_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert (
+            json_data["prompt"].rstrip()
+            == """<｜begin▁of▁sentence｜>You are a good assistant<｜User｜>What is the weather in Copenhagen?<｜Assistant｜><think>"""
+        )
 
 
 # test_replicate_custom_prompt_dict()
@@ -4520,3 +4667,184 @@ def test_humanloop_completion(monkeypatch):
         prompt_variables={"person": "John"},
         messages=[{"role": "user", "content": "Tell me a joke."}],
     )
+
+
+def test_deepseek_reasoning_content_completion():
+    try:
+        litellm.set_verbose = True
+        litellm._turn_on_debug()
+        resp = litellm.completion(
+            timeout=5,
+            model="deepseek/deepseek-reasoner",
+            messages=[{"role": "user", "content": "Tell me a joke."}],
+        )
+
+        assert resp.choices[0].message.reasoning_content is not None
+    except litellm.Timeout:
+        pytest.skip("Model is timing out")
+
+
+@pytest.mark.parametrize(
+    "custom_llm_provider, expected_result",
+    [("anthropic", {"anthropic-beta": "test"}), ("bedrock", {}), ("vertex_ai", {})],
+)
+def test_provider_specific_header(custom_llm_provider, expected_result):
+    from litellm.types.utils import ProviderSpecificHeader
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from unittest.mock import patch
+
+    litellm.set_verbose = True
+    client = HTTPHandler()
+    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+        try:
+            resp = litellm.completion(
+                model="anthropic/claude-3-5-sonnet-v2@20241022",
+                messages=[{"role": "user", "content": "Hello world"}],
+                provider_specific_header=ProviderSpecificHeader(
+                    custom_llm_provider="anthropic",
+                    extra_headers={"anthropic-beta": "test"},
+                ),
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_post.assert_called_once()
+        print(mock_post.call_args.kwargs["headers"])
+        assert "anthropic-beta" in mock_post.call_args.kwargs["headers"]
+
+
+def test_qwen_text_completion():
+    # litellm._turn_on_debug()
+    resp = litellm.completion(
+        model="gpt-3.5-turbo-instruct",
+        messages=[{"content": "hello", "role": "user"}],
+        stream=False,
+        logprobs=1,
+    )
+    assert resp.choices[0].message.content is not None
+    assert resp.choices[0].logprobs.token_logprobs[0] is not None
+    print(
+        f"resp.choices[0].logprobs.token_logprobs[0]: {resp.choices[0].logprobs.token_logprobs[0]}"
+    )
+
+
+@pytest.mark.parametrize(
+    "enable_preview_features",
+    [True, False],
+)
+def test_completion_openai_metadata(monkeypatch, enable_preview_features):
+    from openai import OpenAI
+
+    client = OpenAI()
+
+    litellm.set_verbose = True
+
+    monkeypatch.setattr(litellm, "enable_preview_features", enable_preview_features)
+    with patch.object(
+        client.chat.completions.with_raw_response, "create", return_value=MagicMock()
+    ) as mock_completion:
+        try:
+            resp = litellm.completion(
+                model="openai/gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello world"}],
+                metadata={"my-test-key": "my-test-value"},
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_completion.assert_called_once()
+        if enable_preview_features:
+            assert mock_completion.call_args.kwargs["metadata"] == {
+                "my-test-key": "my-test-value"
+            }
+        else:
+            assert "metadata" not in mock_completion.call_args.kwargs
+
+
+def test_completion_o3_mini_temperature():
+    try:
+        litellm.set_verbose = True
+        resp = litellm.completion(
+            model="o3-mini",
+            temperature=0.0,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Hello, world!",
+                }
+            ],
+            drop_params=True,
+        )
+        assert resp.choices[0].message.content is not None
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_completion_gpt_4o_empty_str():
+    litellm._turn_on_debug()
+    from openai import OpenAI
+    from unittest.mock import MagicMock
+
+    client = OpenAI()
+
+    # Create response object matching OpenAI's format
+    mock_response_data = {
+        "id": "chatcmpl-B0W3vmiM78Xkgx7kI7dr7PC949DMS",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "logprobs": None,
+                "message": {
+                    "content": "",
+                    "refusal": None,
+                    "role": "assistant",
+                    "audio": None,
+                    "function_call": None,
+                    "tool_calls": None,
+                },
+            }
+        ],
+        "created": 1739462947,
+        "model": "gpt-4o-mini-2024-07-18",
+        "object": "chat.completion",
+        "service_tier": "default",
+        "system_fingerprint": "fp_bd83329f63",
+        "usage": {
+            "completion_tokens": 1,
+            "prompt_tokens": 121,
+            "total_tokens": 122,
+            "completion_tokens_details": {
+                "accepted_prediction_tokens": 0,
+                "audio_tokens": 0,
+                "reasoning_tokens": 0,
+                "rejected_prediction_tokens": 0,
+            },
+            "prompt_tokens_details": {"audio_tokens": 0, "cached_tokens": 0},
+        },
+    }
+
+    # Create a mock response object
+    mock_raw_response = MagicMock()
+    mock_raw_response.headers = {
+        "x-request-id": "123",
+        "openai-organization": "org-123",
+        "x-ratelimit-limit-requests": "100",
+        "x-ratelimit-remaining-requests": "99",
+    }
+    mock_raw_response.parse.return_value = mock_response_data
+
+    # Set up the mock completion
+    mock_completion = MagicMock()
+    mock_completion.return_value = mock_raw_response
+
+    with patch.object(
+        client.chat.completions.with_raw_response, "create", mock_completion
+    ) as mock_create:
+        resp = litellm.completion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": ""}],
+        )
+        assert resp.choices[0].message.content is not None

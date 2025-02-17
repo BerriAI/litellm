@@ -4,13 +4,12 @@ import sys
 from datetime import datetime
 
 sys.path.insert(
-    0, os.path.abspath("../../")
+    0, os.path.abspath("../../../")
 )  # Adds the parent directory to the system path
 
 import litellm
 import pytest
 from datetime import timedelta
-from litellm.utils import convert_to_model_response_object
 
 from litellm.types.utils import (
     ModelResponse,
@@ -18,6 +17,11 @@ from litellm.types.utils import (
     Choices,
     PromptTokensDetailsWrapper,
     CompletionTokensDetailsWrapper,
+    Usage,
+)
+
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+    convert_to_model_response_object,
 )
 
 
@@ -324,12 +328,21 @@ def test_convert_to_model_response_object_json_mode():
     This test is verifying that when convert_tool_call_to_json_mode is True, a single tool call's arguments are correctly converted into the message content of the response.
     """
     model_response_object = ModelResponse(model="gpt-3.5-turbo")
+    from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+
     response_object = {
         "choices": [
             {
                 "message": {
                     "role": "assistant",
-                    "tool_calls": [{"function": {"arguments": '{"key": "value"}'}}],
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "arguments": '{"key": "value"}',
+                                "name": RESPONSE_FORMAT_TOOL_NAME,
+                            }
+                        }
+                    ],
                 },
                 "finish_reason": None,
             }
@@ -621,16 +634,21 @@ def test_convert_to_model_response_object_with_logprobs():
         "system_fingerprint": None,
     }
 
-    result = convert_to_model_response_object(
-        model_response_object=ModelResponse(),
-        response_object=response_object,
-        stream=False,
-        start_time=datetime.now(),
-        end_time=datetime.now(),
-        hidden_params=None,
-        _response_headers=None,
-        convert_tool_call_to_json_mode=False,
-    )
+    print("ENTERING CONVERT")
+    try:
+        result = convert_to_model_response_object(
+            model_response_object=ModelResponse(),
+            response_object=response_object,
+            stream=False,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            hidden_params=None,
+            _response_headers=None,
+            convert_tool_call_to_json_mode=False,
+        )
+    except Exception as e:
+        print(f"ERROR: {e}")
+        raise e
 
     assert isinstance(result, ModelResponse)
     assert result.id == "chatcmpl-123"
@@ -648,7 +666,7 @@ def test_convert_to_model_response_object_with_logprobs():
 
     # Check logprobs
     assert choice.logprobs is not None
-    assert len(choice.logprobs["content"]) == 9
+    assert len(choice.logprobs.content) == 9
 
     # Check each logprob entry
     expected_tokens = [
@@ -662,14 +680,14 @@ def test_convert_to_model_response_object_with_logprobs():
         " today",
         "?",
     ]
-    for i, logprob in enumerate(choice.logprobs["content"]):
-        assert logprob["token"] == expected_tokens[i]
-        assert isinstance(logprob["logprob"], float)
-        assert isinstance(logprob["bytes"], list)
-        assert len(logprob["top_logprobs"]) == 2
-        assert isinstance(logprob["top_logprobs"][0]["token"], str)
-        assert isinstance(logprob["top_logprobs"][0]["logprob"], float)
-        assert isinstance(logprob["top_logprobs"][0]["bytes"], (list, type(None)))
+    for i, logprob in enumerate(choice.logprobs.content):
+        assert logprob.token == expected_tokens[i]
+        assert isinstance(logprob.logprob, float)
+        assert isinstance(logprob.bytes, list)
+        assert len(logprob.top_logprobs) == 2
+        assert isinstance(logprob.top_logprobs[0].token, str)
+        assert isinstance(logprob.top_logprobs[0].logprob, float)
+        assert isinstance(logprob.top_logprobs[0].bytes, (list, type(None)))
 
     assert result.usage.prompt_tokens == 9
     assert result.usage.completion_tokens == 9
@@ -733,3 +751,107 @@ def test_image_generation_openai_with_pydantic_warning(caplog):
         assert isinstance(resp.data[0], ImageObject)
     except Exception as e:
         pytest.fail(f"Test failed with exception: {e}")
+
+
+def test_convert_to_model_response_object_with_empty_str():
+    """Test that convert_to_model_response_object handles empty strings correctly."""
+
+    args = {
+        "response_object": {
+            "id": "chatcmpl-B0b1BmxhH4iSoRvFVbBJdLbMwr346",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "logprobs": None,
+                    "message": {
+                        "content": "",
+                        "refusal": None,
+                        "role": "assistant",
+                        "audio": None,
+                        "function_call": None,
+                        "tool_calls": None,
+                    },
+                }
+            ],
+            "created": 1739481997,
+            "model": "gpt-4o-mini-2024-07-18",
+            "object": "chat.completion",
+            "service_tier": "default",
+            "system_fingerprint": "fp_bd83329f63",
+            "usage": {
+                "completion_tokens": 1,
+                "prompt_tokens": 121,
+                "total_tokens": 122,
+                "completion_tokens_details": {
+                    "accepted_prediction_tokens": 0,
+                    "audio_tokens": 0,
+                    "reasoning_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+                "prompt_tokens_details": {"audio_tokens": 0, "cached_tokens": 0},
+            },
+        },
+        "model_response_object": ModelResponse(
+            id="chatcmpl-9f9e5ad2-d570-46fe-a5e0-4983e9774318",
+            created=1739481997,
+            model=None,
+            object="chat.completion",
+            system_fingerprint=None,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=None,
+                        function_call=None,
+                        provider_specific_fields=None,
+                    ),
+                )
+            ],
+            usage=Usage(
+                completion_tokens=0,
+                prompt_tokens=0,
+                total_tokens=0,
+                completion_tokens_details=None,
+                prompt_tokens_details=None,
+            ),
+        ),
+        "response_type": "completion",
+        "stream": False,
+        "start_time": None,
+        "end_time": None,
+        "hidden_params": None,
+        "_response_headers": {
+            "date": "Thu, 13 Feb 2025 21:26:37 GMT",
+            "content-type": "application/json",
+            "transfer-encoding": "chunked",
+            "connection": "keep-alive",
+            "access-control-expose-headers": "X-Request-ID",
+            "openai-organization": "reliablekeystest",
+            "openai-processing-ms": "297",
+            "openai-version": "2020-10-01",
+            "x-ratelimit-limit-requests": "30000",
+            "x-ratelimit-limit-tokens": "150000000",
+            "x-ratelimit-remaining-requests": "29999",
+            "x-ratelimit-remaining-tokens": "149999846",
+            "x-ratelimit-reset-requests": "2ms",
+            "x-ratelimit-reset-tokens": "0s",
+            "x-request-id": "req_651030cbda2c80353086eba8fd0a54ec",
+            "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+            "cf-cache-status": "DYNAMIC",
+            "set-cookie": "__cf_bm=0ihEMDdqKfEr0I8iP4XZ7C6xEA5rJeAc11XFXNxZgyE-1739481997-1.0.1.1-v5jbjAWhMUZ0faO8q2izQljUQC.R85Vexb18A2MCyS895bur5eRxcguP0.WGY6EkxXSaOKN55VL3Pg3NOdq_xA; path=/; expires=Thu, 13-Feb-25 21:56:37 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None, _cfuvid=jrNMSOBRrxUnGgJ62BltpZZSNImfnEqPX9Uu8meGFLY-1739481997919-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None",
+            "x-content-type-options": "nosniff",
+            "server": "cloudflare",
+            "cf-ray": "9117e5d4caa1f7b5-LAX",
+            "content-encoding": "gzip",
+            "alt-svc": 'h3=":443"; ma=86400',
+        },
+        "convert_tool_call_to_json_mode": None,
+    }
+
+    resp: ModelResponse = convert_to_model_response_object(**args)
+    assert resp is not None
+    assert resp.choices[0].message.content is not None

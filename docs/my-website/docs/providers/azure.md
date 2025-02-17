@@ -10,7 +10,7 @@ import TabItem from '@theme/TabItem';
 | Property | Details |
 |-------|-------|
 | Description | Azure OpenAI Service provides REST API access to OpenAI's powerful language models including o1, o1-mini, GPT-4o, GPT-4o mini, GPT-4 Turbo with Vision, GPT-4, GPT-3.5-Turbo, and Embeddings model series |
-| Provider Route on LiteLLM | `azure/` |
+| Provider Route on LiteLLM | `azure/`, [`azure/o_series/`](#azure-o-series-models) |
 | Supported Operations | [`/chat/completions`](#azure-openai-chat-completion-models), [`/completions`](#azure-instruct-models), [`/embeddings`](../embedding/supported_embedding#azure-openai-embedding-models), [`/audio/speech`](#azure-text-to-speech-tts), [`/audio/transcriptions`](../audio_transcription), `/fine_tuning`, [`/batches`](#azure-batches-api), `/files`, [`/images`](../image_generation#azure-openai-image-generation-models) |
 | Link to Provider Doc | [Azure OpenAI ↗](https://learn.microsoft.com/en-us/azure/ai-services/openai/overview)
 
@@ -947,6 +947,65 @@ Expected Response:
 ```bash
 {"data":[{"id":"batch_R3V...}
 ```
+
+## O-Series Models
+
+Azure OpenAI O-Series models are supported on LiteLLM. 
+
+LiteLLM routes any deployment name with `o1` or `o3` in the model name, to the O-Series [transformation](https://github.com/BerriAI/litellm/blob/91ed05df2962b8eee8492374b048d27cc144d08c/litellm/llms/azure/chat/o1_transformation.py#L4) logic.
+
+To set this explicitly, set `model` to `azure/o_series/<your-deployment-name>`.
+
+**Automatic Routing**
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+
+litellm.completion(model="azure/my-o3-deployment", messages=[{"role": "user", "content": "Hello, world!"}]) # 👈 Note: 'o3' in the deployment name
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: o3-mini
+    litellm_params:
+      model: azure/o3-model
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+```
+
+</TabItem>
+</Tabs>
+
+**Explicit Routing**
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+
+litellm.completion(model="azure/o_series/my-random-deployment-name", messages=[{"role": "user", "content": "Hello, world!"}]) # 👈 Note: 'o_series/' in the deployment name
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: o3-mini
+    litellm_params:
+      model: azure/o_series/my-random-deployment-name
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+```
+</TabItem>
+</Tabs>
+
+
 
 ## Advanced
 ### Azure API Load-Balancing

@@ -18,13 +18,15 @@ model_list:
       api_key: "test"
 ```
 
-## 1 Instance LiteLLM Proxy
+### 1 Instance LiteLLM Proxy
 
+In these tests the median latency of directly calling the fake-openai-endpoint is 60ms.
 
 | Metric | Litellm Proxy (1 Instance) |
 |--------|------------------------|
-| Median Latency (ms) | 110 |
-| RPS | 250 |
+| RPS | 475 |
+| Median Latency (ms) | 100 |
+| Latency overhead added by LiteLLM Proxy | 40ms |
 
 <!-- <Image img={require('../img/1_instance_proxy.png')} /> -->
 
@@ -33,8 +35,9 @@ model_list:
 <Image img={require('../img/instances_vs_rps.png')} /> -->
 
 #### Key Findings
-- Single instance: 250 RPS @ 100ms latency
-- 4 LiteLLM instances: 1000 RPS @ 100ms latency
+- Single instance: 475 RPS @ 100ms latency
+- 2 LiteLLM instances: 950 RPS @ 100ms latency
+- 4 LiteLLM instances: 1900 RPS @ 100ms latency
 
 ### 2 Instances
 
@@ -43,8 +46,15 @@ model_list:
 | Metric | Litellm Proxy (2 Instances) |
 |--------|------------------------|
 | Median Latency (ms) | 100 |
-| RPS | 500 |
+| RPS | 950 |
 
+
+## Machine Spec used for testing
+
+Each machine deploying LiteLLM had the following specs:
+
+- 2 CPU
+- 4GB RAM
 
 
 

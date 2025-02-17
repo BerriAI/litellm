@@ -43,7 +43,7 @@ export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/<>/<>/<>"
 general_settings: 
     alerting: ["slack"]
     alerting_threshold: 300 # sends alerts if requests hang for 5min+ and responses take 5min+ 
-    spend_report_frequency: "1d" # [Optional] set as 1d, 2d, 30d .... Specifiy how often you want a Spend Report to be sent
+    spend_report_frequency: "1d" # [Optional] set as 1d, 2d, 30d .... Specify how often you want a Spend Report to be sent
     
     # [OPTIONAL ALERTING ARGS]
     alerting_args:
