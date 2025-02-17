@@ -1188,16 +1188,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             fontSize: "11px",
                           }}
                         >
-                          Team ID
-                        </TableHeaderCell>
-                        <TableHeaderCell
-                          style={{
-                            maxWidth: "100px",
-                            whiteSpace: "normal",
-                            wordBreak: "break-word",
-                            fontSize: "11px",
-                          }}
-                        >
                           Provider
                         </TableHeaderCell>
                         <TableHeaderCell
@@ -1293,6 +1283,16 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         </TableHeaderCell>
                         <TableHeaderCell
                           style={{
+                            maxWidth: "100px",
+                            whiteSpace: "normal",
+                            wordBreak: "break-word",
+                            fontSize: "11px",
+                          }}
+                        >
+                          Team ID
+                        </TableHeaderCell>
+                        <TableHeaderCell
+                          style={{
                             maxWidth: "50px",
                             whiteSpace: "normal",
                             wordBreak: "break-word",
@@ -1346,34 +1346,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                     {model.model_info.id.slice(0, 7)}...
                                   </Button>
                                 </Tooltip>
-                              </div>
-                            </TableCell>
-                            <TableCell
-                              style={{
-                                maxWidth: "100px",
-                                whiteSpace: "normal",
-                                wordBreak: "break-word",
-                              }}
-                            >
-                              <div className="overflow-hidden">
-                              {model.model_info.team_id ? (
-                              <Tooltip title={model.model_info.team_id}>
-                                <Button 
-                                  size="xs"
-                                  variant="light"
-                                  className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-                                  onClick={() => {
-                                    setSelectedTeamId(model.model_info.team_id);
-                                  }}
-                                >
-                                  {model.model_info.team_id.slice(0, 7)}...
-                                </Button>
-                              </Tooltip>
-                              ) : (
-                                "-"
-                              )}
-
-                              
                               </div>
                             </TableCell>
                             <TableCell
@@ -1518,6 +1490,34 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                   ? model.model_info.created_by || "-"
                                   : "-"}
                               </p>
+                            </TableCell>
+                            <TableCell
+                              style={{
+                                maxWidth: "100px",
+                                whiteSpace: "normal",
+                                wordBreak: "break-word",
+                              }}
+                            >
+                              <div className="overflow-hidden">
+                              {model.model_info.team_id ? (
+                              <Tooltip title={model.model_info.team_id}>
+                                <Button 
+                                  size="xs"
+                                  variant="light"
+                                  className="font-mono text-purple-500 bg-purple-50 hover:bg-purple-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+                                  onClick={() => {
+                                    setSelectedTeamId(model.model_info.team_id);
+                                  }}
+                                >
+                                  {model.model_info.team_id.slice(0, 7)}...
+                                </Button>
+                              </Tooltip>
+                              ) : (
+                                "-"
+                              )}
+
+                              
+                              </div>
                             </TableCell>
                             <TableCell
                               style={{
