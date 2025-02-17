@@ -1,0 +1,19 @@
+#!/bin/sh
+
+set -e
+
+# Verify clean tree
+[ -z "$(git status --porcelain)" ] || ( echo >&2 "Git tree not clean!" && exit 1 )
+
+# Use gitcalver if we are on main
+if [ "$(git branch --show-current)" = main ]; then
+    TZ=UTC
+    # Prints version in the following format: <DAY>.<COMMIT#>_<SHA>
+    # From docker docs: A tag name may contain lowercase and uppercase characters,
+    # digits, underscores, periods and dashes. A tag name may not start with a period
+    # or a dash and may contain a maximum of 128 characters.
+    git log --pretty="format:%cd %h" --date="format-local:%Y%m%d" | \
+        awk 'NR==1{d=$1;h=$2}{if(d==$1)c++;else exit}END{print d"."c"_"h}'
+else
+    printf $(git branch --show-current | tr / -)_$(git rev-parse --short HEAD)
+fi
