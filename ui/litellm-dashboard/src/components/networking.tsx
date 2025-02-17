@@ -111,9 +111,12 @@ export const modelCreateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMsg =
+        errorData.error?.message?.error ||
+        "Network response was not ok";
+      message.error(errorMsg);
+      throw new Error(errorMsg);
     }
 
     const data = await response.json();
