@@ -181,6 +181,61 @@ export default function ModelInfoView({
                   </div>
 
                   <div>
+                    <Text className="font-medium">Input Cost (per 1M tokens)</Text>
+                    <div>{modelData.litellm_params?.input_cost_per_token ? (modelData.litellm_params.input_cost_per_token * 1_000_000).toFixed(4) : "Not Set"}</div>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Output Cost (per 1M tokens)</Text>
+                    <div>{modelData.litellm_params?.output_cost_per_token ? (modelData.litellm_params.output_cost_per_token * 1_000_000).toFixed(4) : "Not Set"}</div>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">API Base</Text>
+                    <div>{modelData.litellm_params?.api_base || "Not Set"}</div>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Custom LLM Provider</Text>
+                    <div>{modelData.litellm_params?.custom_llm_provider || "Not Set"}</div>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Model</Text>
+                    <div>{modelData.litellm_params?.model || "Not Set"}</div>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Organization</Text>
+                    <div>{modelData.litellm_params?.organization || "Not Set"}</div>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">TPM (Tokens per Minute)</Text>
+                    <div>{modelData.litellm_params?.tpm || "Not Set"}</div>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">RPM (Requests per Minute)</Text>
+                    <div>{modelData.litellm_params?.rpm || "Not Set"}</div>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Max Retries</Text>
+                    <div>{modelData.litellm_params?.max_retries || "Not Set"}</div>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Timeout (seconds)</Text>
+                    <div>{modelData.litellm_params?.timeout || "Not Set"}</div>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Stream Timeout (seconds)</Text>
+                    <div>{modelData.litellm_params?.stream_timeout || "Not Set"}</div>
+                  </div>
+
+                  <div>
                     <Text className="font-medium">Team ID</Text>
                     <div>{modelData.model_info.team_id || "Not Set"}</div>
                   </div>
@@ -194,13 +249,6 @@ export default function ModelInfoView({
                     <Text className="font-medium">Created By</Text>
                     <div>{modelData.model_info.created_by || "Not Set"}</div>
                   </div>
-
-                  {userRole === "Admin" && (
-                    <div>
-                      <Text className="font-medium">API Base</Text>
-                      <div>{modelData.api_base || "Not Set"}</div>
-                    </div>
-                  )}
 
                   <div>
                     <Text className="font-medium">LiteLLM Parameters</Text>
