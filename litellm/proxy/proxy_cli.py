@@ -218,6 +218,7 @@ def is_port_in_use(port):
     envvar="SSL_CERTFILE_PATH",
 )
 @click.option("--local", is_flag=True, default=False, help="for local debugging")
+@click.option("--reload", is_flag=True, default=False, help="reload on changes")
 def run_server(  # noqa: PLR0915
     host,
     port,
@@ -252,6 +253,7 @@ def run_server(  # noqa: PLR0915
     ssl_keyfile_path,
     ssl_certfile_path,
     log_config,
+    reload,
 ):
     args = locals()
     if local:
@@ -663,6 +665,9 @@ def run_server(  # noqa: PLR0915
         elif litellm.json_logs:
             print("Using json logs. Setting log_config to None.")  # noqa
             uvicorn_args["log_config"] = None
+
+        if reload:
+            uvicorn_args["reload"] = True
 
         if run_gunicorn is False and run_hypercorn is False:
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:

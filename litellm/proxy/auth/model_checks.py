@@ -145,7 +145,7 @@ def get_complete_model_list(
         unique_models=unique_models, return_wildcard_routes=return_wildcard_routes
     )
 
-    return list(unique_models) + all_wildcard_models
+    return sorted(unique_models) + all_wildcard_models
 
 
 def get_known_models_from_wildcard(wildcard_model: str) -> List[str]:
