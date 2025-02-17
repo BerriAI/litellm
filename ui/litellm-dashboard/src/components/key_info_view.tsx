@@ -15,11 +15,12 @@ import {
   TextInput,
   Select as TremorSelect
 } from "@tremor/react";
-import { ArrowLeftIcon, TrashIcon } from "@heroicons/react/outline";
+import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
 import { keyDeleteCall, keyUpdateCall } from "./networking";
 import { KeyResponse } from "./key_team_helpers/key_list";
 import { Form, Input, InputNumber, message, Select } from "antd";
 import { KeyEditView } from "./key_edit_view";
+import { RegenerateKeyModal } from "./regenerate_key_modal";
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -35,6 +36,7 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
   const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isRegenerateModalOpen, setIsRegenerateModalOpen] = useState(false);
 
   if (!keyData) {
     return (
@@ -126,15 +128,37 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
           <Title>{keyData.key_alias || "API Key"}</Title>
           <Text className="text-gray-500 font-mono">{keyData.token}</Text>
         </div>
-        <Button
-          icon={TrashIcon}
-          variant="light"
-          color="red"
-          onClick={() => setIsDeleteModalOpen(true)}
-        >
-          Delete Key
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            icon={RefreshIcon}
+            variant="secondary"
+            onClick={() => setIsRegenerateModalOpen(true)}
+            className="flex items-center"
+          >
+            Regenerate Key
+          </Button>
+          <Button
+            icon={TrashIcon}
+            variant="secondary"
+            onClick={() => setIsDeleteModalOpen(true)}
+            className="flex items-center"
+          >
+            Delete Key
+          </Button>
+        </div>
       </div>
+
+      {/* Add RegenerateKeyModal */}
+      <RegenerateKeyModal
+        selectedToken={keyData}
+        visible={isRegenerateModalOpen}
+        onClose={() => setIsRegenerateModalOpen(false)}
+        accessToken={accessToken}
+        onSuccess={(newKeyData) => {
+          // Handle the updated key data here if needed
+          setIsRegenerateModalOpen(false);
+        }}
+      />
 
       {/* Delete Confirmation Modal */}
       {isDeleteModalOpen && (

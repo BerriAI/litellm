@@ -7095,7 +7095,9 @@
         "input_cost_per_token": 0.00000072,
         "output_cost_per_token": 0.00000072,
         "litellm_provider": "bedrock_converse",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true, 
+        "supports_tool_choice": false
     },
     "meta.llama2-13b-chat-v1": {
         "max_tokens": 4096, 
@@ -7431,6 +7433,17 @@
         "input_cost_per_token": 0.000002,
         "output_cost_per_token": 0.000002,
         "litellm_provider": "bedrock",
+        "mode": "chat",
+        "supports_function_calling": true, 
+        "supports_tool_choice": false
+    },
+    "us.meta.llama3-3-70b-instruct-v1:0": {
+        "max_tokens": 4096, 
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000072,
+        "output_cost_per_token": 0.00000072,
+        "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "supports_function_calling": true, 
         "supports_tool_choice": false

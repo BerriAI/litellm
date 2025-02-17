@@ -24,6 +24,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
+from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
@@ -37,7 +39,6 @@ from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import (
     PrismaClient,
     _hash_token_if_needed,
-    duration_in_seconds,
     handle_exception_on_proxy,
 )
 from litellm.router import Router
@@ -1789,6 +1790,7 @@ async def list_keys(
             "team_id",
             "key_alias",
             "return_full_object",
+            "organization_id",
         }
         unsupported_params = set(request.query_params.keys()) - supported_params
         if unsupported_params:
@@ -1828,6 +1830,7 @@ async def list_keys(
             team_id=team_id,
             key_alias=key_alias,
             return_full_object=return_full_object,
+            organization_id=organization_id,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -1859,6 +1862,7 @@ async def _list_key_helper(
     size: int,
     user_id: Optional[str],
     team_id: Optional[str],
+    organization_id: Optional[str],
     key_alias: Optional[str],
     exclude_team_id: Optional[str] = None,
     return_full_object: bool = False,
@@ -1885,7 +1889,9 @@ async def _list_key_helper(
     """
 
     # Prepare filter conditions
-    where: Dict[str, Union[str, Dict[str, str]]] = {}
+    where: Dict[str, Union[str, Dict[str, Any]]] = {}
+    where.update(_get_condition_to_filter_out_ui_session_tokens())
+
     if user_id and isinstance(user_id, str):
         where["user_id"] = user_id
     if team_id and isinstance(team_id, str):
@@ -1894,6 +1900,8 @@ async def _list_key_helper(
         where["key_alias"] = key_alias
     if exclude_team_id and isinstance(exclude_team_id, str):
         where["team_id"] = {"not": exclude_team_id}
+    if organization_id and isinstance(organization_id, str):
+        where["organization_id"] = organization_id
 
     verbose_proxy_logger.debug(f"Filter conditions: {where}")
 
@@ -1936,6 +1944,20 @@ async def _list_key_helper(
         current_page=page,
         total_pages=total_pages,
     )
+
+
+def _get_condition_to_filter_out_ui_session_tokens() -> Dict[str, Any]:
+    """
+    Condition to filter out UI session tokens
+    """
+    return {
+        "OR": [
+            {"team_id": None},  # Include records where team_id is null
+            {
+                "team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}
+            },  # Include records where team_id != UI_SESSION_TOKEN_TEAM_ID
+        ]
+    }
 
 
 @router.post(
