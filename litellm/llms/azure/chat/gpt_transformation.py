@@ -98,6 +98,7 @@ class AzureOpenAIConfig(BaseConfig):
             "seed",
             "extra_headers",
             "parallel_tool_calls",
+            "prediction",
         ]
 
     def _is_response_format_supported_model(self, model: str) -> bool:

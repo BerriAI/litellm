@@ -52,6 +52,39 @@ def interpret_results(csv_file):
     return markdown_table
 
 
+def _get_docker_run_command_stable_release(release_version):
+    return f"""
+    \n\n
+    ## Docker Run LiteLLM Proxy
+
+    ```
+    docker run \\
+    -e STORE_MODEL_IN_DB=True \\
+    -p 4000:4000 \\
+    ghcr.io/berriai/litellm_stable_release_branch-{release_version}
+    """
+
+
+def _get_docker_run_command(release_version):
+    return f"""
+    \n\n
+    ## Docker Run LiteLLM Proxy
+
+    ```
+    docker run \\
+    -e STORE_MODEL_IN_DB=True \\
+    -p 4000:4000 \\
+    ghcr.io/berriai/litellm:main-{release_version}
+    """
+
+
+def get_docker_run_command(release_version):
+    if "stable" in release_version:
+        return _get_docker_run_command_stable_release(release_version)
+    else:
+        return _get_docker_run_command(release_version)
+
+
 if __name__ == "__main__":
     csv_file = "load_test_stats.csv"  # Change this to the path of your CSV file
     markdown_table = interpret_results(csv_file)
@@ -79,17 +112,7 @@ if __name__ == "__main__":
         start_index = latest_release.body.find("Load Test LiteLLM Proxy Results")
         existing_release_body = latest_release.body[:start_index]
 
-    docker_run_command = f"""
-\n\n
-## Docker Run LiteLLM Proxy
-
-```
-docker run \\
--e STORE_MODEL_IN_DB=True \\
--p 4000:4000 \\
-ghcr.io/berriai/litellm:main-{release_version}
-```
-    """
+    docker_run_command = get_docker_run_command(release_version)
     print("docker run command: ", docker_run_command)
 
     new_release_body = (

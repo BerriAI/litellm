@@ -354,11 +354,11 @@ environment_variables:
 
 ### Example Token 
 
-```
+```bash
 {
   "aud": "api://LiteLLM_Proxy",
   "oid": "eec236bd-0135-4b28-9354-8fc4032d543e",
-  "roles": ["litellm.api.consumer"]
+  "roles": ["litellm.api.consumer"] 
 }
 ```
 
@@ -415,9 +415,9 @@ general_settings:
 
 Expected Token:
 
-```
+```bash
 {
-  "scope": ["litellm.api.consumer", "litellm.api.gpt_3_5_turbo"]
+  "scope": ["litellm.api.consumer", "litellm.api.gpt_3_5_turbo"] # can be a list or a space-separated string
 }
 ```
 

@@ -618,7 +618,7 @@ def function_setup(  # noqa: PLR0915
                 details_to_log.pop("prompt", None)
             add_breadcrumb(
                 category="litellm.llm_call",
-                message=f"Positional Args: {args}, Keyword Args: {details_to_log}",
+                message=f"Keyword Args: {details_to_log}",
                 level="info",
             )
         if "logger_fn" in kwargs:
@@ -726,8 +726,8 @@ def function_setup(  # noqa: PLR0915
         )
         return logging_obj, kwargs
     except Exception as e:
-        verbose_logger.error(
-            f"litellm.utils.py::function_setup() - [Non-Blocking] {traceback.format_exc()}; args - {args}; kwargs - {kwargs}"
+        verbose_logger.exception(
+            "litellm.utils.py::function_setup() - [Non-Blocking] Error in function_setup"
         )
         raise e
 
@@ -3166,51 +3166,56 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
-    elif custom_llm_provider == "vertex_ai" and model in litellm.vertex_llama3_models:
-        optional_params = litellm.VertexAILlama3Config().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=(
-                drop_params
-                if drop_params is not None and isinstance(drop_params, bool)
-                else False
-            ),
-        )
-    elif custom_llm_provider == "vertex_ai" and model in litellm.vertex_mistral_models:
-        if "codestral" in model:
-            optional_params = litellm.CodestralTextCompletionConfig().map_openai_params(
-                model=model,
+    elif custom_llm_provider == "vertex_ai":
+
+        if model in litellm.vertex_mistral_models:
+            if "codestral" in model:
+                optional_params = (
+                    litellm.CodestralTextCompletionConfig().map_openai_params(
+                        model=model,
+                        non_default_params=non_default_params,
+                        optional_params=optional_params,
+                        drop_params=(
+                            drop_params
+                            if drop_params is not None and isinstance(drop_params, bool)
+                            else False
+                        ),
+                    )
+                )
+            else:
+                optional_params = litellm.MistralConfig().map_openai_params(
+                    model=model,
+                    non_default_params=non_default_params,
+                    optional_params=optional_params,
+                    drop_params=(
+                        drop_params
+                        if drop_params is not None and isinstance(drop_params, bool)
+                        else False
+                    ),
+                )
+        elif model in litellm.vertex_ai_ai21_models:
+            optional_params = litellm.VertexAIAi21Config().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
+                model=model,
                 drop_params=(
                     drop_params
                     if drop_params is not None and isinstance(drop_params, bool)
                     else False
                 ),
             )
-        else:
-            optional_params = litellm.MistralConfig().map_openai_params(
-                model=model,
+        else:  # use generic openai-like param mapping
+            optional_params = litellm.VertexAILlama3Config().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
+                model=model,
                 drop_params=(
                     drop_params
                     if drop_params is not None and isinstance(drop_params, bool)
                     else False
                 ),
             )
-    elif custom_llm_provider == "vertex_ai" and model in litellm.vertex_ai_ai21_models:
-        optional_params = litellm.VertexAIAi21Config().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=(
-                drop_params
-                if drop_params is not None and isinstance(drop_params, bool)
-                else False
-            ),
-        )
+
     elif custom_llm_provider == "sagemaker":
         # temperature, top_p, n, stream, stop, max_tokens, n, presence_penalty default to None
         optional_params = litellm.SagemakerConfig().map_openai_params(
@@ -4168,7 +4173,6 @@ def _get_max_position_embeddings(model_name: str) -> Optional[int]:
         return None
 
 
-@lru_cache_wrapper(maxsize=16)
 def _cached_get_model_info_helper(
     model: str, custom_llm_provider: Optional[str]
 ) -> ModelInfoBase:
@@ -5189,9 +5193,10 @@ def _calculate_retry_after(
 # custom prompt helper function
 def register_prompt_template(
     model: str,
-    roles: dict,
+    roles: dict = {},
     initial_prompt_value: str = "",
     final_prompt_value: str = "",
+    tokenizer_config: dict = {},
 ):
     """
     Register a prompt template to follow your custom format for a given model
@@ -5228,12 +5233,27 @@ def register_prompt_template(
     )
     ```
     """
-    model = get_llm_provider(model=model)[0]
-    litellm.custom_prompt_dict[model] = {
-        "roles": roles,
-        "initial_prompt_value": initial_prompt_value,
-        "final_prompt_value": final_prompt_value,
-    }
+    complete_model = model
+    potential_models = [complete_model]
+    try:
+        model = get_llm_provider(model=model)[0]
+        potential_models.append(model)
+    except Exception:
+        pass
+    if tokenizer_config:
+        for m in potential_models:
+            litellm.known_tokenizer_config[m] = {
+                "tokenizer": tokenizer_config,
+                "status": "success",
+            }
+    else:
+        for m in potential_models:
+            litellm.custom_prompt_dict[m] = {
+                "roles": roles,
+                "initial_prompt_value": initial_prompt_value,
+                "final_prompt_value": final_prompt_value,
+            }
+
     return litellm.custom_prompt_dict
 
 

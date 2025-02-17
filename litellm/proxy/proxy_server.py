@@ -159,6 +159,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
 )
 from litellm.proxy.common_utils.proxy_state import ProxyState
+from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
@@ -246,7 +247,6 @@ from litellm.proxy.utils import (
     get_error_message_str,
     get_instance_fn,
     hash_token,
-    reset_budget,
     update_spend,
 )
 from litellm.proxy.vertex_ai_endpoints.langfuse_endpoints import (
@@ -1903,10 +1903,6 @@ class ProxyConfig:
                                 callback
                             )
                             if "prometheus" in callback:
-                                if not premium_user:
-                                    raise Exception(
-                                        CommonProxyErrors.not_premium_user.value
-                                    )
                                 verbose_proxy_logger.debug(
                                     "Starting Prometheus Metrics on /metrics"
                                 )
@@ -3254,8 +3250,14 @@ class ProxyStartupEvent:
 
         ### RESET BUDGET ###
         if general_settings.get("disable_reset_budget", False) is False:
+            budget_reset_job = ResetBudgetJob(
+                proxy_logging_obj=proxy_logging_obj,
+                prisma_client=prisma_client,
+            )
             scheduler.add_job(
-                reset_budget, "interval", seconds=interval, args=[prisma_client]
+                budget_reset_job.reset_budget,
+                "interval",
+                seconds=interval,
             )
 
         ### UPDATE SPEND ###

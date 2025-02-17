@@ -1058,6 +1058,7 @@ jobs:
       - run: python ./tests/code_coverage_tests/ensure_async_clients_test.py
       - run: python ./tests/code_coverage_tests/enforce_llms_folder_style.py
       - run: python ./tests/documentation_tests/test_circular_imports.py
+      - run: python ./tests/code_coverage_tests/prevent_key_leaks_in_exceptions.py
       - run: helm lint ./deploy/charts/litellm-helm
 
   db_migration_disable_update_check:
@@ -2017,7 +2018,7 @@ jobs:
                 circleci step halt
             fi
       - run:
-          name: Trigger Github Action for new Docker Container + Trigger Stable Release Testing
+          name: Trigger Github Action for new Docker Container + Trigger Load Testing
           command: |
             echo "Install TOML package."
             python3 -m pip install toml
@@ -2027,9 +2028,9 @@ jobs:
               -H "Accept: application/vnd.github.v3+json" \
               -H "Authorization: Bearer $GITHUB_TOKEN" \
               "https://api.github.com/repos/BerriAI/litellm/actions/workflows/ghcr_deploy.yml/dispatches" \
-              -d "{\"ref\":\"main\", \"inputs\":{\"tag\":\"v${VERSION}\", \"commit_hash\":\"$CIRCLE_SHA1\"}}"
-            echo "triggering stable release server for version ${VERSION} and commit ${CIRCLE_SHA1}"
-            curl -X POST "https://proxyloadtester-production.up.railway.app/start/load/test?version=${VERSION}&commit_hash=${CIRCLE_SHA1}"
+              -d "{\"ref\":\"main\", \"inputs\":{\"tag\":\"v${VERSION}-nightly\", \"commit_hash\":\"$CIRCLE_SHA1\"}}"
+            echo "triggering load testing server for version ${VERSION} and commit ${CIRCLE_SHA1}"
+            curl -X POST "https://proxyloadtester-production.up.railway.app/start/load/test?version=${VERSION}&commit_hash=${CIRCLE_SHA1}&release_type=nightly"
 
   e2e_ui_testing:
     machine:

@@ -101,6 +101,7 @@ async def common_checks(
         team_object=team_object,
         model=_model,
         llm_router=llm_router,
+        team_model_aliases=valid_token.team_model_aliases if valid_token else None,
     )
 
     ## 2.1 If user can call model (if personal key)
@@ -968,6 +969,7 @@ async def _can_object_call_model(
     model: str,
     llm_router: Optional[Router],
     models: List[str],
+    team_model_aliases: Optional[Dict[str, str]] = None,
 ) -> Literal[True]:
     """
     Checks if token can call a given model
@@ -1002,6 +1004,9 @@ async def _can_object_call_model(
 
     verbose_proxy_logger.debug(f"model: {model}; allowed_models: {filtered_models}")
 
+    if _model_in_team_aliases(model=model, team_model_aliases=team_model_aliases):
+        return True
+
     if _model_matches_any_wildcard_pattern_in_list(
         model=model, allowed_model_list=filtered_models
     ):
@@ -1026,6 +1031,26 @@ async def _can_object_call_model(
     return True
 
 
+def _model_in_team_aliases(
+    model: str, team_model_aliases: Optional[Dict[str, str]] = None
+) -> bool:
+    """
+    Returns True if `model` being accessed is an alias of a team model
+
+    - `model=gpt-4o`
+    - `team_model_aliases={"gpt-4o": "gpt-4o-team-1"}`
+        - returns True
+
+    - `model=gp-4o`
+    - `team_model_aliases={"o-3": "o3-preview"}`
+        - returns False
+    """
+    if team_model_aliases:
+        if model in team_model_aliases:
+            return True
+    return False
+
+
 async def can_key_call_model(
     model: str,
     llm_model_list: Optional[list],
@@ -1045,6 +1070,7 @@ async def can_key_call_model(
         model=model,
         llm_router=llm_router,
         models=valid_token.models,
+        team_model_aliases=valid_token.team_model_aliases,
     )
 
 
@@ -1217,6 +1243,7 @@ def _team_model_access_check(
     model: Optional[str],
     team_object: Optional[LiteLLM_TeamTable],
     llm_router: Optional[Router],
+    team_model_aliases: Optional[Dict[str, str]] = None,
 ):
     """
     Access check for team models
@@ -1243,6 +1270,8 @@ def _team_model_access_check(
         ):
             pass
         elif model and "*" in model:
+            pass
+        elif _model_in_team_aliases(model=model, team_model_aliases=team_model_aliases):
             pass
         elif _model_matches_any_wildcard_pattern_in_list(
             model=model, allowed_model_list=team_object.models
