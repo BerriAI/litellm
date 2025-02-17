@@ -17,11 +17,6 @@ class AzureAIRerankConfig(CohereRerankConfig):
     """
     Azure AI Rerank - Follows the same Spec as Cohere Rerank
     """
-
-    # Azure does not support v2/rerank for cohere yet
-    def __init__(self):
-        super().__init__(True)
-
     def get_complete_url(self, api_base: Optional[str], model: str) -> str:
         if api_base is None:
             raise ValueError(

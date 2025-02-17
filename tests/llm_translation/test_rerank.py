@@ -386,28 +386,6 @@ def test_rerank_response_assertions():
 
     assert_response_shape(r, custom_llm_provider="custom")
 
-@pytest.mark.parametrize(
-    "endpoint, params, expected_bool, expected_url",
-    [
-        ("localhost:4000/v1/rerank", ["max_chunks_per_doc"], True, "localhost:4000/v1/rerank"),
-        ("localhost:4000/v2/rerank", ["max_chunks_per_doc"], False, "localhost:4000/v2/rerank"),
-        ("localhost:4000", ["max_chunks_per_doc"], True, "localhost:4000/v1/rerank"),
-
-        ("localhost:4000/v1/rerank", ["max_tokens_per_doc"], True, "localhost:4000/v1/rerank"),
-        ("localhost:4000/v2/rerank", ["max_tokens_per_doc"], False, "localhost:4000/v2/rerank"),
-        ("localhost:4000", ["max_tokens_per_doc"], False, "localhost:4000/v2/rerank"),
-
-        ("localhost:4000/v1/rerank", ["max_chunks_per_doc", "max_tokens_per_doc"], True, "localhost:4000/v1/rerank"),
-        ("localhost:4000/v2/rerank", ["max_chunks_per_doc", "max_tokens_per_doc"], False, "localhost:4000/v2/rerank"),
-        ("localhost:4000", ["max_chunks_per_doc", "max_tokens_per_doc"], False, "localhost:4000/v2/rerank"),
-
-    ],
-)
-def test_cohere_rerank_config_versions(endpoint, params, expected_bool, expected_url):
-
-    assert(litellm.CohereRerankConfig(endpoint, params).uses_v1_client == expected_bool)
-    assert(litellm.CohereRerankConfig(endpoint, params).get_complete_url(endpoint, "123") == expected_url)
-
 def test_cohere_rerank_v2_client():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
@@ -439,7 +417,7 @@ def test_cohere_rerank_v2_client():
 
         mock_post.return_value = mock_response
 
-        litellm.rerank(
+        response = litellm.rerank(
             model=rerank_model,
             query=text,
             documents=list_texts,
@@ -450,6 +428,7 @@ def test_cohere_rerank_v2_client():
             client=client,
         )
 
+        # Ensure Cohere API is called with the expected params
         mock_post.assert_called_once()
         assert(mock_post.call_args.kwargs["url"] == "http://localhost:4000/v2/rerank")
 
@@ -459,3 +438,6 @@ def test_cohere_rerank_v2_client():
         assert(request_data["documents"] == list_texts)
         assert(request_data["max_tokens_per_doc"] == 3)
         assert(request_data["top_n"] == 2)
+
+        # Ensure litellm response is what we expect
+        assert(response["results"] == mock_response.json()["results"])
