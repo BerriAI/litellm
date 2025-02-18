@@ -6368,7 +6368,9 @@ def get_non_default_completion_params(kwargs: dict) -> dict:
 
 def add_openai_metadata(metadata: dict) -> dict:
     """
-    Add metadata to openai optional parameters, excluding hidden params
+    Add metadata to openai optional parameters, excluding hidden params.
+
+    OpenAI 'metadata' only supports string values.
 
     Args:
         params (dict): Dictionary of API parameters

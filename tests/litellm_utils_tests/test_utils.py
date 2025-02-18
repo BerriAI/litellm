@@ -1966,3 +1966,22 @@ def test_get_applied_guardrails(test_case):
 
     # Assert
     assert sorted(result) == sorted(test_case["expected"])
+
+
+def test_add_openai_metadata():
+    from litellm.utils import add_openai_metadata
+
+    metadata = {
+        "user_api_key_end_user_id": "123",
+        "hidden_params": {"api_key": "123"},
+        "litellm_parent_otel_span": MagicMock(),
+        "none-val": None,
+        "int-val": 1,
+        "dict-val": {"a": 1, "b": 2},
+    }
+
+    result = add_openai_metadata(metadata)
+
+    assert result == {
+        "user_api_key_end_user_id": "123",
+    }
