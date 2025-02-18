@@ -6368,7 +6368,9 @@ def get_non_default_completion_params(kwargs: dict) -> dict:
 
 def add_openai_metadata(metadata: dict) -> dict:
     """
-    Add metadata to openai optional parameters, excluding hidden params
+    Add metadata to openai optional parameters, excluding hidden params.
+
+    OpenAI 'metadata' only supports string values.
 
     Args:
         params (dict): Dictionary of API parameters
@@ -6380,5 +6382,10 @@ def add_openai_metadata(metadata: dict) -> dict:
     if metadata is None:
         return None
     # Only include non-hidden parameters
-    visible_metadata = {k: v for k, v in metadata.items() if k != "hidden_params"}
+    visible_metadata = {
+        k: v
+        for k, v in metadata.items()
+        if k != "hidden_params" and isinstance(v, (str))
+    }
+
     return visible_metadata.copy()
