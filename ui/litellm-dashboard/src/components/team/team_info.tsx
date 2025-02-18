@@ -71,11 +71,11 @@ interface TeamInfoProps {
   editTeam: boolean;
 }
 
-const TeamInfoView: React.FC<TeamInfoProps> = ({ 
-  teamId, 
-  onClose, 
-  accessToken, 
-  is_team_admin, 
+const TeamInfoView: React.FC<TeamInfoProps> = ({
+  teamId,
+  onClose,
+  accessToken,
+  is_team_admin,
   is_proxy_admin,
   userModels,
   editTeam
@@ -189,9 +189,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           guardrails: values.guardrails || []
         }
       };
-      
+
       const response = await teamUpdateCall(accessToken, updateData);
-      
+
       message.success("Team settings updated successfully");
       setIsEditing(false);
       fetchTeamInfo();
@@ -199,6 +199,172 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       message.error("Failed to update team settings");
       console.error("Error updating team:", error);
     }
+  };
+
+  const renderSettingsPanel = () => {
+    if (!teamData?.team_info) return null;
+    const info = teamData.team_info;
+
+    // Extract existing guardrails from team metadata
+    let existingGuardrails: string[] = [];
+    try {
+      existingGuardrails = info.metadata?.guardrails || [];
+    } catch (error) {
+      console.error("Error extracting guardrails:", error);
+    }
+
+    if (!isEditing) {
+      return (
+        <Card>
+          <div className="flex justify-between">
+            <Title>Team Settings</Title>
+            {canEditTeam && (
+              <Button type="primary" onClick={() => setIsEditing(true)}>
+                Edit Settings
+              </Button>
+            )}
+          </div>
+          <div className="mt-4 space-y-4">
+            <div>
+              <Text className="font-medium">Team Name</Text>
+              <Text>{info.team_alias}</Text>
+            </div>
+            <div>
+              <Text className="font-medium">Team ID</Text>
+              <Text className="font-mono">{info.team_id}</Text>
+            </div>
+            <div>
+              <Text className="font-medium">Created At</Text>
+              <Text>{new Date(info.created_at).toLocaleString()}</Text>
+            </div>
+            <div>
+              <Text className="font-medium">Models</Text>
+              <div className="flex flex-wrap gap-2 mt-1">
+                {info.models.map((model, index) => (
+                  <Badge key={index} color="red">
+                    {model}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+            <div>
+              <Text className="font-medium">Rate Limits</Text>
+              <Text>TPM: {info.tpm_limit || 'Unlimited'}</Text>
+              <Text>RPM: {info.rpm_limit || 'Unlimited'}</Text>
+            </div>
+            <div>
+              <Text className="font-medium">Budget</Text>
+              <Text>Max: ${info.max_budget || 'Unlimited'}</Text>
+              <Text>Reset: {info.budget_duration || 'Never'}</Text>
+            </div>
+            <div>
+              <Text className="font-medium">Status</Text>
+              <Badge color={info.blocked ? 'red' : 'green'}>
+                {info.blocked ? 'Blocked' : 'Active'}
+              </Badge>
+            </div>
+          </div>
+        </Card>
+      );
+    }
+
+    return (
+      <Card>
+        <Title>Edit Team Settings</Title>
+        <Form
+          form={form}
+          onFinish={handleTeamUpdate}
+          initialValues={{
+            ...info,
+            guardrails: existingGuardrails
+          }}
+          layout="vertical"
+          className="mt-4"
+        >
+          <Form.Item
+            label="Team Name"
+            name="team_alias"
+            rules={[{ required: true, message: "Please input a team name" }]}
+          >
+            <Input />
+          </Form.Item>
+
+          <Form.Item label="Models" name="models">
+            <Select2
+              mode="multiple"
+              placeholder="Select models"
+              style={{ width: "100%" }}
+            >
+              <Select2.Option
+                key="all-proxy-models"
+                value="all-proxy-models"
+              >
+                All Proxy Models
+              </Select2.Option>
+              {userModels.map((model) => (
+                <Select2.Option key={model} value={model}>
+                  {getModelDisplayName(model)}
+                </Select2.Option>
+              ))}
+            </Select2>
+          </Form.Item>
+
+          <Form.Item label="Max Budget (USD)" name="max_budget">
+            <InputNumber step={0.01} precision={2} style={{ width: 200 }} />
+          </Form.Item>
+
+          <Form.Item label="Reset Budget" name="budget_duration">
+            <Select placeholder="n/a">
+              <Select.Option value="24h">daily</Select.Option>
+              <Select.Option value="7d">weekly</Select.Option>
+              <Select.Option value="30d">monthly</Select.Option>
+            </Select>
+          </Form.Item>
+
+          <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
+            <InputNumber step={1} style={{ width: "100%" }} />
+          </Form.Item>
+
+          <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
+            <InputNumber step={1} style={{ width: "100%" }} />
+          </Form.Item>
+
+          <Form.Item
+            label={
+              <span>
+                Guardrails{' '}
+                <Tooltip title="Setup your first guardrail">
+                  <a
+                    href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </a>
+                </Tooltip>
+              </span>
+            }
+            name="guardrails"
+            help="Select existing guardrails or enter new ones"
+          >
+            <Select
+              mode="tags"
+              placeholder="Select or enter guardrails"
+            />
+          </Form.Item>
+
+          <div className="flex justify-end gap-2 mt-6">
+            <Button onClick={() => setIsEditing(false)}>
+              Cancel
+            </Button>
+            <Button type="primary" htmlType="submit">
+              Save Changes
+            </Button>
+          </div>
+        </Form>
+      </Card>
+    );
   };
 
   if (loading) {
@@ -213,12 +379,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   return (
     <div className="p-4">
-      <div className="flex justify-between items-center mb-6">
-        <div>
-          <Button onClick={onClose} className="mb-4">← Back</Button>
-          <Title>{info.team_alias}</Title>
-          <Text className="text-gray-500 font-mono">{info.team_id}</Text>
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-4">
+          <Button onClick={onClose}>←</Button>
+          <div>
+            <Title className="text-2xl/7">{info.team_alias}</Title>
+            <Text className="text-gray-500 font-mono">{info.team_id}</Text>
+          </div>
         </div>
+    
       </div>
 
       <TabGroup defaultIndex={editTeam ? 2 : 0}>
@@ -329,7 +498,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               <div className="flex justify-between items-center mb-4">
                 <Title>Team Settings</Title>
                 {(canEditTeam && !isEditing) && (
-                  <TremorButton 
+                  <TremorButton
                     onClick={() => setIsEditing(true)}
                   >
                     Edit Settings
@@ -358,9 +527,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     name="team_alias"
                     rules={[{ required: true, message: "Please input a team name" }]}
                   >
-                    <Input type=""/>
+                    <Input type="" />
                   </Form.Item>
-                  
+
                   <Form.Item label="Models" name="models">
                     <Select
                       mode="multiple"
@@ -402,9 +571,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <span>
                         Guardrails{' '}
                         <Tooltip title="Setup your first guardrail">
-                          <a 
-                            href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
-                            target="_blank" 
+                          <a
+                            href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
+                            target="_blank"
                             rel="noopener noreferrer"
                             onClick={(e) => e.stopPropagation()}
                           >
@@ -432,44 +601,42 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </div>
                 </Form>
               ) : (
-                <div className="space-y-4">
-                  <div>
-                    <Text className="font-medium">Team Name</Text>
-                    <div>{info.team_alias}</div>
+                <div className="grid grid-cols-2 gap-6">
+                  <div className="p-4 border rounded-lg">
+                    <Text className="font-medium">Team Info</Text>
+                    <div className="mt-1">Team Id : <span className="text-gray-500">{info.team_id}</span></div>
+                    <div className="mt-1">Team Name : <span className="text-gray-500">{info.team_alias}</span></div>
+                    <div className="mt-1">Created At : <span className="text-gray-500">{new Date(info.created_at).toLocaleString()}</span></div>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="">Status:</span>
+                      <Badge color={info.blocked ? 'red' : 'green'}>
+                       {info.blocked ? 'Blocked' : 'Active'}
+                      </Badge>
+                    </div>
                   </div>
-                  <div>
-                    <Text className="font-medium">Team ID</Text>
-                    <div className="font-mono">{info.team_id}</div>
+                  <div className="p-4 border rounded-lg">
+                    <Text className="font-medium">Rate Limits</Text>
+                    <div className="mt-1">
+                      <div className="mt-1">TPM: {info.tpm_limit || 'Unlimited'}</div>
+                      <div className="mt-1">RPM: {info.rpm_limit || 'Unlimited'}</div>
+                    </div>
                   </div>
-                  <div>
-                    <Text className="font-medium">Created At</Text>
-                    <div>{new Date(info.created_at).toLocaleString()}</div>
+                  <div className="p-4 border rounded-lg">
+                    <Text className="font-medium">Budget</Text>
+                    <div className="mt-1">
+                      <div className="mt-1">Max: {info.max_budget !== null ? `$${info.max_budget}` : 'No Limit'}</div>
+                      <div className="mt-1">Reset: {info.budget_duration || 'Never'}</div>
+                    </div>
                   </div>
-                  <div>
+                  <div className="p-4 border rounded-lg">
                     <Text className="font-medium">Models</Text>
-                    <div className="flex flex-wrap gap-2 mt-1">
+                    <div className="flex flex-wrap gap-2 mt-2">
                       {info.models.map((model, index) => (
-                        <Badge key={index} color="red">
+                        <Badge key={index} color="gray">
                           {model}
                         </Badge>
                       ))}
                     </div>
-                  </div>
-                  <div>
-                    <Text className="font-medium">Rate Limits</Text>
-                    <div>TPM: {info.tpm_limit || 'Unlimited'}</div>
-                    <div>RPM: {info.rpm_limit || 'Unlimited'}</div>
-                  </div>
-                  <div>
-                    <Text className="font-medium">Budget</Text>
-                      <div>Max: {info.max_budget !== null ? `$${info.max_budget}` : 'No Limit'}</div>
-                    <div>Reset: {info.budget_duration || 'Never'}</div>
-                  </div>
-                  <div>
-                    <Text className="font-medium">Status</Text>
-                    <Badge color={info.blocked ? 'red' : 'green'}>
-                      {info.blocked ? 'Blocked' : 'Active'}
-                    </Badge>
                   </div>
                 </div>
               )}
