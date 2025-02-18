@@ -4910,8 +4910,20 @@ class Router:
 
         model_names = []
         for m in model_list:
-            model_names.append(m["model_name"])
+            model_names.append(self._get_public_model_name(m))
         return model_names
+
+    def _get_public_model_name(self, deployment: DeploymentTypedDict) -> str:
+        """
+        Returns the user-friendly model name for public display (e.g., on /models endpoint).
+
+        Prioritizes the team's public model name if available, otherwise falls back to the default model name.
+        """
+        model_info = deployment.get("model_info")
+        if model_info and model_info.get("team_public_model_name"):
+            return model_info["team_public_model_name"]
+
+        return deployment["model_name"]
 
     def get_model_list_from_model_alias(
         self, model_name: Optional[str] = None
@@ -4993,14 +5005,16 @@ class Router:
         model_list = self.get_model_list(model_name=model_name)
         if model_list:
             for m in model_list:
-                for group in m.get("model_info", {}).get("access_groups", []):
-                    if model_access_group is not None:
-                        if group == model_access_group:
+                _model_info = m.get("model_info")
+                if _model_info:
+                    for group in _model_info.get("access_groups", []) or []:
+                        if model_access_group is not None:
+                            if group == model_access_group:
+                                model_name = m["model_name"]
+                                access_groups[group].append(model_name)
+                        else:
                             model_name = m["model_name"]
                             access_groups[group].append(model_name)
-                    else:
-                        model_name = m["model_name"]
-                        access_groups[group].append(model_name)
 
         return access_groups
 

@@ -55,6 +55,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
@@ -66,17 +67,6 @@ from litellm.proxy.utils import (
 )
 
 router = APIRouter()
-
-
-def _is_user_team_admin(
-    user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable
-) -> bool:
-
-    for member in team_obj.members_with_roles:
-        if member.user_id is not None and member.user_id == user_api_key_dict.user_id:
-            return True
-
-    return False
 
 
 def _is_available_team(team_id: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
