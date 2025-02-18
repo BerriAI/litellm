@@ -6174,7 +6174,7 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
         api_base: Optional[str],
-        present_version_params: list[str],
+        present_version_params: List[str],
     ) -> BaseRerankConfig:
         if litellm.LlmProviders.COHERE == provider:
             if should_use_cohere_v1_client(api_base, present_version_params):
@@ -6262,7 +6262,7 @@ def get_end_user_id_for_cost_tracking(
         return None
     return end_user_id
 
-def should_use_cohere_v1_client(api_base: Optional[str], present_version_params: list[str]):
+def should_use_cohere_v1_client(api_base: Optional[str], present_version_params: List[str]):
     if not api_base:
         return False
     uses_v1_params = ("max_chunks_per_doc" in present_version_params) and ('max_tokens_per_doc' not in present_version_params) 
