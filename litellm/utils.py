@@ -3883,7 +3883,7 @@ def _count_characters(text: str) -> int:
     return len(filtered_text)
 
 
-def get_response_string(response_obj: ModelResponse) -> str:
+def get_response_string(response_obj: ModelResponse | ModelResponseStream) -> str:
     _choices: List[Union[Choices, StreamingChoices]] = response_obj.choices
 
     response_str = ""
