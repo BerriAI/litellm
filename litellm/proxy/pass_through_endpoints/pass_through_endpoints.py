@@ -609,7 +609,7 @@ def create_pass_through_route(
     # check if target is an adapter.py or a url
     import uuid
 
-    from litellm.proxy.utils import get_instance_fn
+    from litellm.proxy.types_utils.utils import get_instance_fn
 
     try:
         if isinstance(target, CustomLogger):

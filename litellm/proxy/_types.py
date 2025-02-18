@@ -2,7 +2,7 @@ import enum
 import json
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
 
 import httpx
 from pydantic import (
@@ -29,6 +29,8 @@ from litellm.types.utils import (
     StandardPassThroughResponseObject,
     TextCompletionResponse,
 )
+
+from .types_utils.utils import get_instance_fn, validate_custom_validate_return_type
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -2395,6 +2397,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     - public_key_ttl: Default - 600s. TTL for caching public JWT keys.
     - public_allowed_routes: list of allowed routes for authenticated but unknown litellm role jwt tokens.
     - enforce_rbac: If true, enforce RBAC for all routes.
+    - custom_validate: A custom function to validates the JWT token.
 
     See `auth_checks.py` for the specific routes
     """
@@ -2439,6 +2442,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     scope_mappings: Optional[List[ScopeMapping]] = None
     enforce_scope_based_access: bool = False
     enforce_team_based_model_access: bool = False
+    custom_validate: Optional[Callable[..., Literal[True]]] = None
 
     def __init__(self, **kwargs: Any) -> None:
         # get the attribute names for this Pydantic model
@@ -2451,6 +2455,12 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         role_mappings = kwargs.get("role_mappings")
         scope_mappings = kwargs.get("scope_mappings")
         enforce_scope_based_access = kwargs.get("enforce_scope_based_access")
+        custom_validate = kwargs.get("custom_validate")
+
+        if custom_validate is not None:
+            fn = get_instance_fn(custom_validate)
+            validate_custom_validate_return_type(fn)
+            kwargs["custom_validate"] = fn
 
         if invalid_keys:
             raise ValueError(
