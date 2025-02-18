@@ -20,14 +20,26 @@ else:
 
 
 class BaseCache(ABC):
-    def __init__(self, default_ttl: int = 60):
+    def __init__(
+        self,
+        default_ttl: int = 60,
+        maximum_ttl: Optional[int] = None,
+    ):
+        """
+        Initialize the BaseCache
+
+        Args:
+            default_ttl: The default TTL for the cache
+            maximum_ttl: The maximum allowed dynamic TTL for the cache
+        """
         self.default_ttl = default_ttl
+        self.maximum_ttl = maximum_ttl
 
     def get_ttl(self, **kwargs) -> Optional[int]:
         kwargs_ttl: Optional[int] = kwargs.get("ttl")
         if kwargs_ttl is not None:
             try:
-                return int(kwargs_ttl)
+                return self._get_dynamic_ttl(kwargs_ttl=int(kwargs_ttl))
             except ValueError:
                 return self.default_ttl
         return self.default_ttl
@@ -53,3 +65,16 @@ class BaseCache(ABC):
 
     async def disconnect(self):
         raise NotImplementedError
+
+    def _get_dynamic_ttl(
+        self,
+        kwargs_ttl: int,
+    ) -> int:
+        """
+        Returns the minimum of the maximum TTL and the TTL from the kwargs
+
+        Allows a admin to set the maxmium allowed TTL for dynamic ttl requests
+        """
+        if self.maximum_ttl is not None:
+            return min(kwargs_ttl, self.maximum_ttl)
+        return kwargs_ttl
