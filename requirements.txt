@@ -44,7 +44,6 @@ importlib-metadata==6.8.0 # for random utils
 tokenizers==0.20.2 # for calculating usage
 click==8.1.7 # for proxy cli 
 jinja2==3.1.4 # for prompt templates
-certifi==2024.12.14 # [TODO] clean up 
 aiohttp==3.10.2 # for network calls
 aioboto3==12.3.0 # for async sagemaker calls
 tenacity==8.2.3  # for retrying requests, when litellm.num_retries set
