@@ -101,7 +101,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
       </TremorButton>
 
       {showFilters && (
-        <Card className="absolute left-0 mt-2 w-96 z-50">
+        <Card className="absolute left-0 mt-2 w-96 z-50 border border-gray-200 shadow-lg">
           <div className="flex flex-col gap-4">
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium">Where</span>
