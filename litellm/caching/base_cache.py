@@ -22,7 +22,7 @@ else:
 class BaseCache(ABC):
     def __init__(
         self,
-        default_ttl: int = 60,
+        default_ttl: Optional[int] = 60,
         maximum_ttl: Optional[int] = None,
     ):
         """
@@ -36,6 +36,9 @@ class BaseCache(ABC):
         self.maximum_ttl = maximum_ttl
 
     def get_ttl(self, **kwargs) -> Optional[int]:
+        """
+        Get the TTL to use for storing a LLM response in the cache
+        """
         kwargs_ttl: Optional[int] = kwargs.get("ttl")
         if kwargs_ttl is not None:
             try:
