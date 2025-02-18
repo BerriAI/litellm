@@ -21,8 +21,11 @@ export const handleAddModelSubmit = async (
         formValues["model"] = wildcardModel; 
       }
 
-      // Get model mappings
+      // Get model mappings and safely remove from formValues
       const modelMappings = formValues["model_mappings"] || [];
+      if ("model_mappings" in formValues) {
+        delete formValues["model_mappings"];
+      }
       
       // Create a deployment for each mapping
       for (const mapping of modelMappings) {
