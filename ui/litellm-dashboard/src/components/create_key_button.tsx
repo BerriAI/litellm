@@ -31,6 +31,7 @@ import {
   getGuardrailsList,
 } from "./networking";
 import { Team } from "./key_team_helpers/key_list";
+import TeamDropdown from "./common_components/team_dropdown";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Tooltip } from 'antd';
 
@@ -292,28 +293,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               initialValue={team ? team.team_id : null}
               className="mt-8"
             >
-              <Select
-                showSearch
-                placeholder="Search or select a team"
-                onChange={(value) => {
-                  form.setFieldValue('team_id', value);
-                  const selectedTeam = teams?.find(team => team.team_id === value);
-                  setSelectedCreateKeyTeam(selectedTeam || null);
-                }}
-                filterOption={(input, option) => {
-                  if (!option) return false;
-                  const optionValue = option.children?.toString() || '';
-                  return optionValue.toLowerCase().includes(input.toLowerCase());
-                }}
-                optionFilterProp="children"
-              >
-                {teams?.map((team) => (
-                  <Select.Option key={team.team_id} value={team.team_id}>
-                    <span className="font-medium">{team.team_alias}</span>{" "}
-                    <span className="text-gray-500">({team.team_id})</span>
-                  </Select.Option>
-                ))}
-              </Select>
+              <TeamDropdown teams={teams} />
             </Form.Item>
 
             <Form.Item
