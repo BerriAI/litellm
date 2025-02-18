@@ -80,6 +80,7 @@ class RedisCache(BaseCache):
 
         redis_kwargs.update(kwargs)
         self.redis_client = get_redis_client(**redis_kwargs)
+        self.redis_async_client: Optional[async_redis_client] = None
         self.redis_kwargs = redis_kwargs
         self.async_redis_conn_pool = get_redis_connection_pool(**redis_kwargs)
 
@@ -132,9 +133,11 @@ class RedisCache(BaseCache):
     ) -> Union[async_redis_client, async_redis_cluster_client]:
         from .._redis import get_redis_async_client
 
-        return get_redis_async_client(
-            connection_pool=self.async_redis_conn_pool, **self.redis_kwargs
-        )
+        if self.redis_async_client is None:
+            self.redis_async_client = get_redis_async_client(
+                connection_pool=self.async_redis_conn_pool, **self.redis_kwargs
+            )
+        return self.redis_async_client
 
     def check_and_fix_namespace(self, key: str) -> str:
         """
