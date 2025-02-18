@@ -5348,7 +5348,7 @@
         "supports_vision": true,
         "supports_response_schema": true,
         "supports_audio_output": true,
-        "supports_tool_choice": true,
+        "supports_tool_choice": true
     },
     "openrouter/mistralai/mixtral-8x22b-instruct": {
         "max_tokens": 65536,
