@@ -122,10 +122,12 @@ class RedisCache(BaseCache):
                 "Error connecting to Sync Redis client", extra={"error": str(e)}
             )
 
-        if litellm.default_redis_ttl is not None:
-            super().__init__(default_ttl=int(litellm.default_redis_ttl))
-        else:
-            super().__init__()  # defaults to 60s
+        default_ttl = (
+            int(litellm.default_redis_ttl)
+            if litellm.default_redis_ttl is not None
+            else None
+        )
+        super().__init__(default_ttl=default_ttl, **kwargs)
 
     def init_async_client(
         self,
