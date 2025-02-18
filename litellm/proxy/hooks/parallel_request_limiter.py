@@ -96,6 +96,13 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 detail=f"LiteLLM Rate Limit Handler for rate limit type = {rate_limit_type}. Crossed TPM / RPM / Max Parallel Request Limit. current rpm: {current['current_rpm']}, rpm limit: {rpm_limit}, current tpm: {current['current_tpm']}, tpm limit: {tpm_limit}, current max_parallel_requests: {current['current_requests']}, max_parallel_requests: {max_parallel_requests}",
                 headers={"retry-after": str(self.time_to_next_minute())},
             )
+
+        await self.internal_usage_cache.async_batch_set_cache(
+            cache_list=values_to_update_in_cache,
+            ttl=60,
+            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            local_only=True,
+        )
         return new_val
 
     def time_to_next_minute(self) -> float:
