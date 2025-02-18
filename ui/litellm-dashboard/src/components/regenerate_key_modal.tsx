@@ -11,7 +11,6 @@ interface RegenerateKeyModalProps {
   visible: boolean;
   onClose: () => void;
   accessToken: string | null;
-  onSuccess?: (newKeyData: any) => void;
 }
 
 export function RegenerateKeyModal({
@@ -19,12 +18,12 @@ export function RegenerateKeyModal({
   visible,
   onClose,
   accessToken,
-  onSuccess,
 }: RegenerateKeyModalProps) {
   const [form] = Form.useForm();
   const [regeneratedKey, setRegeneratedKey] = useState<string | null>(null);
   const [regenerateFormData, setRegenerateFormData] = useState<any>(null);
   const [newExpiryTime, setNewExpiryTime] = useState<string | null>(null);
+  const [isRegenerating, setIsRegenerating] = useState(false);
 
   useEffect(() => {
     if (visible && selectedToken) {
@@ -37,6 +36,15 @@ export function RegenerateKeyModal({
       });
     }
   }, [visible, selectedToken, form]);
+
+  useEffect(() => {
+    if (!visible) {
+      // Reset states when modal is closed
+      setRegeneratedKey(null);
+      setIsRegenerating(false);
+      form.resetFields();
+    }
+  }, [visible, form]);
 
   useEffect(() => {
     const calculateNewExpiryTime = (duration: string | undefined) => {
@@ -70,25 +78,24 @@ export function RegenerateKeyModal({
   }, [regenerateFormData?.duration]);
 
   const handleRegenerateKey = async () => {
-
     if (!selectedToken || !accessToken) return;
 
+    setIsRegenerating(true);
     try {
       const formValues = await form.validateFields();
       const response = await regenerateKeyCall(accessToken, selectedToken.token, formValues);
       setRegeneratedKey(response.key);
-      if (onSuccess) {
-        onSuccess({ ...selectedToken, key_name: response.key_name, ...formValues });
-      }
       message.success("API Key regenerated successfully");
     } catch (error) {
       console.error("Error regenerating key:", error);
       message.error("Failed to regenerate API Key");
+      setIsRegenerating(false); // Reset regenerating state on error
     }
   };
 
   const handleClose = () => {
     setRegeneratedKey(null);
+    setIsRegenerating(false);
     form.resetFields();
     onClose();
   };
@@ -96,7 +103,7 @@ export function RegenerateKeyModal({
   return (
     <Modal
       title="Regenerate API Key"
-      visible={visible}
+      open={visible}
       onCancel={handleClose}
       footer={regeneratedKey ? [
         <Button key="close" onClick={handleClose}>
@@ -106,8 +113,12 @@ export function RegenerateKeyModal({
         <Button key="cancel" onClick={handleClose} className="mr-2">
           Cancel
         </Button>,
-        <Button key="regenerate" onClick={handleRegenerateKey} >
-          Regenerate
+        <Button 
+          key="regenerate" 
+          onClick={handleRegenerateKey}
+          disabled={isRegenerating}
+        >
+          {isRegenerating ? "Regenerating..." : "Regenerate"}
         </Button>,
       ]}
     >
@@ -142,41 +153,40 @@ export function RegenerateKeyModal({
           </Col>
         </Grid>
       ) : (
-          <Form
-            form={form}
-            layout="vertical"
-            onValuesChange={(changedValues) => {
-              if ("duration" in changedValues) {
-                setRegenerateFormData((prev: { duration?: string }) => ({ ...prev, duration: changedValues.duration }));
-              }
-            }}
-          >
-            <Form.Item name="key_alias" label="Key Alias">
-              <TextInput disabled={true} />
-            </Form.Item>
-            <Form.Item name="max_budget" label="Max Budget (USD)">
-              <InputNumber step={0.01} precision={2} style={{ width: "100%" }} />
-            </Form.Item>
-            <Form.Item name="tpm_limit" label="TPM Limit">
-              <InputNumber style={{ width: "100%" }} />
-            </Form.Item>
-            <Form.Item name="rpm_limit" label="RPM Limit">
-              <InputNumber style={{ width: "100%" }} />
-            </Form.Item>
-            <Form.Item name="duration" label="Expire Key (eg: 30s, 30h, 30d)" className="mt-8">
-              <TextInput placeholder="" />
-            </Form.Item>
-            <div className="mt-2 text-sm text-gray-500">
-              Current expiry: {selectedToken?.expires ? new Date(selectedToken.expires).toLocaleString() : "Never"}
+        <Form
+          form={form}
+          layout="vertical"
+          onValuesChange={(changedValues) => {
+            if ("duration" in changedValues) {
+              setRegenerateFormData((prev: { duration?: string }) => ({ ...prev, duration: changedValues.duration }));
+            }
+          }}
+        >
+          <Form.Item name="key_alias" label="Key Alias">
+            <TextInput disabled={true} />
+          </Form.Item>
+          <Form.Item name="max_budget" label="Max Budget (USD)">
+            <InputNumber step={0.01} precision={2} style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item name="tpm_limit" label="TPM Limit">
+            <InputNumber style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item name="rpm_limit" label="RPM Limit">
+            <InputNumber style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item name="duration" label="Expire Key (eg: 30s, 30h, 30d)" className="mt-8">
+            <TextInput placeholder="" />
+          </Form.Item>
+          <div className="mt-2 text-sm text-gray-500">
+            Current expiry: {selectedToken?.expires ? new Date(selectedToken.expires).toLocaleString() : "Never"}
+          </div>
+          {newExpiryTime && (
+            <div className="mt-2 text-sm text-green-600">
+              New expiry: {newExpiryTime}
             </div>
-            {newExpiryTime && (
-              <div className="mt-2 text-sm text-green-600">
-                New expiry: {newExpiryTime}
-              </div>
-            )}
-          </Form>
-        )
-        }
+          )}
+        </Form>
+      )}
     </Modal>
   );
-} 
+}
