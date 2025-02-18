@@ -1,5 +1,5 @@
 """
-Transformation logic from OpenAI /v1/embeddings format to Bedrock Amazon Titan V2 /invoke format. 
+Transformation logic from OpenAI /v1/embeddings format to Bedrock Amazon Titan V2 /invoke format.
 
 Why separate file? Make it easy to see how transformation works
 
@@ -70,7 +70,14 @@ class AmazonTitanV2Config:
     def _transform_request(
         self, input: str, inference_params: dict
     ) -> AmazonTitanV2EmbeddingRequest:
-        return AmazonTitanV2EmbeddingRequest(inputText=input, **inference_params)  # type: ignore
+        # Filter out AWS-specific parameters
+        filtered_params = {
+            k: v for k, v in inference_params.items()
+            if not k.lower().startswith("aws_")
+        }
+
+        # Only pass the model-specific parameters
+        return AmazonTitanV2EmbeddingRequest(inputText=input, **filtered_params) # type: ignore
 
     def _transform_response(
         self, response_list: List[dict], model: str
