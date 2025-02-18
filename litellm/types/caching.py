@@ -33,3 +33,15 @@ class RedisPipelineIncrementOperation(TypedDict):
     key: str
     increment_value: float
     ttl: Optional[int]
+
+
+DynamicCacheControl = TypedDict(
+    "DynamicCacheControl",
+    {
+        "ttl": Optional[int],
+        "namespace": Optional[str],
+        "s-maxage": Optional[int],
+        "no-cache": Optional[bool],
+        "no-store": Optional[bool],
+    },
+)
