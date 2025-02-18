@@ -88,8 +88,10 @@ export default function ModelInfoView({
         {canEditModel && (
           <div className="flex gap-2">
             <TremorButton
+              icon={TrashIcon}
+              variant="secondary"
               onClick={() => setIsDeleteModalOpen(true)}
-              color="red"
+              className="flex items-center"
             >
               Delete Model
             </TremorButton>
@@ -152,6 +154,7 @@ export default function ModelInfoView({
                 <Title>Model Settings</Title>
                 {(canEditModel && !isEditing) && (
                   <TremorButton 
+                    variant="light"
                     onClick={() => setIsEditing(true)}
                   >
                     Edit Settings
