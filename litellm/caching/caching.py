@@ -277,9 +277,7 @@ class Cache:
 
         verbose_logger.debug("\nCreated cache key: %s", cache_key)
         hashed_cache_key = Cache._get_hashed_cache_key(cache_key)
-        hashed_cache_key = self._add_redis_namespace_to_cache_key(
-            hashed_cache_key, **kwargs
-        )
+        hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
         self._set_preset_cache_key_in_kwargs(
             preset_cache_key=hashed_cache_key, **kwargs
         )
@@ -455,7 +453,7 @@ class Cache:
         verbose_logger.debug("Hashed cache key (SHA-256): %s", hash_hex)
         return hash_hex
 
-    def _add_redis_namespace_to_cache_key(self, hash_hex: str, **kwargs) -> str:
+    def _add_namespace_to_cache_key(self, hash_hex: str, **kwargs) -> str:
         """
         If a redis namespace is provided, add it to the cache key
 
@@ -466,7 +464,12 @@ class Cache:
         Returns:
             str: The final hashed cache key with the redis namespace.
         """
-        namespace = kwargs.get("metadata", {}).get("redis_namespace") or self.namespace
+        dynamic_cache_control: DynamicCacheControl = kwargs.get("cache", {})
+        namespace = (
+            dynamic_cache_control.get("namespace")
+            or kwargs.get("metadata", {}).get("redis_namespace")
+            or self.namespace
+        )
         if namespace:
             hash_hex = f"{namespace}:{hash_hex}"
         verbose_logger.debug("Final hashed key: %s", hash_hex)
@@ -546,10 +549,13 @@ class Cache:
             else:
                 cache_key = self.get_cache_key(**kwargs)
             if cache_key is not None:
-                cache_control_args = kwargs.get("cache", {})
-                max_age = cache_control_args.get(
-                    "s-max-age", cache_control_args.get("s-maxage", float("inf"))
+                cache_control_args: DynamicCacheControl = kwargs.get("cache", {})
+                max_age = (
+                    cache_control_args.get("s-maxage")
+                    or cache_control_args.get("s-max-age")
+                    or float("inf")
                 )
+                cached_result = self.cache.get_cache(cache_key, messages=messages)
                 cached_result = self.cache.get_cache(cache_key, messages=messages)
                 return self._get_cache_logic(
                     cached_result=cached_result, max_age=max_age
