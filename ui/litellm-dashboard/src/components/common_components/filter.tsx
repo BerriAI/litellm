@@ -132,6 +132,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
                 placeholder="Enter value..."
                 value={tempValues[selectedFilter] || ''}
                 onChange={(e) => handleFilterChange(e.target.value)}
+                className="px-3 py-1.5 border rounded-md text-sm flex-1 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 suffix={
                   tempValues[selectedFilter] ? (
                     <XIcon
