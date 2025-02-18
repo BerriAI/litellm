@@ -1101,16 +1101,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       <TableRow>
                         <TableHeaderCell
                           style={{
-                            maxWidth: "150px",
-                            whiteSpace: "normal",
-                            wordBreak: "break-word",
-                            fontSize: "11px",
-                          }}
-                        >
-                          Public Model Name
-                        </TableHeaderCell>
-                        <TableHeaderCell
-                          style={{
                             maxWidth: "100px",
                             whiteSpace: "normal",
                             wordBreak: "break-word",
@@ -1118,6 +1108,16 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           }}
                         >
                           Model ID
+                        </TableHeaderCell>
+                        <TableHeaderCell
+                          style={{
+                            maxWidth: "150px",
+                            whiteSpace: "normal",
+                            wordBreak: "break-word",
+                            fontSize: "11px",
+                          }}
+                        >
+                          Public Model Name
                         </TableHeaderCell>
                         <TableHeaderCell
                           style={{
@@ -1265,15 +1265,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                 wordBreak: "break-word",
                               }}
                             >
-                              <p className="text-xs">{getDisplayModelName(model) || "-"}</p>
-                            </TableCell>
-                            <TableCell
-                              style={{
-                                maxWidth: "100px",
-                                whiteSpace: "normal",
-                                wordBreak: "break-word",
-                              }}
-                            >
                               <div className="overflow-hidden">
                                 <Tooltip title={model.model_info.id}>
                                   <Button 
@@ -1286,6 +1277,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                   </Button>
                                 </Tooltip>
                               </div>
+                            </TableCell>
+                            <TableCell
+                              style={{
+                                maxWidth: "100px",
+                                whiteSpace: "normal",
+                                wordBreak: "break-word",
+                              }}
+                            >
+                              <p className="text-xs">{getDisplayModelName(model) || "-"}</p>
                             </TableCell>
                             <TableCell
                               style={{
