@@ -100,7 +100,11 @@ interface ViewKeyTableProps {
   accessToken: string;
   selectedTeam: any | null;
   setSelectedTeam: React.Dispatch<React.SetStateAction<any | null>>;
-  data: any[] | null;
+  data:  KeyResponse[];
+  isLoading:any ;
+  error:any;
+  pagination:any; 
+  refresh:any; 
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
   teams: Team[] | null;
   premiumUser: boolean;
@@ -149,12 +153,13 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   selectedTeam,
   setSelectedTeam,
   data,
+  isLoading, error, pagination, refresh ,
   setData,
   teams,
   premiumUser,
   currentOrg,
   organizations,
-  setCurrentOrg
+  setCurrentOrg,
 }) => {
   const [isButtonClicked, setIsButtonClicked] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -176,11 +181,11 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   // Build a memoized filters object for the backend call.
 
   // Pass filters into the hook so the API call includes these query parameters.
-  const { keys, isLoading, error, pagination, refresh } = useKeyList({
-    selectedTeam,
-    currentOrg,
-    accessToken,
-  });
+  // const { keys, isLoading, error, pagination, refresh } = useKeyList({
+  //   selectedTeam,
+  //   currentOrg,
+  //   accessToken,
+  // });
 
   const handlePageChange = (newPage: number) => {
     refresh({ page: newPage });
@@ -408,7 +413,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   return (
     <div>
       <AllKeysTable 
-        keys={keys}
+        keys={data}
         isLoading={isLoading}
         pagination={pagination}
         onPageChange={handlePageChange}
@@ -421,6 +426,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         userRole={userRole}
         organizations={organizations}
         setCurrentOrg={setCurrentOrg}
+        refresh={refresh}
       />
 
       {isDeleteModalOpen && (

@@ -27,6 +27,7 @@ interface AllKeysTableProps {
   userRole: string | null;
   organizations: Organization[] | null;
   setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>;
+  refresh:any;
 }
 
 // Define columns similar to our logs table
@@ -86,7 +87,8 @@ export function AllKeysTable({
   userID,
   userRole,
   organizations,
-  setCurrentOrg
+  setCurrentOrg,
+  refresh
 }: AllKeysTableProps) {
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
   const [filters, setFilters] = useState<{
@@ -277,6 +279,7 @@ export function AllKeysTable({
           userID={userID}
           userRole={userRole}
           teams={teams}
+          refresh={refresh}
         />
       ) : (
         <div className="border-b py-4 flex-1 overflow-hidden">
