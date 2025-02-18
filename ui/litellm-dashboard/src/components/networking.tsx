@@ -2176,6 +2176,7 @@ export const keyListCall = async (
     }
 
     queryParams.append('return_full_object', 'true');
+    queryParams.append('include_team_keys', 'true');
     
     const queryString = queryParams.toString();
     if (queryString) {
