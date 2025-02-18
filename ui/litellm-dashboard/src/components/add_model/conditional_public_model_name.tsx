@@ -14,7 +14,7 @@ const ConditionalPublicModelName: React.FC = () => {
   // Auto-populate model mappings when selected models change
   useEffect(() => {
     if (selectedModels.length > 0 && !selectedModels.includes('all-wildcard')) {
-      const mappings = selectedModels.map(model => ({
+      const mappings = selectedModels.map((model: string) => ({
         public_name: model,
         litellm_model: model
       }));

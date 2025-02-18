@@ -425,3 +425,4 @@ BATCH_STATUS_POLL_MAX_ATTEMPTS = 24  # for 24 hours
 HEALTH_CHECK_TIMEOUT_SECONDS = 60  # 60 seconds
 
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
+LITELLM_PROXY_ADMIN_NAME = "default_user_id"
