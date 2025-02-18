@@ -107,7 +107,15 @@ class ModelInfo(BaseModel):
         None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
     )
     tier: Optional[Literal["free", "paid"]] = None
-    team_id: Optional[str] = None  # the team id that this model belongs to
+
+    """
+    Team Model Specific Fields
+    """
+    # the team id that this model belongs to
+    team_id: Optional[str] = None
+
+    # the model_name that can be used by the team when making LLM calls
+    team_public_model_name: Optional[str] = None
 
     def __init__(self, id: Optional[Union[str, int]] = None, **params):
         if id is None:
@@ -377,7 +385,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
 class DeploymentTypedDict(TypedDict, total=False):
     model_name: Required[str]
     litellm_params: Required[LiteLLMParamsTypedDict]
-    model_info: dict
+    model_info: ModelInfo
 
 
 SPECIAL_MODEL_INFO_PARAMS = [

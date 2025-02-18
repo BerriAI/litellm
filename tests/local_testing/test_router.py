@@ -2601,6 +2601,26 @@ def test_model_group_alias(hidden):
         assert len(model_names) == len(_model_list) + 1
 
 
+def test_get_public_model_name():
+    """
+    Test that the _get_public_model_name helper returns the `team_public_model_name` if it exists, otherwise it returns the `model_name`.
+    """
+    _model_list = [
+        {
+            "model_name": "model_name_12299393939_gms",
+            "litellm_params": {"model": "gpt-4o"},
+            "model_info": {"team_public_model_name": "gpt-4o"},
+        },
+    ]
+    router = Router(
+        model_list=_model_list,
+    )
+
+    models = router.get_model_list()
+
+    assert router._get_public_model_name(models[0]) == "gpt-4o"
+
+
 # @pytest.mark.parametrize("on_error", [True, False])
 # @pytest.mark.asyncio
 # async def test_router_response_headers(on_error):
