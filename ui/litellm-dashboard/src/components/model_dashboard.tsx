@@ -104,6 +104,7 @@ import { Team } from "./key_team_helpers/key_list";
 import TeamInfoView from "./team/team_info";
 import { Providers, provider_map, providerLogoMap, getProviderLogoAndName, getPlaceholder, getProviderModels } from "./provider_info_helpers";
 import ModelInfoView from "./model_info_view";
+import AddModelTab from "./add_model/add_model_tab";
 
 interface ModelDashboardProps {
   accessToken: string | null;
@@ -1046,7 +1047,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       .validateFields()
       .then((values) => {
         handleAddModelSubmit(values, accessToken, form, handleRefreshClick);
-        // form.resetFields();
       })
       .catch((error) => {
         console.error("Validation failed:", error);
@@ -1582,96 +1582,19 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               />
             </TabPanel>
             <TabPanel className="h-full">
-              <Title2 level={2}>Add new model</Title2>
-              <Card>
-                <Form
-                  form={form}
-                  onFinish={handleOk}
-                  labelCol={{ span: 10 }}
-                  wrapperCol={{ span: 16 }}
-                  labelAlign="left"
-                >
-                  <>
-                    {/* Provider Selection */}
-                    <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
-                      label="Provider:"
-                      name="custom_llm_provider"
-                      tooltip="E.g. OpenAI, Azure OpenAI, Anthropic, Bedrock, etc."
-                      labelCol={{ span: 10 }}
-                      labelAlign="left"
-                    >
-                      <AntdSelect
-                        showSearch={true}
-                        value={selectedProvider}
-                        onChange={(value) => {
-                          setSelectedProvider(value);
-                          setProviderModelsFn(value);
-                          form.setFieldsValue({ 
-                            model: [],
-                            model_name: undefined 
-                          });
-                        }}
-                      >
-                        {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => (
-                          <AntdSelect.Option
-                            key={providerEnum}
-                            value={providerEnum}
-                          >
-                            <div className="flex items-center space-x-2">
-                              <img
-                                src={providerLogoMap[providerDisplayName]}
-                                alt={`${providerEnum} logo`}
-                                className="w-5 h-5"
-                                onError={(e) => {
-                                  // Create a div with provider initial as fallback
-                                  const target = e.target as HTMLImageElement;
-                                  const parent = target.parentElement;
-                                  if (parent) {
-                                    const fallbackDiv = document.createElement('div');
-                                    fallbackDiv.className = 'w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs';
-                                    fallbackDiv.textContent = providerDisplayName.charAt(0);
-                                    parent.replaceChild(fallbackDiv, target);
-                                  }
-                                }}
-                              />
-                              <span>{providerDisplayName}</span>
-                            </div>
-                          </AntdSelect.Option>
-                        ))}
-                      </AntdSelect>
-                    </Form.Item>
-                    <LiteLLMModelNameField
-                        selectedProvider={selectedProvider}
-                        providerModels={providerModels}
-                        getPlaceholder={getPlaceholder}
-                      />
-                    
-                    {/* Conditionally Render "Public Model Name" */}
-                    <ConditionalPublicModelName  />
-
-                    <ProviderSpecificFields
-                      selectedProvider={selectedProvider}
-                      uploadProps={uploadProps}
-                    />
-                    <AdvancedSettings 
-                      showAdvancedSettings={showAdvancedSettings}
-                      setShowAdvancedSettings={setShowAdvancedSettings}
-                      teams={teams}
-                    />
-                    
-
-                    <div className="flex justify-between items-center mb-4">
-                      <Tooltip title="Get help on our github">
-                        <Typography.Link href="https://github.com/BerriAI/litellm/issues">
-                          Need Help?
-                        </Typography.Link>
-                      </Tooltip>
-                      <Button2 htmlType="submit">Add Model</Button2>
-                    </div>
-                  </>
-                </Form>
-              </Card>
+              <AddModelTab
+                form={form}
+                handleOk={handleOk}
+                selectedProvider={selectedProvider}
+                setSelectedProvider={setSelectedProvider}
+                providerModels={providerModels}
+                setProviderModelsFn={setProviderModelsFn}
+                getPlaceholder={getPlaceholder}
+                uploadProps={uploadProps}
+                showAdvancedSettings={showAdvancedSettings}
+                setShowAdvancedSettings={setShowAdvancedSettings}
+                teams={teams}
+              />
             </TabPanel>
             <TabPanel>
               <Card>
