@@ -173,9 +173,9 @@ async def test_basic_rerank_azure_ai(sync_mode):
 
         assert_response_shape(response, custom_llm_provider="together_ai")
 
-
 @pytest.mark.asyncio()
-async def test_rerank_custom_api_base():
+@pytest.mark.parametrize("version", ["v1", "v2"])
+async def test_rerank_custom_api_base(version):
     mock_response = AsyncMock()
 
     def return_val():
@@ -221,7 +221,7 @@ async def test_rerank_custom_api_base():
         print("Arguments passed to API=", args_to_api)
         print("url = ", _url)
         assert (
-            _url == "https://exampleopenaiendpoint-production.up.railway.app/v1/rerank"
+            _url == f"https://exampleopenaiendpoint-production.up.railway.app/${version}/rerank"
         )
 
         request_data = json.loads(args_to_api)
@@ -385,3 +385,59 @@ def test_rerank_response_assertions():
     )
 
     assert_response_shape(r, custom_llm_provider="custom")
+
+def test_cohere_rerank_v2_client():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    litellm.api_base = "http://localhost:4000"
+    litellm.set_verbose = True
+
+    text = "Hello there!"
+    list_texts = ["Hello there!", "How are you?", "How do you do?"]
+
+    rerank_model = "rerank-multilingual-v3.0"
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = MagicMock()
+        mock_response.text = json.dumps(
+            {
+                "id": "cmpl-mockid",
+                "results": [
+                    {"index": 0, "relevance_score": 0.95},
+                    {"index": 1, "relevance_score": 0.75},
+                    {"index": 2, "relevance_score": 0.65}
+                ],
+                "usage": {"prompt_tokens": 100, "total_tokens": 150},
+            }        
+        ) 
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "application/json"}
+        mock_response.json = lambda: json.loads(mock_response.text)
+
+        mock_post.return_value = mock_response
+
+        response = litellm.rerank(
+            model=rerank_model,
+            query=text,
+            documents=list_texts,
+            custom_llm_provider="cohere",
+            max_tokens_per_doc=3,
+            top_n=2,
+            api_key="fake-api-key",
+            client=client,
+        )
+
+        # Ensure Cohere API is called with the expected params
+        mock_post.assert_called_once()
+        assert(mock_post.call_args.kwargs["url"] == "http://localhost:4000/v2/rerank")
+
+        request_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert(request_data["model"] == rerank_model)
+        assert(request_data["query"] == text)
+        assert(request_data["documents"] == list_texts)
+        assert(request_data["max_tokens_per_doc"] == 3)
+        assert(request_data["top_n"] == 2)
+
+        # Ensure litellm response is what we expect
+        assert(response["results"] == mock_response.json()["results"])
