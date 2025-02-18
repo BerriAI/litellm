@@ -115,6 +115,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                   <AdvancedSettings 
                     showAdvancedSettings={showAdvancedSettings}
                     setShowAdvancedSettings={setShowAdvancedSettings}
+                    teams={teams}
                   />
                   
 
