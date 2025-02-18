@@ -392,18 +392,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     setEditModalVisible(true);
   };
 
-  const handleInfoClick = (model: any) => {
-    setSelectedModel(model);
-    setInfoModalVisible(true);
-  };
-
   const handleEditCancel = () => {
     setEditModalVisible(false);
-    setSelectedModel(null);
-  };
-
-  const handleInfoCancel = () => {
-    setInfoModalVisible(false);
     setSelectedModel(null);
   };
 
@@ -1544,14 +1534,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                 wordBreak: "break-word",
                               }}
                             >
-                              <Grid numItems={3}>
-                                <Col>
-                                  <Icon
-                                    icon={InformationCircleIcon}
-                                    size="sm"
-                                    onClick={() => handleInfoClick(model)}
-                                  />
-                                </Col>
+                              <Grid numItems={2}>
                                 <Col>
                                   <Icon
                                     icon={PencilAltIcon}
