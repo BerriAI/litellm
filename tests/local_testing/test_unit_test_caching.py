@@ -150,6 +150,15 @@ def test_add_namespace_to_cache_key():
     result = cache._add_namespace_to_cache_key(hashed_key, **kwargs)
     assert result == "custom_namespace:abcdef1234567890"
 
+    # Test with cache control namespace
+    kwargs = {"cache": {"namespace": "cache_control_namespace"}}
+    result = cache._add_namespace_to_cache_key(hashed_key, **kwargs)
+    assert result == "cache_control_namespace:abcdef1234567890"
+
+    kwargs = {"cache": {"namespace": "cache_control_namespace-2"}}
+    result = cache._add_namespace_to_cache_key(hashed_key, **kwargs)
+    assert result == "cache_control_namespace-2:abcdef1234567890"
+
 
 def test_get_model_param_value():
     cache = Cache()
