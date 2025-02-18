@@ -94,6 +94,8 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
         icon={FilterIcon}
         onClick={() => setShowFilters(!showFilters)}
         variant="secondary"
+        size='xs'
+        className="flex items-center pr-2"
       >
         {buttonLabel}
       </TremorButton>
