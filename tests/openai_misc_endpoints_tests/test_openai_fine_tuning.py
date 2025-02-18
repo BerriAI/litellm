@@ -28,7 +28,7 @@ async def test_openai_fine_tuning():
     # create fine tuning job
 
     ft_job = await client.fine_tuning.jobs.create(
-        model="gpt-3.5-turbo",
+        model="gpt-4o-mini-2024-07-18",
         training_file=response.id,
         extra_body={"custom_llm_provider": "openai"},
     )
