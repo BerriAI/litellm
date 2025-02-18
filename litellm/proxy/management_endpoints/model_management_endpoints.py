@@ -36,6 +36,7 @@ from litellm.types.router import (
     Deployment,
     DeploymentTypedDict,
     LiteLLMParamsTypedDict,
+    ModelInfo,
     updateDeployment,
 )
 from litellm.utils import get_utc_datetime
@@ -87,11 +88,16 @@ def update_db_model(
 
     # update model info
     if updated_patch.model_info:
-        if "model_info" not in merged_deployment_dict:
-            merged_deployment_dict["model_info"] = {}
-        merged_deployment_dict["model_info"].update(
-            updated_patch.model_info.model_dump(exclude_none=True)
+        _updated_model_info_dict = updated_patch.model_info.model_dump(
+            exclude_unset=True
         )
+        if "model_info" not in merged_deployment_dict:
+            merged_deployment_dict["model_info"] = ModelInfo()
+        _original_model_info_dict = merged_deployment_dict["model_info"].model_dump(
+            exclude_unset=True
+        )
+        _original_model_info_dict.update(_updated_model_info_dict)
+        merged_deployment_dict["model_info"] = ModelInfo(**_original_model_info_dict)
 
     # convert to prisma compatible format
 
