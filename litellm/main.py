@@ -2575,6 +2575,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 print_verbose=print_verbose,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                timeout=timeout,
                 custom_prompt_dict=custom_prompt_dict,
                 logger_fn=logger_fn,
                 encoding=encoding,
