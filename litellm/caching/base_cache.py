@@ -11,6 +11,8 @@ Has 4 methods:
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Optional
 
+from litellm.types.caching import DynamicCacheControl
+
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
@@ -39,13 +41,7 @@ class BaseCache(ABC):
         """
         Get the TTL to use for storing a LLM response in the cache
         """
-        kwargs_ttl: Optional[int] = kwargs.get("ttl")
-        if kwargs_ttl is not None:
-            try:
-                return self._get_dynamic_ttl(kwargs_ttl=int(kwargs_ttl))
-            except ValueError:
-                return self.default_ttl
-        return self.default_ttl
+        return self._get_dynamic_ttl(kwargs=kwargs) or self.default_ttl
 
     def set_cache(self, key, value, **kwargs):
         raise NotImplementedError
@@ -71,13 +67,28 @@ class BaseCache(ABC):
 
     def _get_dynamic_ttl(
         self,
-        kwargs_ttl: int,
-    ) -> int:
+        kwargs: dict,
+    ) -> Optional[int]:
         """
-        Returns the minimum of the maximum TTL and the TTL from the kwargs
+        Returns the dynamic TTL to use for storing a LLM response in the cache
+
+        - Checks if `cache` is set in kwargs. Uses cache: {ttl: <ttl>} to set the TTL
+        - Checks if `ttl` is set in kwargs. Uses ttl: <ttl> to set the TTL
+            - If ttl passed dynamically, it will be set to the minimum of the max allowed ttl and the ttl passed
+        - Returns None if neither are set
 
         Allows a admin to set the maxmium allowed TTL for dynamic ttl requests
         """
-        if self.max_allowed_ttl is not None:
-            return min(kwargs_ttl, self.max_allowed_ttl)
-        return kwargs_ttl
+        kwargs_ttl: Optional[int] = kwargs.get("ttl")
+        dynamic_cache_control: Optional[DynamicCacheControl] = kwargs.get("cache")
+
+        if dynamic_cache_control and dynamic_cache_control.get("ttl") is not None:
+            kwargs_ttl = dynamic_cache_control.get("ttl")
+
+        if kwargs_ttl is None:
+            return None
+
+        if self.max_allowed_ttl is None:
+            return kwargs_ttl
+
+        return min(kwargs_ttl, self.max_allowed_ttl)
