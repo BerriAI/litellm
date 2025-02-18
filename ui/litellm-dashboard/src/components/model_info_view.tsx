@@ -16,6 +16,7 @@ import { ArrowLeftIcon, TrashIcon } from "@heroicons/react/outline";
 import { modelDeleteCall, modelUpdateCall } from "./networking";
 import { Button, Form, Input, InputNumber, message, Select } from "antd";
 import EditModelModal from "./edit_model/edit_model_modal";
+import { handleEditModelSubmit } from "./edit_model/edit_model_modal";
 import { getProviderLogoAndName } from "./provider_info_helpers";
 import { getDisplayModelName } from "./view_model/model_name_display";
 
@@ -27,6 +28,8 @@ interface ModelInfoViewProps {
   userID: string | null;
   userRole: string | null;
   editModel: boolean;
+  setEditModalVisible: (visible: boolean) => void;
+  setSelectedModel: (model: any) => void;
 }
 
 export default function ModelInfoView({ 
@@ -36,7 +39,9 @@ export default function ModelInfoView({
   accessToken,
   userID,
   userRole,
-  editModel
+  editModel,
+  setEditModalVisible,
+  setSelectedModel
 }: ModelInfoViewProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
@@ -71,25 +76,6 @@ export default function ModelInfoView({
     }
   };
 
-  const handleModelUpdate = async (values: any) => {
-    try {
-      if (!accessToken) return;
-      
-      let payload = {
-        litellm_params: Object.keys(values.litellm_params).length > 0 ? values.litellm_params : undefined,
-        model_info: values.model_info ? {
-          id: values.model_info.id,
-        } : undefined,
-      };
-
-      await modelUpdateCall(accessToken, payload);
-      message.success("Model updated successfully");
-      setIsEditing(false);
-    } catch (error) {
-      console.error("Error updating model:", error);
-      message.error("Failed to update model");
-    }
-  };
 
   return (
     <div className="p-4">
@@ -178,7 +164,7 @@ export default function ModelInfoView({
                   visible={isEditing}
                   onCancel={() => setIsEditing(false)}
                   model={modelData}
-                  onSubmit={handleModelUpdate}
+                  onSubmit={(data: FormData) => handleEditModelSubmit(data, accessToken, setEditModalVisible, setSelectedModel)}
                 />
               ) : (
                 <div className="space-y-4">

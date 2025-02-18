@@ -16,13 +16,15 @@ import {
   AccordionHeader,
   AccordionBody,
 } from "@tremor/react";
+
+
 import ConditionalPublicModelName from "./add_model/conditional_public_model_name";
 import LiteLLMModelNameField from "./add_model/litellm_model_name";
 import AdvancedSettings from "./add_model/advanced_settings";
 import ProviderSpecificFields from "./add_model/provider_specific_fields";
 import { handleAddModelSubmit } from "./add_model/handle_add_model_submit";
 import { getDisplayModelName } from "./view_model/model_name_display";
-import EditModelModal from "./edit_model/edit_model_modal";
+import EditModelModal, { handleEditModelSubmit } from "./edit_model/edit_model_modal";
 import {
   TabPanel,
   TabPanels,
@@ -397,60 +399,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     setSelectedModel(null);
   };
 
-  const handleEditSubmit = async (formValues: Record<string, any>) => {
-    // Call API to update team with teamId and values
-
-    console.log("handleEditSubmit:", formValues);
-    if (accessToken == null) {
-      return;
-    }
-
-    let newLiteLLMParams: Record<string, any> = {};
-    let model_info_model_id = null;
-
-    if (formValues.input_cost_per_token) {
-      // Convert from per 1M tokens to per token
-      formValues.input_cost_per_token = Number(formValues.input_cost_per_token) / 1_000_000;
-    }
-    if (formValues.output_cost_per_token) {
-      // Convert from per 1M tokens to per token
-      formValues.output_cost_per_token = Number(formValues.output_cost_per_token) / 1_000_000;
-    }
-  
-
-    for (const [key, value] of Object.entries(formValues)) {
-      if (key !== "model_id") {
-        // Empty string means user wants to null the value
-        newLiteLLMParams[key] = value === "" ? null : value;
-      } else {
-        model_info_model_id = value === "" ? null : value;
-      }
-    }
-    
-    let payload: {
-      litellm_params: Record<string, any> | undefined;
-      model_info: { id: any } | undefined;
-    } = {
-      litellm_params: Object.keys(newLiteLLMParams).length > 0 ? newLiteLLMParams : undefined,
-      model_info: model_info_model_id !== undefined ? {
-        id: model_info_model_id,
-      } : undefined,
-    };
-
-    console.log("handleEditSubmit payload:", payload);
-
-    try {
-      let newModelValue = await modelUpdateCall(accessToken, payload);
-      message.success(
-        "Model updated successfully, restart server to see updates"
-      );
-
-      setEditModalVisible(false);
-      setSelectedModel(null);
-    } catch (error) {
-      console.log(`Error occurred`);
-    }
-  };
 
   const uploadProps: UploadProps = {
     name: "file",
@@ -1562,7 +1510,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 visible={editModalVisible}
                 onCancel={handleEditCancel}
                 model={selectedModel}
-                onSubmit={handleEditSubmit}
+                onSubmit={(data: FormData) => handleEditModelSubmit(data, accessToken, setEditModalVisible, setSelectedModel)}
               />
             </TabPanel>
             <TabPanel className="h-full">
