@@ -23,17 +23,17 @@ class BaseCache(ABC):
     def __init__(
         self,
         default_ttl: Optional[int] = 60,
-        maximum_ttl: Optional[int] = None,
+        max_allowed_ttl: Optional[int] = None,
     ):
         """
         Initialize the BaseCache
 
         Args:
             default_ttl: The default TTL for the cache
-            maximum_ttl: The maximum allowed dynamic TTL for the cache
+            max_allowed_ttl: The maximum allowed dynamic TTL for the cache
         """
         self.default_ttl = default_ttl
-        self.maximum_ttl = maximum_ttl
+        self.max_allowed_ttl = max_allowed_ttl
 
     def get_ttl(self, **kwargs) -> Optional[int]:
         """
@@ -78,6 +78,6 @@ class BaseCache(ABC):
 
         Allows a admin to set the maxmium allowed TTL for dynamic ttl requests
         """
-        if self.maximum_ttl is not None:
-            return min(kwargs_ttl, self.maximum_ttl)
+        if self.max_allowed_ttl is not None:
+            return min(kwargs_ttl, self.max_allowed_ttl)
         return kwargs_ttl

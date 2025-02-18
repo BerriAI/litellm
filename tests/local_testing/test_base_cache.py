@@ -29,7 +29,7 @@ def test_get_ttl_with_maximum_ttl():
     """
     Test that get_ttl respects the maximum_ttl configuration when set
     """
-    cache = TestCache(maximum_ttl=100)
+    cache = TestCache(max_allowed_ttl=100)
     # Test with TTL exceeding maximum
     assert cache.get_ttl(ttl=150) == 100, "TTL should be capped at maximum_ttl"
     # Test with TTL below maximum
