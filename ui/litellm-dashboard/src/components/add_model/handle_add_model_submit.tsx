@@ -2,6 +2,8 @@ import { message } from "antd";
 import { provider_map, Providers } from "../provider_info_helpers";
 import { modelCreateCall, Model } from "../networking";
 
+// fields on Add Model Form that should be added to model_info and not in litellm_params
+const modelInfoKeys = ["base_model", "team_id"];
 
 export const handleAddModelSubmit = async (
     formValues: Record<string, any>,
@@ -72,7 +74,7 @@ export const handleAddModelSubmit = async (
           }
   
           // Check if key is "base_model"
-          else if (key === "base_model") {
+          else if (modelInfoKeys.includes(key)) {
             // Add key-value pair to model_info dictionary
             modelInfoObj[key] = value;
           }
