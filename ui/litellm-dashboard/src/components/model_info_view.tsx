@@ -17,6 +17,7 @@ import { modelDeleteCall, modelUpdateCall } from "./networking";
 import { Button, Form, Input, InputNumber, message, Select } from "antd";
 import EditModelModal from "./edit_model/edit_model_modal";
 import { getProviderLogoAndName } from "./provider_info_helpers";
+import { getDisplayModelName } from "./view_model/model_name_display";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -95,7 +96,7 @@ export default function ModelInfoView({
       <div className="flex justify-between items-center mb-6">
         <div>
           <Button onClick={onClose} className="mb-4">← Back</Button>
-          <Title>{modelData.model_name}</Title>
+          <Title>Public Model Name: {getDisplayModelName(modelData)}</Title>
           <Text className="text-gray-500 font-mono">{modelData.model_info.id}</Text>
         </div>
         {canEditModel && (
