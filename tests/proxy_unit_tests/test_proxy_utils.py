@@ -1710,7 +1710,7 @@ def mock_prisma_client():
 @pytest.mark.parametrize(
     "test_id, user_info, user_role, mock_teams, expected_teams, should_query_db",
     [
-        ("no_user_info", None, "admin", None, [], False),
+        ("no_user_info", None, "proxy_admin", None, [], False),
         (
             "no_teams_found",
             LiteLLM_UserTable(
@@ -1721,7 +1721,7 @@ def mock_prisma_client():
                 user_email="user1@example.com",
                 user_role="proxy_admin",
             ),
-            "admin",
+            "proxy_admin",
             None,
             [],
             True,
@@ -1734,17 +1734,23 @@ def mock_prisma_client():
                 max_budget=100,
                 spend=0,
                 user_email="user1@example.com",
-                user_role="internal_user",
+                user_role="proxy_admin",
             ),
-            "admin",
+            "proxy_admin",
             [
                 MagicMock(
-                    model_dump=lambda: {"team_id": "team1", "members": ["user1"]}
+                    model_dump=lambda: {
+                        "team_id": "team1",
+                        "members_with_roles": [{"role": "admin", "user_id": "user1"}],
+                    }
                 ),
                 MagicMock(
                     model_dump=lambda: {
                         "team_id": "team2",
-                        "members": ["user1", "user2"],
+                        "members_with_roles": [
+                            {"role": "admin", "user_id": "user1"},
+                            {"role": "user", "user_id": "user2"},
+                        ],
                     }
                 ),
             ],
@@ -1761,7 +1767,7 @@ def mock_prisma_client():
                 user_email="user1@example.com",
                 user_role="internal_user",
             ),
-            "member",
+            "internal_user",
             [
                 MagicMock(
                     model_dump=lambda: {"team_id": "team1", "members": ["user1"]}
@@ -1787,9 +1793,15 @@ async def test_get_admin_team_ids(
     should_query_db: bool,
     mock_prisma_client,
 ):
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        get_admin_team_ids,
+    )
+
     # Setup
     mock_prisma_client.db.litellm_teamtable.find_many.return_value = mock_teams
-    user_api_key_dict = {"user_role": user_role}
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=user_role, user_id=user_info.user_id if user_info else None
+    )
 
     # Execute
     result = await get_admin_team_ids(
@@ -1799,7 +1811,7 @@ async def test_get_admin_team_ids(
     )
 
     # Assert
-    assert result == expected_teams
+    assert result == expected_teams, f"Expected {expected_teams}, but got {result}"
 
     if should_query_db:
         mock_prisma_client.db.litellm_teamtable.find_many.assert_called_once_with(
