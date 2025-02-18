@@ -238,7 +238,8 @@ class LicenseChecker:
 
 
 def main():
-    req_file = "../../requirements.txt"
+    # req_file = "../../requirements.txt" ## LOCAL TESTING
+    req_file = "./requirements.txt"
     checker = LicenseChecker()
 
     # Check requirements
