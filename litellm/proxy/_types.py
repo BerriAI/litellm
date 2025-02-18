@@ -2,17 +2,7 @@ import enum
 import json
 import uuid
 from datetime import datetime
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Union,
-    get_type_hints,
-)
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
 
 import httpx
 from pydantic import (
