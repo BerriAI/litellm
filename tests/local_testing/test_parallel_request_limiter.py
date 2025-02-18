@@ -192,15 +192,6 @@ async def test_pre_call_hook_rpm_limits_retry_after():
         user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
     )
 
-    kwargs = {"litellm_params": {"metadata": {"user_api_key": _api_key}}}
-
-    await parallel_request_handler.async_pre_call_hook(
-        user_api_key_dict=user_api_key_dict,
-        cache=local_cache,
-        data={},
-        call_type="",
-    )
-
     await asyncio.sleep(2)
 
     ## Expected cache val: {"current_requests": 0, "current_tpm": 0, "current_rpm": 1}
@@ -250,13 +241,6 @@ async def test_pre_call_hook_team_rpm_limits():
             "metadata": {"user_api_key": _api_key, "user_api_key_team_id": _team_id}
         }
     }
-
-    await parallel_request_handler.async_pre_call_hook(
-        user_api_key_dict=user_api_key_dict,
-        cache=local_cache,
-        data={},
-        call_type="",
-    )
 
     await asyncio.sleep(2)
 
