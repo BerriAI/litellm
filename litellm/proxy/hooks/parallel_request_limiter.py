@@ -11,7 +11,7 @@ from litellm import DualCache, ModelResponse
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
-from litellm.proxy._types import CurrentItemRateLimit, UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, CurrentItemRateLimit, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
@@ -72,7 +72,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if max_parallel_requests == 0 or tpm_limit == 0 or rpm_limit == 0:
                 # base case
                 raise self.raise_rate_limit_error(
-                    additional_details=f"Hit limit for {rate_limit_type}. Current limits: max_parallel_requests: {max_parallel_requests}, tpm_limit: {tpm_limit}, rpm_limit: {rpm_limit}"
+                    additional_details=f"{CommonProxyErrors.max_parallel_request_limit_reached.value}. Hit limit for {rate_limit_type}. Current limits: max_parallel_requests: {max_parallel_requests}, tpm_limit: {tpm_limit}, rpm_limit: {rpm_limit}"
                 )
             new_val = {
                 "current_requests": 1,
@@ -96,7 +96,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         else:
             raise HTTPException(
                 status_code=429,
-                detail=f"LiteLLM Rate Limit Handler for rate limit type = {rate_limit_type}. Crossed TPM / RPM / Max Parallel Request Limit. current rpm: {current['current_rpm']}, rpm limit: {rpm_limit}, current tpm: {current['current_tpm']}, tpm limit: {tpm_limit}, current max_parallel_requests: {current['current_requests']}, max_parallel_requests: {max_parallel_requests}",
+                detail=f"LiteLLM Rate Limit Handler for rate limit type = {rate_limit_type}. {CommonProxyErrors.max_parallel_request_limit_reached.value}. current rpm: {current['current_rpm']}, rpm limit: {rpm_limit}, current tpm: {current['current_tpm']}, tpm limit: {tpm_limit}, current max_parallel_requests: {current['current_requests']}, max_parallel_requests: {max_parallel_requests}",
                 headers={"retry-after": str(self.time_to_next_minute())},
             )
 
@@ -693,7 +693,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             verbose_proxy_logger.info("ENTERS FAILURE LOG EVENT")
 
             ## decrement call count if call failed
-            if "Crossed TPM / RPM / Max Parallel Request Limit" in str(
+            if CommonProxyErrors.max_parallel_request_limit_reached.value in str(
                 kwargs["exception"]
             ):
                 verbose_proxy_logger.info(
