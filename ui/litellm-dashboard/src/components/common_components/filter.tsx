@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Button, Input, Dropdown, MenuProps } from 'antd';
-import { Card } from '@tremor/react';
+import { Card, Button as TremorButton } from '@tremor/react';
 import {
   FilterIcon,
   XIcon,
@@ -90,12 +90,13 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
 
   return (
     <div className="relative" ref={filtersRef}>
-      <Button
-        icon={<FilterIcon className="h-4 w-4" />}
+      <TremorButton
+        icon={FilterIcon}
         onClick={() => setShowFilters(!showFilters)}
+        variant="secondary"
       >
         {buttonLabel}
-      </Button>
+      </TremorButton>
 
       {showFilters && (
         <Card className="absolute left-0 mt-2 w-96 z-50">
