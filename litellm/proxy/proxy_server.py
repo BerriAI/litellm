@@ -238,6 +238,7 @@ from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     router as ui_crud_endpoints_router,
 )
@@ -251,7 +252,6 @@ from litellm.proxy.utils import (
     _is_projected_spend_over_limit,
     _is_valid_team_configs,
     get_error_message_str,
-    get_instance_fn,
     hash_token,
     update_spend,
 )
