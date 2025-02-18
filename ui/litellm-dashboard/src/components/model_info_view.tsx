@@ -53,7 +53,7 @@ export default function ModelInfoView({
     return (
       <div className="p-4">
         <Button 
-          icon={ArrowLeftIcon} 
+          icon={<ArrowLeftIcon />}
           onClick={onClose}
           className="mb-4"
         >
@@ -81,7 +81,13 @@ export default function ModelInfoView({
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Button onClick={onClose} className="mb-4">← Back</Button>
+          <Button 
+            icon={<ArrowLeftIcon />}
+            onClick={onClose}
+            className="mb-4"
+          >
+            Back to Models
+          </Button>
           <Title>Public Model Name: {getDisplayModelName(modelData)}</Title>
           <Text className="text-gray-500 font-mono">{modelData.model_info.id}</Text>
         </div>
