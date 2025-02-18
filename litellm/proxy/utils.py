@@ -1,7 +1,6 @@
 import asyncio
 import copy
 import hashlib
-import importlib
 import json
 import os
 import smtplib
@@ -2220,51 +2219,6 @@ class PrismaClient:
             variable_name="spend_logs_row_count",
             value=_num_spend_logs_rows,
         )
-
-
-### CUSTOM FILE ###
-def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
-    module_name = value
-    instance_name = None
-    try:
-        # Split the path by dots to separate module from instance
-        parts = value.split(".")
-
-        # The module path is all but the last part, and the instance_name is the last part
-        module_name = ".".join(parts[:-1])
-        instance_name = parts[-1]
-
-        # If config_file_path is provided, use it to determine the module spec and load the module
-        if config_file_path is not None:
-            directory = os.path.dirname(config_file_path)
-            module_file_path = os.path.join(directory, *module_name.split("."))
-            module_file_path += ".py"
-
-            spec = importlib.util.spec_from_file_location(module_name, module_file_path)  # type: ignore
-            if spec is None:
-                raise ImportError(
-                    f"Could not find a module specification for {module_file_path}"
-                )
-            module = importlib.util.module_from_spec(spec)  # type: ignore
-            spec.loader.exec_module(module)  # type: ignore
-        else:
-            # Dynamically import the module
-            module = importlib.import_module(module_name)
-
-        # Get the instance from the module
-        instance = getattr(module, instance_name)
-
-        return instance
-    except ImportError as e:
-        # Re-raise the exception with a user-friendly message
-        if instance_name and module_name:
-            raise ImportError(
-                f"Could not import {instance_name} from {module_name}"
-            ) from e
-        else:
-            raise e
-    except Exception as e:
-        raise e
 
 
 ### HELPER FUNCTIONS ###
