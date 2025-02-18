@@ -92,7 +92,6 @@ export const modelCostMap = async (
     throw error;
   }
 };
-
 export const modelCreateCall = async (
   accessToken: string,
   formValues: Model
@@ -106,7 +105,7 @@ export const modelCreateCall = async (
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        ...formValues, // Include formValues in the request body
+        ...formValues,
       }),
     });
 
@@ -121,9 +120,13 @@ export const modelCreateCall = async (
 
     const data = await response.json();
     console.log("API Response:", data);
-    message.success(
-      "Model created successfully"
-    );
+    
+    // Close any existing messages before showing new ones
+    message.destroy();
+    
+    // Sequential success messages
+    message.success(`Model ${formValues.model_name} created successfully`, 2);
+    
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
