@@ -1,15 +1,25 @@
 model_list:
-  - model_name: fake-openai-endpoint
+  - model_name: bad-model-config
     litellm_params:
       model: openai/my-fake-model
       api_key: my-fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      timeout: 0.0001
+  - model_name: fake-openai-endpoint-5
+    litellm_params:
+      model: openai/my-fake-model
+      api_key: my-fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      timeout: 1
 
-
-general_settings:
-  store_model_in_db: true
-
+router_settings:
+  fallbacks: [
+      {
+          "bad-model-config": ["fake-openai-endpoint-5"]
+      }
+  ]
 
 litellm_settings:
-  callbacks: ["gcs_bucket"]
-
+  constants: {
+    SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD: 1
+  }
