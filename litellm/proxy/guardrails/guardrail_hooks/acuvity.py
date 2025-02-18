@@ -171,9 +171,9 @@ class AcuvityGuardrail(CustomGuardrail):
                         redacted = True
                         response.choices[0].message.content = extraction.data
 
-        verbose_proxy_logger.info(
-                f"Acuvity post call processed message: {response.choices[0]}, redaction applied {redacted}"
-            )
+            verbose_proxy_logger.info(
+                    f"Acuvity post call processed message: {response.choices[0]}, redaction applied {redacted}"
+                )
         return response
 
     def _extract_response_messages(self, response_obj: Union[ModelResponse, EmbeddingResponse, ImageResponse]) -> Optional[str]:
