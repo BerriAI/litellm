@@ -65,6 +65,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         rate_limit_type: Literal["key", "model_per_key", "user", "customer", "team"],
         values_to_update_in_cache: List[Tuple[Any, Any]],
     ) -> dict:
+        verbose_proxy_logger.info(
+            f"Current Usage of {rate_limit_type} in this minute: {current}"
+        )
         if current is None:
             if max_parallel_requests == 0 or tpm_limit == 0 or rpm_limit == 0:
                 # base case
@@ -687,8 +690,15 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if user_api_key is None:
                 return
 
+            verbose_proxy_logger.info("ENTERS FAILURE LOG EVENT")
+
             ## decrement call count if call failed
-            if "Max parallel request limit reached" in str(kwargs["exception"]):
+            if "Crossed TPM / RPM / Max Parallel Request Limit" in str(
+                kwargs["exception"]
+            ):
+                verbose_proxy_logger.info(
+                    "IGNORE FAILED CALLS DUE TO MAX LIMIT BEING REACHED"
+                )
                 pass  # ignore failed calls due to max limit being reached
             else:
                 # ------------
