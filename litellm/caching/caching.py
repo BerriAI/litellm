@@ -72,9 +72,10 @@ class Cache:
         port: Optional[str] = None,
         password: Optional[str] = None,
         namespace: Optional[str] = None,
-        ttl: Optional[float] = None,
-        default_in_memory_ttl: Optional[float] = None,
-        default_in_redis_ttl: Optional[float] = None,
+        ttl: Optional[int] = None,
+        max_allowed_ttl: Optional[int] = None,
+        default_in_memory_ttl: Optional[int] = None,
+        default_in_redis_ttl: Optional[int] = None,
         similarity_threshold: Optional[float] = None,
         supported_call_types: Optional[List[CachingSupportedCallTypes]] = [
             "completion",
@@ -150,6 +151,7 @@ class Cache:
 
             # Common Cache Args
             supported_call_types (list, optional): List of call types to cache for. Defaults to cache == on for all call types.
+            max_allowed_ttl (float, optional): The maximum allowed ttl for cache requests. Defaults to None.
             **kwargs: Additional keyword arguments for redis.Redis() cache
 
         Raises:
@@ -166,6 +168,7 @@ class Cache:
                     password=password,
                     redis_flush_size=redis_flush_size,
                     startup_nodes=redis_startup_nodes,
+                    max_allowed_ttl=max_allowed_ttl,
                     **kwargs,
                 )
             else:
@@ -174,6 +177,7 @@ class Cache:
                     port=port,
                     password=password,
                     redis_flush_size=redis_flush_size,
+                    max_allowed_ttl=max_allowed_ttl,
                     **kwargs,
                 )
         elif type == LiteLLMCacheType.REDIS_SEMANTIC:
@@ -184,6 +188,7 @@ class Cache:
                 similarity_threshold=similarity_threshold,
                 use_async=redis_semantic_cache_use_async,
                 embedding_model=redis_semantic_cache_embedding_model,
+                max_allowed_ttl=max_allowed_ttl,
                 **kwargs,
             )
         elif type == LiteLLMCacheType.QDRANT_SEMANTIC:
@@ -194,9 +199,11 @@ class Cache:
                 similarity_threshold=similarity_threshold,
                 quantization_config=qdrant_quantization_config,
                 embedding_model=qdrant_semantic_cache_embedding_model,
+                max_allowed_ttl=max_allowed_ttl,
+                **kwargs,
             )
         elif type == LiteLLMCacheType.LOCAL:
-            self.cache = InMemoryCache()
+            self.cache = InMemoryCache(max_allowed_ttl=max_allowed_ttl, **kwargs)
         elif type == LiteLLMCacheType.S3:
             self.cache = S3Cache(
                 s3_bucket_name=s3_bucket_name,
@@ -210,10 +217,13 @@ class Cache:
                 s3_aws_session_token=s3_aws_session_token,
                 s3_config=s3_config,
                 s3_path=s3_path,
+                max_allowed_ttl=max_allowed_ttl,
                 **kwargs,
             )
         elif type == LiteLLMCacheType.DISK:
-            self.cache = DiskCache(disk_cache_dir=disk_cache_dir)
+            self.cache = DiskCache(
+                disk_cache_dir=disk_cache_dir, max_allowed_ttl=max_allowed_ttl, **kwargs
+            )
         if "cache" not in litellm.input_callback:
             litellm.input_callback.append("cache")
         if "cache" not in litellm.success_callback:

@@ -22,6 +22,8 @@ class InMemoryCache(BaseCache):
         default_ttl: Optional[
             int
         ] = 600,  # default ttl is 10 minutes. At maximum litellm rate limiting logic requires objects to be in memory for 1 minute
+        max_allowed_ttl: Optional[int] = None,
+        **kwargs,
     ):
         """
         max_size_in_memory [int]: Maximum number of items in cache. done to prevent memory leaks. Use 200 items as a default
@@ -34,6 +36,9 @@ class InMemoryCache(BaseCache):
         # in-memory cache
         self.cache_dict: dict = {}
         self.ttl_dict: dict = {}
+        super().__init__(
+            default_ttl=default_ttl, max_allowed_ttl=max_allowed_ttl, **kwargs
+        )
 
     def evict_cache(self):
         """

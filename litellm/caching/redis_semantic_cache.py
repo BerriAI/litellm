@@ -11,7 +11,7 @@ Has 4 methods:
 import ast
 import asyncio
 import json
-from typing import Any
+from typing import Any, Optional
 
 import litellm
 from litellm._logging import print_verbose
@@ -29,6 +29,7 @@ class RedisSemanticCache(BaseCache):
         similarity_threshold=None,
         use_async=False,
         embedding_model="text-embedding-ada-002",
+        max_allowed_ttl: Optional[int] = None,
         **kwargs,
     ):
         from redisvl.index import SearchIndex
@@ -84,6 +85,7 @@ class RedisSemanticCache(BaseCache):
             schema["index"]["name"] = "litellm_semantic_cache_index_async"
             self.index = SearchIndex.from_dict(schema)
             self.index.connect(redis_url=redis_url, use_async=True)
+        super().__init__(max_allowed_ttl=max_allowed_ttl, **kwargs)
 
     #
     def _get_cache_logic(self, cached_response: Any):

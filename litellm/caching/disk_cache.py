@@ -12,7 +12,12 @@ else:
 
 
 class DiskCache(BaseCache):
-    def __init__(self, disk_cache_dir: Optional[str] = None):
+    def __init__(
+        self,
+        disk_cache_dir: Optional[str] = None,
+        max_allowed_ttl: Optional[int] = None,
+        **kwargs,
+    ):
         import diskcache as dc
 
         # if users don't provider one, use the default litellm cache
@@ -20,6 +25,8 @@ class DiskCache(BaseCache):
             self.disk_cache = dc.Cache(".litellm_cache")
         else:
             self.disk_cache = dc.Cache(disk_cache_dir)
+
+        super().__init__(max_allowed_ttl=max_allowed_ttl, **kwargs)
 
     def set_cache(self, key, value, **kwargs):
         if "ttl" in kwargs:

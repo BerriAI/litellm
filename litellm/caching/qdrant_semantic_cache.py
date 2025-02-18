@@ -11,7 +11,7 @@ Has 4 methods:
 import ast
 import asyncio
 import json
-from typing import Any
+from typing import Any, Optional
 
 import litellm
 from litellm._logging import print_verbose
@@ -29,6 +29,8 @@ class QdrantSemanticCache(BaseCache):
         quantization_config=None,
         embedding_model="text-embedding-ada-002",
         host_type=None,
+        max_allowed_ttl: Optional[int] = None,
+        **kwargs,
     ):
         import os
 
@@ -148,6 +150,8 @@ class QdrantSemanticCache(BaseCache):
                 )
             else:
                 raise Exception("Error while creating new collection")
+
+        super().__init__(max_allowed_ttl=max_allowed_ttl, **kwargs)
 
     def _get_cache_logic(self, cached_response: Any):
         if cached_response is None:

@@ -48,14 +48,25 @@ class RedisCache(BaseCache):
 
     def __init__(
         self,
-        host=None,
-        port=None,
-        password=None,
+        host: Optional[str] = None,
+        port: Optional[str] = None,
+        password: Optional[str] = None,
         redis_flush_size: Optional[int] = 100,
         namespace: Optional[str] = None,
         startup_nodes: Optional[List] = None,  # for redis-cluster
+        max_allowed_ttl: Optional[int] = None,
         **kwargs,
     ):
+        """
+        Args:
+           host: The host for the redis cache. Defaults to None.
+           port: The port for the redis cache. Defaults to None.
+           password: The password for the redis cache. Defaults to None.
+           redis_flush_size: The size of the redis flush buffer. Defaults to 100.
+           namespace: The namespace for the redis cache. Defaults to None.
+           startup_nodes: The startup nodes for the redis cluster. Defaults to None.
+           max_allowed_ttl: The maximum allowed ttl for cache requests. Defaults to None. This is the ceiling when a user passes a dynamic ttl to a cache request.
+        """
 
         from litellm._service_logger import ServiceLogging
 
@@ -127,7 +138,9 @@ class RedisCache(BaseCache):
             if litellm.default_redis_ttl is not None
             else None
         )
-        super().__init__(default_ttl=default_ttl, **kwargs)
+        super().__init__(
+            default_ttl=default_ttl, max_allowed_ttl=max_allowed_ttl, **kwargs
+        )
 
     def init_async_client(
         self,

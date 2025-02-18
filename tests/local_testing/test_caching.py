@@ -2522,3 +2522,53 @@ def test_redis_caching_multiple_namespaces():
 
     # request 4 without a namespace should not be cached under the same key as request 3
     assert response_4.id != response_3.id
+
+
+@patch("litellm.caching.redis_cache.RedisCache")
+def test_redis_max_allowed_ttl(MockRedisCache):
+    """
+    Test that the max allowed ttl is used for redis caching
+    """
+    # Create mock Redis client instance
+    mock_redis_instance = MockRedisCache.return_value
+    mock_redis_instance.add_cache = MagicMock()  # mock the set_cache method
+
+    import uuid
+
+    messages = [{"role": "user", "content": f"what is litellm? {uuid.uuid4()}"}]
+    litellm.cache = mock_redis_instance
+
+    # Test 1: dynamic ttl request is above the max allowed ttl
+    # should be capped at the max allowed ttl
+    response_1 = completion(
+        model="gpt-3.5-turbo",
+        messages=messages,
+        cache={
+            "ttl": 3.0,
+        },
+    )
+
+    # Verify Redis client was called with correct TTL
+    mock_redis_instance.set_cache.assert_called_with(ttl=3.0)
+
+    # Test 2: dynamic ttl request is below the max allowed ttl
+    # should not be capped at the max allowed ttl
+    response_2 = completion(
+        model="gpt-3.5-turbo",
+        messages=messages,
+        cache={
+            "ttl": 1.0,
+        },
+    )
+
+    # Verify Redis client was called with correct TTL
+    mock_redis_instance.set_cache.assert_called_with(ttl=1.0)
+
+    # Test 3: no ttl sent dynamically, no ttl passed to redis cache
+    response_3 = completion(
+        model="gpt-3.5-turbo",
+        messages=messages,
+    )
+
+    # Verify Redis client was called with no TTL
+    mock_redis_instance.set_cache.assert_called_with()

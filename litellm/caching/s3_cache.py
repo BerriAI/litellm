@@ -33,6 +33,7 @@ class S3Cache(BaseCache):
         s3_aws_session_token=None,
         s3_config=None,
         s3_path=None,
+        max_allowed_ttl: Optional[int] = None,
         **kwargs,
     ):
         import boto3
@@ -54,6 +55,8 @@ class S3Cache(BaseCache):
             config=s3_config,
             **kwargs,
         )
+
+        super().__init__(max_allowed_ttl=max_allowed_ttl, **kwargs)
 
     def set_cache(self, key, value, **kwargs):
         try:
