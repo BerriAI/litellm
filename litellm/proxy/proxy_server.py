@@ -1972,6 +1972,13 @@ class ProxyConfig:
                         raise Exception(
                             f"Invalid value set for upperbound_key_generate_params - value={value}"
                         )
+                elif key == "constants":
+                    # allow overriding constants
+                    for constant_key, constant_value in value.items():
+                        verbose_proxy_logger.debug(
+                            f"{blue_color_code} setting litellm.constants.{constant_key}={constant_value}{reset_color_code}"
+                        )
+                        setattr(litellm.constants, constant_key, constant_value)
                 else:
                     verbose_proxy_logger.debug(
                         f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}"
@@ -8845,6 +8852,12 @@ app.include_router(caching_router)
 app.include_router(analytics_router)
 app.include_router(guardrails_router)
 app.include_router(debugging_endpoints_router)
+app.include_router(ui_crud_endpoints_router)
+app.include_router(openai_files_router)
+app.include_router(team_callback_router)
+app.include_router(budget_management_router)
+app.include_router(model_management_router)
+
 app.include_router(ui_crud_endpoints_router)
 app.include_router(openai_files_router)
 app.include_router(team_callback_router)

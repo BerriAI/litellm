@@ -11,11 +11,6 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import litellm
 from litellm._logging import verbose_router_logger
-from litellm.constants import (
-    DEFAULT_COOLDOWN_TIME_SECONDS,
-    DEFAULT_FAILURE_THRESHOLD_PERCENT,
-    SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
-)
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 
 from .router_callbacks.track_deployment_metrics import (
@@ -197,12 +192,12 @@ def _should_cooldown_deployment(
         elif (
             percent_fails == 1.0
             and total_requests_this_minute
-            >= SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD
+            >= litellm.constants.SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD
         ):
             # Cooldown if all requests failed and we have reasonable traffic
             return True
         elif (
-            percent_fails > DEFAULT_FAILURE_THRESHOLD_PERCENT
+            percent_fails > litellm.constants.DEFAULT_FAILURE_THRESHOLD_PERCENT
             and not is_single_deployment_model_group  # by default we should avoid cooldowns on single deployment model groups
         ):
             return True
@@ -377,7 +372,8 @@ def should_cooldown_based_on_allowed_fails_policy(
         or litellm_router_instance.allowed_fails
     )
     cooldown_time = (
-        litellm_router_instance.cooldown_time or DEFAULT_COOLDOWN_TIME_SECONDS
+        litellm_router_instance.cooldown_time
+        or litellm.constants.DEFAULT_COOLDOWN_TIME_SECONDS
     )
 
     current_fails = litellm_router_instance.failed_calls.get_cache(key=deployment) or 0
