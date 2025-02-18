@@ -8,14 +8,13 @@ Has 4 primary methods:
     - async_get_cache
 """
 
-import asyncio
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any, List, Optional
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
+from litellm.litellm_core_utils.asyncify import run_async_function
 
 from .base_cache import BaseCache
 from .in_memory_cache import InMemoryCache
@@ -166,30 +165,7 @@ class DualCache(BaseCache):
         received_args = locals()
         received_args.pop("self")
 
-        def run_in_new_loop():
-            """Run the coroutine in a new event loop within this thread."""
-            new_loop = asyncio.new_event_loop()
-            try:
-                asyncio.set_event_loop(new_loop)
-                return new_loop.run_until_complete(
-                    self.async_batch_get_cache(**received_args)
-                )
-            finally:
-                new_loop.close()
-                asyncio.set_event_loop(None)
-
-        try:
-            # First, try to get the current event loop
-            _ = asyncio.get_running_loop()
-            # If we're already in an event loop, run in a separate thread
-            # to avoid nested event loop issues
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(run_in_new_loop)
-                return future.result()
-
-        except RuntimeError:
-            # No running event loop, we can safely run in this thread
-            return run_in_new_loop()
+        return run_async_function(self.async_batch_get_cache, **received_args)
 
     async def async_get_cache(
         self,
