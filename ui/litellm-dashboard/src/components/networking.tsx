@@ -92,7 +92,6 @@ export const modelCostMap = async (
     throw error;
   }
 };
-
 export const modelCreateCall = async (
   accessToken: string,
   formValues: Model
@@ -106,21 +105,28 @@ export const modelCreateCall = async (
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        ...formValues, // Include formValues in the request body
+        ...formValues,
       }),
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMsg =
+        errorData.error?.message?.error ||
+        "Network response was not ok";
+      message.error(errorMsg);
+      throw new Error(errorMsg);
     }
 
     const data = await response.json();
     console.log("API Response:", data);
-    message.success(
-      "Model created successfully"
-    );
+    
+    // Close any existing messages before showing new ones
+    message.destroy();
+    
+    // Sequential success messages
+    message.success(`Model ${formValues.model_name} created successfully`, 2);
+    
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -2173,6 +2179,7 @@ export const keyListCall = async (
     }
 
     queryParams.append('return_full_object', 'true');
+    queryParams.append('include_team_keys', 'true');
     
     const queryString = queryParams.toString();
     if (queryString) {

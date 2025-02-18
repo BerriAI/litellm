@@ -154,10 +154,6 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
         visible={isRegenerateModalOpen}
         onClose={() => setIsRegenerateModalOpen(false)}
         accessToken={accessToken}
-        onSuccess={(newKeyData) => {
-          // Handle the updated key data here if needed
-          setIsRegenerateModalOpen(false);
-        }}
       />
 
       {/* Delete Confirmation Modal */}
