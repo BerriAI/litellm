@@ -634,7 +634,6 @@ class Router:
         """
         if fallback_param is None:
             return
-
         for fallback_dict in fallback_param:
             if not isinstance(fallback_dict, dict):
                 raise ValueError(f"Item '{fallback_dict}' is not a dictionary.")
