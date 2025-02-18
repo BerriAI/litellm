@@ -178,7 +178,7 @@ export default function ModelInfoView({
                   
                   <div>
                     <Text className="font-medium">Public Model Name</Text>
-                    <div>{modelData.model_name}</div>
+                    <div>{getDisplayModelName(modelData)}</div>
                   </div>
 
                   <div>
