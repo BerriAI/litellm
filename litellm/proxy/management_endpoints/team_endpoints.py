@@ -814,7 +814,6 @@ async def team_member_add(
 @management_endpoint_wrapper
 async def team_member_delete(
     data: TeamMemberDeleteRequest,
-    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -1128,15 +1127,21 @@ async def delete_team(
         raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
 
     # check that all teams passed exist
+    team_rows: List[LiteLLM_TeamTable] = []
     for team_id in data.team_ids:
-        team_row = await prisma_client.get_data(  # type: ignore
-            team_id=team_id, table_name="team", query_type="find_unique"
-        )
-        if team_row is None:
+        try:
+            team_row_base: BaseModel = (
+                await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id}
+                )
+            )
+        except Exception:
             raise HTTPException(
-                status_code=404,
+                status_code=400,
                 detail={"error": f"Team not found, passed team_id={team_id}"},
             )
+        team_row_pydantic = LiteLLM_TeamTable(**team_row_base.model_dump())
+        team_rows.append(team_row_pydantic)
 
     # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
     # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
@@ -1174,6 +1179,26 @@ async def delete_team(
 
     ## DELETE ASSOCIATED KEYS
     await prisma_client.delete_data(team_id_list=data.team_ids, table_name="key")
+
+    # ## DELETE TEAM MEMBERSHIPS
+    for team_row in team_rows:
+        ### get all team members
+        team_members = team_row.members_with_roles
+        ### call team_member_delete for each team member
+        tasks = []
+        for team_member in team_members:
+            tasks.append(
+                team_member_delete(
+                    data=TeamMemberDeleteRequest(
+                        team_id=team_row.team_id,
+                        user_id=team_member.user_id,
+                        user_email=team_member.user_email,
+                    ),
+                    user_api_key_dict=user_api_key_dict,
+                )
+            )
+        await asyncio.gather(*tasks)
+
     ## DELETE TEAMS
     deleted_teams = await prisma_client.delete_data(
         team_id_list=data.team_ids, table_name="team"
