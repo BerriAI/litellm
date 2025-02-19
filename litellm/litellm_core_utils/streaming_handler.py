@@ -867,15 +867,17 @@ class CustomStreamWrapper:
         elif (
             "provider_specific_fields" in response_obj
             and response_obj["provider_specific_fields"] is not None
-            and 'reasoning_content' in response_obj["provider_specific_fields"]
+            and "reasoning_content" in response_obj["provider_specific_fields"]
         ):
             if self.sent_first_chunk is False:
                 completion_obj["role"] = "assistant"
                 self.sent_first_chunk = True
             if response_obj.get("provider_specific_fields") is not None:
-                completion_obj["provider_specific_fields"] = response_obj["provider_specific_fields"]
+                completion_obj["provider_specific_fields"] = response_obj[
+                    "provider_specific_fields"
+                ]
                 model_response.choices[0].delta = Delta(**completion_obj)
-                _index: Optional[int] = completion_obj.get("index")
+                _index = completion_obj.get("index")
                 if _index is not None:
                     model_response.choices[0].index = _index
             return model_response
