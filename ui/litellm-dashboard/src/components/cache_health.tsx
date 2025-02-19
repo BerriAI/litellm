@@ -156,7 +156,6 @@ export const CacheHealthTab: React.FC<{
 }> = ({ accessToken, healthCheckResponse, runCachingHealthCheck, responseTimeMs }) => {
   const [localResponseTimeMs, setLocalResponseTimeMs] = React.useState<number | null>(null);
   const [isLoading, setIsLoading] = React.useState<boolean>(false);
-  const [lastRun, setLastRun] = React.useState<Date | null>(null);
 
   const handleHealthCheck = async () => {
     setIsLoading(true);
@@ -164,19 +163,11 @@ export const CacheHealthTab: React.FC<{
     await runCachingHealthCheck();
     const endTime = performance.now();
     setLocalResponseTimeMs(endTime - startTime);
-    setLastRun(new Date());
     setIsLoading(false);
   };
 
   return (
     <div className="p-4">
-      <div className="flex items-center justify-between mb-4">
-        <Text className="text-gray-600">
-          Cache health will run a very small request through API /cache/ping configured on litellm
-        </Text>
-        <ResponseTimeIndicator responseTimeMs={localResponseTimeMs} />
-      </div>
-
       <Button 
         onClick={handleHealthCheck}
         disabled={isLoading}
@@ -185,11 +176,9 @@ export const CacheHealthTab: React.FC<{
         {isLoading ? "Running Cache Health..." : "Run cache health"}
       </Button>
 
-      {lastRun && (
-        <Text className="mt-2 text-gray-500">
-          Last checked: {lastRun.toLocaleString()}
-        </Text>
-      )}
+      <div className="flex items-center justify-end">
+        <ResponseTimeIndicator responseTimeMs={localResponseTimeMs} />
+      </div>
 
       {healthCheckResponse && (
         <div className="mt-4">
