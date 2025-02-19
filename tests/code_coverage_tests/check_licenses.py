@@ -20,7 +20,9 @@ class PackageLicense:
 
 
 class LicenseChecker:
-    def __init__(self, config_file: Path = Path("liccheck.ini")):
+    def __init__(
+        self, config_file: Path = Path("./tests/code_coverage_tests/liccheck.ini")
+    ):
         if not config_file.exists():
             print(f"Error: Config file {config_file} not found")
             sys.exit(1)
@@ -238,7 +240,8 @@ class LicenseChecker:
 
 
 def main():
-    req_file = "../../requirements.txt"
+    # req_file = "../../requirements.txt" ## LOCAL TESTING
+    req_file = "./requirements.txt"
     checker = LicenseChecker()
 
     # Check requirements
