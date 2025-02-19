@@ -2113,6 +2113,20 @@ class TeamMemberUpdateResponse(MemberUpdateResponse):
     max_budget_in_team: Optional[float] = None
 
 
+class TeamModelAddRequest(BaseModel):
+    """Request to add models to a team"""
+
+    team_id: str
+    models: List[str]
+
+
+class TeamModelDeleteRequest(BaseModel):
+    """Request to delete models from a team"""
+
+    team_id: str
+    models: List[str]
+
+
 # Organization Member Requests
 class OrganizationMemberAddRequest(OrgMemberAddRequest):
     organization_id: str

@@ -25,12 +25,16 @@ from litellm.proxy._types import (
     PrismaCompatibleUpdateDBModel,
     ProxyErrorTypes,
     ProxyException,
+    TeamModelAddRequest,
     UpdateTeamRequest,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
-from litellm.proxy.management_endpoints.team_endpoints import update_team
+from litellm.proxy.management_endpoints.team_endpoints import (
+    team_model_add,
+    update_team,
+)
 from litellm.proxy.utils import PrismaClient
 from litellm.types.router import (
     Deployment,
@@ -292,6 +296,16 @@ async def _add_team_model_to_db(
         ),
         user_api_key_dict=user_api_key_dict,
         http_request=Request(scope={"type": "http"}),
+    )
+
+    # add model to team object
+    await team_model_add(
+        data=TeamModelAddRequest(
+            team_id=_team_id,
+            models=[original_model_name],
+        ),
+        http_request=Request(scope={"type": "http"}),
+        user_api_key_dict=user_api_key_dict,
     )
 
     return model_response
