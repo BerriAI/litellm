@@ -1,6 +1,8 @@
 from enum import Enum
 from typing import Literal, Optional, TypedDict
 
+from pydantic import BaseModel
+
 
 class LiteLLMCacheType(str, Enum):
     LOCAL = "local"
@@ -51,3 +53,12 @@ DynamicCacheControl = TypedDict(
         "no-store": Optional[bool],
     },
 )
+
+
+class CachePingResponse(BaseModel):
+    status: str
+    cache_type: str
+    ping_response: Optional[bool] = None
+    set_cache_response: Optional[str] = None
+    litellm_cache_params: Optional[str] = None
+    redis_cache_params: Optional[str] = None
