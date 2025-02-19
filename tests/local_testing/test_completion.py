@@ -3311,13 +3311,15 @@ def test_bedrock_deepseek_custom_prompt_dict():
         )
 
 
-def test_bedrock_deepseek_known_tokenizer_config():
+def test_bedrock_deepseek_known_tokenizer_config(monkeypatch):
     model = (
         "deepseek_r1/arn:aws:bedrock:us-west-2:888602223428:imported-model/bnnr6463ejgf"
     )
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from unittest.mock import Mock
     import httpx
+
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
 
     mock_response = Mock(spec=httpx.Response)
     mock_response.status_code = 200
@@ -3354,6 +3356,8 @@ def test_bedrock_deepseek_known_tokenizer_config():
         print(mock_post.call_args.kwargs)
         url = mock_post.call_args.kwargs["url"]
         assert "deepseek_r1" not in url
+        assert "us-east-1" not in url
+        assert "us-west-2" in url
         json_data = json.loads(mock_post.call_args.kwargs["data"])
         assert (
             json_data["prompt"].rstrip()

@@ -94,7 +94,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
-            aws_region_name=self._get_aws_region_name(optional_params=optional_params),
+            aws_region_name=self._get_aws_region_name(
+                optional_params=optional_params, model=model
+            ),
         )
 
         if (stream is not None and stream is True) and provider != "ai21":
@@ -114,6 +116,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         optional_params: dict,
         request_data: dict,
         api_base: str,
+        model: Optional[str] = None,
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
     ) -> dict:
@@ -135,7 +138,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         aws_profile_name = optional_params.get("aws_profile_name", None)
         aws_web_identity_token = optional_params.get("aws_web_identity_token", None)
         aws_sts_endpoint = optional_params.get("aws_sts_endpoint", None)
-        aws_region_name = self._get_aws_region_name(optional_params)
+        aws_region_name = self._get_aws_region_name(
+            optional_params=optional_params, model=model
+        )
 
         credentials: Credentials = self.get_credentials(
             aws_access_key_id=aws_access_key_id,
@@ -593,24 +598,53 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             )
         return modelId
 
-    def _get_aws_region_name(self, optional_params: dict) -> str:
+    def get_aws_region_from_model_arn(self, model: Optional[str]) -> Optional[str]:
+        try:
+            # First check if the string contains the expected prefix
+            if not isinstance(model, str) or "arn:aws:bedrock" not in model:
+                return None
+
+            # Split the ARN and check if we have enough parts
+            parts = model.split(":")
+            if len(parts) < 4:
+                return None
+
+            # Get the region from the correct position
+            region = parts[3]
+            if not region:  # Check if region is empty
+                return None
+
+            return region
+        except Exception:
+            # Catch any unexpected errors and return None
+            return None
+
+    def _get_aws_region_name(
+        self, optional_params: dict, model: Optional[str] = None
+    ) -> str:
         """
         Get the AWS region name from the environment variables
         """
         aws_region_name = optional_params.get("aws_region_name", None)
         ### SET REGION NAME ###
         if aws_region_name is None:
+            # check model arn #
+            aws_region_name = self.get_aws_region_from_model_arn(model)
             # check env #
             litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
 
-            if litellm_aws_region_name is not None and isinstance(
-                litellm_aws_region_name, str
+            if (
+                aws_region_name is None
+                and litellm_aws_region_name is not None
+                and isinstance(litellm_aws_region_name, str)
             ):
                 aws_region_name = litellm_aws_region_name
 
             standard_aws_region_name = get_secret("AWS_REGION", None)
-            if standard_aws_region_name is not None and isinstance(
-                standard_aws_region_name, str
+            if (
+                aws_region_name is None
+                and standard_aws_region_name is not None
+                and isinstance(standard_aws_region_name, str)
             ):
                 aws_region_name = standard_aws_region_name
 
