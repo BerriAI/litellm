@@ -106,7 +106,6 @@ from litellm.types.router import (
     DeploymentTypedDict,
     LiteLLM_Params,
     ModelGroupInfo,
-    ModelInfo,
     OptionalPreCallChecks,
     RetryPolicy,
     RouterCacheEnum,
