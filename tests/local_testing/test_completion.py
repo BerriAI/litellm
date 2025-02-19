@@ -3347,12 +3347,13 @@ def test_bedrock_deepseek_known_tokenizer_config():
         completion(
             model="bedrock/" + model,
             messages=messages,
-            aws_region_name="us-west-2",
             client=client,
         )
 
         mock_post.assert_called_once()
         print(mock_post.call_args.kwargs)
+        url = mock_post.call_args.kwargs["url"]
+        assert "deepseek_r1" not in url
         json_data = json.loads(mock_post.call_args.kwargs["data"])
         assert (
             json_data["prompt"].rstrip()
