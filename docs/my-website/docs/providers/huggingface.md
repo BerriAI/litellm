@@ -303,6 +303,9 @@ print(response)
 You can set up a [LiteLLM Proxy Server](https://docs.litellm.ai/#litellm-proxy-server-llm-gateway) to serve Hugging Face models through any of the supported Inference Providers. Here's how to do it:
 
 ### Step 1. Setup the config file
+
+In this case, we are configuring a proxy to serve `DeepSeek R1` from Hugging Face, using Together AI as the backend Inference Provider.
+
 ```yaml
 model_list:
   - model_name: my-r1-model
