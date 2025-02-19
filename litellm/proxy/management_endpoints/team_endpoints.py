@@ -1211,7 +1211,10 @@ async def delete_team(
 def validate_membership(
     user_api_key_dict: UserAPIKeyAuth, team_table: LiteLLM_TeamTable
 ):
-    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+    if (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+    ):
         return
 
     if (
@@ -1270,32 +1273,19 @@ async def team_info(
                 detail={"message": "Malformed request. No team id passed in."},
             )
 
-        if (
-            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
-            or user_api_key_dict.user_role
-            == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
-        ):
-            pass
-        elif user_api_key_dict.team_id is None or (
-            team_id != user_api_key_dict.team_id
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="key not allowed to access this team's info. Key team_id={}, Requested team_id={}".format(
-                    user_api_key_dict.team_id, team_id
-                ),
+        try:
+            team_info: BaseModel = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id}
             )
-
-        team_info: Optional[Union[LiteLLM_TeamTable, dict]] = (
-            await prisma_client.get_data(
-                team_id=team_id, table_name="team", query_type="find_unique"
-            )
-        )
-        if team_info is None:
+        except Exception:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"message": f"Team not found, passed team id: {team_id}."},
             )
+        validate_membership(
+            user_api_key_dict=user_api_key_dict,
+            team_table=LiteLLM_TeamTable(**team_info.model_dump()),
+        )
 
         ## GET ALL KEYS ##
         keys = await prisma_client.get_data(

@@ -294,8 +294,7 @@ class TestOpenAIChatCompletion(BaseLLMChatTest):
             )
             assert response is not None
         except litellm.InternalServerError:
-            pytest.skip("OpenAI API is raising internal server errors")
-
+            pytest.skip("Skipping test due to InternalServerError")
 
 def test_completion_bad_org():
     import litellm
