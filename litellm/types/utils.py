@@ -552,10 +552,17 @@ class Delta(OpenAIObject):
     ):
         super(Delta, self).__init__(**params)
         provider_specific_fields: Dict[str, Any] = {}
-
-        if "reasoning_content" in params:
-            provider_specific_fields["reasoning_content"] = params["reasoning_content"]
-            setattr(self, "reasoning_content", params["reasoning_content"])
+        # Used to map message attributes to specified fields for consistency with the OpenAI SDK.
+        # - eg. `openrouter/deepseek/deepseek-r1` returns unmapped field `reasoning`
+        message_field_aliases = {
+            "reasoning_content": "reasoning_content",
+            "reasoning": "reasoning_content",
+        }
+        for key, value in params.items():
+            if key in message_field_aliases:
+                alias = message_field_aliases[key]
+                provider_specific_fields[alias] = value
+                setattr(self, alias, value)
         self.content = content
         self.role = role
         # Set default values and correct types
@@ -1193,6 +1200,7 @@ class TextCompletionResponse(OpenAIObject):
         "choices": [
         {
             "text": response["choices"][0]["message"]["content"],
+            "reasoning_content": response["choices"][0]["message"]["reasoning_content"],
             "index": response["choices"][0]["index"],
             "logprobs": transformed_logprobs,
             "finish_reason": response["choices"][0]["finish_reason"]

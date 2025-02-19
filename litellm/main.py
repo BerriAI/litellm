@@ -5537,6 +5537,7 @@ def stream_chunk_builder_text_completion(
         "choices": [
             {
                 "text": None,
+                "reasoning_content": None,
                 "index": 0,
                 "logprobs": logprobs,
                 "finish_reason": finish_reason,
@@ -5565,6 +5566,24 @@ def stream_chunk_builder_text_completion(
 
     # Update the "content" field within the response dictionary
     response["choices"][0]["text"] = combined_content
+
+    reasoning_content_list = []
+    for chunk in chunks:
+        choices = chunk["choices"]
+        for choice in choices:
+            if (
+                choice is not None
+                and hasattr(choice, "reasoning_content")
+                and choice.get("reasoning_content") is not None
+            ):
+                _choice = choice.get("reasoning_content")
+                reasoning_content_list.append(_choice)
+
+    # Combine the "reasoning_content" strings into a single string || combine the 'function' strings into a single string
+    combined_reasoning_content = "".join(reasoning_content_list)
+
+    # Update the "reasoning_content" field within the response dictionary
+    response["choices"][0]["reasoning_content"] = combined_reasoning_content
 
     if len(combined_content) > 0:
         pass
@@ -5663,6 +5682,17 @@ def stream_chunk_builder(  # noqa: PLR0915
         if len(content_chunks) > 0:
             response["choices"][0]["message"]["content"] = (
                 processor.get_combined_content(content_chunks)
+            )
+
+        reasoning_content_chunks = [
+            chunk
+            for chunk in chunks
+            if "reasoning_content" in chunk and chunk["reasoning_content"] is not None
+        ]
+
+        if len(reasoning_content_chunks) > 0:
+            response["choices"][0]["message"]["reasoning_content"] = (
+                processor.get_combined_reasoning_content(reasoning_content_chunks)
             )
 
         audio_chunks = [
