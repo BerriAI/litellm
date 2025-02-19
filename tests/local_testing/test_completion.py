@@ -3312,7 +3312,9 @@ def test_bedrock_deepseek_custom_prompt_dict():
 
 
 def test_bedrock_deepseek_known_tokenizer_config():
-    model = "deepseek_r1/arn:aws:bedrock:us-east-1:1234:imported-model/45d34re"
+    model = (
+        "deepseek_r1/arn:aws:bedrock:us-west-2:888602223428:imported-model/bnnr6463ejgf"
+    )
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from unittest.mock import Mock
     import httpx
@@ -3345,6 +3347,7 @@ def test_bedrock_deepseek_known_tokenizer_config():
         completion(
             model="bedrock/" + model,
             messages=messages,
+            aws_region_name="us-west-2",
             client=client,
         )
 

@@ -586,7 +586,11 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
 
         modelId = modelId.replace("invoke/", "", 1)
         if provider == "llama" and "llama/" in modelId:
-            modelId = self._get_model_id_for_llama_like_model(modelId)
+            modelId = self._get_model_id_from_model_with_spec(modelId, spec="llama")
+        elif provider == "deepseek_r1" and "deepseek_r1/" in modelId:
+            modelId = self._get_model_id_from_model_with_spec(
+                modelId, spec="deepseek_r1"
+            )
         return modelId
 
     def _get_aws_region_name(self, optional_params: dict) -> str:
@@ -615,14 +619,15 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
 
         return aws_region_name
 
-    def _get_model_id_for_llama_like_model(
+    def _get_model_id_from_model_with_spec(
         self,
         model: str,
+        spec: str,
     ) -> str:
         """
         Remove `llama` from modelID since `llama` is simply a spec to follow for custom bedrock models
         """
-        model_id = model.replace("llama/", "")
+        model_id = model.replace(spec + "/", "")
         return self.encode_model_id(model_id=model_id)
 
     def encode_model_id(self, model_id: str) -> str:
