@@ -92,16 +92,11 @@ def update_db_model(
 
     # update model info
     if updated_patch.model_info:
-        _updated_model_info_dict = updated_patch.model_info.model_dump(
-            exclude_unset=True
-        )
         if "model_info" not in merged_deployment_dict:
-            merged_deployment_dict["model_info"] = ModelInfo()
-        _original_model_info_dict = merged_deployment_dict["model_info"].model_dump(
-            exclude_unset=True
+            merged_deployment_dict["model_info"] = {}
+        merged_deployment_dict["model_info"].update(
+            updated_patch.model_info.model_dump(exclude_none=True)
         )
-        _original_model_info_dict.update(_updated_model_info_dict)
-        merged_deployment_dict["model_info"] = ModelInfo(**_original_model_info_dict)
 
     # convert to prisma compatible format
 
