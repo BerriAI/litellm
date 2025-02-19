@@ -1,6 +1,7 @@
 import React from "react";
 import { Card, Text, Button } from "@tremor/react";
 import { CheckCircleIcon, XCircleIcon } from "@heroicons/react/outline";
+import { ResponseTimeIndicator } from "./response_time_indicator";
 
 // Helper function to deep-parse a JSON string if possible
 const deepParse = (input: any) => {
@@ -34,7 +35,7 @@ const TableClickableErrorField: React.FC<{ label: string; value: string }> = ({
             {isExpanded ? "▼" : "▶"}
           </button>
           <div className="flex-1">
-            <div className="font-medium text-blue-600">{label}</div>
+            <div className="font-medium">{label}</div>
             <pre className="mt-1 text-sm text-gray-700 whitespace-pre-wrap">
               {isExpanded ? value : truncated}
             </pre>
@@ -57,79 +58,75 @@ export const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) =>
     }
 
     return (
-      <div className="p-6 bg-gray-50 space-y-6">
-        <div className="bg-white rounded-lg shadow">
-          <div className="flex items-center space-x-2 text-red-600 p-4 border-b">
-            <XCircleIcon className="h-5 w-5" />
-            <h3 className="text-lg font-medium">Cache Health Check Failed</h3>
-          </div>
-          <table className="w-full">
-            <tbody>
-              {errorData.message && (
-                <TableClickableErrorField 
-                  label="Error Message" 
-                  value={errorData.message} 
-                />
-              )}
-              {errorData.type && (
-                <TableClickableErrorField 
-                  label="Error Type" 
-                  value={errorData.type} 
-                />
-              )}
-              {errorData.traceback && (
-                <TableClickableErrorField 
-                  label="Traceback" 
-                  value={errorData.traceback} 
-                />
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="p-6 bg-gray-50 space-y-6">
-      <div className="bg-white rounded-lg shadow">
-        <div className="flex items-center space-x-2 text-green-600 p-4 border-b">
-          <CheckCircleIcon className="h-5 w-5" />
-          <h3 className="text-lg font-medium">Cache Health Check Passed</h3>
+      <div className="bg-white rounded-lg border border-gray-200">
+        <div className="flex items-center space-x-2 text-red-600 p-4 border-b border-gray-200">
+          <XCircleIcon className="h-5 w-5" />
+          <h3 className="text-lg font-medium">Cache Health Check Failed</h3>
         </div>
         <table className="w-full">
           <tbody>
-            <TableClickableErrorField 
-              label="Status" 
-              value={String(response.status || "-")} 
-            />
-            <TableClickableErrorField 
-              label="Cache Type" 
-              value={String(response.cache_type || "-")} 
-            />
-            <TableClickableErrorField 
-              label="Ping Response" 
-              value={String(response.ping_response || "-")} 
-            />
-            <TableClickableErrorField 
-              label="Set Cache Response" 
-              value={String(response.set_cache_response || "-")} 
-            />
-            {response.litellm_cache_params && (
+            {errorData.message && (
               <TableClickableErrorField 
-                label="LiteLLM Cache Parameters" 
-                value={JSON.stringify(deepParse(response.litellm_cache_params), null, 2)} 
+                label="Error Message" 
+                value={errorData.message} 
               />
             )}
-            {response.specific_cache_params && (
+            {errorData.type && (
               <TableClickableErrorField 
-                label="Specific Cache Parameters" 
-                value={JSON.stringify(deepParse(response.specific_cache_params), null, 2)} 
+                label="Error Type" 
+                value={errorData.type} 
+              />
+            )}
+            {errorData.traceback && (
+              <TableClickableErrorField 
+                label="Traceback" 
+                value={errorData.traceback} 
               />
             )}
           </tbody>
         </table>
       </div>
+    );
+  }
+
+  return (
+    <div className="bg-white rounded-lg border border-gray-200">
+      <div className="flex items-center space-x-2 text-green-600 p-4 border-b border-gray-200">
+        <CheckCircleIcon className="h-5 w-5" />
+        <h3 className="text-lg font-medium">Cache Health Check Passed</h3>
+      </div>
+      <table className="w-full">
+        <tbody>
+          <TableClickableErrorField 
+            label="Status" 
+            value={String(response.status || "-")} 
+          />
+          <TableClickableErrorField 
+            label="Cache Type" 
+            value={String(response.cache_type || "-")} 
+          />
+          <TableClickableErrorField 
+            label="Ping Response" 
+            value={String(response.ping_response || "-")} 
+          />
+          <TableClickableErrorField 
+            label="Set Cache Response" 
+            value={String(response.set_cache_response || "-")} 
+          />
+          {response.litellm_cache_params && (
+            <TableClickableErrorField 
+              label="LiteLLM Cache Parameters" 
+              value={JSON.stringify(deepParse(response.litellm_cache_params), null, 2)} 
+            />
+          )}
+          {response.specific_cache_params && (
+            <TableClickableErrorField 
+              label="Specific Cache Parameters" 
+              value={JSON.stringify(deepParse(response.specific_cache_params), null, 2)} 
+            />
+          )}
+        </tbody>
+      </table>
     </div>
   );
 };
@@ -138,21 +135,38 @@ export const CacheHealthTab: React.FC<{
   accessToken: string | null;
   healthCheckResponse: any;
   runCachingHealthCheck: () => void;
-}> = ({ accessToken, healthCheckResponse, runCachingHealthCheck }) => {
-  return (
-    <Card className="mt-4">
-      <Text>
-        Cache health will run a very small request through API /cache/ping
-        configured on litellm
-      </Text>
+  responseTimeMs?: number | null;
+}> = ({ accessToken, healthCheckResponse, runCachingHealthCheck, responseTimeMs }) => {
+  const [localResponseTimeMs, setLocalResponseTimeMs] = React.useState<number | null>(null);
 
-      <Button onClick={runCachingHealthCheck} className="mt-4">
+  const handleHealthCheck = async () => {
+    const startTime = performance.now();
+    await runCachingHealthCheck();
+    const endTime = performance.now();
+    setLocalResponseTimeMs(endTime - startTime);
+  };
+
+  return (
+    <div className="p-4">
+      <div className="flex items-center justify-between mb-4">
+        <Text className="text-gray-600">
+          Cache health will run a very small request through API /cache/ping configured on litellm
+        </Text>
+        <ResponseTimeIndicator responseTimeMs={localResponseTimeMs} />
+      </div>
+
+      <Button 
+        onClick={handleHealthCheck}
+        className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md"
+      >
         Run cache health
       </Button>
       
       {healthCheckResponse && (
-        <HealthCheckDetails response={healthCheckResponse} />
+        <div className="mt-4">
+          <HealthCheckDetails response={healthCheckResponse} />
+        </div>
       )}
-    </Card>
+    </div>
   );
 }; 
