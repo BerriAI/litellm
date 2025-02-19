@@ -730,6 +730,8 @@ class BaseLLMChatTest(ABC):
                 second_response.choices[0].message.content is not None
                 or second_response.choices[0].message.tool_calls is not None
             )
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
         except litellm.RateLimitError:
             pass
         except Exception as e:
