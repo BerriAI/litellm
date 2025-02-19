@@ -52,8 +52,7 @@ class AmazonTitanMultimodalEmbeddingG1Config:
             transformed_request = AmazonTitanMultimodalEmbeddingRequest(inputText=input)
 
         for k, v in inference_params.items():
-            if not k.lower().startswith("aws_"):  # filter out AWS-specific parameters
-                transformed_request[k] = v  # type: ignore
+            transformed_request[k] = v  # type: ignore
         return transformed_request
 
     def _transform_response(
