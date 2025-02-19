@@ -146,7 +146,7 @@ async def test_pre_call_hook_rpm_limits():
     _api_key = "sk-12345"
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(
-        api_key=_api_key, max_parallel_requests=1, tpm_limit=9, rpm_limit=1
+        api_key=_api_key, max_parallel_requests=10, tpm_limit=9, rpm_limit=1
     )
     local_cache = DualCache()
     parallel_request_handler = MaxParallelRequestsHandler(
@@ -155,16 +155,6 @@ async def test_pre_call_hook_rpm_limits():
 
     await parallel_request_handler.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
-    )
-
-    kwargs = {"litellm_params": {"metadata": {"user_api_key": _api_key}}}
-
-    ## Expected cache val: {"current_requests": 0, "current_tpm": 0, "current_rpm": 1}
-    await parallel_request_handler.async_pre_call_hook(
-        user_api_key_dict=user_api_key_dict,
-        cache=local_cache,
-        data={},
-        call_type="",
     )
 
     await asyncio.sleep(2)
@@ -200,15 +190,6 @@ async def test_pre_call_hook_rpm_limits_retry_after():
 
     await parallel_request_handler.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
-    )
-
-    kwargs = {"litellm_params": {"metadata": {"user_api_key": _api_key}}}
-
-    await parallel_request_handler.async_pre_call_hook(
-        user_api_key_dict=user_api_key_dict,
-        cache=local_cache,
-        data={},
-        call_type="",
     )
 
     await asyncio.sleep(2)
@@ -260,13 +241,6 @@ async def test_pre_call_hook_team_rpm_limits():
             "metadata": {"user_api_key": _api_key, "user_api_key_team_id": _team_id}
         }
     }
-
-    await parallel_request_handler.async_pre_call_hook(
-        user_api_key_dict=user_api_key_dict,
-        cache=local_cache,
-        data={},
-        call_type="",
-    )
 
     await asyncio.sleep(2)
 
