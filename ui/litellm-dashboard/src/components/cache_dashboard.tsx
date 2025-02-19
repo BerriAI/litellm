@@ -29,6 +29,8 @@ import {
 } from "antd";
 import {
   RefreshIcon,
+  CheckCircleIcon,
+  XCircleIcon,
 } from "@heroicons/react/outline";
 import {
     adminGlobalCacheActivity,
@@ -82,7 +84,109 @@ interface uiData {
 
 }
 
+interface CacheHealthResponse {
+  status?: string;
+  cache_type?: string;
+  ping_response?: boolean;
+  set_cache_response?: string;
+  litellm_cache_params?: string;
+  error?: {
+    message: string;
+    type: string;
+    param: string;
+    code: string;
+  };
+}
 
+// Health Check Details Component
+const HealthCheckDetails: React.FC<{ response: CacheHealthResponse }> = ({ response }) => {
+  const formatData = (input: any) => {
+    if (typeof input === "string") {
+      try {
+        return JSON.parse(input);
+      } catch {
+        return input;
+      }
+    }
+    return input;
+  };
+
+  if (response.error) {
+    return (
+      <div className="mt-4 space-y-4">
+        <div className="flex items-center space-x-2 text-red-600">
+          <XCircleIcon className="h-5 w-5" />
+          <span className="font-medium">Cache Health Check Failed</span>
+        </div>
+        <div className="bg-white rounded-lg shadow">
+          <div className="p-4 border-b">
+            <h3 className="text-lg font-medium">Error Details</h3>
+          </div>
+          <div className="space-y-2 p-4">
+            <div className="flex">
+              <span className="font-medium w-1/3">Error Type:</span>
+              <span>{response.error.type}</span>
+            </div>
+            <div className="flex">
+              <span className="font-medium w-1/3">Error Code:</span>
+              <span>{response.error.code}</span>
+            </div>
+            <div className="flex">
+              <span className="font-medium w-1/3">Parameter:</span>
+              <span>{response.error.param}</span>
+            </div>
+          </div>
+          <pre className="p-4 bg-gray-50 text-sm overflow-auto rounded-b-lg">
+            {JSON.stringify(formatData(response.error.message), null, 2)}
+          </pre>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-4 space-y-4">
+      <div className="flex items-center space-x-2 text-green-600">
+        <CheckCircleIcon className="h-5 w-5" />
+        <span className="font-medium">Cache Health Check Passed</span>
+      </div>
+      <div className="bg-white rounded-lg shadow">
+        <div className="p-4 border-b">
+          <h3 className="text-lg font-medium">Cache Configuration</h3>
+        </div>
+        <div className="space-y-2 p-4">
+          <div className="flex">
+            <span className="font-medium w-1/3">Status:</span>
+            <span>{response.status}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Cache Type:</span>
+            <span>{response.cache_type}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Ping Response:</span>
+            <span>{String(response.ping_response)}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Set Cache Response:</span>
+            <span>{response.set_cache_response}</span>
+          </div>
+        </div>
+      </div>
+
+      {response.litellm_cache_params && (
+        <div className="bg-white rounded-lg shadow">
+          <div className="p-4 border-b">
+            <h3 className="text-lg font-medium">LiteLLM Cache Parameters</h3>
+          </div>
+          <pre className="p-4 bg-gray-50 text-sm overflow-auto rounded-b-lg">
+            {JSON.stringify(formatData(response.litellm_cache_params), null, 2)}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+};
 
 const CacheDashboard: React.FC<CachePageProps> = ({
   accessToken,
@@ -387,15 +491,12 @@ const runCachingHealthCheck = async () => {
                 configured on litellm
               </Text>
 
-              <Button onClick={runCachingHealthCheck} className="mt-4">Run cache health</Button>
+              <Button onClick={runCachingHealthCheck} className="mt-4">
+                Run cache health
+              </Button>
+              
               {healthCheckResponse && (
-                <pre className="mt-4" style={{ 
-                  whiteSpace: 'pre-wrap',
-                  wordWrap: 'break-word',
-                  maxWidth: '100%'
-                }}>
-                  {JSON.stringify(healthCheckResponse, null, 2)}
-                </pre>
+                <HealthCheckDetails response={healthCheckResponse} />
               )}
             </Card>
           </TabPanel>
