@@ -196,15 +196,18 @@ class BaseLLMChatTest(ABC):
         assert response is not None
 
     def test_message_with_name(self):
-        litellm.set_verbose = True
-        base_completion_call_args = self.get_base_completion_call_args()
-        messages = [
-            {"role": "user", "content": "Hello", "name": "test_name"},
-        ]
-        response = self.completion_function(
-            **base_completion_call_args, messages=messages
-        )
-        assert response is not None
+        try:
+            litellm.set_verbose = True
+            base_completion_call_args = self.get_base_completion_call_args()
+            messages = [
+                {"role": "user", "content": "Hello", "name": "test_name"},
+            ]
+            response = self.completion_function(
+                **base_completion_call_args, messages=messages
+            )
+            assert response is not None
+        except litellm.RateLimitError:
+            pass
 
     @pytest.mark.parametrize(
         "response_format",
