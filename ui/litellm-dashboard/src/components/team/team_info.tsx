@@ -474,14 +474,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 </div>
               )}
             </Card>
-
-            <ModelAliasesCard
-              teamId={teamId}
-              accessToken={accessToken}
-              currentAliases={teamData?.team_info?.litellm_model_table?.model_aliases || {}}
-              availableModels={userModels}
-              onUpdate={fetchTeamInfo}
-            />
           </TabPanel>
         </TabPanels>
       </TabGroup>
