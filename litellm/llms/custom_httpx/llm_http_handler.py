@@ -247,6 +247,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             stream=stream,
             fake_stream=fake_stream,
+            model=model,
         )
 
         ## LOGGING
