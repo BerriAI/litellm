@@ -293,7 +293,13 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               initialValue={team ? team.team_id : null}
               className="mt-8"
             >
-              <TeamDropdown teams={teams} />
+              <TeamDropdown 
+                teams={teams} 
+                onChange={(teamId) => {
+                  const selectedTeam = teams?.find(t => t.team_id === teamId) || null;
+                  setSelectedCreateKeyTeam(selectedTeam);
+                }}
+              />
             </Form.Item>
 
             <Form.Item

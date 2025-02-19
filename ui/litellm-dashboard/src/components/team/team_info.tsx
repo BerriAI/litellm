@@ -29,7 +29,6 @@ import { PencilAltIcon, PlusIcon, TrashIcon } from "@heroicons/react/outline";
 import MemberModal from "./edit_membership";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
-import ModelAliasesCard from "./model_aliases_card";
 
 
 interface TeamData {
@@ -474,14 +473,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 </div>
               )}
             </Card>
-
-            <ModelAliasesCard
-              teamId={teamId}
-              accessToken={accessToken}
-              currentAliases={teamData?.team_info?.litellm_model_table?.model_aliases || {}}
-              availableModels={userModels}
-              onUpdate={fetchTeamInfo}
-            />
           </TabPanel>
         </TabPanels>
       </TabGroup>

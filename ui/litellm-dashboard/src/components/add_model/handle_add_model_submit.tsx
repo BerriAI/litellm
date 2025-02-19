@@ -11,15 +11,7 @@ export const handleAddModelSubmit = async (
   ) => {
     try {
       console.log("handling submit for formValues:", formValues);
-      
-      // Handle wildcard case
-      if (formValues["model"] && formValues["model"].includes("all-wildcard")) {
-        const customProvider: Providers = formValues["custom_llm_provider"];
-        const litellm_custom_provider = provider_map[customProvider as keyof typeof Providers];
-        const wildcardModel = litellm_custom_provider + "/*";
-        formValues["model_name"] = wildcardModel;
-        formValues["model"] = wildcardModel; 
-      }
+
 
       // Get model mappings and safely remove from formValues
       const modelMappings = formValues["model_mappings"] || [];
@@ -27,6 +19,20 @@ export const handleAddModelSubmit = async (
         delete formValues["model_mappings"];
       }
       
+      
+      // Handle wildcard case
+      if (formValues["model"] && formValues["model"].includes("all-wildcard")) {
+        const customProvider: Providers = formValues["custom_llm_provider"];
+        const litellm_custom_provider = provider_map[customProvider as keyof typeof Providers];
+        const wildcardModel = litellm_custom_provider + "/*";
+        formValues["model_name"] = wildcardModel;
+        modelMappings.push({
+          public_name: wildcardModel,
+          litellm_model: wildcardModel,
+        });
+        formValues["model"] = wildcardModel; 
+      }
+
       // Create a deployment for each mapping
       for (const mapping of modelMappings) {
         const litellmParamsObj: Record<string, any> = {};

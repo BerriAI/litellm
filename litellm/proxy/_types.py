@@ -1625,7 +1625,7 @@ class LiteLLM_ErrorLogs(LiteLLMPydanticObjectBase):
 class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
     id: str
     updated_at: datetime
-    changed_by: str
+    changed_by: Optional[Any] = None
     changed_by_api_key: Optional[str] = None
     action: Literal["created", "updated", "deleted", "blocked"]
     table_name: Literal[
@@ -1637,6 +1637,13 @@ class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
     object_id: str
     before_value: Optional[Json] = None
     updated_values: Optional[Json] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def cast_changed_by_to_str(cls, values):
+        if values.get("changed_by") is not None:
+            values["changed_by"] = str(values["changed_by"])
+        return values
 
 
 class LiteLLM_SpendLogs_ResponseObject(LiteLLMPydanticObjectBase):
@@ -1972,6 +1979,9 @@ class CommonProxyErrors(str, enum.Enum):
     no_llm_router = "No models configured on proxy"
     not_allowed_access = "Admin-only endpoint. Not allowed to access this."
     not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. Get a 7 day trial key here: https://www.litellm.ai/#trial. \nPricing: https://www.litellm.ai/#pricing"
+    max_parallel_request_limit_reached = (
+        "Crossed TPM / RPM / Max Parallel Request Limit"
+    )
 
 
 class SpendCalculateRequest(LiteLLMPydanticObjectBase):
@@ -2111,6 +2121,20 @@ class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
 class TeamMemberUpdateResponse(MemberUpdateResponse):
     team_id: str
     max_budget_in_team: Optional[float] = None
+
+
+class TeamModelAddRequest(BaseModel):
+    """Request to add models to a team"""
+
+    team_id: str
+    models: List[str]
+
+
+class TeamModelDeleteRequest(BaseModel):
+    """Request to delete models from a team"""
+
+    team_id: str
+    models: List[str]
 
 
 # Organization Member Requests
