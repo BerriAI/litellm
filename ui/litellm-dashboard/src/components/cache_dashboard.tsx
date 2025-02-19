@@ -98,63 +98,99 @@ interface CacheHealthResponse {
   };
 }
 
-// Health Check Details Component
-const HealthCheckDetails: React.FC<{ response: CacheHealthResponse }> = ({ response }) => {
-  const formatData = (input: any) => {
-    if (typeof input === "string") {
-      try {
-        return JSON.parse(input);
-      } catch {
-        return input;
+// Helper function to deep-parse a JSON string if possible
+const deepParse = (input: any) => {
+  let parsed = input;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return parsed;
+    }
+  }
+  return parsed;
+};
+
+// New table-based clickable error field component following view_logs table style
+const TableClickableErrorField: React.FC<{ label: string; value: string }> = ({
+  label,
+  value,
+}) => {
+  const [isExpanded, setIsExpanded] = React.useState(false);
+  const truncated = value.length > 50 ? value.substring(0, 50) + "..." : value;
+  return (
+    <tr
+      onClick={() => setIsExpanded(!isExpanded)}
+      className="cursor-pointer hover:bg-gray-50"
+    >
+      <td className="px-6 py-2 font-medium text-blue-600">{label}</td>
+      <td className="px-6 py-2 text-gray-700">
+        {isExpanded ? value : truncated}
+      </td>
+    </tr>
+  );
+};
+
+// Updated HealthCheckDetails component using a table layout for error details
+const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
+  if (response.error) {
+    // First parse the error field
+    let errorData = deepParse(response.error);
+    // If errorData.message is a JSON string, parse it further
+    if (errorData && typeof errorData.message === "string") {
+      const innerParsed = deepParse(errorData.message);
+      if (innerParsed && typeof innerParsed === "object") {
+        errorData = innerParsed;
       }
     }
-    return input;
-  };
-
-  if (response.error) {
     return (
-      <div className="mt-4 space-y-4">
-        <div className="flex items-center space-x-2 text-red-600">
+      <div className="mt-4">
+        <div className="flex items-center space-x-2 text-red-600 px-4">
           <XCircleIcon className="h-5 w-5" />
-          <span className="font-medium">Cache Health Check Failed</span>
+          <h3 className="text-lg font-medium">Cache Health Check Failed</h3>
         </div>
-        <div className="bg-white rounded-lg shadow">
+        <div className="mt-2 bg-white rounded-lg shadow">
           <div className="p-4 border-b">
             <h3 className="text-lg font-medium">Error Details</h3>
           </div>
-          <div className="space-y-2 p-4">
-            <div className="flex">
-              <span className="font-medium w-1/3">Error Type:</span>
-              <span>{response.error.type}</span>
-            </div>
-            <div className="flex">
-              <span className="font-medium w-1/3">Error Code:</span>
-              <span>{response.error.code}</span>
-            </div>
-            <div className="flex">
-              <span className="font-medium w-1/3">Parameter:</span>
-              <span>{response.error.param}</span>
-            </div>
+          <div className="p-4 overflow-auto">
+            <table className="min-w-full">
+              <tbody>
+                <tr>
+                  <td className="px-6 py-2 font-medium">Message</td>
+                  <td className="px-6 py-2 text-gray-700">
+                    {errorData.message}
+                  </td>
+                </tr>
+                {Object.entries(errorData)
+                  .filter(([key]) => key !== "message")
+                  .map(([key, value]) => (
+                    <TableClickableErrorField
+                      key={key}
+                      label={key}
+                      value={String(value)}
+                    />
+                  ))}
+              </tbody>
+            </table>
           </div>
-          <pre className="p-4 bg-gray-50 text-sm overflow-auto rounded-b-lg">
-            {JSON.stringify(formatData(response.error.message), null, 2)}
-          </pre>
         </div>
       </div>
     );
   }
 
+  // When the response is successful (i.e. no error), display the healthy details.
   return (
-    <div className="mt-4 space-y-4">
-      <div className="flex items-center space-x-2 text-green-600">
+    <div className="mt-4">
+      <div className="flex items-center space-x-2 text-green-600 px-4">
         <CheckCircleIcon className="h-5 w-5" />
-        <span className="font-medium">Cache Health Check Passed</span>
+        <h3 className="text-lg font-medium">Cache Health Check Passed</h3>
       </div>
-      <div className="bg-white rounded-lg shadow">
+      <div className="mt-2 bg-white rounded-lg shadow">
         <div className="p-4 border-b">
           <h3 className="text-lg font-medium">Cache Configuration</h3>
         </div>
-        <div className="space-y-2 p-4">
+        <div className="p-4 space-y-2">
           <div className="flex">
             <span className="font-medium w-1/3">Status:</span>
             <span>{response.status}</span>
@@ -175,12 +211,12 @@ const HealthCheckDetails: React.FC<{ response: CacheHealthResponse }> = ({ respo
       </div>
 
       {response.litellm_cache_params && (
-        <div className="bg-white rounded-lg shadow">
+        <div className="mt-4 bg-white rounded-lg shadow">
           <div className="p-4 border-b">
             <h3 className="text-lg font-medium">LiteLLM Cache Parameters</h3>
           </div>
           <pre className="p-4 bg-gray-50 text-sm overflow-auto rounded-b-lg">
-            {JSON.stringify(formatData(response.litellm_cache_params), null, 2)}
+            {JSON.stringify(deepParse(response.litellm_cache_params), null, 2)}
           </pre>
         </div>
       )}
@@ -209,7 +245,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({
   });
 
   const [lastRefreshed, setLastRefreshed] = useState("");
-  const [healthCheckResponse, setHealthCheckResponse] = useState<string>("");
+  const [healthCheckResponse, setHealthCheckResponse] = useState<any>("");
 
   useEffect(() => {
     if (!accessToken || !dateValue) {
@@ -349,9 +385,25 @@ const runCachingHealthCheck = async () => {
     const response = await cachingHealthCheckCall(accessToken !== null ? accessToken : "");
     console.log("CACHING HEALTH CHECK RESPONSE", response);
     setHealthCheckResponse(response);
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error running health check:", error);
-    setHealthCheckResponse("Error running health check");
+    let errorData;
+    if (error && error.message) {
+      try {
+        // Parse the error message which may contain a nested error layer.
+        let parsedData = JSON.parse(error.message);
+        // If the parsed object is wrapped (e.g. { error: { ... } }), unwrap it.
+        if (parsedData.error) {
+          parsedData = parsedData.error;
+        }
+        errorData = parsedData;
+      } catch (e) {
+        errorData = { message: error.message };
+      }
+    } else {
+      errorData = { message: "Unknown error occurred" };
+    }
+    setHealthCheckResponse({ error: errorData });
   }
 };
 
