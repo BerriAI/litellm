@@ -1,6 +1,6 @@
-import React from "react";
-import { Form } from "antd";
-import { TextInput, Text } from "@tremor/react";
+import React, { useEffect } from "react";
+import { Form, Table, Input } from "antd";
+import { Text, TextInput } from "@tremor/react";
 import { Row, Col } from "antd";
 
 const ConditionalPublicModelName: React.FC = () => {
@@ -11,32 +11,61 @@ const ConditionalPublicModelName: React.FC = () => {
   const selectedModels = Form.useWatch('model', form) || [];
   const showPublicModelName = !selectedModels.includes('all-wildcard');
 
+  // Auto-populate model mappings when selected models change
+  useEffect(() => {
+    if (selectedModels.length > 0 && !selectedModels.includes('all-wildcard')) {
+      const mappings = selectedModels.map((model: string) => ({
+        public_name: model,
+        litellm_model: model
+      }));
+      form.setFieldValue('model_mappings', mappings);
+    }
+  }, [selectedModels, form]);
+
   if (!showPublicModelName) return null;
+
+  const columns = [
+    {
+      title: 'Public Name',
+      dataIndex: 'public_name',
+      key: 'public_name',
+      render: (text: string, record: any, index: number) => {
+        return (
+          <TextInput
+            defaultValue={text}
+            onChange={(e) => {
+              const newMappings = [...form.getFieldValue('model_mappings')];
+              newMappings[index].public_name = e.target.value;
+              form.setFieldValue('model_mappings', newMappings);
+            }}
+          />
+        );
+      }
+    },
+    {
+      title: 'LiteLLM Model',
+      dataIndex: 'litellm_model',
+      key: 'litellm_model',
+    }
+  ];
 
   return (
     <>
       <Form.Item
-        label="Public Model Name"
-        name="model_name"
-        tooltip="Model name your users will pass in. Also used for load-balancing, LiteLLM will load balance between all models with this public name."
+        label="Model Mappings"
+        name="model_mappings"
+        tooltip="Map public model names to LiteLLM model names for load balancing"
         labelCol={{ span: 10 }}
         wrapperCol={{ span: 16 }}
         labelAlign="left"
-        required={false}
-        className="mb-0"
-        rules={[
-          ({ getFieldValue }) => ({
-            validator(_, value) {
-              const selectedModels = getFieldValue('model') || [];
-              if (!selectedModels.includes('all-wildcard') || value) {
-                return Promise.resolve();
-              }
-              return Promise.reject(new Error('Public Model Name is required unless "All Models" is selected.'));
-            },
-          }),
-        ]}
+        required={true}
       >
-        <TextInput placeholder="my-gpt-4" />
+        <Table 
+          dataSource={form.getFieldValue('model_mappings')} 
+          columns={columns} 
+          pagination={false}
+          size="small"
+        />
       </Form.Item>
       <Row>
         <Col span={10}></Col>

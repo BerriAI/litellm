@@ -5,6 +5,7 @@ import React from "react";
 import { CountryCell } from "./country_cell";
 import { getProviderLogoAndName } from "../provider_info_helpers";
 import { Tooltip } from "antd";
+import { TimeCell } from "./time_cell";
 
 export type LogEntry = {
   request_id: string;
@@ -53,17 +54,24 @@ export const columns: ColumnDef<LogEntry>[] = [
   {
     header: "Time",
     accessorKey: "startTime",
-    cell: (info: any) => (
-      <span>{moment(info.getValue()).format("MMM DD HH:mm:ss")}</span>
-    ),
+    cell: (info: any) => <TimeCell utcTime={info.getValue()} />,
   },
   {
     header: "Request ID",
     accessorKey: "request_id",
     cell: (info: any) => (
-      <span className="font-mono text-xs max-w-[100px] truncate block">
-        {String(info.getValue() || "")}
-      </span>
+      <Tooltip title={String(info.getValue() || "")}>
+        <span className="font-mono text-xs max-w-[100px] truncate block">
+          {String(info.getValue() || "")}
+        </span>
+      </Tooltip>
+    ),
+  },
+  {
+    header: "Cost",
+    accessorKey: "spend",
+    cell: (info: any) => (
+      <span>${Number(info.getValue() || 0).toFixed(6)}</span>
     ),
   },
   {
@@ -72,40 +80,26 @@ export const columns: ColumnDef<LogEntry>[] = [
     cell: (info: any) => <CountryCell ipAddress={info.getValue()} />,
   },
   {
-    header: "Team",
+    header: "Team Name",
     accessorKey: "metadata.user_api_key_team_alias",
     cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
+  },
+  {
+    header: "Key Hash",
+    accessorKey: "metadata.user_api_key",
+    cell: (info: any) => {
+      const value = String(info.getValue() || "-");
+      return (
+        <Tooltip title={value}>
+          <span className="font-mono">{value.slice(0, 5)}...</span>
+        </Tooltip>
+      );
+    },
   },
   {
     header: "Key Name",
     accessorKey: "metadata.user_api_key_alias",
     cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
-  },
-  {
-    header: "Request",
-    accessorKey: "messages",
-    cell: (info: any) => {
-      const messages = info.getValue();
-      try {
-        const content =
-          typeof messages === "string" ? JSON.parse(messages) : messages;
-        let displayText = "";
-
-        if (Array.isArray(content)) {
-          displayText = formatMessage(content[0]?.content);
-        } else {
-          displayText = formatMessage(content);
-        }
-
-        return <span className="truncate max-w-md text-sm">{displayText}</span>;
-      } catch (e) {
-        return (
-          <span className="truncate max-w-md text-sm">
-            {formatMessage(messages)}
-          </span>
-        );
-      }
-    },
   },
   {
     header: "Model",
@@ -162,29 +156,36 @@ export const columns: ColumnDef<LogEntry>[] = [
     accessorKey: "end_user",
     cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
   },
-  {
-    header: "Cost",
-    accessorKey: "spend",
-    cell: (info: any) => (
-      <span>${Number(info.getValue() || 0).toFixed(6)}</span>
-    ),
-  },
+
   {
     header: "Tags",
     accessorKey: "request_tags",
     cell: (info: any) => {
       const tags = info.getValue();
       if (!tags || Object.keys(tags).length === 0) return "-";
+      
+      const tagEntries = Object.entries(tags);
+      const firstTag = tagEntries[0];
+      const remainingTags = tagEntries.slice(1);
+      
       return (
         <div className="flex flex-wrap gap-1">
-          {Object.entries(tags).map(([key, value]) => (
-            <span
-              key={key}
-              className="px-2 py-1 bg-gray-100 rounded-full text-xs"
-            >
-              {key}: {String(value)}
+          <Tooltip 
+            title={
+              <div className="flex flex-col gap-1">
+                {tagEntries.map(([key, value]) => (
+                  <span key={key}>
+                    {key}: {String(value)}
+                  </span>
+                ))}
+              </div>
+            }
+          >
+            <span className="px-2 py-1 bg-gray-100 rounded-full text-xs">
+              {firstTag[0]}: {String(firstTag[1])}
+              {remainingTags.length > 0 && ` +${remainingTags.length}`}
             </span>
-          ))}
+          </Tooltip>
         </div>
       );
     },

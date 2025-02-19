@@ -16,6 +16,7 @@ import {
 } from "antd";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { Select, SelectItem, Subtitle } from "@tremor/react";
+import { Team } from "./key_team_helpers/key_list";
 import {
   Table,
   TableBody,
@@ -38,7 +39,7 @@ import { InvitationLink } from "./onboarding_link";
 interface AdminPanelProps {
   searchParams: any;
   accessToken: string | null;
-  setTeams: React.Dispatch<React.SetStateAction<Object[] | null>>;
+  setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
   showSSOBanner: boolean;
   premiumUser: boolean;
 }
@@ -496,116 +497,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   return (
     <div className="w-full m-2 mt-2 p-8">
       <Title level={4}>Admin Access </Title>
-      <Paragraph>
-        {showSSOBanner && (
-          <a href="https://docs.litellm.ai/docs/proxy/ui#restrict-ui-access">
-            Requires SSO Setup
-          </a>
-        )}
-        <br />
-        <b>Proxy Admin: </b> Can create keys, teams, users, add models, etc.{" "}
-        <br />
-        <b>Proxy Admin Viewer: </b>Can just view spend. They cannot create keys,
-        teams or grant users access to new models.{" "}
-      </Paragraph>
-      <Grid numItems={1} className="gap-2 p-2 w-full">
-        <Col numColSpan={1}>
-          <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeaderCell>Member Name</TableHeaderCell>
-                  <TableHeaderCell>Role</TableHeaderCell>
-                </TableRow>
-              </TableHead>
-
-              <TableBody>
-                {admins
-                  ? admins.map((member: any, index: number) => (
-                      <TableRow key={index}>
-                        <TableCell>
-                          {member["user_email"]
-                            ? member["user_email"]
-                            : member["user_id"]
-                              ? member["user_id"]
-                              : null}
-                        </TableCell>
-                        <TableCell>
-                          {" "}
-                          {possibleUIRoles?.[member?.user_role]?.ui_label ||
-                            "-"}
-                        </TableCell>
-                        <TableCell>
-                          <Icon
-                            icon={PencilAltIcon}
-                            size="sm"
-                            onClick={() => setIsUpdateModalModalVisible(true)}
-                          />
-                          <Modal
-                            title="Update role"
-                            visible={isUpdateMemberModalVisible}
-                            width={800}
-                            footer={null}
-                            onOk={handleMemberUpdateOk}
-                            onCancel={handleMemberUpdateCancel}
-                          >
-                            {modifyMemberForm(
-                              handleMemberUpdate,
-                              member["user_role"],
-                              member["user_id"]
-                            )}
-                          </Modal>
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  : null}
-              </TableBody>
-            </Table>
-          </Card>
-        </Col>
-        <Col numColSpan={1}>
-          <div className="flex justify-start">
-            <Button
-              className="mr-4 mb-5"
-              onClick={() => setIsAddAdminModalVisible(true)}
-            >
-              + Add admin
-            </Button>
-            <Modal
-              title="Add admin"
-              visible={isAddAdminModalVisible}
-              width={800}
-              footer={null}
-              onOk={handleAdminOk}
-              onCancel={handleAdminCancel}
-            >
-              {addMemberForm(handleAdminCreate)}
-            </Modal>
-            <OnboardingModal
-              isInvitationLinkModalVisible={isInvitationLinkModalVisible}
-              setIsInvitationLinkModalVisible={setIsInvitationLinkModalVisible}
-              baseUrl={baseUrl}
-              invitationLinkData={invitationLinkData}
-            />
-            <Button
-              className="mb-5"
-              onClick={() => setIsAddMemberModalVisible(true)}
-            >
-              + Add viewer
-            </Button>
-            <Modal
-              title="Add viewer"
-              visible={isAddMemberModalVisible}
-              width={800}
-              footer={null}
-              onOk={handleMemberOk}
-              onCancel={handleMemberCancel}
-            >
-              {addMemberForm(handleMemberCreate)}
-            </Modal>
-          </div>
-        </Col>
-      </Grid>
+      <Paragraph>Go to &apos;Internal Users&apos; page to add other admins.</Paragraph>
       <Grid >
         <Card>
         <Title level={4}> ✨ Security Settings</Title>

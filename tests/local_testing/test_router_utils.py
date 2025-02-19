@@ -384,3 +384,15 @@ def test_router_get_model_access_groups(potential_access_group, expected_result)
         model_access_group=potential_access_group
     )
     assert access_groups == expected_result
+
+
+def test_router_redis_cache():
+    router = Router(
+        model_list=[{"model_name": "gemini/*", "litellm_params": {"model": "gemini/*"}}]
+    )
+
+    redis_cache = MagicMock()
+
+    router._update_redis_cache(cache=redis_cache)
+
+    assert router.cache.redis_cache == redis_cache

@@ -559,6 +559,21 @@ curl 'http://localhost:4000/key/sk-1234/regenerate' \
 
 [**👉 API REFERENCE DOCS**](https://litellm-api.up.railway.app/#/key%20management/regenerate_key_fn_key__key__regenerate_post)
 
+
+### Temporary Budget Increase
+
+Use the `/key/update` endpoint to increase the budget of an existing key. 
+
+```bash
+curl -L -X POST 'http://localhost:4000/key/update' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{"key": "sk-b3Z3Lqdb_detHXSUp4ol4Q", "temp_budget_increase": 100, "temp_budget_expiry": "10d"}'
+```
+
+[API Reference](https://litellm-api.up.railway.app/#/key%20management/update_key_fn_key_update_post)
+
+
 ### Restricting Key Generation
 
 Use this to control who can generate keys. Useful when letting others create keys on the UI. 

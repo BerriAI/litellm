@@ -314,6 +314,17 @@ Example Response:
 "I'm alive!"
 ```
 
+## `/health/services`
+
+Use this admin-only endpoint to check if a connected service (datadog/slack/langfuse/etc.) is healthy.
+
+```bash
+curl -L -X GET 'http://0.0.0.0:4000/health/services?service=datadog'     -H 'Authorization: Bearer sk-1234'
+```
+
+[**API Reference**](https://litellm-api.up.railway.app/#/health/health_services_endpoint_health_services_get)
+
+
 ## Advanced - Call specific models 
 
 To check health of specific models, here's how to call them: 

@@ -42,6 +42,18 @@ class BaseAWSLLM:
     def __init__(self) -> None:
         self.iam_cache = DualCache()
         super().__init__()
+        self.aws_authentication_params = [
+            "aws_access_key_id",
+            "aws_secret_access_key",
+            "aws_session_token",
+            "aws_region_name",
+            "aws_session_name",
+            "aws_profile_name",
+            "aws_role_name",
+            "aws_web_identity_token",
+            "aws_sts_endpoint",
+            "aws_bedrock_runtime_endpoint",
+        ]
 
     def get_cache_key(self, credential_args: Dict[str, Optional[str]]) -> str:
         """
@@ -67,17 +79,6 @@ class BaseAWSLLM:
         Return a boto3.Credentials object
         """
         ## CHECK IS  'os.environ/' passed in
-        param_names = [
-            "aws_access_key_id",
-            "aws_secret_access_key",
-            "aws_session_token",
-            "aws_region_name",
-            "aws_session_name",
-            "aws_profile_name",
-            "aws_role_name",
-            "aws_web_identity_token",
-            "aws_sts_endpoint",
-        ]
         params_to_check: List[Optional[str]] = [
             aws_access_key_id,
             aws_secret_access_key,
@@ -97,7 +98,7 @@ class BaseAWSLLM:
                 if _v is not None and isinstance(_v, str):
                     params_to_check[i] = _v
             elif param is None:  # check if uppercase value in env
-                key = param_names[i]
+                key = self.aws_authentication_params[i]
                 if key.upper() in os.environ:
                     params_to_check[i] = os.getenv(key)
 

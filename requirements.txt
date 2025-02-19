@@ -1,7 +1,7 @@
 # LITELLM PROXY DEPENDENCIES #
 anyio==4.4.0 # openai + http req.
 httpx==0.27.0 # Pin Httpx dependency
-openai==1.55.3  # openai req. 
+openai==1.61.0  # openai req. 
 fastapi==0.115.5 # server dep
 backoff==2.2.1 # server dep
 pyyaml==6.0.2 # server dep
@@ -44,7 +44,6 @@ importlib-metadata==6.8.0 # for random utils
 tokenizers==0.20.2 # for calculating usage
 click==8.1.7 # for proxy cli 
 jinja2==3.1.4 # for prompt templates
-certifi==2024.12.14 # [TODO] clean up 
 aiohttp==3.10.2 # for network calls
 aioboto3==12.3.0 # for async sagemaker calls
 tenacity==8.2.3  # for retrying requests, when litellm.num_retries set

@@ -1,3 +1,7 @@
+import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Logging
 
 Log Proxy input, output, and exceptions using:
@@ -13,9 +17,7 @@ Log Proxy input, output, and exceptions using:
 - DynamoDB
 - etc.
 
-import Image from '@theme/IdealImage';
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
+
 
 ## Getting the LiteLLM Call ID
 
@@ -77,10 +79,13 @@ litellm_settings:
 
 ### Redact Messages, Response Content
 
-Set `litellm.turn_off_message_logging=True` This will prevent the messages and responses from being logged to your logging provider, but request metadata will still be logged.
+Set `litellm.turn_off_message_logging=True` This will prevent the messages and responses from being logged to your logging provider, but request metadata - e.g. spend, will still be tracked.
 
+<Tabs>
 
-Example config.yaml
+<TabItem value="global" label="Global">
+
+**1. Setup config.yaml **
 ```yaml
 model_list:
  - model_name: gpt-3.5-turbo
@@ -91,8 +96,86 @@ litellm_settings:
   turn_off_message_logging: True # 👈 Key Change
 ```
 
-If you have this feature turned on, you can override it for specific requests by
+**2. Send request**
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+}'
+```
+
+
+
+</TabItem>
+<TabItem value="dynamic" label="Per Request">
+
+:::info
+
+Dynamic request message redaction is in BETA. 
+
+:::
+
+Pass in a request header to enable message redaction for a request.
+
+```
+x-litellm-enable-message-redaction: true
+```
+
+Example config.yaml
+
+**1. Setup config.yaml **
+
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+```
+
+**2. Setup per request header**
+
+```shell
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-zV5HlSIm8ihj1F9C_ZbB1g' \
+-H 'x-litellm-enable-message-redaction: true' \
+-d '{
+  "model": "gpt-3.5-turbo-testing",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hey, how'\''s it going 1234?"
+    }
+  ]
+}'
+```
+
+</TabItem>
+</Tabs>
+
+**3. Check Logging Tool + Spend Logs**
+
+**Logging Tool**
+
+<Image img={require('../../img/message_redaction_logging.png')}/>
+
+**Spend Logs**
+
+<Image img={require('../../img/message_redaction_spend_logs.png')} />
+
+
+### Disable Message Redaction
+
+If you have `litellm.turn_on_message_logging` turned on, you can override it for specific requests by
 setting a request header `LiteLLM-Disable-Message-Redaction: true`.
+
 
 ```shell
 curl --location 'http://0.0.0.0:4000/chat/completions' \
@@ -108,8 +191,6 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     ]
 }'
 ```
-
-Removes any field with `user_api_key_*` from metadata.
 
 
 ### Turn off all tracking/logging
@@ -1504,9 +1585,6 @@ class MyCustomHandler(CustomLogger):
     
     def log_post_api_call(self, kwargs, response_obj, start_time, end_time): 
         print(f"Post-API Call")
-
-    def log_stream_event(self, kwargs, response_obj, start_time, end_time):
-        print(f"On Stream")
         
     def log_success_event(self, kwargs, response_obj, start_time, end_time): 
         print("On Success")

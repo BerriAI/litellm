@@ -11,13 +11,7 @@ from litellm.types.utils import ModelResponse
 from litellm.utils import supports_response_schema
 
 from ....exceptions import UnsupportedParamsError
-from ....types.llms.openai import (
-    AllMessageValues,
-    ChatCompletionToolChoiceFunctionParam,
-    ChatCompletionToolChoiceObjectParam,
-    ChatCompletionToolParam,
-    ChatCompletionToolParamFunctionChunk,
-)
+from ....types.llms.openai import AllMessageValues
 from ...base_llm.chat.transformation import BaseConfig
 from ..common_utils import AzureOpenAIError
 
@@ -104,6 +98,7 @@ class AzureOpenAIConfig(BaseConfig):
             "seed",
             "extra_headers",
             "parallel_tool_calls",
+            "prediction",
         ]
 
     def _is_response_format_supported_model(self, model: str) -> bool:
@@ -118,6 +113,17 @@ class AzureOpenAIConfig(BaseConfig):
             return True
 
         return False
+
+    def _is_response_format_supported_api_version(
+        self, api_version_year: str, api_version_month: str
+    ) -> bool:
+        """
+        - check if api_version is supported for response_format
+        """
+
+        is_supported = int(api_version_year) <= 2024 and int(api_version_month) >= 8
+
+        return is_supported
 
     def map_openai_params(
         self,
@@ -174,49 +180,27 @@ class AzureOpenAIConfig(BaseConfig):
                 else:
                     optional_params["tool_choice"] = value
             elif param == "response_format" and isinstance(value, dict):
-                json_schema: Optional[dict] = None
-                schema_name: str = ""
-                if "response_schema" in value:
-                    json_schema = value["response_schema"]
-                    schema_name = "json_tool_call"
-                elif "json_schema" in value:
-                    json_schema = value["json_schema"]["schema"]
-                    schema_name = value["json_schema"]["name"]
-                """
-                Follow similar approach to anthropic - translate to a single tool call. 
-
-                When using tools in this way: - https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
-                - You usually want to provide a single tool
-                - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
-                - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
-                """
                 _is_response_format_supported_model = (
                     self._is_response_format_supported_model(model)
                 )
-                if json_schema is not None and (
-                    (api_version_year <= "2024" and api_version_month < "08")
-                    or not _is_response_format_supported_model
-                ):  # azure api version "2024-08-01-preview" onwards supports 'json_schema' only for gpt-4o/3.5 models
 
-                    _tool_choice = ChatCompletionToolChoiceObjectParam(
-                        type="function",
-                        function=ChatCompletionToolChoiceFunctionParam(
-                            name=schema_name
-                        ),
+                is_response_format_supported_api_version = (
+                    self._is_response_format_supported_api_version(
+                        api_version_year, api_version_month
                     )
-
-                    _tool = ChatCompletionToolParam(
-                        type="function",
-                        function=ChatCompletionToolParamFunctionChunk(
-                            name=schema_name, parameters=json_schema
-                        ),
-                    )
-
-                    optional_params["tools"] = [_tool]
-                    optional_params["tool_choice"] = _tool_choice
-                    optional_params["json_mode"] = True
-                else:
-                    optional_params["response_format"] = value
+                )
+                is_response_format_supported = (
+                    is_response_format_supported_api_version
+                    and _is_response_format_supported_model
+                )
+                optional_params = self._add_response_format_to_tools(
+                    optional_params=optional_params,
+                    value=value,
+                    is_response_format_supported=is_response_format_supported,
+                )
+            elif param == "tools" and isinstance(value, list):
+                optional_params.setdefault("tools", [])
+                optional_params["tools"].extend(value)
             elif param in supported_openai_params:
                 optional_params[param] = value
 

@@ -1,12 +1,13 @@
 import moment from "moment";
 import { useQuery } from "@tanstack/react-query";
 import { useState, useRef, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { uiSpendLogsCall } from "../networking";
 import { DataTable } from "./table";
 import { columns, LogEntry } from "./columns";
 import { Row } from "@tanstack/react-table";
-
+import { prefetchLogDetails } from "./prefetch";
 interface SpendLogsTableProps {
   accessToken: string | null;
   token: string | null;
@@ -20,6 +21,11 @@ interface PaginatedResponse {
   page: number;
   page_size: number;
   total_pages: number;
+}
+
+interface PrefetchedLog {
+  messages: any[];
+  response: any;
 }
 
 export default function SpendLogsTable({
@@ -53,6 +59,8 @@ export default function SpendLogsTable({
   const [selectedTeamId, setSelectedTeamId] = useState("");
   const [selectedKeyHash, setSelectedKeyHash] = useState("");
   const [selectedFilter, setSelectedFilter] = useState("Team ID");
+
+  const queryClient = useQueryClient();
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -105,12 +113,13 @@ export default function SpendLogsTable({
         };
       }
 
-      const formattedStartTime = moment(startTime).format("YYYY-MM-DD HH:mm:ss");
+      const formattedStartTime = moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss");
       const formattedEndTime = isCustomDate 
-        ? moment(endTime).format("YYYY-MM-DD HH:mm:ss")
-        : moment().format("YYYY-MM-DD HH:mm:ss");
+        ? moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss")
+        : moment().utc().format("YYYY-MM-DD HH:mm:ss");
 
-      return await uiSpendLogsCall(
+      // Get base response from API
+      const response = await uiSpendLogsCall(
         accessToken,
         selectedKeyHash || undefined,
         selectedTeamId || undefined,
@@ -120,6 +129,30 @@ export default function SpendLogsTable({
         currentPage,
         pageSize
       );
+
+      // Trigger prefetch for all logs
+      await prefetchLogDetails(
+        response.data,
+        formattedStartTime,
+        accessToken,
+        queryClient
+      );
+
+      // Update logs with prefetched data if available
+      response.data = response.data.map((log: LogEntry) => {
+        const prefetchedData = queryClient.getQueryData<PrefetchedLog>(
+          ["logDetails", log.request_id, formattedStartTime]
+        );
+
+        if (prefetchedData?.messages && prefetchedData?.response) {
+          log.messages = prefetchedData.messages;
+          log.response = prefetchedData.response;
+          return log;
+        }
+        return log;
+      });
+
+      return response;
     },
     enabled: !!accessToken && !!token && !!userRole && !!userID,
     refetchInterval: 5000,
@@ -176,7 +209,7 @@ export default function SpendLogsTable({
         <h1 className="text-xl font-semibold">Request Logs</h1>
       </div>
       
-      <div className="bg-white rounded-lg shadow overflow-hidden">
+      <div className="bg-white rounded-lg shadow">
         <div className="border-b px-6 py-4">
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
             <div className="flex flex-wrap items-center gap-3">
@@ -543,20 +576,101 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
 
   return (
     <div className="p-6 bg-gray-50 space-y-6">
+      {/* Combined Info Card */}
+      <div className="bg-white rounded-lg shadow">
+        <div className="p-4 border-b">
+          <h3 className="text-lg font-medium ">Request Details</h3>
+        </div>
+        <div className="space-y-2 p-4 ">
+          <div className="flex">
+            <span className="font-medium w-1/3">Request ID:</span>
+            <span>{row.original.request_id}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Api Key:</span>
+            <span>{row.original.api_key}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Team ID:</span>
+            <span>{row.original.team_id}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Model:</span>
+            <span>{row.original.model}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Api Base:</span>
+            <span>{row.original.api_base}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Call Type:</span>
+            <span>{row.original.call_type}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Spend:</span>
+            <span>{row.original.spend}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Total Tokens:</span>
+            <span>{row.original.total_tokens}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Prompt Tokens:</span>
+            <span>{row.original.prompt_tokens}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Completion Tokens:</span>
+            <span>{row.original.completion_tokens}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Start Time:</span>
+            <span>{row.original.startTime}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">End Time:</span>
+            <span>{row.original.endTime}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Cache Hit:</span>
+            <span>{row.original.cache_hit}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Cache Key:</span>
+            <span>{row.original.cache_key}</span>
+          </div>
+          {row?.original?.requester_ip_address && (
+            <div className="flex">
+              <span className="font-medium w-1/3">Request IP Address:</span>
+              <span>{row?.original?.requester_ip_address}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Request Card */}
+      <div className="bg-white rounded-lg shadow">
+        <div className="flex justify-between items-center p-4 border-b">
+          <h3 className="text-lg font-medium">Request Tags</h3>
+        </div>
+        <pre className="p-4  text-wrap overflow-auto text-sm">
+          {JSON.stringify(formatData(row.original.request_tags), null, 2)}
+        </pre>
+      </div>
+
       {/* Request Card */}
       <div className="bg-white rounded-lg shadow">
         <div className="flex justify-between items-center p-4 border-b">
           <h3 className="text-lg font-medium">Request</h3>
-          <div>
+          {/* <div>
             <button className="mr-2 px-3 py-1 text-sm border rounded hover:bg-gray-50">
               Expand
             </button>
             <button className="px-3 py-1 text-sm border rounded hover:bg-gray-50">
               JSON
             </button>
-          </div>
+          </div> */}
         </div>
-        <pre className="p-4 overflow-auto text-sm">
+        <pre className="p-4  text-wrap overflow-auto text-sm">
           {JSON.stringify(formatData(row.original.messages), null, 2)}
         </pre>
       </div>
@@ -566,15 +680,15 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
         <div className="flex justify-between items-center p-4 border-b">
           <h3 className="text-lg font-medium">Response</h3>
           <div>
-            <button className="mr-2 px-3 py-1 text-sm border rounded hover:bg-gray-50">
+            {/* <button className="mr-2 px-3 py-1 text-sm border rounded hover:bg-gray-50">
               Expand
             </button>
             <button className="px-3 py-1 text-sm border rounded hover:bg-gray-50">
               JSON
-            </button>
+            </button> */}
           </div>
         </div>
-        <pre className="p-4 overflow-auto text-sm">
+        <pre className="p-4 text-wrap overflow-auto text-sm">
           {JSON.stringify(formatData(row.original.response), null, 2)}
         </pre>
       </div>
@@ -585,13 +699,13 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
           <div className="bg-white rounded-lg shadow">
             <div className="flex justify-between items-center p-4 border-b">
               <h3 className="text-lg font-medium">Metadata</h3>
-              <div>
+              {/* <div>
                 <button className="px-3 py-1 text-sm border rounded hover:bg-gray-50">
                   JSON
                 </button>
-              </div>
+              </div> */}
             </div>
-            <pre className="p-4 overflow-auto text-sm">
+            <pre className="p-4 text-wrap  overflow-auto text-sm ">
               {JSON.stringify(row.original.metadata, null, 2)}
             </pre>
           </div>

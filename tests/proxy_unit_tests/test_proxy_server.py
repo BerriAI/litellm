@@ -1163,10 +1163,11 @@ async def test_create_team_member_add_team_admin(
     user = f"ishaan {uuid.uuid4().hex}"
     _team_id = "litellm-test-client-id-new"
     user_key = "sk-12345678"
+    team_admin = f"krrish {uuid.uuid4().hex}"
 
     valid_token = UserAPIKeyAuth(
         team_id=_team_id,
-        user_id=user,
+        user_id=team_admin,
         token=hash_token(user_key),
         last_refreshed_at=time.time(),
     )
@@ -1176,7 +1177,7 @@ async def test_create_team_member_add_team_admin(
         team_id=_team_id,
         blocked=False,
         last_refreshed_at=time.time(),
-        members_with_roles=[Member(role=user_role, user_id=user)],
+        members_with_roles=[Member(role=user_role, user_id=team_admin)],
         metadata={"guardrails": {"modify_guardrails": False}},
     )
 
@@ -1231,6 +1232,7 @@ async def test_create_team_member_add_team_admin(
         except HTTPException as e:
             if user_role == "user":
                 assert e.status_code == 403
+                return
             else:
                 raise e
 

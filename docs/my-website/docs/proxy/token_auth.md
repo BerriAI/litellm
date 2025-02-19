@@ -1,9 +1,9 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# SSO - JWT-based Auth 
+# OIDC - JWT-based Auth 
 
-Use JWT's to auth admins / projects into the proxy.
+Use JWT's to auth admins / users / projects into the proxy.
 
 :::info
 
@@ -156,50 +156,114 @@ scope: ["litellm-proxy-admin",...]
 scope: "litellm-proxy-admin ..."
 ```
 
-## Enforce Role-Based Access Control (RBAC)
+## Control model access with Teams
 
-Reject a JWT token if it's valid but doesn't have the required scopes / fields.
 
-Only tokens which with valid Admin (`admin_jwt_scope`), User (`user_id_jwt_field`), Team (`team_id_jwt_field`) are allowed.
+1. Specify the JWT field that contains the team ids, that the user belongs to. 
+
+```yaml
+general_settings:
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    user_id_jwt_field: "sub"
+    team_ids_jwt_field: "groups" 
+    user_id_upsert: true # add user_id to the db if they don't exist
+    enforce_team_based_model_access: true # don't allow users to access models unless the team has access
+```
+
+This is assuming your token looks like this:
+```
+{
+  ...,
+  "sub": "my-unique-user",
+  "groups": ["team_id_1", "team_id_2"]
+}
+```
+
+2. Create the teams on LiteLLM 
+
+```bash
+curl -X POST '<PROXY_BASE_URL>/team/new' \
+-H 'Authorization: Bearer <PROXY_MASTER_KEY>' \
+-H 'Content-Type: application/json' \
+-D '{
+    "team_alias": "team_1",
+    "team_id": "team_id_1" # 👈 MUST BE THE SAME AS THE SSO GROUP ID
+}'
+```
+
+3. Test the flow
+
+SSO for UI: [**See Walkthrough**](https://www.loom.com/share/8959be458edf41fd85937452c29a33f3?sid=7ebd6d37-569a-4023-866e-e0cde67cb23e)
+
+OIDC Auth for API: [**See Walkthrough**](https://www.loom.com/share/00fe2deab59a426183a46b1e2b522200?sid=4ed6d497-ead6-47f9-80c0-ca1c4b6b4814)
+
+
+### Flow
+
+- Validate if user id is in the DB (LiteLLM_UserTable)
+- Validate if any of the groups are in the DB (LiteLLM_TeamTable)
+- Validate if any group has model access
+- If all checks pass, allow the request
+
+
+## Advanced - Custom Validate
+
+Validate a JWT Token using custom logic, if you need an extra way to verify if tokens are valid for LiteLLM Proxy.
+
+### 1. Setup custom validate function
+
+```python
+from typing import Literal
+
+def my_custom_validate(token: str) -> Literal[True]:
+  """
+  Only allow tokens with tenant-id == "my-unique-tenant", and claims == ["proxy-admin"]
+  """
+  allowed_tenants = ["my-unique-tenant"]
+  allowed_claims = ["proxy-admin"]
+
+  if token["tenant_id"] not in allowed_tenants:
+    raise Exception("Invalid JWT token")
+  if token["claims"] not in allowed_claims:
+    raise Exception("Invalid JWT token")
+  return True
+```
+
+### 2. Setup config.yaml
 
 ```yaml
 general_settings:
   master_key: sk-1234
   enable_jwt_auth: True
   litellm_jwtauth:
-    admin_jwt_scope: "litellm_proxy_endpoints_access"
-    admin_allowed_routes:
-      - openai_routes
-      - info_routes
-    public_key_ttl: 600
-    enforce_rbac: true # 👈 Enforce RBAC
+    user_id_jwt_field: "sub"
+    team_id_jwt_field: "tenant_id"
+    user_id_upsert: True
+    custom_validate: custom_validate.my_custom_validate # 👈 custom validate function
 ```
 
-Expected Scope in JWT: 
+### 3. Test the flow
+
+**Expected JWT**
 
 ```
 {
-  "scope": "litellm_proxy_endpoints_access"
+  "sub": "my-unique-user",
+  "tenant_id": "INVALID_TENANT",
+  "claims": ["proxy-admin"]
 }
 ```
 
-### Control Model Access 
+**Expected Response**
 
-```yaml
-general_settings:
-  enable_jwt_auth: True 
-  litellm_jwtauth:
-    user_roles_jwt_field: "resource_access.litellm-test-client-id.roles"
-    user_allowed_roles: ["basic_user"] # roles that map to an 'internal_user' role on LiteLLM 
-    enforce_rbac: true # if true, will check if the user has the correct role to access the model + endpoint
-  
-  role_permissions: # control what models + endpointsare allowed for each role
-    - role: internal_user
-      models: ["anthropic-claude"]
+```
+{
+  "error": "Invalid JWT token"
+}
 ```
 
 
-**[Architecture Diagram (Control Model Access)](./jwt_auth_arch)**
 
 ## Advanced - Allowed Routes 
 
@@ -305,4 +369,129 @@ general_settings:
     user_email_jwt_field: "email" # 👈 checks 'email' field in jwt payload
     user_allowed_email_domain: "my-co.com" # allows user@my-co.com to call proxy
     user_id_upsert: true # 👈 upserts the user to db, if valid email but not in db
+```
+
+## [BETA] Control Access with OIDC Roles
+
+Allow JWT tokens with supported roles to access the proxy.
+
+Let users and teams access the proxy, without needing to add them to the DB.
+
+
+Very important, set `enforce_rbac: true` to ensure that the RBAC system is enabled.
+
+**Note:** This is in beta and might change unexpectedly.
+
+```yaml
+general_settings:
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    object_id_jwt_field: "oid" # can be either user / team, inferred from the role mapping
+    roles_jwt_field: "roles"
+    role_mappings:
+      - role: litellm.api.consumer
+        internal_role: "team"
+    enforce_rbac: true # 👈 VERY IMPORTANT
+
+  role_permissions: # default model + endpoint permissions for a role. 
+    - role: team
+      models: ["anthropic-claude"]
+      routes: ["/v1/chat/completions"]
+
+environment_variables:
+  JWT_AUDIENCE: "api://LiteLLM_Proxy" # ensures audience is validated
+```
+
+- `object_id_jwt_field`: The field in the JWT token that contains the object id. This id can be either a user id or a team id. Use this instead of `user_id_jwt_field` and `team_id_jwt_field`. If the same field could be both. 
+
+- `roles_jwt_field`: The field in the JWT token that contains the roles. This field is a list of roles that the user has. To index into a nested field, use dot notation - eg. `resource_access.litellm-test-client-id.roles`.
+
+- `role_mappings`: A list of role mappings. Map the received role in the JWT token to an internal role on LiteLLM.
+
+- `JWT_AUDIENCE`: The audience of the JWT token. This is used to validate the audience of the JWT token. Set via an environment variable.
+
+### Example Token 
+
+```bash
+{
+  "aud": "api://LiteLLM_Proxy",
+  "oid": "eec236bd-0135-4b28-9354-8fc4032d543e",
+  "roles": ["litellm.api.consumer"] 
+}
+```
+
+### Role Mapping Spec 
+
+- `role`: The expected role in the JWT token. 
+- `internal_role`: The internal role on LiteLLM that will be used to control access. 
+
+Supported internal roles:
+- `team`: Team object will be used for RBAC spend tracking. Use this for tracking spend for a 'use case'. 
+- `internal_user`: User object will be used for RBAC spend tracking. Use this for tracking spend for an 'individual user'.
+- `proxy_admin`: Proxy admin will be used for RBAC spend tracking. Use this for granting admin access to a token.
+
+### [Architecture Diagram (Control Model Access)](./jwt_auth_arch)
+
+## [BETA] Control Model Access with Scopes
+
+Control which models a JWT can access. Set `enforce_scope_based_access: true` to enforce scope-based access control.
+
+### 1. Setup config.yaml with scope mappings.
+
+
+```yaml
+model_list:
+  - model_name: anthropic-claude
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: gpt-3.5-turbo-testing
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+general_settings:
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    team_id_jwt_field: "client_id" # 👈 set the field in the JWT token that contains the team id
+    team_id_upsert: true # 👈 upsert the team to db, if team id is not found in db
+    scope_mappings:
+      - scope: litellm.api.consumer
+        models: ["anthropic-claude"]
+      - scope: litellm.api.gpt_3_5_turbo
+        models: ["gpt-3.5-turbo-testing"]
+    enforce_scope_based_access: true # 👈 enforce scope-based access control
+    enforce_rbac: true # 👈 enforces only a Team/User/ProxyAdmin can access the proxy.
+```
+
+#### Scope Mapping Spec 
+
+- `scope`: The scope to be used for the JWT token.
+- `models`: The models that the JWT token can access. Value is the `model_name` in `model_list`. Note: Wildcard routes are not currently supported.
+
+### 2. Create a JWT with the correct scopes.
+
+Expected Token:
+
+```bash
+{
+  "scope": ["litellm.api.consumer", "litellm.api.gpt_3_5_turbo"] # can be a list or a space-separated string
+}
+```
+
+### 3. Test the flow.
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer eyJhbGci...' \
+-d '{
+  "model": "gpt-3.5-turbo-testing",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hey, how'\''s it going 1234?"
+    }
+  ]
+}'
 ```

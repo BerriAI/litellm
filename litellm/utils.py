@@ -60,6 +60,7 @@ import litellm.litellm_core_utils.json_validation_rule
 from litellm.caching._internal_lru_cache import lru_cache_wrapper
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     map_finish_reason,
@@ -86,6 +87,7 @@ from litellm.litellm_core_utils.llm_request_utils import _ensure_extra_body_is_s
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     LiteLLMResponseObjectHandler,
     _handle_invalid_parallel_tool_calls,
+    _parse_content_for_reasoning,
     convert_to_model_response_object,
     convert_to_streaming_response,
     convert_to_streaming_response_async,
@@ -110,6 +112,7 @@ from litellm.litellm_core_utils.token_counter import (
     calculate_img_tokens,
     get_modified_max_tokens,
 )
+from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.router_utils.get_retry_from_policy import (
     get_num_retries_from_retry_policy,
@@ -166,7 +169,6 @@ with resources.open_text(
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
-from concurrent.futures import ThreadPoolExecutor
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -185,6 +187,7 @@ from typing import (
 
 from openai import OpenAIError as OriginalError
 
+from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
@@ -235,10 +238,6 @@ from .types.router import LiteLLM_Params
 
 ####### ENVIRONMENT VARIABLES ####################
 # Adjust to your specific application needs / system capabilities.
-MAX_THREADS = 100
-
-# Create a ThreadPoolExecutor
-executor = ThreadPoolExecutor(max_workers=MAX_THREADS)
 sentry_sdk_instance = None
 capture_exception = None
 add_breadcrumb = None
@@ -420,6 +419,35 @@ def _custom_logger_class_exists_in_failure_callbacks(
     )
 
 
+def get_request_guardrails(kwargs: Dict[str, Any]) -> List[str]:
+    """
+    Get the request guardrails from the kwargs
+    """
+    metadata = kwargs.get("metadata") or {}
+    requester_metadata = metadata.get("requester_metadata") or {}
+    applied_guardrails = requester_metadata.get("guardrails") or []
+    return applied_guardrails
+
+
+def get_applied_guardrails(kwargs: Dict[str, Any]) -> List[str]:
+    """
+    - Add 'default_on' guardrails to the list
+    - Add request guardrails to the list
+    """
+
+    request_guardrails = get_request_guardrails(kwargs)
+    applied_guardrails = []
+    for callback in litellm.callbacks:
+        if callback is not None and isinstance(callback, CustomGuardrail):
+            if callback.guardrail_name is not None:
+                if callback.default_on is True:
+                    applied_guardrails.append(callback.guardrail_name)
+                elif callback.guardrail_name in request_guardrails:
+                    applied_guardrails.append(callback.guardrail_name)
+
+    return applied_guardrails
+
+
 def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
@@ -437,6 +465,9 @@ def function_setup(  # noqa: PLR0915
 
         ## CUSTOM LLM SETUP ##
         custom_llm_setup()
+
+        ## GET APPLIED GUARDRAILS
+        applied_guardrails = get_applied_guardrails(kwargs)
 
         ## LOGGING SETUP
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
@@ -587,7 +618,7 @@ def function_setup(  # noqa: PLR0915
                 details_to_log.pop("prompt", None)
             add_breadcrumb(
                 category="litellm.llm_call",
-                message=f"Positional Args: {args}, Keyword Args: {details_to_log}",
+                message=f"Keyword Args: {details_to_log}",
                 level="info",
             )
         if "logger_fn" in kwargs:
@@ -679,6 +710,7 @@ def function_setup(  # noqa: PLR0915
             dynamic_async_success_callbacks=dynamic_async_success_callbacks,
             dynamic_async_failure_callbacks=dynamic_async_failure_callbacks,
             kwargs=kwargs,
+            applied_guardrails=applied_guardrails,
         )
 
         ## check if metadata is passed in
@@ -694,8 +726,8 @@ def function_setup(  # noqa: PLR0915
         )
         return logging_obj, kwargs
     except Exception as e:
-        verbose_logger.error(
-            f"litellm.utils.py::function_setup() - [Non-Blocking] {traceback.format_exc()}; args - {args}; kwargs - {kwargs}"
+        verbose_logger.exception(
+            "litellm.utils.py::function_setup() - [Non-Blocking] Error in function_setup"
         )
         raise e
 
@@ -1729,7 +1761,7 @@ def _format_type(props, indent):
 
 def token_counter(
     model="",
-    custom_tokenizer: Optional[dict] = None,
+    custom_tokenizer: Optional[Union[dict, SelectTokenizerResponse]] = None,
     text: Optional[Union[str, List[str]]] = None,
     messages: Optional[List] = None,
     count_response_tokens: Optional[bool] = False,
@@ -1789,7 +1821,10 @@ def token_counter(
                     for tool_call in message["tool_calls"]:
                         if "function" in tool_call:
                             function_arguments = tool_call["function"]["arguments"]
-                            text += function_arguments
+                            text = (
+                                text if isinstance(text, str) else "".join(text or [])
+                            ) + (str(function_arguments) if function_arguments else "")
+
         else:
             raise ValueError("text and messages cannot both be None")
     elif isinstance(text, List):
@@ -1939,6 +1974,15 @@ def supports_function_calling(
         model=model,
         custom_llm_provider=custom_llm_provider,
         key="supports_function_calling",
+    )
+
+
+def supports_tool_choice(model: str, custom_llm_provider: Optional[str] = None) -> bool:
+    """
+    Check if the given model supports `tool_choice` and return a boolean value.
+    """
+    return _supports_factory(
+        model=model, custom_llm_provider=custom_llm_provider, key="supports_tool_choice"
     )
 
 
@@ -2690,6 +2734,7 @@ def get_optional_params(  # noqa: PLR0915
     api_version=None,
     parallel_tool_calls=None,
     drop_params=None,
+    reasoning_effort=None,
     additional_drop_params=None,
     messages: Optional[List[AllMessageValues]] = None,
     **kwargs,
@@ -2775,6 +2820,7 @@ def get_optional_params(  # noqa: PLR0915
         "drop_params": None,
         "additional_drop_params": None,
         "messages": None,
+        "reasoning_effort": None,
     }
 
     # filter out those parameters that were passed with non-default values
@@ -3120,51 +3166,56 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
-    elif custom_llm_provider == "vertex_ai" and model in litellm.vertex_llama3_models:
-        optional_params = litellm.VertexAILlama3Config().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=(
-                drop_params
-                if drop_params is not None and isinstance(drop_params, bool)
-                else False
-            ),
-        )
-    elif custom_llm_provider == "vertex_ai" and model in litellm.vertex_mistral_models:
-        if "codestral" in model:
-            optional_params = litellm.CodestralTextCompletionConfig().map_openai_params(
-                model=model,
+    elif custom_llm_provider == "vertex_ai":
+
+        if model in litellm.vertex_mistral_models:
+            if "codestral" in model:
+                optional_params = (
+                    litellm.CodestralTextCompletionConfig().map_openai_params(
+                        model=model,
+                        non_default_params=non_default_params,
+                        optional_params=optional_params,
+                        drop_params=(
+                            drop_params
+                            if drop_params is not None and isinstance(drop_params, bool)
+                            else False
+                        ),
+                    )
+                )
+            else:
+                optional_params = litellm.MistralConfig().map_openai_params(
+                    model=model,
+                    non_default_params=non_default_params,
+                    optional_params=optional_params,
+                    drop_params=(
+                        drop_params
+                        if drop_params is not None and isinstance(drop_params, bool)
+                        else False
+                    ),
+                )
+        elif model in litellm.vertex_ai_ai21_models:
+            optional_params = litellm.VertexAIAi21Config().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
+                model=model,
                 drop_params=(
                     drop_params
                     if drop_params is not None and isinstance(drop_params, bool)
                     else False
                 ),
             )
-        else:
-            optional_params = litellm.MistralConfig().map_openai_params(
-                model=model,
+        else:  # use generic openai-like param mapping
+            optional_params = litellm.VertexAILlama3Config().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
+                model=model,
                 drop_params=(
                     drop_params
                     if drop_params is not None and isinstance(drop_params, bool)
                     else False
                 ),
             )
-    elif custom_llm_provider == "vertex_ai" and model in litellm.vertex_ai_ai21_models:
-        optional_params = litellm.VertexAIAi21Config().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=(
-                drop_params
-                if drop_params is not None and isinstance(drop_params, bool)
-                else False
-            ),
-        )
+
     elif custom_llm_provider == "sagemaker":
         # temperature, top_p, n, stream, stop, max_tokens, n, presence_penalty default to None
         optional_params = litellm.SagemakerConfig().map_openai_params(
@@ -3178,8 +3229,8 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "bedrock":
-        base_model = litellm.AmazonConverseConfig()._get_base_model(model)
-        if base_model in litellm.bedrock_converse_models:
+        bedrock_route = BedrockModelInfo.get_bedrock_route(model)
+        if bedrock_route == "converse" or bedrock_route == "converse_like":
             optional_params = litellm.AmazonConverseConfig().map_openai_params(
                 model=model,
                 non_default_params=non_default_params,
@@ -3192,15 +3243,20 @@ def get_optional_params(  # noqa: PLR0915
                 messages=messages,
             )
 
-        elif "anthropic" in model:
-            if "aws_bedrock_client" in passed_params:  # deprecated boto3.invoke route.
-                if model.startswith("anthropic.claude-3"):
-                    optional_params = (
-                        litellm.AmazonAnthropicClaude3Config().map_openai_params(
-                            non_default_params=non_default_params,
-                            optional_params=optional_params,
-                        )
+        elif "anthropic" in model and bedrock_route == "invoke":
+            if model.startswith("anthropic.claude-3"):
+                optional_params = (
+                    litellm.AmazonAnthropicClaude3Config().map_openai_params(
+                        non_default_params=non_default_params,
+                        optional_params=optional_params,
+                        model=model,
+                        drop_params=(
+                            drop_params
+                            if drop_params is not None and isinstance(drop_params, bool)
+                            else False
+                        ),
                     )
+                )
             else:
                 optional_params = litellm.AmazonAnthropicConfig().map_openai_params(
                     non_default_params=non_default_params,
@@ -3489,7 +3545,7 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "azure":
-        if litellm.AzureOpenAIO1Config().is_o1_model(model=model):
+        if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
             optional_params = litellm.AzureOpenAIO1Config().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
@@ -3961,8 +4017,16 @@ def _strip_stable_vertex_version(model_name) -> str:
     return re.sub(r"-\d+$", "", model_name)
 
 
-def _strip_bedrock_region(model_name) -> str:
-    return litellm.AmazonConverseConfig()._get_base_model(model_name)
+def _get_base_bedrock_model(model_name) -> str:
+    """
+    Get the base model from the given model name.
+
+    Handle model names like - "us.meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
+    AND "meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
+    """
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    return BedrockModelInfo.get_base_model(model_name)
 
 
 def _strip_openai_finetune_model_name(model_name: str) -> str:
@@ -3983,8 +4047,8 @@ def _strip_openai_finetune_model_name(model_name: str) -> str:
 
 def _strip_model_name(model: str, custom_llm_provider: Optional[str]) -> str:
     if custom_llm_provider and custom_llm_provider == "bedrock":
-        strip_bedrock_region = _strip_bedrock_region(model_name=model)
-        return strip_bedrock_region
+        stripped_bedrock_model = _get_base_bedrock_model(model_name=model)
+        return stripped_bedrock_model
     elif custom_llm_provider and (
         custom_llm_provider == "vertex_ai" or custom_llm_provider == "gemini"
     ):
@@ -4020,7 +4084,7 @@ def _check_provider_match(model_info: dict, custom_llm_provider: Optional[str]) 
             "litellm_provider"
         ].startswith("fireworks_ai"):
             return True
-        elif custom_llm_provider == "bedrock" and model_info[
+        elif custom_llm_provider.startswith("bedrock") and model_info[
             "litellm_provider"
         ].startswith("bedrock"):
             return True
@@ -4109,7 +4173,6 @@ def _get_max_position_embeddings(model_name: str) -> Optional[int]:
         return None
 
 
-@lru_cache_wrapper(maxsize=16)
 def _cached_get_model_info_helper(
     model: str, custom_llm_provider: Optional[str]
 ) -> ModelInfoBase:
@@ -4191,6 +4254,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_system_messages=None,
                 supports_response_schema=None,
                 supports_function_calling=None,
+                supports_tool_choice=None,
                 supports_assistant_prefill=None,
                 supports_prompt_caching=None,
                 supports_pdf_input=None,
@@ -4335,6 +4399,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_function_calling=_model_info.get(
                     "supports_function_calling", False
                 ),
+                supports_tool_choice=_model_info.get("supports_tool_choice", False),
                 supports_assistant_prefill=_model_info.get(
                     "supports_assistant_prefill", False
                 ),
@@ -4413,6 +4478,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             supports_response_schema: Optional[bool]
             supports_vision: Optional[bool]
             supports_function_calling: Optional[bool]
+            supports_tool_choice: Optional[bool]
             supports_prompt_caching: Optional[bool]
             supports_audio_input: Optional[bool]
             supports_audio_output: Optional[bool]
@@ -5127,9 +5193,10 @@ def _calculate_retry_after(
 # custom prompt helper function
 def register_prompt_template(
     model: str,
-    roles: dict,
+    roles: dict = {},
     initial_prompt_value: str = "",
     final_prompt_value: str = "",
+    tokenizer_config: dict = {},
 ):
     """
     Register a prompt template to follow your custom format for a given model
@@ -5166,12 +5233,27 @@ def register_prompt_template(
     )
     ```
     """
-    model = get_llm_provider(model=model)[0]
-    litellm.custom_prompt_dict[model] = {
-        "roles": roles,
-        "initial_prompt_value": initial_prompt_value,
-        "final_prompt_value": final_prompt_value,
-    }
+    complete_model = model
+    potential_models = [complete_model]
+    try:
+        model = get_llm_provider(model=model)[0]
+        potential_models.append(model)
+    except Exception:
+        pass
+    if tokenizer_config:
+        for m in potential_models:
+            litellm.known_tokenizer_config[m] = {
+                "tokenizer": tokenizer_config,
+                "status": "success",
+            }
+    else:
+        for m in potential_models:
+            litellm.custom_prompt_dict[m] = {
+                "roles": roles,
+                "initial_prompt_value": initial_prompt_value,
+                "final_prompt_value": final_prompt_value,
+            }
+
     return litellm.custom_prompt_dict
 
 
@@ -5874,6 +5956,10 @@ def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
                                 if item.get("type") not in ValidUserMessageContentTypes:
                                     raise Exception("invalid content type")
         except Exception as e:
+            if isinstance(e, KeyError):
+                raise Exception(
+                    f"Invalid message={m} at index {idx}. Please ensure all messages are valid OpenAI chat completion messages."
+                )
             if "invalid content type" in str(e):
                 raise Exception(
                     f"Invalid user message={m} at index {idx}. Please ensure all user messages are valid OpenAI chat completion messages."
@@ -5922,9 +6008,9 @@ class ProviderConfigManager:
         """
         if (
             provider == LlmProviders.OPENAI
-            and litellm.openAIO1Config.is_model_o1_reasoning_model(model=model)
+            and litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
         ):
-            return litellm.OpenAIO1Config()
+            return litellm.openaiOSeriesConfig
         elif litellm.LlmProviders.DEEPSEEK == provider:
             return litellm.DeepSeekChatConfig()
         elif litellm.LlmProviders.GROQ == provider:
@@ -5997,7 +6083,7 @@ class ProviderConfigManager:
         ):
             return litellm.AI21ChatConfig()
         elif litellm.LlmProviders.AZURE == provider:
-            if litellm.AzureOpenAIO1Config().is_o1_model(model=model):
+            if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
                 return litellm.AzureOpenAIO1Config()
             return litellm.AzureOpenAIConfig()
         elif litellm.LlmProviders.AZURE_AI == provider:
@@ -6048,22 +6134,26 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.PETALS == provider:
             return litellm.PetalsConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
-            base_model = litellm.AmazonConverseConfig()._get_base_model(model)
-            if (
-                base_model in litellm.bedrock_converse_models
-                or "converse_like" in model
-            ):
+            bedrock_route = BedrockModelInfo.get_bedrock_route(model)
+            bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
+                model
+            )
+            if bedrock_route == "converse" or bedrock_route == "converse_like":
                 return litellm.AmazonConverseConfig()
-            elif "amazon" in model:  # amazon titan llms
+            elif bedrock_invoke_provider == "amazon":  # amazon titan llms
                 return litellm.AmazonTitanConfig()
-            elif "meta" in model:  # amazon / meta llms
+            elif (
+                bedrock_invoke_provider == "meta" or bedrock_invoke_provider == "llama"
+            ):  # amazon / meta llms
                 return litellm.AmazonLlamaConfig()
-            elif "ai21" in model:  # ai21 llms
+            elif bedrock_invoke_provider == "ai21":  # ai21 llms
                 return litellm.AmazonAI21Config()
-            elif "cohere" in model:  # cohere models on bedrock
+            elif bedrock_invoke_provider == "cohere":  # cohere models on bedrock
                 return litellm.AmazonCohereConfig()
-            elif "mistral" in model:  # mistral models on bedrock
+            elif bedrock_invoke_provider == "mistral":  # mistral models on bedrock
                 return litellm.AmazonMistralConfig()
+            else:
+                return litellm.AmazonInvokeConfig()
         return litellm.OpenAIGPTConfig()
 
     @staticmethod
@@ -6278,7 +6368,9 @@ def get_non_default_completion_params(kwargs: dict) -> dict:
 
 def add_openai_metadata(metadata: dict) -> dict:
     """
-    Add metadata to openai optional parameters, excluding hidden params
+    Add metadata to openai optional parameters, excluding hidden params.
+
+    OpenAI 'metadata' only supports string values.
 
     Args:
         params (dict): Dictionary of API parameters
@@ -6290,5 +6382,10 @@ def add_openai_metadata(metadata: dict) -> dict:
     if metadata is None:
         return None
     # Only include non-hidden parameters
-    visible_metadata = {k: v for k, v in metadata.items() if k != "hidden_params"}
+    visible_metadata = {
+        k: v
+        for k, v in metadata.items()
+        if k != "hidden_params" and isinstance(v, (str))
+    }
+
     return visible_metadata.copy()

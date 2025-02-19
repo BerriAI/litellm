@@ -423,6 +423,7 @@ class PrometheusLogger(CustomLogger):
             team=user_api_team,
             team_alias=user_api_team_alias,
             user=user_id,
+            user_email=standard_logging_payload["metadata"]["user_api_key_user_email"],
             status_code="200",
             model=model,
             litellm_model_name=model,
@@ -806,6 +807,7 @@ class PrometheusLogger(CustomLogger):
             enum_values = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
+                user_email=user_api_key_dict.user_email,
                 hashed_api_key=user_api_key_dict.api_key,
                 api_key_alias=user_api_key_dict.key_alias,
                 team=user_api_key_dict.team_id,
@@ -853,6 +855,7 @@ class PrometheusLogger(CustomLogger):
                 team=user_api_key_dict.team_id,
                 team_alias=user_api_key_dict.team_alias,
                 user=user_api_key_dict.user_id,
+                user_email=user_api_key_dict.user_email,
                 status_code="200",
             )
             _labels = prometheus_label_factory(
@@ -1439,6 +1442,7 @@ class PrometheusLogger(CustomLogger):
                 key_alias=None,
                 exclude_team_id=UI_SESSION_TOKEN_TEAM_ID,
                 return_full_object=True,
+                organization_id=None,
             )
             keys = key_list_response.get("keys", [])
             total_count = key_list_response.get("total_count")
@@ -1587,10 +1591,17 @@ class PrometheusLogger(CustomLogger):
         - Max Budget
         - Budget Reset At
         """
-        self.litellm_remaining_api_key_budget_metric.labels(
-            user_api_key_dict.token,
-            user_api_key_dict.key_alias or "",
-        ).set(
+        enum_values = UserAPIKeyLabelValues(
+            hashed_api_key=user_api_key_dict.token,
+            api_key_alias=user_api_key_dict.key_alias or "",
+        )
+        _labels = prometheus_label_factory(
+            supported_enum_labels=PrometheusMetricLabels.get_labels(
+                label_name="litellm_remaining_api_key_budget_metric"
+            ),
+            enum_values=enum_values,
+        )
+        self.litellm_remaining_api_key_budget_metric.labels(**_labels).set(
             self._safe_get_remaining_budget(
                 max_budget=user_api_key_dict.max_budget,
                 spend=user_api_key_dict.spend,
@@ -1598,14 +1609,18 @@ class PrometheusLogger(CustomLogger):
         )
 
         if user_api_key_dict.max_budget is not None:
-            self.litellm_api_key_max_budget_metric.labels(
-                user_api_key_dict.token, user_api_key_dict.key_alias
-            ).set(user_api_key_dict.max_budget)
+            _labels = prometheus_label_factory(
+                supported_enum_labels=PrometheusMetricLabels.get_labels(
+                    label_name="litellm_api_key_max_budget_metric"
+                ),
+                enum_values=enum_values,
+            )
+            self.litellm_api_key_max_budget_metric.labels(**_labels).set(
+                user_api_key_dict.max_budget
+            )
 
         if user_api_key_dict.budget_reset_at is not None:
-            self.litellm_api_key_budget_remaining_hours_metric.labels(
-                user_api_key_dict.token, user_api_key_dict.key_alias
-            ).set(
+            self.litellm_api_key_budget_remaining_hours_metric.labels(**_labels).set(
                 self._get_remaining_hours_for_budget_reset(
                     budget_reset_at=user_api_key_dict.budget_reset_at
                 )

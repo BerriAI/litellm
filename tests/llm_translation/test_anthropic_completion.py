@@ -1022,10 +1022,26 @@ def test_anthropic_json_mode_and_tool_call_response(
     [
         ("stop", ["stop"], True),  # basic string
         (["stop1", "stop2"], ["stop1", "stop2"], True),  # list of strings
-        ("   ", None, True),  # whitespace string should be dropped when drop_params is True
-        ("   ", ["   "], False),  # whitespace string should be kept when drop_params is False
-        (["stop1", "  ", "stop2"], ["stop1", "stop2"], True),  # list with whitespace that should be filtered
-        (["stop1", "  ", "stop2"], ["stop1", "  ", "stop2"], False),  # list with whitespace that should be kept
+        (
+            "   ",
+            None,
+            True,
+        ),  # whitespace string should be dropped when drop_params is True
+        (
+            "   ",
+            ["   "],
+            False,
+        ),  # whitespace string should be kept when drop_params is False
+        (
+            ["stop1", "  ", "stop2"],
+            ["stop1", "stop2"],
+            True,
+        ),  # list with whitespace that should be filtered
+        (
+            ["stop1", "  ", "stop2"],
+            ["stop1", "  ", "stop2"],
+            False,
+        ),  # list with whitespace that should be kept
         (None, None, True),  # None input
     ],
 )
@@ -1035,3 +1051,113 @@ def test_map_stop_sequences(stop_input, expected_output, drop_params):
     config = AnthropicConfig()
     result = config._map_stop_sequences(stop_input)
     assert result == expected_output
+
+
+@pytest.mark.asyncio
+async def test_anthropic_structured_output():
+    """
+    Test the _transform_response_for_structured_output
+
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/8291
+    """
+    from litellm import acompletion
+
+    args = {
+        "model": "claude-3-5-sonnet-20240620",
+        "seed": 3015206306868917280,
+        "stop": None,
+        "messages": [
+            {
+                "role": "system",
+                "content": 'You are a hello world agent.\nAlways respond in the following valid JSON format: {\n  "response": "response",\n}\n',
+            },
+            {"role": "user", "content": "Respond with hello world"},
+        ],
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+        "drop_params": True,
+    }
+
+    response = await acompletion(**args)
+    assert response is not None
+
+    print(response)
+
+
+def test_anthropic_citations_api():
+    """
+    Test the citations API
+    """
+    from litellm import completion
+
+    resp = completion(
+        model="claude-3-5-sonnet-20241022",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "text",
+                            "media_type": "text/plain",
+                            "data": "The grass is green. The sky is blue.",
+                        },
+                        "title": "My Document",
+                        "context": "This is a trustworthy document.",
+                        "citations": {"enabled": True},
+                    },
+                    {
+                        "type": "text",
+                        "text": "What color is the grass and sky?",
+                    },
+                ],
+            }
+        ],
+    )
+
+    citations = resp.choices[0].message.provider_specific_fields["citations"]
+
+    assert citations is not None
+
+
+def test_anthropic_citations_api_streaming():
+    from litellm import completion
+
+    resp = completion(
+        model="claude-3-5-sonnet-20241022",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "text",
+                            "media_type": "text/plain",
+                            "data": "The grass is green. The sky is blue.",
+                        },
+                        "title": "My Document",
+                        "context": "This is a trustworthy document.",
+                        "citations": {"enabled": True},
+                    },
+                    {
+                        "type": "text",
+                        "text": "What color is the grass and sky?",
+                    },
+                ],
+            }
+        ],
+        stream=True,
+    )
+
+    has_citations = False
+    for chunk in resp:
+        print(f"returned chunk: {chunk}")
+        if (
+            chunk.choices[0].delta.provider_specific_fields
+            and "citation" in chunk.choices[0].delta.provider_specific_fields
+        ):
+            has_citations = True
+
+    assert has_citations

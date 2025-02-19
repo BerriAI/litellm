@@ -137,18 +137,27 @@ def test_get_hashed_cache_key():
     assert len(hashed_key) == 64  # SHA-256 produces a 64-character hex string
 
 
-def test_add_redis_namespace_to_cache_key():
+def test_add_namespace_to_cache_key():
     cache = Cache(namespace="test_namespace")
     hashed_key = "abcdef1234567890"
 
     # Test with class-level namespace
-    result = cache._add_redis_namespace_to_cache_key(hashed_key)
+    result = cache._add_namespace_to_cache_key(hashed_key)
     assert result == "test_namespace:abcdef1234567890"
 
     # Test with metadata namespace
     kwargs = {"metadata": {"redis_namespace": "custom_namespace"}}
-    result = cache._add_redis_namespace_to_cache_key(hashed_key, **kwargs)
+    result = cache._add_namespace_to_cache_key(hashed_key, **kwargs)
     assert result == "custom_namespace:abcdef1234567890"
+
+    # Test with cache control namespace
+    kwargs = {"cache": {"namespace": "cache_control_namespace"}}
+    result = cache._add_namespace_to_cache_key(hashed_key, **kwargs)
+    assert result == "cache_control_namespace:abcdef1234567890"
+
+    kwargs = {"cache": {"namespace": "cache_control_namespace-2"}}
+    result = cache._add_namespace_to_cache_key(hashed_key, **kwargs)
+    assert result == "cache_control_namespace-2:abcdef1234567890"
 
 
 def test_get_model_param_value():

@@ -139,9 +139,6 @@ class MyCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/observabilit
 
     #### ASYNC #### 
     
-    async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
-        pass
-
     async def async_log_pre_api_call(self, model, messages, kwargs):
         pass
 

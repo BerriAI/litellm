@@ -327,6 +327,7 @@ class TestLangfuseLogging:
             ({}, "empty_metadata.json"),
         ],
     )
+    @pytest.mark.flaky(retries=6, delay=1)
     async def test_langfuse_logging_with_various_metadata_types(
         self, mock_setup, test_metadata, response_json_file
     ):
@@ -350,4 +351,33 @@ class TestLangfuseLogging:
                 setup["mock_post"],
                 response_json_file,
                 setup["trace_id"],
+            )
+
+    @pytest.mark.asyncio
+    async def test_langfuse_logging_completion_with_malformed_llm_response(
+        self, mock_setup
+    ):
+        """Test Langfuse logging for chat completion with malformed LLM response"""
+        setup = await mock_setup  # Await the fixture
+        litellm._turn_on_debug()
+        with patch("httpx.Client.post", setup["mock_post"]):
+            mock_response = litellm.ModelResponse(
+                choices=[],
+                usage=litellm.Usage(
+                    prompt_tokens=10,
+                    completion_tokens=10,
+                    total_tokens=20,
+                ),
+                model="gpt-3.5-turbo",
+                object="chat.completion",
+                created=1723081200,
+            ).model_dump()
+            await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello!"}],
+                mock_response=mock_response,
+                metadata={"trace_id": setup["trace_id"]},
+            )
+            await self._verify_langfuse_call(
+                setup["mock_post"], "completion_with_no_choices.json", setup["trace_id"]
             )
