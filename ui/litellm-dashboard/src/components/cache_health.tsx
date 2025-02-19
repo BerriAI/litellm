@@ -1,6 +1,6 @@
 import React from "react";
 import { Card, Text, Button } from "@tremor/react";
-import { CheckCircleIcon, XCircleIcon } from "@heroicons/react/outline";
+import { CheckCircleIcon, XCircleIcon, ClipboardCopyIcon } from "@heroicons/react/outline";
 import { ResponseTimeIndicator } from "./response_time_indicator";
 
 // Helper function to deep-parse a JSON string if possible
@@ -16,18 +16,27 @@ const deepParse = (input: any) => {
   return parsed;
 };
 
-// TableClickableErrorField component
+// TableClickableErrorField component with copy-to-clipboard functionality
 const TableClickableErrorField: React.FC<{ label: string; value: string }> = ({
   label,
   value,
 }) => {
   const [isExpanded, setIsExpanded] = React.useState(false);
+  const [copied, setCopied] = React.useState(false);
   const truncated = value.length > 50 ? value.substring(0, 50) + "..." : value;
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(value);
+    setCopied(true);
+    setTimeout(() => {
+      setCopied(false);
+    }, 2000);
+  };
 
   return (
     <tr className="border-t first:border-t-0">
       <td className="px-6 py-4 align-top w-full" colSpan={2}>
-        <div className="flex">
+        <div className="flex items-center">
           <button
             onClick={() => setIsExpanded(!isExpanded)}
             className="mr-2 text-gray-500 hover:text-gray-700 focus:outline-none"
@@ -40,6 +49,14 @@ const TableClickableErrorField: React.FC<{ label: string; value: string }> = ({
               {isExpanded ? value : truncated}
             </pre>
           </div>
+          <button
+            onClick={handleCopy}
+            className="ml-2 text-gray-500 hover:text-gray-700 focus:outline-none"
+            title="Copy to clipboard"
+          >
+            <ClipboardCopyIcon className="h-5 w-5" />
+            <span className="sr-only">{copied ? "Copied" : "Copy"}</span>
+          </button>
         </div>
       </td>
     </tr>
@@ -138,12 +155,17 @@ export const CacheHealthTab: React.FC<{
   responseTimeMs?: number | null;
 }> = ({ accessToken, healthCheckResponse, runCachingHealthCheck, responseTimeMs }) => {
   const [localResponseTimeMs, setLocalResponseTimeMs] = React.useState<number | null>(null);
+  const [isLoading, setIsLoading] = React.useState<boolean>(false);
+  const [lastRun, setLastRun] = React.useState<Date | null>(null);
 
   const handleHealthCheck = async () => {
+    setIsLoading(true);
     const startTime = performance.now();
     await runCachingHealthCheck();
     const endTime = performance.now();
     setLocalResponseTimeMs(endTime - startTime);
+    setLastRun(new Date());
+    setIsLoading(false);
   };
 
   return (
@@ -157,11 +179,18 @@ export const CacheHealthTab: React.FC<{
 
       <Button 
         onClick={handleHealthCheck}
+        disabled={isLoading}
         className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md"
       >
-        Run cache health
+        {isLoading ? "Running Cache Health..." : "Run cache health"}
       </Button>
-      
+
+      {lastRun && (
+        <Text className="mt-2 text-gray-500">
+          Last checked: {lastRun.toLocaleString()}
+        </Text>
+      )}
+
       {healthCheckResponse && (
         <div className="mt-4">
           <HealthCheckDetails response={healthCheckResponse} />
