@@ -84,3 +84,68 @@ async def test_team_model_alias():
         headers={"Authorization": f"Bearer {TEST_MASTER_KEY}"},
     )
     assert delete_response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_team_model_association():
+    """
+    Test that models created with a team_id are properly associated with the team:
+    1. Create a new team
+    2. Add a model with team_id in model_info
+    3. Verify the model appears in team info
+    """
+    client = AsyncClient(base_url=PROXY_BASE_URL)
+    headers = {"Authorization": f"Bearer {TEST_MASTER_KEY}"}
+
+    # Create new team
+    team_response = await client.post(
+        "/team/new",
+        json={
+            "models": [],  # Start with empty model list
+        },
+        headers=headers,
+    )
+    assert team_response.status_code == 200
+    team_data = team_response.json()
+    team_id = team_data["team_id"]
+
+    # Add new model with team_id
+    model_response = await client.post(
+        "/model/new",
+        json={
+            "model_name": "gpt-4-team-test",
+            "litellm_params": {
+                "model": "gpt-4",
+                "custom_llm_provider": "openai",
+                "api_key": "fake_key",
+            },
+            "model_info": {"team_id": team_id},
+        },
+        headers=headers,
+    )
+    assert model_response.status_code == 200
+
+    # Get team info and verify model association
+    team_info_response = await client.get(
+        f"/team/info",
+        headers=headers,
+        params={"team_id": team_id},
+    )
+    assert team_info_response.status_code == 200
+    team_info = team_info_response.json()["team_info"]
+
+    print("team_info", json.dumps(team_info, indent=4))
+
+    # Verify the model is in team_models
+    assert (
+        "gpt-4-team-test" in team_info["models"]
+    ), "Model should be associated with team"
+
+    # Cleanup - delete the model
+    model_id = model_response.json()["model_info"]["id"]
+    delete_response = await client.post(
+        "/model/delete",
+        json={"id": model_id},
+        headers=headers,
+    )
+    assert delete_response.status_code == 200
