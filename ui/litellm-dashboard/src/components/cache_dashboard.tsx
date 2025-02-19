@@ -111,115 +111,144 @@ const deepParse = (input: any) => {
   return parsed;
 };
 
-// New table-based clickable error field component following view_logs table style
-const TableClickableErrorField: React.FC<{ label: string; value: string }> = ({
-  label,
-  value,
-}) => {
-  const [isExpanded, setIsExpanded] = React.useState(false);
-  const truncated = value.length > 50 ? value.substring(0, 50) + "..." : value;
-  return (
-    <tr
-      onClick={() => setIsExpanded(!isExpanded)}
-      className="cursor-pointer hover:bg-gray-50"
-    >
-      <td className="px-6 py-2 font-medium text-blue-600">{label}</td>
-      <td className="px-6 py-2 text-gray-700">
-        {isExpanded ? value : truncated}
-      </td>
-    </tr>
-  );
-};
-
-// Updated HealthCheckDetails component using a table layout for error details
+// Updated HealthCheckDetails component using the table-based style
 const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
   if (response.error) {
-    // First parse the error field
+    // Parse error data
     let errorData = deepParse(response.error);
-    // If errorData.message is a JSON string, parse it further
     if (errorData && typeof errorData.message === "string") {
       const innerParsed = deepParse(errorData.message);
       if (innerParsed && typeof innerParsed === "object") {
         errorData = innerParsed;
       }
     }
+
     return (
-      <div className="mt-4">
-        <div className="flex items-center space-x-2 text-red-600 px-4">
-          <XCircleIcon className="h-5 w-5" />
-          <h3 className="text-lg font-medium">Cache Health Check Failed</h3>
-        </div>
-        <div className="mt-2 bg-white rounded-lg shadow">
-          <div className="p-4 border-b">
-            <h3 className="text-lg font-medium">Error Details</h3>
+      <div className="p-6 bg-gray-50 space-y-6">
+        <div className="bg-white rounded-lg shadow">
+          <div className="flex items-center space-x-2 text-red-600 p-4 border-b">
+            <XCircleIcon className="h-5 w-5" />
+            <h3 className="text-lg font-medium">Cache Health Check Failed</h3>
           </div>
-          <div className="p-4 overflow-auto">
-            <table className="min-w-full">
-              <tbody>
-                <tr>
-                  <td className="px-6 py-2 font-medium">Message</td>
-                  <td className="px-6 py-2 text-gray-700">
-                    {errorData.message}
-                  </td>
-                </tr>
-                {Object.entries(errorData)
-                  .filter(([key]) => key !== "message")
-                  .map(([key, value]) => (
-                    <TableClickableErrorField
-                      key={key}
-                      label={key}
-                      value={String(value)}
-                    />
-                  ))}
-              </tbody>
-            </table>
-          </div>
+          <table className="w-full">
+            <tbody>
+              {errorData.message && (
+                <TableClickableErrorField 
+                  label="Error Message" 
+                  value={errorData.message} 
+                />
+              )}
+              {errorData.type && (
+                <TableClickableErrorField 
+                  label="Error Type" 
+                  value={errorData.type} 
+                />
+              )}
+              {errorData.traceback && (
+                <TableClickableErrorField 
+                  label="Traceback" 
+                  value={errorData.traceback} 
+                />
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
     );
   }
 
-  // When the response is successful (i.e. no error), display the healthy details.
+  // When the response is successful
   return (
-    <div className="mt-4">
-      <div className="flex items-center space-x-2 text-green-600 px-4">
-        <CheckCircleIcon className="h-5 w-5" />
-        <h3 className="text-lg font-medium">Cache Health Check Passed</h3>
-      </div>
-      <div className="mt-2 bg-white rounded-lg shadow">
-        <div className="p-4 border-b">
-          <h3 className="text-lg font-medium">Cache Configuration</h3>
+    <div className="p-6 bg-gray-50 space-y-6">
+      <div className="bg-white rounded-lg shadow">
+        <div className="flex items-center space-x-2 text-green-600 p-4 border-b">
+          <CheckCircleIcon className="h-5 w-5" />
+          <h3 className="text-lg font-medium">Cache Health Check Passed</h3>
         </div>
-        <div className="p-4 space-y-2">
-          <div className="flex">
-            <span className="font-medium w-1/3">Status:</span>
-            <span>{response.status}</span>
-          </div>
-          <div className="flex">
-            <span className="font-medium w-1/3">Cache Type:</span>
-            <span>{response.cache_type}</span>
-          </div>
-          <div className="flex">
-            <span className="font-medium w-1/3">Ping Response:</span>
-            <span>{String(response.ping_response)}</span>
-          </div>
-          <div className="flex">
-            <span className="font-medium w-1/3">Set Cache Response:</span>
-            <span>{response.set_cache_response}</span>
-          </div>
-        </div>
+        <table className="w-full">
+          <tbody>
+            <TableClickableErrorField 
+              label="Status" 
+              value={String(response.status || "-")} 
+            />
+            <TableClickableErrorField 
+              label="Cache Type" 
+              value={String(response.cache_type || "-")} 
+            />
+            <TableClickableErrorField 
+              label="Ping Response" 
+              value={String(response.ping_response || "-")} 
+            />
+            <TableClickableErrorField 
+              label="Set Cache Response" 
+              value={String(response.set_cache_response || "-")} 
+            />
+            {response.litellm_cache_params && (
+              <TableClickableErrorField 
+                label="LiteLLM Cache Parameters" 
+                value={JSON.stringify(deepParse(response.litellm_cache_params), null, 2)} 
+              />
+            )}
+            {response.specific_cache_params && (
+              <TableClickableErrorField 
+                label="Specific Cache Parameters" 
+                value={JSON.stringify(deepParse(response.specific_cache_params), null, 2)} 
+              />
+            )}
+          </tbody>
+        </table>
       </div>
+    </div>
+  );
+};
 
-      {response.litellm_cache_params && (
-        <div className="mt-4 bg-white rounded-lg shadow">
-          <div className="p-4 border-b">
-            <h3 className="text-lg font-medium">LiteLLM Cache Parameters</h3>
+// Updated TableClickableErrorField component
+const TableClickableErrorField: React.FC<{ label: string; value: string }> = ({
+  label,
+  value,
+}) => {
+  const [isExpanded, setIsExpanded] = React.useState(false);
+  const truncated = value.length > 50 ? value.substring(0, 50) + "..." : value;
+
+  return (
+    <tr className="border-t first:border-t-0">
+      <td className="px-6 py-4 align-top w-full" colSpan={2}>
+        <div className="flex">
+          <button
+            onClick={() => setIsExpanded(!isExpanded)}
+            className="mr-2 text-gray-500 hover:text-gray-700 focus:outline-none"
+          >
+            {isExpanded ? "▼" : "▶"}
+          </button>
+          <div className="flex-1">
+            <div className="font-medium text-blue-600">{label}</div>
+            <pre className="mt-1 text-sm text-gray-700 whitespace-pre-wrap">
+              {isExpanded ? value : truncated}
+            </pre>
           </div>
-          <pre className="p-4 bg-gray-50 text-sm overflow-auto rounded-b-lg">
-            {JSON.stringify(deepParse(response.litellm_cache_params), null, 2)}
-          </pre>
         </div>
-      )}
+      </td>
+    </tr>
+  );
+};
+
+const ClickableErrorField: React.FC<{ label: string; value: string }> = ({ label, value }) => {
+  const [isExpanded, setIsExpanded] = React.useState(false);
+
+  return (
+    <div className="flex flex-col">
+      <span
+        className="font-medium cursor-pointer text-blue-600"
+        onClick={() => setIsExpanded(!isExpanded)}
+      >
+        {label}:
+      </span>
+      <span
+        className="cursor-pointer text-gray-700"
+        onClick={() => setIsExpanded(!isExpanded)}
+      >
+        {isExpanded ? value : (value.length > 50 ? value.substring(0, 50) + "..." : value)}
+      </span>
     </div>
   );
 };
