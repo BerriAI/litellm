@@ -33,12 +33,7 @@ from litellm.router_utils.cooldown_callbacks import (
     _get_prometheus_logger_from_callbacks,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.router import (
-    DeploymentTypedDict,
-    LiteLLM_Params,
-    ModelInfo,
-    RouterErrors,
-)
+from litellm.types.router import DeploymentTypedDict, LiteLLM_Params, RouterErrors
 from litellm.types.utils import BudgetConfig
 from litellm.types.utils import BudgetConfig as GenericBudgetInfo
 from litellm.types.utils import GenericBudgetConfigType, StandardLoggingPayload
