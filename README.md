@@ -64,7 +64,7 @@ import os
 
 ## set ENV variables
 os.environ["OPENAI_API_KEY"] = "your-openai-key"
-os.environ["ANTHROPIC_API_KEY"] = "your-cohere-key"
+os.environ["ANTHROPIC_API_KEY"] = "your-anthropic-key"
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
@@ -187,13 +187,13 @@ os.environ["LANGFUSE_PUBLIC_KEY"] = ""
 os.environ["LANGFUSE_SECRET_KEY"] = ""
 os.environ["ATHINA_API_KEY"] = "your-athina-api-key"
 
-os.environ["OPENAI_API_KEY"]
+os.environ["OPENAI_API_KEY"] = "your-openai-key"
 
 # set callbacks
 litellm.success_callback = ["lunary", "mlflow", "langfuse", "athina", "helicone"] # log input/output to lunary, langfuse, supabase, athina, helicone etc
 
 #openai call
-response = completion(model="anthropic/claude-3-sonnet-20240229", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
+response = completion(model="openai/gpt-4o", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
 ```
 
 # LiteLLM Proxy Server (LLM Gateway) - ([Docs](https://docs.litellm.ai/docs/simple_proxy))

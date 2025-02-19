@@ -31,6 +31,7 @@ import {
   getGuardrailsList,
 } from "./networking";
 import { Team } from "./key_team_helpers/key_list";
+import TeamDropdown from "./common_components/team_dropdown";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Tooltip } from 'antd';
 
@@ -94,6 +95,29 @@ export const getTeamModels = (team: Team | null, allAvailableModels: string[]): 
   return unfurlWildcardModelsInList(tempModelsToPick, allAvailableModels);
 };
 
+export const fetchUserModels = async (userID: string, userRole: string, accessToken: string, setUserModels: (models: string[]) => void) => {
+  try {
+    if (userID === null || userRole === null) {
+      return;
+    }
+
+    if (accessToken !== null) {
+      const model_available = await modelAvailableCall(
+        accessToken,
+        userID,
+        userRole
+      );
+      let available_model_names = model_available["data"].map(
+        (element: { id: string }) => element.id
+      );
+      console.log("available_model_names:", available_model_names);
+      setUserModels(available_model_names);
+    }
+  } catch (error) {
+    console.error("Error fetching user models:", error);
+  }
+};
+
 const CreateKey: React.FC<CreateKeyProps> = ({
   userID,
   team,
@@ -126,30 +150,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   };
 
   useEffect(() => {
-    const fetchUserModels = async () => {
-      try {
-        if (userID === null || userRole === null) {
-          return;
-        }
-
-        if (accessToken !== null) {
-          const model_available = await modelAvailableCall(
-            accessToken,
-            userID,
-            userRole
-          );
-          let available_model_names = model_available["data"].map(
-            (element: { id: string }) => element.id
-          );
-          console.log("available_model_names:", available_model_names);
-          setUserModels(available_model_names);
-        }
-      } catch (error) {
-        console.error("Error fetching user models:", error);
-      }
-    };
-
-    fetchUserModels();
+    if (userID && userRole && accessToken) {
+      fetchUserModels(userID, userRole, accessToken, setUserModels);
+    }
   }, [accessToken, userID, userRole]);
 
   useEffect(() => {
@@ -289,30 +292,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               name="team_id"
               initialValue={team ? team.team_id : null}
               className="mt-8"
-              rules={[{ required: true, message: 'Please select a team' }]}
             >
-              <Select
-                showSearch
-                placeholder="Search or select a team"
-                onChange={(value) => {
-                  form.setFieldValue('team_id', value);
-                  const selectedTeam = teams?.find(team => team.team_id === value);
-                  setSelectedCreateKeyTeam(selectedTeam || null);
-                }}
-                filterOption={(input, option) => {
-                  if (!option) return false;
-                  const optionValue = option.children?.toString() || '';
-                  return optionValue.toLowerCase().includes(input.toLowerCase());
-                }}
-                optionFilterProp="children"
-              >
-                {teams?.map((team) => (
-                  <Select.Option key={team.team_id} value={team.team_id}>
-                    <span className="font-medium">{team.team_alias}</span>{" "}
-                    <span className="text-gray-500">({team.team_id})</span>
-                  </Select.Option>
-                ))}
-              </Select>
+              <TeamDropdown teams={teams} />
             </Form.Item>
 
             <Form.Item

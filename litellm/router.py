@@ -57,7 +57,10 @@ from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.router_strategy.simple_shuffle import simple_shuffle
 from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
-from litellm.router_utils.add_retry_headers import add_retry_headers_to_response
+from litellm.router_utils.add_retry_fallback_headers import (
+    add_fallback_headers_to_response,
+    add_retry_headers_to_response,
+)
 from litellm.router_utils.batch_utils import (
     _get_router_metadata_variable_name,
     replace_model_in_jsonl,
@@ -631,7 +634,6 @@ class Router:
         """
         if fallback_param is None:
             return
-
         for fallback_dict in fallback_param:
             if not isinstance(fallback_dict, dict):
                 raise ValueError(f"Item '{fallback_dict}' is not a dictionary.")
@@ -2888,6 +2890,10 @@ class Router:
             else:
                 response = await self.async_function_with_retries(*args, **kwargs)
             verbose_router_logger.debug(f"Async Response: {response}")
+            response = add_fallback_headers_to_response(
+                response=response,
+                attempted_fallbacks=0,
+            )
             return response
         except Exception as e:
             verbose_router_logger.debug(f"Traceback{traceback.format_exc()}")
@@ -3057,7 +3063,7 @@ class Router:
 
             if hasattr(original_exception, "message"):
                 # add the available fallbacks to the exception
-                original_exception.message += "\nReceived Model Group={}\nAvailable Model Group Fallbacks={}".format(  # type: ignore
+                original_exception.message += ". Received Model Group={}\nAvailable Model Group Fallbacks={}".format(  # type: ignore
                     model_group,
                     fallback_model_group,
                 )
@@ -3122,9 +3128,7 @@ class Router:
             )
 
     async def async_function_with_retries(self, *args, **kwargs):  # noqa: PLR0915
-        verbose_router_logger.debug(
-            f"Inside async function with retries: args - {args}; kwargs - {kwargs}"
-        )
+        verbose_router_logger.debug("Inside async function with retries.")
         original_function = kwargs.pop("original_function")
         fallbacks = kwargs.pop("fallbacks", self.fallbacks)
         parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
@@ -4905,8 +4909,20 @@ class Router:
 
         model_names = []
         for m in model_list:
-            model_names.append(m["model_name"])
+            model_names.append(self._get_public_model_name(m))
         return model_names
+
+    def _get_public_model_name(self, deployment: DeploymentTypedDict) -> str:
+        """
+        Returns the user-friendly model name for public display (e.g., on /models endpoint).
+
+        Prioritizes the team's public model name if available, otherwise falls back to the default model name.
+        """
+        model_info = deployment.get("model_info")
+        if model_info and model_info.get("team_public_model_name"):
+            return model_info["team_public_model_name"]
+
+        return deployment["model_name"]
 
     def get_model_list_from_model_alias(
         self, model_name: Optional[str] = None
@@ -4988,14 +5004,16 @@ class Router:
         model_list = self.get_model_list(model_name=model_name)
         if model_list:
             for m in model_list:
-                for group in m.get("model_info", {}).get("access_groups", []):
-                    if model_access_group is not None:
-                        if group == model_access_group:
+                _model_info = m.get("model_info")
+                if _model_info:
+                    for group in _model_info.get("access_groups", []) or []:
+                        if model_access_group is not None:
+                            if group == model_access_group:
+                                model_name = m["model_name"]
+                                access_groups[group].append(model_name)
+                        else:
                             model_name = m["model_name"]
                             access_groups[group].append(model_name)
-                    else:
-                        model_name = m["model_name"]
-                        access_groups[group].append(model_name)
 
         return access_groups
 

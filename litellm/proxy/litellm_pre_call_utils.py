@@ -1,7 +1,7 @@
 import asyncio
 import copy
 import time
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from fastapi import Request
 from starlette.datastructures import Headers
@@ -17,6 +17,7 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
+from litellm.router import Router
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -407,6 +408,28 @@ class LiteLLMProxyRequestSetup:
             callback_vars=callback_vars_dict,
         )
 
+    @staticmethod
+    def add_request_tag_to_metadata(
+        llm_router: Optional[Router],
+        headers: dict,
+        data: dict,
+    ) -> Optional[List[str]]:
+        tags = None
+
+        if llm_router and llm_router.enable_tag_filtering is True:
+            # Check request headers for tags
+            if "x-litellm-tags" in headers:
+                if isinstance(headers["x-litellm-tags"], str):
+                    _tags = headers["x-litellm-tags"].split(",")
+                    tags = [tag.strip() for tag in _tags]
+                elif isinstance(headers["x-litellm-tags"], list):
+                    tags = headers["x-litellm-tags"]
+            # Check request body for tags
+            if "tags" in data and isinstance(data["tags"], list):
+                tags = data["tags"]
+
+        return tags
+
 
 async def add_litellm_data_to_request(  # noqa: PLR0915
     data: dict,
@@ -611,10 +634,15 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             requester_ip_address = request.client.host
     data[_metadata_variable_name]["requester_ip_address"] = requester_ip_address
 
-    # Enterprise Only - Check if using tag based routing
-    if llm_router and llm_router.enable_tag_filtering is True:
-        if "tags" in data:
-            data[_metadata_variable_name]["tags"] = data["tags"]
+    # Check if using tag based routing
+    tags = LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
+        llm_router=llm_router,
+        headers=dict(request.headers),
+        data=data,
+    )
+
+    if tags is not None:
+        data[_metadata_variable_name]["tags"] = tags
 
     # Team Callbacks controls
     callback_settings_obj = _get_dynamic_logging_metadata(

@@ -16,12 +16,15 @@ import {
   AccordionHeader,
   AccordionBody,
 } from "@tremor/react";
+
+
 import ConditionalPublicModelName from "./add_model/conditional_public_model_name";
 import LiteLLMModelNameField from "./add_model/litellm_model_name";
 import AdvancedSettings from "./add_model/advanced_settings";
 import ProviderSpecificFields from "./add_model/provider_specific_fields";
 import { handleAddModelSubmit } from "./add_model/handle_add_model_submit";
-import EditModelModal from "./edit_model/edit_model_modal";
+import { getDisplayModelName } from "./view_model/model_name_display";
+import EditModelModal, { handleEditModelSubmit } from "./edit_model/edit_model_modal";
 import {
   TabPanel,
   TabPanels,
@@ -100,7 +103,11 @@ import { Upload } from "antd";
 import TimeToFirstToken from "./model_metrics/time_to_first_token";
 import DynamicFields from "./model_add/dynamic_form";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { Team } from "./key_team_helpers/key_list";
+import TeamInfoView from "./team/team_info";
 import { Providers, provider_map, providerLogoMap, getProviderLogoAndName, getPlaceholder, getProviderModels } from "./provider_info_helpers";
+import ModelInfoView from "./model_info_view";
+import AddModelTab from "./add_model/add_model_tab";
 
 interface ModelDashboardProps {
   accessToken: string | null;
@@ -111,6 +118,7 @@ interface ModelDashboardProps {
   keys: any[] | null;
   setModelData: any;
   premiumUser: boolean;
+  teams: Team[] | null;
 }
 
 interface EditModelModalProps {
@@ -164,6 +172,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   keys,
   setModelData,
   premiumUser,
+  teams,
 }) => {
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
   const [form] = Form.useForm();
@@ -182,7 +191,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
   const [healthCheckResponse, setHealthCheckResponse] = useState<string>("");
   const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
-  const [infoModalVisible, setInfoModalVisible] = useState<boolean>(false);
 
   const [selectedModel, setSelectedModel] = useState<any>(null);
   const [availableModelGroups, setAvailableModelGroups] = useState<
@@ -226,6 +234,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
   // Add state for advanced settings visibility
   const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
+
+  // Add these state variables
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+  const [editModel, setEditModel] = useState<boolean>(false);
+
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
 
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelMap);
@@ -380,75 +394,11 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     setEditModalVisible(true);
   };
 
-  const handleInfoClick = (model: any) => {
-    setSelectedModel(model);
-    setInfoModalVisible(true);
-  };
-
   const handleEditCancel = () => {
     setEditModalVisible(false);
     setSelectedModel(null);
   };
 
-  const handleInfoCancel = () => {
-    setInfoModalVisible(false);
-    setSelectedModel(null);
-  };
-
-  const handleEditSubmit = async (formValues: Record<string, any>) => {
-    // Call API to update team with teamId and values
-
-    console.log("handleEditSubmit:", formValues);
-    if (accessToken == null) {
-      return;
-    }
-
-    let newLiteLLMParams: Record<string, any> = {};
-    let model_info_model_id = null;
-
-    if (formValues.input_cost_per_token) {
-      // Convert from per 1M tokens to per token
-      formValues.input_cost_per_token = Number(formValues.input_cost_per_token) / 1_000_000;
-    }
-    if (formValues.output_cost_per_token) {
-      // Convert from per 1M tokens to per token
-      formValues.output_cost_per_token = Number(formValues.output_cost_per_token) / 1_000_000;
-    }
-  
-
-    for (const [key, value] of Object.entries(formValues)) {
-      if (key !== "model_id") {
-        // Empty string means user wants to null the value
-        newLiteLLMParams[key] = value === "" ? null : value;
-      } else {
-        model_info_model_id = value === "" ? null : value;
-      }
-    }
-    
-    let payload: {
-      litellm_params: Record<string, any> | undefined;
-      model_info: { id: any } | undefined;
-    } = {
-      litellm_params: Object.keys(newLiteLLMParams).length > 0 ? newLiteLLMParams : undefined,
-      model_info: model_info_model_id !== undefined ? {
-        id: model_info_model_id,
-      } : undefined,
-    };
-
-    console.log("handleEditSubmit payload:", payload);
-
-    try {
-      let newModelValue = await modelUpdateCall(accessToken, payload);
-      message.success(
-        "Model updated successfully, restart server to see updates"
-      );
-
-      setEditModalVisible(false);
-      setSelectedModel(null);
-    } catch (error) {
-      console.log(`Error occurred`);
-    }
-  };
 
   const uploadProps: UploadProps = {
     name: "file",
@@ -1036,7 +986,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       .validateFields()
       .then((values) => {
         handleAddModelSubmit(values, accessToken, form, handleRefreshClick);
-        // form.resetFields();
       })
       .catch((error) => {
         console.error("Validation failed:", error);
@@ -1057,99 +1006,111 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     );
   }
 
+  // If a team is selected, render TeamInfoView in full page layout
+  if (selectedTeamId) {
+    return (
+      <div className="w-full h-full">
+        <TeamInfoView 
+          teamId={selectedTeamId} 
+          onClose={() => setSelectedTeamId(null)}
+          accessToken={accessToken}
+          is_team_admin={userRole === "Admin"}
+          is_proxy_admin={userRole === "Proxy Admin"}
+          userModels={all_models_on_proxy}
+          editTeam={false}
+        />
+      </div>
+    );
+  }
+
   return (
     <div style={{ width: "100%", height: "100%" }}>
-      <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
-        <TabList className="flex justify-between mt-2 w-full items-center">
-          <div className="flex">
-            <Tab>All Models</Tab>
-            <Tab>Add Model</Tab>
-            <Tab>
-              <pre>/health Models</pre>
-            </Tab>
-            <Tab>Model Analytics</Tab>
-            <Tab>Model Retry Settings</Tab>
-          </div>
+      {selectedModelId ? (
+        <ModelInfoView 
+          modelId={selectedModelId}
+          editModel={true}
+          onClose={() => {
+            setSelectedModelId(null);
+            setEditModel(false);
+          }}
+          modelData={modelData.data.find((model: any) => model.model_info.id === selectedModelId)}
+          accessToken={accessToken}
+          userID={userID}
+          userRole={userRole}
+          setEditModalVisible={setEditModalVisible}
+          setSelectedModel={setSelectedModel}
+        />
+      ) : (
+        <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
+          <TabList className="flex justify-between mt-2 w-full items-center">
+            <div className="flex">
+              <Tab>All Models</Tab>
+              <Tab>Add Model</Tab>
+              <Tab>
+                <pre>/health Models</pre>
+              </Tab>
+              <Tab>Model Analytics</Tab>
+              <Tab>Model Retry Settings</Tab>
+            </div>
 
-          <div className="flex items-center space-x-2">
-            {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
-            <Icon
-              icon={RefreshIcon} // Modify as necessary for correct icon name
-              variant="shadow"
-              size="xs"
-              className="self-center"
-              onClick={handleRefreshClick}
-            />
-          </div>
-        </TabList>
-        <TabPanels>
-          <TabPanel>
-            <Grid>
-              <div className="flex items-center">
-                <Text>Filter by Public Model Name</Text>
-                <Select
-                  className="mb-4 mt-2 ml-2 w-50"
-                  defaultValue={
-                    selectedModelGroup
-                      ? selectedModelGroup
-                      : undefined
-                  }
-                  onValueChange={(value) =>
-                    setSelectedModelGroup(value === "all" ? "all" : value)
-                  }
-                  value={
-                    selectedModelGroup
-                      ? selectedModelGroup
-                      : undefined
-                  }
-                >
-                  <SelectItem value={"all"}>All Models</SelectItem>
-                  {availableModelGroups.map((group, idx) => (
-                    <SelectItem
-                      key={idx}
-                      value={group}
-                      onClick={() => setSelectedModelGroup(group)}
-                    >
-                      {group}
-                    </SelectItem>
-                  ))}
-                </Select>
-              </div>
-              <Card>
-                <Table style={{ maxWidth: "1500px", width: "100%" }}>
-                  <TableHead>
-                    <TableRow>
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "150px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px",
-                        }}
+            <div className="flex items-center space-x-2">
+              {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
+              <Icon
+                icon={RefreshIcon} // Modify as necessary for correct icon name
+                variant="shadow"
+                size="xs"
+                className="self-center"
+                onClick={handleRefreshClick}
+              />
+            </div>
+          </TabList>
+          <TabPanels>
+            <TabPanel>
+              <Grid>
+                <div className="flex items-center">
+                  <Text>Filter by Public Model Name</Text>
+                  <Select
+                    className="mb-4 mt-2 ml-2 w-50"
+                    defaultValue={
+                      selectedModelGroup
+                        ? selectedModelGroup
+                        : undefined
+                    }
+                    onValueChange={(value) =>
+                      setSelectedModelGroup(value === "all" ? "all" : value)
+                    }
+                    value={
+                      selectedModelGroup
+                        ? selectedModelGroup
+                        : undefined
+                    }
+                  >
+                    <SelectItem value={"all"}>All Models</SelectItem>
+                    {availableModelGroups.map((group, idx) => (
+                      <SelectItem
+                        key={idx}
+                        value={group}
+                        onClick={() => setSelectedModelGroup(group)}
                       >
-                        Public Model Name
-                      </TableHeaderCell>
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "100px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px",
-                        }}
-                      >
-                        Provider
-                      </TableHeaderCell>
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "150px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px",
-                        }}
-                      >
-                        LiteLLM Model
-                      </TableHeaderCell>
-                      {userRole === "Admin" && (
+                        {group}
+                      </SelectItem>
+                    ))}
+                  </Select>
+                </div>
+                <Card>
+                  <Table style={{ maxWidth: "1500px", width: "100%" }}>
+                    <TableHead>
+                      <TableRow>
+                        <TableHeaderCell
+                          style={{
+                            maxWidth: "100px",
+                            whiteSpace: "normal",
+                            wordBreak: "break-word",
+                            fontSize: "11px",
+                          }}
+                        >
+                          Model ID
+                        </TableHeaderCell>
                         <TableHeaderCell
                           style={{
                             maxWidth: "150px",
@@ -1158,116 +1119,177 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             fontSize: "11px",
                           }}
                         >
-                          API Base
+                          Public Model Name
                         </TableHeaderCell>
-                      )}
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "85px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px",
-                        }}
-                      >
-                        Input Price{" "}
-                        <p style={{ fontSize: "10px", color: "gray" }}>
-                          /1M Tokens ($)
-                        </p>
-                      </TableHeaderCell>
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "85px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px",
-                        }}
-                      >
-                        Output Price{" "}
-                        <p style={{ fontSize: "10px", color: "gray" }}>
-                          /1M Tokens ($)
-                        </p>
-                      </TableHeaderCell>
-
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "100px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px",
-                        }}
-                      >
-                        {premiumUser ? (
-                          "Created At"
-                        ) : (
-                          <a
-                            href="https://forms.gle/W3U4PZpJGFHWtHyA9"
-                            target="_blank"
-                            style={{ color: "#72bcd4" }}
-                          >
-                            {" "}
-                            ✨ Created At
-                          </a>
-                        )}
-                      </TableHeaderCell>
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "100px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px",
-                        }}
-                      >
-                        {premiumUser ? (
-                          "Created By"
-                        ) : (
-                          <a
-                            href="https://forms.gle/W3U4PZpJGFHWtHyA9"
-                            target="_blank"
-                            style={{ color: "#72bcd4" }}
-                          >
-                            {" "}
-                            ✨ Created By
-                          </a>
-                        )}
-                      </TableHeaderCell>
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "50px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px",
-                        }}
-                      >
-                        Status
-                      </TableHeaderCell>
-                      <TableHeaderCell></TableHeaderCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {modelData.data
-                      .filter(
-                        (model: any) =>
-                          selectedModelGroup === "all" ||
-                          model.model_name === selectedModelGroup ||
-                          selectedModelGroup === null ||
-                          selectedModelGroup === undefined ||
-                          selectedModelGroup === ""
-                      )
-                      .map((model: any, index: number) => (
-                        <TableRow
-                          key={index}
-                          style={{ maxHeight: "1px", minHeight: "1px" }}
+                        <TableHeaderCell
+                          style={{
+                            maxWidth: "100px",
+                            whiteSpace: "normal",
+                            wordBreak: "break-word",
+                            fontSize: "11px",
+                          }}
                         >
-                          <TableCell
+                          Provider
+                        </TableHeaderCell>
+                        <TableHeaderCell
+                          style={{
+                            maxWidth: "150px",
+                            whiteSpace: "normal",
+                            wordBreak: "break-word",
+                            fontSize: "11px",
+                          }}
+                        >
+                          LiteLLM Model
+                        </TableHeaderCell>
+                        {userRole === "Admin" && (
+                          <TableHeaderCell
                             style={{
-                              maxWidth: "100px",
+                              maxWidth: "150px",
                               whiteSpace: "normal",
                               wordBreak: "break-word",
+                              fontSize: "11px",
                             }}
                           >
-                            <p className="text-xs">{model.model_name || "-"}</p>
-                          </TableCell>
-                          <TableCell
+                            API Base
+                          </TableHeaderCell>
+                        )}
+                        <TableHeaderCell
+                          style={{
+                            maxWidth: "85px",
+                            whiteSpace: "normal",
+                            wordBreak: "break-word",
+                            fontSize: "11px",
+                          }}
+                        >
+                          Input Price{" "}
+                          <p style={{ fontSize: "10px", color: "gray" }}>
+                            /1M Tokens ($)
+                          </p>
+                        </TableHeaderCell>
+                        <TableHeaderCell
+                          style={{
+                            maxWidth: "85px",
+                            whiteSpace: "normal",
+                            wordBreak: "break-word",
+                            fontSize: "11px",
+                          }}
+                        >
+                          Output Price{" "}
+                          <p style={{ fontSize: "10px", color: "gray" }}>
+                            /1M Tokens ($)
+                          </p>
+                        </TableHeaderCell>
+
+                        <TableHeaderCell
+                          style={{
+                            maxWidth: "100px",
+                            whiteSpace: "normal",
+                            wordBreak: "break-word",
+                            fontSize: "11px",
+                          }}
+                        >
+                          {premiumUser ? (
+                            "Created At"
+                          ) : (
+                            <a
+                              href="https://forms.gle/W3U4PZpJGFHWtHyA9"
+                              target="_blank"
+                              style={{ color: "#72bcd4" }}
+                            >
+                              {" "}
+                              ✨ Created At
+                            </a>
+                          )}
+                        </TableHeaderCell>
+                        <TableHeaderCell
+                          style={{
+                            maxWidth: "100px",
+                            whiteSpace: "normal",
+                            wordBreak: "break-word",
+                            fontSize: "11px",
+                          }}
+                        >
+                          {premiumUser ? (
+                            "Created By"
+                          ) : (
+                            <a
+                              href="https://forms.gle/W3U4PZpJGFHWtHyA9"
+                              target="_blank"
+                              style={{ color: "#72bcd4" }}
+                            >
+                              {" "}
+                              ✨ Created By
+                            </a>
+                          )}
+                        </TableHeaderCell>
+                        <TableHeaderCell
+                          style={{
+                            maxWidth: "100px",
+                            whiteSpace: "normal",
+                            wordBreak: "break-word",
+                            fontSize: "11px",
+                          }}
+                        >
+                          Team ID
+                        </TableHeaderCell>
+                        <TableHeaderCell
+                          style={{
+                            maxWidth: "50px",
+                            whiteSpace: "normal",
+                            wordBreak: "break-word",
+                            fontSize: "11px",
+                          }}
+                        >
+                          Status
+                        </TableHeaderCell>
+                        <TableHeaderCell></TableHeaderCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {modelData.data
+                        .filter(
+                          (model: any) =>
+                            selectedModelGroup === "all" ||
+                            model.model_name === selectedModelGroup ||
+                            selectedModelGroup === null ||
+                            selectedModelGroup === undefined ||
+                            selectedModelGroup === ""
+                        )
+                        .map((model: any, index: number) => (
+                          <TableRow
+                            key={index}
+                            style={{ maxHeight: "1px", minHeight: "1px" }}
+                          >
+                            <TableCell
+                              style={{
+                                maxWidth: "100px",
+                                whiteSpace: "normal",
+                                wordBreak: "break-word",
+                              }}
+                            >
+                              <div className="overflow-hidden">
+                                <Tooltip title={model.model_info.id}>
+                                  <Button 
+                                    size="xs"
+                                    variant="light"
+                                    className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+                                    onClick={() => setSelectedModelId(model.model_info.id)}
+                                  >
+                                    {model.model_info.id.slice(0, 7)}...
+                                  </Button>
+                                </Tooltip>
+                              </div>
+                            </TableCell>
+                            <TableCell
+                              style={{
+                                maxWidth: "100px",
+                                whiteSpace: "normal",
+                                wordBreak: "break-word",
+                              }}
+                            >
+                              <p className="text-xs">{getDisplayModelName(model) || "-"}</p>
+                            </TableCell>
+                            <TableCell
                               style={{
                                 maxWidth: "100px",
                                 whiteSpace: "normal",
@@ -1295,37 +1317,166 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                 )}
                                 <p className="text-xs">{model.provider || "-"}</p>
                               </div>
-                          </TableCell>
-                          
-                          <TableCell
-                            style={{
-                              maxWidth: "100px",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                            <Tooltip title={model && model.litellm_model_name}>
-                                <pre
-                                  style={{
-                                    maxWidth: "150px",
-                                    whiteSpace: "normal",
-                                    wordBreak: "break-word",
-                                  }}
-                                  className="text-xs"
-                                  title={
-                                    model && model.litellm_model_name
-                                      ? model.litellm_model_name
-                                      : ""
-                                  }
-                                >
-                                  {model && model.litellm_model_name
-                                    ? model.litellm_model_name.slice(0, 20) + (model.litellm_model_name.length > 20 ? "..." : "")
-                                    : "-"}
-                                </pre>
-                              </Tooltip>
+                            </TableCell>
                             
-                          </TableCell>
-                          {userRole === "Admin" && (
+                            <TableCell
+                              style={{
+                                maxWidth: "100px",
+                                whiteSpace: "normal",
+                                wordBreak: "break-word",
+                              }}
+                            >
+                              <Tooltip title={model && model.litellm_model_name}>
+                                  <pre
+                                    style={{
+                                      maxWidth: "150px",
+                                      whiteSpace: "normal",
+                                      wordBreak: "break-word",
+                                    }}
+                                    className="text-xs"
+                                    title={
+                                      model && model.litellm_model_name
+                                        ? model.litellm_model_name
+                                        : ""
+                                    }
+                                  >
+                                    {model && model.litellm_model_name
+                                      ? model.litellm_model_name.slice(0, 20) + (model.litellm_model_name.length > 20 ? "..." : "")
+                                      : "-"}
+                                  </pre>
+                                </Tooltip>
+                              
+                            </TableCell>
+                            {userRole === "Admin" && (
+                              <TableCell
+                                style={{
+                                  maxWidth: "150px",
+                                  whiteSpace: "normal",
+                                  wordBreak: "break-word",
+                                }}
+                              >
+                                <Tooltip title={model && model.api_base}>
+                                  <pre
+                                    style={{
+                                      maxWidth: "150px",
+                                      whiteSpace: "normal",
+                                      wordBreak: "break-word",
+                                    }}
+                                    className="text-xs"
+                                    title={
+                                      model && model.api_base
+                                        ? model.api_base
+                                        : ""
+                                    }
+                                  >
+                                    {model && model.api_base
+                                      ? model.api_base.slice(0, 20)
+                                      : "-"}
+                                  </pre>
+                                </Tooltip>
+                              </TableCell>
+                            )}
+                            <TableCell
+                              style={{
+                                maxWidth: "80px",
+                                whiteSpace: "normal",
+                                wordBreak: "break-word",
+                              }}
+                            >
+                              <pre className="text-xs">
+                                {model.input_cost
+                                  ? model.input_cost
+                                  : model.litellm_params.input_cost_per_token != null && model.litellm_params.input_cost_per_token != undefined
+                                    ? (
+                                        Number(
+                                          model.litellm_params
+                                            .input_cost_per_token
+                                        ) * 1000000
+                                      ).toFixed(2)
+                                    : null}
+                              </pre>
+                            </TableCell>
+                            <TableCell
+                              style={{
+                                maxWidth: "80px",
+                                whiteSpace: "normal",
+                                wordBreak: "break-word",
+                              }}
+                            >
+                              <pre className="text-xs">
+                                {model.output_cost
+                                  ? model.output_cost
+                                  : model.litellm_params.output_cost_per_token
+                                    ? (
+                                        Number(
+                                          model.litellm_params
+                                            .output_cost_per_token
+                                        ) * 1000000
+                                      ).toFixed(2)
+                                    : null}
+                              </pre>
+                            </TableCell>
+                            <TableCell>
+                              <p className="text-xs">
+                                {premiumUser
+                                  ? formatCreatedAt(
+                                      model.model_info.created_at
+                                    ) || "-"
+                                  : "-"}
+                              </p>
+                            </TableCell>
+                            <TableCell>
+                              <p className="text-xs">
+                                {premiumUser
+                                  ? model.model_info.created_by || "-"
+                                  : "-"}
+                              </p>
+                            </TableCell>
+                            <TableCell
+                              style={{
+                                maxWidth: "100px",
+                                whiteSpace: "normal",
+                                wordBreak: "break-word",
+                              }}
+                            >
+                              <div className="overflow-hidden">
+                              {model.model_info.team_id ? (
+                              <Tooltip title={model.model_info.team_id}>
+                                <Button 
+                                  size="xs"
+                                  variant="light"
+                                  className="font-mono text-purple-500 bg-purple-50 hover:bg-purple-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+                                  onClick={() => {
+                                    setSelectedTeamId(model.model_info.team_id);
+                                  }}
+                                >
+                                  {model.model_info.team_id.slice(0, 7)}...
+                                </Button>
+                              </Tooltip>
+                              ) : (
+                                "-"
+                              )}
+
+                              
+                              </div>
+                            </TableCell>
+                            <TableCell
+                              style={{
+                                maxWidth: "100px",
+                                whiteSpace: "normal",
+                                wordBreak: "break-word",
+                              }}
+                            >
+                              {model.model_info.db_model ? (
+                                <Badge size="xs" className="text-white">
+                                  <p className="text-xs">DB Model</p>
+                                </Badge>
+                              ) : (
+                                <Badge size="xs" className="text-black">
+                                  <p className="text-xs">Config Model</p>
+                                </Badge>
+                              )}
+                            </TableCell>
                             <TableCell
                               style={{
                                 maxWidth: "150px",
@@ -1333,282 +1484,322 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                 wordBreak: "break-word",
                               }}
                             >
-                              <Tooltip title={model && model.api_base}>
-                                <pre
-                                  style={{
-                                    maxWidth: "150px",
-                                    whiteSpace: "normal",
-                                    wordBreak: "break-word",
-                                  }}
-                                  className="text-xs"
-                                  title={
-                                    model && model.api_base
-                                      ? model.api_base
-                                      : ""
-                                  }
-                                >
-                                  {model && model.api_base
-                                    ? model.api_base.slice(0, 20)
-                                    : "-"}
-                                </pre>
-                              </Tooltip>
+                              <Grid numItems={2}>
+                                <Col>
+                                  <Icon
+                                    icon={PencilAltIcon}
+                                    size="sm"
+                                    onClick={() => handleEditClick(model)}
+                                  />
+                                </Col>
+
+                                <Col>
+                                  <DeleteModelButton
+                                    modelID={model.model_info.id}
+                                    accessToken={accessToken}
+                                    callback={handleRefreshClick}
+                                  />
+                                </Col>
+                              </Grid>
                             </TableCell>
-                          )}
-                          <TableCell
-                            style={{
-                              maxWidth: "80px",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                            <pre className="text-xs">
-                              {model.input_cost
-                                ? model.input_cost
-                                : model.litellm_params.input_cost_per_token != null && model.litellm_params.input_cost_per_token != undefined
-                                  ? (
-                                      Number(
-                                        model.litellm_params
-                                          .input_cost_per_token
-                                      ) * 1000000
-                                    ).toFixed(2)
-                                  : null}
-                            </pre>
-                          </TableCell>
-                          <TableCell
-                            style={{
-                              maxWidth: "80px",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                            <pre className="text-xs">
-                              {model.output_cost
-                                ? model.output_cost
-                                : model.litellm_params.output_cost_per_token
-                                  ? (
-                                      Number(
-                                        model.litellm_params
-                                          .output_cost_per_token
-                                      ) * 1000000
-                                    ).toFixed(2)
-                                  : null}
-                            </pre>
-                          </TableCell>
-                          <TableCell>
-                            <p className="text-xs">
-                              {premiumUser
-                                ? formatCreatedAt(
-                                    model.model_info.created_at
-                                  ) || "-"
-                                : "-"}
-                            </p>
-                          </TableCell>
-                          <TableCell>
-                            <p className="text-xs">
-                              {premiumUser
-                                ? model.model_info.created_by || "-"
-                                : "-"}
-                            </p>
-                          </TableCell>
-                          <TableCell
-                            style={{
-                              maxWidth: "100px",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                            {model.model_info.db_model ? (
-                              <Badge size="xs" className="text-white">
-                                <p className="text-xs">DB Model</p>
-                              </Badge>
-                            ) : (
-                              <Badge size="xs" className="text-black">
-                                <p className="text-xs">Config Model</p>
-                              </Badge>
-                            )}
-                          </TableCell>
-                          <TableCell
-                            style={{
-                              maxWidth: "150px",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                            <Grid numItems={3}>
-                              <Col>
-                                <Icon
-                                  icon={InformationCircleIcon}
-                                  size="sm"
-                                  onClick={() => handleInfoClick(model)}
-                                />
-                              </Col>
-                              <Col>
-                                <Icon
-                                  icon={PencilAltIcon}
-                                  size="sm"
-                                  onClick={() => handleEditClick(model)}
-                                />
-                              </Col>
-
-                              <Col>
-                                <DeleteModelButton
-                                  modelID={model.model_info.id}
-                                  accessToken={accessToken}
-                                  callback={handleRefreshClick}
-                                />
-                              </Col>
-                            </Grid>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                  </TableBody>
-                </Table>
-              </Card>
-            </Grid>
-            <EditModelModal
-              visible={editModalVisible}
-              onCancel={handleEditCancel}
-              model={selectedModel}
-              onSubmit={handleEditSubmit}
-            />
-            <Modal
-              title={selectedModel && selectedModel.model_name}
-              visible={infoModalVisible}
-              width={800}
-              footer={null}
-              onCancel={handleInfoCancel}
-            >
-              <Title>Model Info</Title>
-              <SyntaxHighlighter language="json">
-                {selectedModel && JSON.stringify(selectedModel, null, 2)}
-              </SyntaxHighlighter>
-            </Modal>
-          </TabPanel>
-          <TabPanel className="h-full">
-            <Title2 level={2}>Add new model</Title2>
-            <Card>
-              <Form
+                          </TableRow>
+                        ))}
+                    </TableBody>
+                  </Table>
+                </Card>
+              </Grid>
+              <EditModelModal
+                visible={editModalVisible}
+                onCancel={handleEditCancel}
+                model={selectedModel}
+                onSubmit={(data: FormData) => handleEditModelSubmit(data, accessToken, setEditModalVisible, setSelectedModel)}
+              />
+            </TabPanel>
+            <TabPanel className="h-full">
+              <AddModelTab
                 form={form}
-                onFinish={handleOk}
-                labelCol={{ span: 10 }}
-                wrapperCol={{ span: 16 }}
-                labelAlign="left"
-              >
-                <>
-                  {/* Provider Selection */}
-                  <Form.Item
-                    rules={[{ required: true, message: "Required" }]}
-                    label="Provider:"
-                    name="custom_llm_provider"
-                    tooltip="E.g. OpenAI, Azure OpenAI, Anthropic, Bedrock, etc."
-                    labelCol={{ span: 10 }}
-                    labelAlign="left"
+                handleOk={handleOk}
+                selectedProvider={selectedProvider}
+                setSelectedProvider={setSelectedProvider}
+                providerModels={providerModels}
+                setProviderModelsFn={setProviderModelsFn}
+                getPlaceholder={getPlaceholder}
+                uploadProps={uploadProps}
+                showAdvancedSettings={showAdvancedSettings}
+                setShowAdvancedSettings={setShowAdvancedSettings}
+                teams={teams}
+              />
+            </TabPanel>
+            <TabPanel>
+              <Card>
+                <Text>
+                  `/health` will run a very small request through your models
+                  configured on litellm
+                </Text>
+
+                <Button onClick={runHealthCheck}>Run `/health`</Button>
+                {healthCheckResponse && (
+                  <pre>{JSON.stringify(healthCheckResponse, null, 2)}</pre>
+                )}
+              </Card>
+            </TabPanel>
+            <TabPanel>
+              <Grid numItems={4} className="mt-2 mb-2">
+                <Col>
+                  <Text>Select Time Range</Text>
+                  <DateRangePicker
+                    enableSelect={true}
+                    value={dateValue}
+                    className="mr-2"
+                    onValueChange={(value) => {
+                      setDateValue(value);
+                      updateModelMetrics(
+                        selectedModelGroup,
+                        value.from,
+                        value.to
+                      ); // Call updateModelMetrics with the new date range
+                    }}
+                  />
+                </Col>
+                <Col className="ml-2">
+                  <Text>Select Model Group</Text>
+                  <Select
+                    defaultValue={
+                      selectedModelGroup
+                        ? selectedModelGroup
+                        : availableModelGroups[0]
+                    }
+                    value={
+                      selectedModelGroup
+                        ? selectedModelGroup
+                        : availableModelGroups[0]
+                    }
                   >
-                    <AntdSelect
-                      showSearch={true}
-                      value={selectedProvider}
-                      onChange={(value) => {
-                        setSelectedProvider(value);
-                        setProviderModelsFn(value);
-                        form.setFieldsValue({ 
-                          model: [],
-                          model_name: undefined 
-                        });
-                      }}
-                    >
-                      {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => (
-                        <AntdSelect.Option
-                          key={providerEnum}
-                          value={providerEnum}
-                        >
-                          <div className="flex items-center space-x-2">
-                            <img
-                              src={providerLogoMap[providerDisplayName]}
-                              alt={`${providerEnum} logo`}
-                              className="w-5 h-5"
-                              onError={(e) => {
-                                // Create a div with provider initial as fallback
-                                const target = e.target as HTMLImageElement;
-                                const parent = target.parentElement;
-                                if (parent) {
-                                  const fallbackDiv = document.createElement('div');
-                                  fallbackDiv.className = 'w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs';
-                                  fallbackDiv.textContent = providerDisplayName.charAt(0);
-                                  parent.replaceChild(fallbackDiv, target);
-                                }
-                              }}
-                            />
-                            <span>{providerDisplayName}</span>
-                          </div>
-                        </AntdSelect.Option>
-                      ))}
-                    </AntdSelect>
-                  </Form.Item>
-                  <LiteLLMModelNameField
-                      selectedProvider={selectedProvider}
-                      providerModels={providerModels}
-                      getPlaceholder={getPlaceholder}
-                    />
-                  
-                  {/* Conditionally Render "Public Model Name" */}
-                  <ConditionalPublicModelName  />
-
-                  <ProviderSpecificFields
-                    selectedProvider={selectedProvider}
-                    uploadProps={uploadProps}
-                  />
-                  <AdvancedSettings 
-                    showAdvancedSettings={showAdvancedSettings}
-                    setShowAdvancedSettings={setShowAdvancedSettings}
-                  />
-                  
-
-                  <div className="flex justify-between items-center mb-4">
-                    <Tooltip title="Get help on our github">
-                      <Typography.Link href="https://github.com/BerriAI/litellm/issues">
-                        Need Help?
-                      </Typography.Link>
-                    </Tooltip>
-                    <Button2 htmlType="submit">Add Model</Button2>
-                  </div>
-                </>
-              </Form>
-            </Card>
-          </TabPanel>
-          <TabPanel>
-            <Card>
-              <Text>
-                `/health` will run a very small request through your models
-                configured on litellm
-              </Text>
-
-              <Button onClick={runHealthCheck}>Run `/health`</Button>
-              {healthCheckResponse && (
-                <pre>{JSON.stringify(healthCheckResponse, null, 2)}</pre>
-              )}
-            </Card>
-          </TabPanel>
-          <TabPanel>
-            <Grid numItems={4} className="mt-2 mb-2">
-              <Col>
-                <Text>Select Time Range</Text>
-                <DateRangePicker
-                  enableSelect={true}
-                  value={dateValue}
-                  className="mr-2"
-                  onValueChange={(value) => {
-                    setDateValue(value);
-                    updateModelMetrics(
-                      selectedModelGroup,
-                      value.from,
-                      value.to
-                    ); // Call updateModelMetrics with the new date range
+                    {availableModelGroups.map((group, idx) => (
+                      <SelectItem
+                        key={idx}
+                        value={group}
+                        onClick={() =>
+                          updateModelMetrics(group, dateValue.from, dateValue.to)
+                        }
+                      >
+                        {group}
+                      </SelectItem>
+                    ))}
+                  </Select>
+                </Col>
+                <Col>
+                <Popover
+                  trigger="click" content={FilterByContent}
+                  overlayStyle={{
+                    width: "20vw"
                   }}
-                />
-              </Col>
-              <Col className="ml-2">
-                <Text>Select Model Group</Text>
+                  >
+                <Button
+                icon={FilterIcon}
+                size="md"
+                variant="secondary"
+                className="mt-4 ml-2"
+                style={{
+                  border: "none",
+                }}
+                onClick={() => setShowAdvancedFilters(true)}
+                  >
+                </Button>      
+                </Popover>
+                </Col>
+
+                </Grid>
+
+
+              <Grid numItems={2}>
+                <Col>
+                  <Card className="mr-2 max-h-[400px] min-h-[400px]">
+                    <TabGroup>
+                      <TabList variant="line" defaultValue="1">
+                        <Tab value="1">Avg. Latency per Token</Tab>
+                        <Tab value="2">✨ Time to first token</Tab>
+                      </TabList>
+                      <TabPanels>
+                        <TabPanel>
+                          <p className="text-gray-500 italic"> (seconds/token)</p>
+                          <Text className="text-gray-500 italic mt-1 mb-1">
+                            average Latency for successfull requests divided by
+                            the total tokens
+                          </Text>
+                          {modelMetrics && modelMetricsCategories && (
+                            <AreaChart
+                              title="Model Latency"
+                              className="h-72"
+                              data={modelMetrics}
+                              showLegend={false}
+                              index="date"
+                              categories={modelMetricsCategories}
+                              connectNulls={true}
+                              customTooltip={customTooltip}
+                            />
+                          )}
+                        </TabPanel>
+                        <TabPanel>
+                          <TimeToFirstToken
+                            modelMetrics={streamingModelMetrics}
+                            modelMetricsCategories={
+                              streamingModelMetricsCategories
+                            }
+                            customTooltip={customTooltip}
+                            premiumUser={premiumUser}
+                          />
+                        </TabPanel>
+                      </TabPanels>
+                    </TabGroup>
+                  </Card>
+                </Col>
+                <Col>
+                  <Card className="ml-2 max-h-[400px] min-h-[400px]  overflow-y-auto">
+                    <Table>
+                      <TableHead>
+                        <TableRow>
+                          <TableHeaderCell>Deployment</TableHeaderCell>
+                          <TableHeaderCell>Success Responses</TableHeaderCell>
+                          <TableHeaderCell>
+                            Slow Responses <p>Success Responses taking 600+s</p>
+                          </TableHeaderCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {slowResponsesData.map((metric, idx) => (
+                          <TableRow key={idx}>
+                            <TableCell>{metric.api_base}</TableCell>
+                            <TableCell>{metric.total_count}</TableCell>
+                            <TableCell>{metric.slow_count}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </Card>
+                </Col>
+              </Grid>
+              <Grid numItems={1} className="gap-2 w-full mt-2">
+              <Card>
+
+              <Title>All Exceptions for {selectedModelGroup}</Title>
+               
+              <BarChart
+                      className="h-60"
+                      data={modelExceptions}
+                      index="model"
+                      categories={allExceptions}
+                      stack={true}
+                      
+                      yAxisWidth={30}
+                /> 
+                            </Card>
+            
+              </Grid>
+
+
+              <Grid numItems={1} className="gap-2 w-full mt-2">
+                  <Card>
+                  <Title>All Up Rate Limit Errors (429) for {selectedModelGroup}</Title>
+                  <Grid numItems={1}>
+                  <Col>
+                  <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Num Rate Limit Errors { (globalExceptionData.sum_num_rate_limit_exceptions)}</Subtitle>
+                  <BarChart
+                      className="h-40"
+                      data={globalExceptionData.daily_data}
+                      index="date"
+                      colors={['rose']}
+                      categories={['num_rate_limit_exceptions']}
+                      onValueChange={(v) => console.log(v)}
+                    />
+                    </Col>
+                    <Col>
+
+                 
+
+                  </Col>
+
+                  </Grid>
+                  
+
+                  </Card>
+
+                  {
+                    premiumUser ? ( 
+                      <>
+                      {globalExceptionPerDeployment.map((globalActivity, index) => (
+                    <Card key={index}>
+                      <Title>{globalActivity.api_base ? globalActivity.api_base : "Unknown API Base"}</Title>
+                      <Grid numItems={1}>
+                        <Col>
+                          <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Num Rate Limit Errors (429) {(globalActivity.sum_num_rate_limit_exceptions)}</Subtitle>
+                          <BarChart
+                            className="h-40"
+                            data={globalActivity.daily_data}
+                            index="date"
+                            colors={['rose']}
+                            categories={['num_rate_limit_exceptions']}
+                
+                            onValueChange={(v) => console.log(v)}
+                          />
+                          
+                        </Col>
+                      </Grid>
+                    </Card>
+                  ))}
+                      </>
+                    ) : 
+                    <>
+                    {globalExceptionPerDeployment && globalExceptionPerDeployment.length > 0 &&
+                      globalExceptionPerDeployment.slice(0, 1).map((globalActivity, index) => (
+                        <Card key={index}>
+                          <Title>✨ Rate Limit Errors by Deployment</Title>
+                          <p className="mb-2 text-gray-500 italic text-[12px]">Upgrade to see exceptions for all deployments</p>
+                          <Button variant="primary" className="mb-2">
+                            <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
+                              Get Free Trial
+                            </a>
+                          </Button>
+                          <Card>
+                          <Title>{globalActivity.api_base}</Title>
+                          <Grid numItems={1}>
+                            <Col>
+                              <Subtitle
+                                style={{
+                                  fontSize: "15px",
+                                  fontWeight: "normal",
+                                  color: "#535452",
+                                }}
+                              >
+                                Num Rate Limit Errors {(globalActivity.sum_num_rate_limit_exceptions)}
+                              </Subtitle>
+                              <BarChart
+                                  className="h-40"
+                                  data={globalActivity.daily_data}
+                                  index="date"
+                                  colors={['rose']}
+                                  categories={['num_rate_limit_exceptions']}
+                
+                                  onValueChange={(v) => console.log(v)}
+                                />
+                            </Col>
+                            
+                            
+                          </Grid>
+                          </Card>
+                        </Card>
+                      ))}
+                  </>
+                  }              
+                </Grid>
+                
+            </TabPanel>
+            <TabPanel>
+              <div className="flex items-center">
+                <Text>Filter by Public Model Name</Text>
+
                 <Select
+                  className="mb-4 mt-2 ml-2 w-50"
                   defaultValue={
                     selectedModelGroup
                       ? selectedModelGroup
@@ -1619,319 +1810,84 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       ? selectedModelGroup
                       : availableModelGroups[0]
                   }
+                  onValueChange={(value) => setSelectedModelGroup(value)}
                 >
                   {availableModelGroups.map((group, idx) => (
                     <SelectItem
                       key={idx}
                       value={group}
-                      onClick={() =>
-                        updateModelMetrics(group, dateValue.from, dateValue.to)
-                      }
+                      onClick={() => setSelectedModelGroup(group)}
                     >
                       {group}
                     </SelectItem>
                   ))}
                 </Select>
-              </Col>
-              <Col>
-              <Popover
-                trigger="click" content={FilterByContent}
-                overlayStyle={{
-                  width: "20vw"
-                }}
-                >
-              <Button
-              icon={FilterIcon}
-              size="md"
-              variant="secondary"
-              className="mt-4 ml-2"
-              style={{
-                border: "none",
-              }}
-              onClick={() => setShowAdvancedFilters(true)}
-                >
-              </Button>      
-              </Popover>
-              </Col>
-  
-              </Grid>
+              </div>
 
+              <Title>Retry Policy for {selectedModelGroup}</Title>
+              <Text className="mb-6">
+                How many retries should be attempted based on the Exception
+              </Text>
+              {retry_policy_map && (
+                <table>
+                  <tbody>
+                    {Object.entries(retry_policy_map).map(
+                      ([exceptionType, retryPolicyKey], idx) => {
+                        let retryCount =
+                          modelGroupRetryPolicy?.[selectedModelGroup!]?.[
+                            retryPolicyKey
+                          ];
+                        if (retryCount == null) {
+                          retryCount = defaultRetry;
+                        }
 
-            <Grid numItems={2}>
-              <Col>
-                <Card className="mr-2 max-h-[400px] min-h-[400px]">
-                  <TabGroup>
-                    <TabList variant="line" defaultValue="1">
-                      <Tab value="1">Avg. Latency per Token</Tab>
-                      <Tab value="2">✨ Time to first token</Tab>
-                    </TabList>
-                    <TabPanels>
-                      <TabPanel>
-                        <p className="text-gray-500 italic"> (seconds/token)</p>
-                        <Text className="text-gray-500 italic mt-1 mb-1">
-                          average Latency for successfull requests divided by
-                          the total tokens
-                        </Text>
-                        {modelMetrics && modelMetricsCategories && (
-                          <AreaChart
-                            title="Model Latency"
-                            className="h-72"
-                            data={modelMetrics}
-                            showLegend={false}
-                            index="date"
-                            categories={modelMetricsCategories}
-                            connectNulls={true}
-                            customTooltip={customTooltip}
-                          />
-                        )}
-                      </TabPanel>
-                      <TabPanel>
-                        <TimeToFirstToken
-                          modelMetrics={streamingModelMetrics}
-                          modelMetricsCategories={
-                            streamingModelMetricsCategories
-                          }
-                          customTooltip={customTooltip}
-                          premiumUser={premiumUser}
-                        />
-                      </TabPanel>
-                    </TabPanels>
-                  </TabGroup>
-                </Card>
-              </Col>
-              <Col>
-                <Card className="ml-2 max-h-[400px] min-h-[400px]  overflow-y-auto">
-                  <Table>
-                    <TableHead>
-                      <TableRow>
-                        <TableHeaderCell>Deployment</TableHeaderCell>
-                        <TableHeaderCell>Success Responses</TableHeaderCell>
-                        <TableHeaderCell>
-                          Slow Responses <p>Success Responses taking 600+s</p>
-                        </TableHeaderCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {slowResponsesData.map((metric, idx) => (
-                        <TableRow key={idx}>
-                          <TableCell>{metric.api_base}</TableCell>
-                          <TableCell>{metric.total_count}</TableCell>
-                          <TableCell>{metric.slow_count}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </Card>
-              </Col>
-            </Grid>
-            <Grid numItems={1} className="gap-2 w-full mt-2">
-            <Card>
-
-            <Title>All Exceptions for {selectedModelGroup}</Title>
-             
-            <BarChart
-                    className="h-60"
-                    data={modelExceptions}
-                    index="model"
-                    categories={allExceptions}
-                    stack={true}
-                    
-                    yAxisWidth={30}
-              /> 
-                          </Card>
-      
-            </Grid>
-
-
-            <Grid numItems={1} className="gap-2 w-full mt-2">
-                <Card>
-                <Title>All Up Rate Limit Errors (429) for {selectedModelGroup}</Title>
-                <Grid numItems={1}>
-                <Col>
-                <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Num Rate Limit Errors { (globalExceptionData.sum_num_rate_limit_exceptions)}</Subtitle>
-                <BarChart
-                    className="h-40"
-                    data={globalExceptionData.daily_data}
-                    index="date"
-                    colors={['rose']}
-                    categories={['num_rate_limit_exceptions']}
-                    onValueChange={(v) => console.log(v)}
-                  />
-                  </Col>
-                  <Col>
-
-               
-
-                </Col>
-
-                </Grid>
-                
-
-                </Card>
-
-                {
-                  premiumUser ? ( 
-                    <>
-                    {globalExceptionPerDeployment.map((globalActivity, index) => (
-                <Card key={index}>
-                  <Title>{globalActivity.api_base ? globalActivity.api_base : "Unknown API Base"}</Title>
-                  <Grid numItems={1}>
-                    <Col>
-                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Num Rate Limit Errors (429) {(globalActivity.sum_num_rate_limit_exceptions)}</Subtitle>
-                      <BarChart
-                        className="h-40"
-                        data={globalActivity.daily_data}
-                        index="date"
-                        colors={['rose']}
-                        categories={['num_rate_limit_exceptions']}
-          
-                        onValueChange={(v) => console.log(v)}
-                      />
-                      
-                    </Col>
-                  </Grid>
-                </Card>
-              ))}
-                    </>
-                  ) : 
-                  <>
-                  {globalExceptionPerDeployment && globalExceptionPerDeployment.length > 0 &&
-                    globalExceptionPerDeployment.slice(0, 1).map((globalActivity, index) => (
-                      <Card key={index}>
-                        <Title>✨ Rate Limit Errors by Deployment</Title>
-                        <p className="mb-2 text-gray-500 italic text-[12px]">Upgrade to see exceptions for all deployments</p>
-                        <Button variant="primary" className="mb-2">
-                          <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
-                            Get Free Trial
-                          </a>
-                        </Button>
-                        <Card>
-                        <Title>{globalActivity.api_base}</Title>
-                        <Grid numItems={1}>
-                          <Col>
-                            <Subtitle
-                              style={{
-                                fontSize: "15px",
-                                fontWeight: "normal",
-                                color: "#535452",
-                              }}
-                            >
-                              Num Rate Limit Errors {(globalActivity.sum_num_rate_limit_exceptions)}
-                            </Subtitle>
-                            <BarChart
-                                className="h-40"
-                                data={globalActivity.daily_data}
-                                index="date"
-                                colors={['rose']}
-                                categories={['num_rate_limit_exceptions']}
-                  
-                                onValueChange={(v) => console.log(v)}
+                        return (
+                          <tr
+                            key={idx}
+                            className="flex justify-between items-center mt-2"
+                          >
+                            <td>
+                              <Text>{exceptionType}</Text>
+                            </td>
+                            <td>
+                              <InputNumber
+                                className="ml-5"
+                                value={retryCount}
+                                min={0}
+                                step={1}
+                                onChange={(value) => {
+                                  setModelGroupRetryPolicy(
+                                    (prevModelGroupRetryPolicy) => {
+                                      const prevRetryPolicy =
+                                        prevModelGroupRetryPolicy?.[
+                                          selectedModelGroup!
+                                        ] ?? {};
+                                      return {
+                                        ...(prevModelGroupRetryPolicy ?? {}),
+                                        [selectedModelGroup!]: {
+                                          ...prevRetryPolicy,
+                                          [retryPolicyKey!]: value,
+                                        },
+                                      } as RetryPolicyObject;
+                                    }
+                                  );
+                                }}
                               />
-                          </Col>
-                          
-                          
-                        </Grid>
-                        </Card>
-                      </Card>
-                    ))}
-                </>
-                }              
-              </Grid>
-              
-          </TabPanel>
-          <TabPanel>
-            <div className="flex items-center">
-              <Text>Filter by Public Model Name</Text>
-
-              <Select
-                className="mb-4 mt-2 ml-2 w-50"
-                defaultValue={
-                  selectedModelGroup
-                    ? selectedModelGroup
-                    : availableModelGroups[0]
-                }
-                value={
-                  selectedModelGroup
-                    ? selectedModelGroup
-                    : availableModelGroups[0]
-                }
-                onValueChange={(value) => setSelectedModelGroup(value)}
-              >
-                {availableModelGroups.map((group, idx) => (
-                  <SelectItem
-                    key={idx}
-                    value={group}
-                    onClick={() => setSelectedModelGroup(group)}
-                  >
-                    {group}
-                  </SelectItem>
-                ))}
-              </Select>
-            </div>
-
-            <Title>Retry Policy for {selectedModelGroup}</Title>
-            <Text className="mb-6">
-              How many retries should be attempted based on the Exception
-            </Text>
-            {retry_policy_map && (
-              <table>
-                <tbody>
-                  {Object.entries(retry_policy_map).map(
-                    ([exceptionType, retryPolicyKey], idx) => {
-                      let retryCount =
-                        modelGroupRetryPolicy?.[selectedModelGroup!]?.[
-                          retryPolicyKey
-                        ];
-                      if (retryCount == null) {
-                        retryCount = defaultRetry;
+                            </td>
+                          </tr>
+                        );
                       }
-
-                      return (
-                        <tr
-                          key={idx}
-                          className="flex justify-between items-center mt-2"
-                        >
-                          <td>
-                            <Text>{exceptionType}</Text>
-                          </td>
-                          <td>
-                            <InputNumber
-                              className="ml-5"
-                              value={retryCount}
-                              min={0}
-                              step={1}
-                              onChange={(value) => {
-                                setModelGroupRetryPolicy(
-                                  (prevModelGroupRetryPolicy) => {
-                                    const prevRetryPolicy =
-                                      prevModelGroupRetryPolicy?.[
-                                        selectedModelGroup!
-                                      ] ?? {};
-                                    return {
-                                      ...(prevModelGroupRetryPolicy ?? {}),
-                                      [selectedModelGroup!]: {
-                                        ...prevRetryPolicy,
-                                        [retryPolicyKey!]: value,
-                                      },
-                                    } as RetryPolicyObject;
-                                  }
-                                );
-                              }}
-                            />
-                          </td>
-                        </tr>
-                      );
-                    }
-                  )}
-                </tbody>
-              </table>
-            )}
-            <Button className="mt-6 mr-8" onClick={handleSaveRetrySettings}>
-              Save
-            </Button>
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+                    )}
+                  </tbody>
+                </table>
+              )}
+              <Button className="mt-6 mr-8" onClick={handleSaveRetrySettings}>
+                Save
+              </Button>
+            </TabPanel>
+          </TabPanels>
+        </TabGroup>
+      )}
     </div>  
   );
 };

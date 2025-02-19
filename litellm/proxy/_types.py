@@ -2,10 +2,17 @@ import enum
 import json
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, Json, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    Json,
+    field_validator,
+    model_validator,
+)
 from typing_extensions import Required, TypedDict
 
 from litellm.types.integrations.slack_alerting import AlertType
@@ -22,6 +29,8 @@ from litellm.types.utils import (
     StandardPassThroughResponseObject,
     TextCompletionResponse,
 )
+
+from .types_utils.utils import get_instance_fn, validate_custom_validate_return_type
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -393,6 +402,7 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/info",
         "/organization/delete",
         "/organization/member_add",
+        "/organization/member_update",
     ]
 
     # All routes accesible by an Org Admin
@@ -1110,6 +1120,10 @@ class OrganizationRequest(LiteLLMPydanticObjectBase):
     organizations: List[str]
 
 
+class DeleteOrganizationRequest(LiteLLMPydanticObjectBase):
+    organization_ids: List[str]  # required
+
+
 class KeyManagementSystem(enum.Enum):
     GOOGLE_KMS = "google_kms"
     AZURE_KEY_VAULT = "azure_key_vault"
@@ -1487,15 +1501,33 @@ class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
     organization_id: Optional[str] = None
     organization_alias: Optional[str] = None
     budget_id: str
+    spend: float = 0.0
     metadata: Optional[dict] = None
     models: List[str]
     created_by: str
     updated_by: str
 
 
+class LiteLLM_OrganizationTableUpdate(LiteLLMPydanticObjectBase):
+    """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
+
+    organization_id: Optional[str] = None
+    organization_alias: Optional[str] = None
+    budget_id: Optional[str] = None
+    spend: Optional[float] = None
+    metadata: Optional[dict] = None
+    models: Optional[List[str]] = None
+    updated_by: Optional[str] = None
+
+
 class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
-    members: List[LiteLLM_OrganizationMembershipTable]
-    teams: List[LiteLLM_TeamTable]
+    """Returned by the /organization/info endpoint and /organization/list endpoint"""
+
+    members: List[LiteLLM_OrganizationMembershipTable] = []
+    teams: List[LiteLLM_TeamTable] = []
+    litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class NewOrganizationResponse(LiteLLM_OrganizationTable):
@@ -1518,6 +1550,8 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     organization_memberships: Optional[List[LiteLLM_OrganizationMembershipTable]] = None
     teams: List[str] = []
     sso_user_id: Optional[str] = None
+    budget_duration: Optional[str] = None
+    budget_reset_at: Optional[datetime] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -2091,8 +2125,26 @@ class OrganizationMemberDeleteRequest(MemberDeleteRequest):
     organization_id: str
 
 
+ROLES_WITHIN_ORG = [
+    LitellmUserRoles.ORG_ADMIN,
+    LitellmUserRoles.INTERNAL_USER,
+    LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+]
+
+
 class OrganizationMemberUpdateRequest(OrganizationMemberDeleteRequest):
-    max_budget_in_organization: float
+    max_budget_in_organization: Optional[float] = None
+    role: Optional[LitellmUserRoles] = None
+
+    @field_validator("role")
+    def validate_role(
+        cls, value: Optional[LitellmUserRoles]
+    ) -> Optional[LitellmUserRoles]:
+        if value is not None and value not in ROLES_WITHIN_ORG:
+            raise ValueError(
+                f"Invalid role. Must be one of: {[role.value for role in ROLES_WITHIN_ORG]}"
+            )
+        return value
 
 
 class OrganizationMemberUpdateResponse(MemberUpdateResponse):
@@ -2345,6 +2397,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     - public_key_ttl: Default - 600s. TTL for caching public JWT keys.
     - public_allowed_routes: list of allowed routes for authenticated but unknown litellm role jwt tokens.
     - enforce_rbac: If true, enforce RBAC for all routes.
+    - custom_validate: A custom function to validates the JWT token.
 
     See `auth_checks.py` for the specific routes
     """
@@ -2389,6 +2442,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     scope_mappings: Optional[List[ScopeMapping]] = None
     enforce_scope_based_access: bool = False
     enforce_team_based_model_access: bool = False
+    custom_validate: Optional[Callable[..., Literal[True]]] = None
 
     def __init__(self, **kwargs: Any) -> None:
         # get the attribute names for this Pydantic model
@@ -2401,6 +2455,12 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         role_mappings = kwargs.get("role_mappings")
         scope_mappings = kwargs.get("scope_mappings")
         enforce_scope_based_access = kwargs.get("enforce_scope_based_access")
+        custom_validate = kwargs.get("custom_validate")
+
+        if custom_validate is not None:
+            fn = get_instance_fn(custom_validate)
+            validate_custom_validate_return_type(fn)
+            kwargs["custom_validate"] = fn
 
         if invalid_keys:
             raise ValueError(

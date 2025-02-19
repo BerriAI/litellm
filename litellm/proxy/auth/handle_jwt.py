@@ -862,6 +862,14 @@ class JWTAuthManager:
         """Main authentication and authorization builder"""
         jwt_valid_token: dict = await jwt_handler.auth_jwt(token=api_key)
 
+        # Check custom validate
+        if jwt_handler.litellm_jwtauth.custom_validate:
+            if not jwt_handler.litellm_jwtauth.custom_validate(jwt_valid_token):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Invalid JWT token",
+                )
+
         # Check RBAC
         rbac_role = jwt_handler.get_rbac_role(token=jwt_valid_token)
         await JWTAuthManager.check_rbac_role(

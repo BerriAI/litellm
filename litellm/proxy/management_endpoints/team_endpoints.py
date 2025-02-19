@@ -55,6 +55,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
@@ -66,17 +67,6 @@ from litellm.proxy.utils import (
 )
 
 router = APIRouter()
-
-
-def _is_user_team_admin(
-    user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable
-) -> bool:
-
-    for member in team_obj.members_with_roles:
-        if member.user_id is not None and member.user_id == user_api_key_dict.user_id:
-            return True
-
-    return False
 
 
 def _is_available_team(team_id: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
@@ -1189,6 +1179,30 @@ async def delete_team(
         team_id_list=data.team_ids, table_name="team"
     )
     return deleted_teams
+
+
+def validate_membership(
+    user_api_key_dict: UserAPIKeyAuth, team_table: LiteLLM_TeamTable
+):
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+
+    if (
+        user_api_key_dict.team_id == team_table.team_id
+    ):  # allow team keys to check their info
+        return
+
+    if user_api_key_dict.user_id not in [
+        m.user_id for m in team_table.members_with_roles
+    ]:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "User={} not authorized to access this team={}".format(
+                    user_api_key_dict.user_id, team_table.team_id
+                )
+            },
+        )
 
 
 @router.get(

@@ -26,10 +26,16 @@ from fastapi.routing import APIRoute
 from fastapi.responses import Response
 import litellm
 from litellm.caching.caching import DualCache
-from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_UserTable, LiteLLMRoutes
-from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy._types import (
+    LiteLLM_JWTAuth,
+    LiteLLM_UserTable,
+    LiteLLMRoutes,
+    JWTAuthBuilderResult,
+)
+from litellm.proxy.auth.handle_jwt import JWTHandler, JWTAuthManager
 from litellm.proxy.management_endpoints.team_endpoints import new_team
 from litellm.proxy.proxy_server import chat_completion
+from typing import Literal
 
 public_key = {
     "kty": "RSA",
@@ -1247,3 +1253,32 @@ def test_check_scope_based_access(requested_model, should_work):
     else:
         with pytest.raises(HTTPException):
             JWTAuthManager.check_scope_based_access(**args)
+
+
+@pytest.mark.asyncio
+async def test_custom_validate_called():
+    # Setup
+    mock_custom_validate = MagicMock(return_value=True)
+
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = MagicMock(
+        custom_validate=mock_custom_validate, allowed_routes=["/chat/completions"]
+    )
+    jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "test_user"})
+
+    try:
+        await JWTAuthManager.auth_builder(
+            api_key="test",
+            jwt_handler=jwt_handler,
+            request_data={},
+            general_settings={},
+            route="/chat/completions",
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+    except Exception:
+        pass
+    # Assert custom_validate was called with the jwt token
+    mock_custom_validate.assert_called_once_with({"sub": "test_user"})
