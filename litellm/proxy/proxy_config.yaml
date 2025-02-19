@@ -1,15 +1,27 @@
 model_list:
   - model_name: fake-openai-endpoint
     litellm_params:
-      model: openai/my-fake-model
+      model: openai/my-fake-model  # Ensure consistency with config.yaml
       api_key: my-fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
-
+    model_info:
+      mode: chat
+      disable_health_check: true  # Prevents health check loop
 
 general_settings:
+  master_key: sk-1234  # Add only if authentication is required
   store_model_in_db: true
-
+  background_health_checks: true
+  health_check_interval: 300
+  health_check_details: true
+  proxy_budget_rescheduler_min_time: 60
+  proxy_budget_rescheduler_max_time: 64
+  proxy_batch_write_at: 1
 
 litellm_settings:
-  callbacks: ["gcs_bucket"]
-
+  #callbacks: ["gcs_bucket"]
+  drop_params: True
+  num_retries: 5
+  request_timeout: 600
+  telemetry: False
+  context_window_fallbacks: [{"gpt-3.5-turbo": ["gpt-3.5-turbo-large"]}]

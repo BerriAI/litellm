@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import logging
 import inspect
 import io
 import os
@@ -727,8 +728,8 @@ user_config_file_path: Optional[str] = None
 local_logging = True  # writes logs to a local api_log.json file for debugging
 experimental = False
 #### GLOBAL VARIABLES ####
-llm_router: Optional[Router] = None
-llm_model_list: Optional[list] = None
+llm_router: Optional[Router] = []
+llm_model_list: Optional[list] = []
 general_settings: dict = {}
 callback_settings: dict = {}
 log_file = "api_log.json"
@@ -1413,35 +1414,50 @@ def run_ollama_serve():
         )
 
 
+MAX_HEALTH_CHECK_RETRIES = 3  # Maximum retries before stopping health checks
+
 async def _run_background_health_check():
     """
     Periodically run health checks in the background on the endpoints.
 
-    Update health_check_results, based on this.
+    Updates health_check_results based on this.
     """
-    global health_check_results, llm_model_list, health_check_interval, health_check_details
+    global health_check_results, llm_model_list, health_check_interval, health_check_details, use_background_health_checks
 
-    # make 1 deep copy of llm_model_list -> use this for all background health checks
     _llm_model_list = copy.deepcopy(llm_model_list)
 
-    if _llm_model_list is None:
+    if not _llm_model_list:
         return
 
-    while True:
-        healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-            model_list=_llm_model_list, details=health_check_details
-        )
+    health_check_retries = 0
 
-        # Update the global variable with the health check results
-        health_check_results["healthy_endpoints"] = healthy_endpoints
-        health_check_results["unhealthy_endpoints"] = unhealthy_endpoints
-        health_check_results["healthy_count"] = len(healthy_endpoints)
-        health_check_results["unhealthy_count"] = len(unhealthy_endpoints)
+    while use_background_health_checks:
+        try:
+            healthy_endpoints, unhealthy_endpoints = await perform_health_check(
+                model_list=_llm_model_list, details=health_check_details
+            )
 
-        if health_check_interval is not None and isinstance(
-            health_check_interval, float
-        ):
+            health_check_results.update({
+                "healthy_endpoints": healthy_endpoints,
+                "unhealthy_endpoints": unhealthy_endpoints,
+                "healthy_count": len(healthy_endpoints),
+                "unhealthy_count": len(unhealthy_endpoints),
+            })
+
+            if not unhealthy_endpoints:
+                break
+
+            health_check_retries += 1
+            if health_check_retries >= MAX_HEALTH_CHECK_RETRIES:
+                break
+
+        except Exception:
+            pass
+
+        if isinstance(health_check_interval, float):
             await asyncio.sleep(health_check_interval)
+
+
 
 
 class ProxyConfig:

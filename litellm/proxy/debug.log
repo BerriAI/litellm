@@ -1,0 +1,32 @@
+2025-02-12 01:08:03,540 - DEBUG - Starting LiteLLM proxy server with detailed debugging...
+2025-02-12 01:08:04,263 - DEBUG - connect_tcp.started host='raw.githubusercontent.com' port=443 local_address=None timeout=5 socket_options=None
+2025-02-12 01:08:04,299 - DEBUG - connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x10af015e0>
+2025-02-12 01:08:04,299 - DEBUG - start_tls.started ssl_context=<ssl.SSLContext object at 0x10add3ec0> server_hostname='raw.githubusercontent.com' timeout=5
+2025-02-12 01:08:04,330 - DEBUG - start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x10af015b0>
+2025-02-12 01:08:04,331 - DEBUG - send_request_headers.started request=<Request [b'GET']>
+2025-02-12 01:08:04,331 - DEBUG - send_request_headers.complete
+2025-02-12 01:08:04,331 - DEBUG - send_request_body.started request=<Request [b'GET']>
+2025-02-12 01:08:04,331 - DEBUG - send_request_body.complete
+2025-02-12 01:08:04,331 - DEBUG - receive_response_headers.started request=<Request [b'GET']>
+2025-02-12 01:08:04,359 - DEBUG - receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Connection', b'keep-alive'), (b'Content-Length', b'15898'), (b'Cache-Control', b'max-age=300'), (b'Content-Security-Policy', b"default-src 'none'; style-src 'unsafe-inline'; sandbox"), (b'Content-Type', b'text/plain; charset=utf-8'), (b'ETag', b'W/"388c0fea924c2d4f9b4f2762c064907631858077e46f3dca2a0e1dd2dd1cbac5"'), (b'Strict-Transport-Security', b'max-age=31536000'), (b'X-Content-Type-Options', b'nosniff'), (b'X-Frame-Options', b'deny'), (b'X-XSS-Protection', b'1; mode=block'), (b'X-GitHub-Request-Id', b'E6CB:16DE7A:41308D:486A87:67AC4292'), (b'Content-Encoding', b'gzip'), (b'Accept-Ranges', b'bytes'), (b'Date', b'Wed, 12 Feb 2025 07:08:04 GMT'), (b'Via', b'1.1 varnish'), (b'X-Served-By', b'cache-chi-kigq8000062-CHI'), (b'X-Cache', b'HIT'), (b'X-Cache-Hits', b'1'), (b'X-Timer', b'S1739344084.365068,VS0,VE1'), (b'Vary', b'Authorization,Accept-Encoding,Origin'), (b'Access-Control-Allow-Origin', b'*'), (b'Cross-Origin-Resource-Policy', b'cross-origin'), (b'X-Fastly-Request-ID', b'00dc8c29ed130232244541b7cc6780a2b17eab01'), (b'Expires', b'Wed, 12 Feb 2025 07:13:04 GMT'), (b'Source-Age', b'100')])
+2025-02-12 01:08:04,359 - INFO - HTTP Request: GET https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json "HTTP/1.1 200 OK"
+2025-02-12 01:08:04,359 - DEBUG - receive_response_body.started request=<Request [b'GET']>
+2025-02-12 01:08:04,360 - DEBUG - receive_response_body.complete
+2025-02-12 01:08:04,360 - DEBUG - response_closed.started
+2025-02-12 01:08:04,360 - DEBUG - response_closed.complete
+2025-02-12 01:08:04,361 - DEBUG - close.started
+2025-02-12 01:08:04,361 - DEBUG - close.complete
+2025-02-12 01:08:04,889 - DEBUG - License Str value - None
+2025-02-12 01:08:04,894 - DEBUG - litellm.proxy.auth.litellm_license.py::is_premium() - ENTERING 'IS_PREMIUM' - LiteLLM License=None
+2025-02-12 01:08:04,894 - DEBUG - litellm.proxy.auth.litellm_license.py::is_premium() - Updated 'self.license_str' - None
+2025-02-12 01:08:04,899 - DEBUG - Using selector: KqueueSelector
+2025-02-12 01:08:11,747 - DEBUG - Starting LiteLLM proxy server with detailed debugging...
+2025-02-12 01:08:11,750 - DEBUG - License Str value - None
+2025-02-12 01:08:11,757 - DEBUG - litellm.proxy.auth.litellm_license.py::is_premium() - ENTERING 'IS_PREMIUM' - LiteLLM License=None
+2025-02-12 01:08:11,757 - DEBUG - litellm.proxy.auth.litellm_license.py::is_premium() - Updated 'self.license_str' - None
+2025-02-12 01:08:11,758 - DEBUG - Custom logger of type _PROXY_VirtualKeyModelMaxBudgetLimiter, key: _PROXY_VirtualKeyModelMaxBudgetLimiter already exists in [<litellm.proxy.hooks.model_max_budget_limiter._PROXY_VirtualKeyModelMaxBudgetLimiter object at 0x11c295040>], not adding again..
+2025-02-12 01:08:13,632 - DEBUG - Starting LiteLLM proxy server with detailed debugging...
+2025-02-12 01:08:13,650 - DEBUG - License Str value - None
+2025-02-12 01:08:13,659 - DEBUG - litellm.proxy.auth.litellm_license.py::is_premium() - ENTERING 'IS_PREMIUM' - LiteLLM License=None
+2025-02-12 01:08:13,660 - DEBUG - litellm.proxy.auth.litellm_license.py::is_premium() - Updated 'self.license_str' - None
+2025-02-12 01:08:13,661 - DEBUG - Custom logger of type _PROXY_VirtualKeyModelMaxBudgetLimiter, key: _PROXY_VirtualKeyModelMaxBudgetLimiter already exists in [<litellm.proxy.hooks.model_max_budget_limiter._PROXY_VirtualKeyModelMaxBudgetLimiter object at 0x11c295040>], not adding again..
