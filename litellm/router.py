@@ -4935,14 +4935,14 @@ class Router:
             str: The `team_public_model_name` if team_id matches
             None: If team_id doesn't match or no team info exists
         """
-        model_info: Optional[ModelInfo] = deployment.get("model_info")
+        model_info: Optional[Dict] = deployment.get("model_info") or {}
         if model_info is None:
             return None
-        if team_id == model_info.team_id:
-            return model_info.team_public_model_name
+        if team_id == model_info.get("team_id"):
+            return model_info.get("team_public_model_name")
         return None
 
-    def _is_team_specific_model(self, model_info: Optional[ModelInfo]) -> bool:
+    def _is_team_specific_model(self, model_info: Optional[Dict]) -> bool:
         """
         Check if model info contains team-specific configuration.
 
