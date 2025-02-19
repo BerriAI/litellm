@@ -3448,7 +3448,6 @@ type = ["pytest-mypy"]
 
 [extras]
 extra-proxy = ["azure-identity", "azure-keyvault-secrets", "google-cloud-kms", "prisma", "resend"]
-huggingface = ["huggingface-hub"]
 proxy = ["PyJWT", "apscheduler", "backoff", "cryptography", "fastapi", "fastapi-sso", "gunicorn", "orjson", "pynacl", "python-multipart", "pyyaml", "rq", "uvicorn", "uvloop"]
 
 [metadata]

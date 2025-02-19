@@ -7,9 +7,7 @@ from typing import (
     List,
     Literal,
     Optional,
-    Tuple,
     Union,
-    cast,
     get_args,
 )
 
@@ -22,28 +20,31 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
 )
-
 from litellm.types.utils import EmbeddingResponse
-from litellm.types.utils import Logprobs as TextCompletionLogprobs
-
+from .transformation import HuggingFaceEmbeddingConfig
 from ...base import BaseLLM
-from ..common_utils import HuggingFaceError, _validate_environment
+from ..common_utils import HuggingFaceError
+
+config = HuggingFaceEmbeddingConfig()
 
 
-
-hf_tasks_embeddings = (
-    Literal[  # pipeline tags + hf tei endpoints - https://huggingface.github.io/text-embeddings-inference/#/
-        "sentence-similarity", "feature-extraction", "rerank", "embed", "similarity"
-    ]
-)
+hf_tasks_embeddings = Literal[  # pipeline tags + hf tei endpoints - https://huggingface.github.io/text-embeddings-inference/#/
+    "sentence-similarity", "feature-extraction", "rerank", "embed", "similarity"
+]
 
 
-def get_hf_task_embedding_for_model(model: str, task_type: Optional[str], api_base: str) -> Optional[str]:
+def get_hf_task_embedding_for_model(
+    model: str, task_type: Optional[str], api_base: str
+) -> Optional[str]:
     if task_type is not None:
         if task_type in get_args(hf_tasks_embeddings):
             return task_type
         else:
-            raise Exception("Invalid task_type={}. Expected one of={}".format(task_type, hf_tasks_embeddings))
+            raise Exception(
+                "Invalid task_type={}. Expected one of={}".format(
+                    task_type, hf_tasks_embeddings
+                )
+            )
     http_client = HTTPHandler(concurrent_limit=1)
 
     model_info = http_client.get(url=api_base)
@@ -55,12 +56,18 @@ def get_hf_task_embedding_for_model(model: str, task_type: Optional[str], api_ba
     return pipeline_tag
 
 
-async def async_get_hf_task_embedding_for_model(model: str, task_type: Optional[str], api_base: str) -> Optional[str]:
+async def async_get_hf_task_embedding_for_model(
+    model: str, task_type: Optional[str], api_base: str
+) -> Optional[str]:
     if task_type is not None:
         if task_type in get_args(hf_tasks_embeddings):
             return task_type
         else:
-            raise Exception("Invalid task_type={}. Expected one of={}".format(task_type, hf_tasks_embeddings))
+            raise Exception(
+                "Invalid task_type={}. Expected one of={}".format(
+                    task_type, hf_tasks_embeddings
+                )
+            )
     http_client = get_async_httpx_client(
         llm_provider=litellm.LlmProviders.HUGGINGFACE,
     )
@@ -73,58 +80,16 @@ async def async_get_hf_task_embedding_for_model(model: str, task_type: Optional[
 
     return pipeline_tag
 
-
-async def make_call(
-    client: Optional[AsyncHTTPHandler],
-    api_base: str,
-    headers: dict,
-    data: str,
-    model: str,
-    messages: list,
-    logging_obj,
-    timeout: Optional[Union[float, httpx.Timeout]],
-    json_mode: bool,
-) -> Tuple[Any, httpx.Headers]:
-    if client is None:
-        client = litellm.module_level_aclient
-
-    try:
-        response = await client.post(api_base, headers=headers, data=data, stream=True, timeout=timeout)
-    except httpx.HTTPStatusError as e:
-        error_headers = getattr(e, "headers", None)
-        error_response = getattr(e, "response", None)
-        if error_headers is None and error_response:
-            error_headers = getattr(error_response, "headers", None)
-        raise HuggingFaceError(
-            status_code=e.response.status_code,
-            message=str(await e.response.aread()),
-            headers=cast(dict, error_headers) if error_headers else None,
-        )
-    except Exception as e:
-        for exception in litellm.LITELLM_EXCEPTION_TYPES:
-            if isinstance(e, exception):
-                raise e
-        raise HuggingFaceError(status_code=500, message=str(e))
-
-    # LOGGING
-    logging_obj.post_call(
-        input=messages,
-        api_key="",
-        original_response=response,  # Pass the completion stream for logging
-        additional_args={"complete_input_dict": data},
-    )
-
-    return response.aiter_lines(), response.headers
-
-
-class HFEmbedding(BaseLLM):
+class HuggingFaceEmbedding(BaseLLM):
     _client_session: Optional[httpx.Client] = None
     _aclient_session: Optional[httpx.AsyncClient] = None
 
     def __init__(self) -> None:
         super().__init__()
 
-    def _transform_input_on_pipeline_tag(self, input: List, pipeline_tag: Optional[str]) -> dict:
+    def _transform_input_on_pipeline_tag(
+        self, input: List, pipeline_tag: Optional[str]
+    ) -> dict:
         if pipeline_tag is None:
             return {"inputs": input}
         if pipeline_tag == "sentence-similarity" or pipeline_tag == "similarity":
@@ -151,7 +116,9 @@ class HFEmbedding(BaseLLM):
         input: List,
         optional_params: dict,
     ) -> dict:
-        hf_task = await async_get_hf_task_embedding_for_model(model=model, task_type=task_type, api_base=embed_url)
+        hf_task = await async_get_hf_task_embedding_for_model(
+            model=model, task_type=task_type, api_base=embed_url
+        )
 
         data = self._transform_input_on_pipeline_tag(input=input, pipeline_tag=hf_task)
 
@@ -161,7 +128,7 @@ class HFEmbedding(BaseLLM):
         return data
 
     def _process_optional_params(self, data: dict, optional_params: dict) -> dict:
-        special_options_keys = ["use_cache", "wait_for_model"]
+        special_options_keys = config.get_special_options_params()
         special_parameters_keys = [
             "min_length",
             "max_length",
@@ -208,14 +175,22 @@ class HFEmbedding(BaseLLM):
             task_type = optional_params.pop("input_type", None)
 
             if call_type == "sync":
-                hf_task = get_hf_task_embedding_for_model(model=model, task_type=task_type, api_base=embed_url)
+                hf_task = get_hf_task_embedding_for_model(
+                    model=model, task_type=task_type, api_base=embed_url
+                )
             elif call_type == "async":
-                return self._async_transform_input(model=model, task_type=task_type, embed_url=embed_url, input=input)  # type: ignore
+                return self._async_transform_input(
+                    model=model, task_type=task_type, embed_url=embed_url, input=input
+                )  # type: ignore
 
-            data = self._transform_input_on_pipeline_tag(input=input, pipeline_tag=hf_task)
+            data = self._transform_input_on_pipeline_tag(
+                input=input, pipeline_tag=hf_task
+            )
 
         if len(optional_params.keys()) > 0:
-            data = self._process_optional_params(data=data, optional_params=optional_params)
+            data = self._process_optional_params(
+                data=data, optional_params=optional_params
+            )
 
         return data
 
@@ -260,7 +235,9 @@ class HFEmbedding(BaseLLM):
                         {
                             "object": "embedding",
                             "index": idx,
-                            "embedding": embedding[0][0],  # flatten list returned from hf
+                            "embedding": embedding[0][
+                                0
+                            ],  # flatten list returned from hf
                         }
                     )
         model_response.object = "list"
@@ -362,7 +339,7 @@ class HFEmbedding(BaseLLM):
         headers={},
     ) -> EmbeddingResponse:
         super().embedding()
-        headers = _validate_environment(
+        headers = config.validate_environment(
             api_key=api_key,
             headers=headers,
             model=model,
@@ -444,71 +421,3 @@ class HFEmbedding(BaseLLM):
             input=input,
             encoding=encoding,
         )
-
-    def _transform_logprobs(self, hf_response: Optional[List]) -> Optional[TextCompletionLogprobs]:
-        """
-        Transform Hugging Face logprobs to OpenAI.Completion() format
-        """
-        if hf_response is None:
-            return None
-
-        # Initialize an empty list for the transformed logprobs
-        _logprob: TextCompletionLogprobs = TextCompletionLogprobs(
-            text_offset=[],
-            token_logprobs=[],
-            tokens=[],
-            top_logprobs=[],
-        )
-
-        # For each Hugging Face response, transform the logprobs
-        for response in hf_response:
-            # Extract the relevant information from the response
-            response_details = response["details"]
-            top_tokens = response_details.get("top_tokens", {})
-
-            for i, token in enumerate(response_details["prefill"]):
-                # Extract the text of the token
-                token_text = token["text"]
-
-                # Extract the logprob of the token
-                token_logprob = token["logprob"]
-
-                # Add the token information to the 'token_info' list
-                cast(List[str], _logprob.tokens).append(token_text)
-                cast(List[float], _logprob.token_logprobs).append(token_logprob)
-
-                # stub this to work with llm eval harness
-                top_alt_tokens = {"": -1.0, "": -2.0, "": -3.0}  # noqa: F601
-                cast(List[Dict[str, float]], _logprob.top_logprobs).append(top_alt_tokens)
-
-            # For each element in the 'tokens' list, extract the relevant information
-            for i, token in enumerate(response_details["tokens"]):
-                # Extract the text of the token
-                token_text = token["text"]
-
-                # Extract the logprob of the token
-                token_logprob = token["logprob"]
-
-                top_alt_tokens = {}
-                temp_top_logprobs = []
-                if top_tokens != {}:
-                    temp_top_logprobs = top_tokens[i]
-
-                # top_alt_tokens should look like this: { "alternative_1": -1, "alternative_2": -2, "alternative_3": -3 }
-                for elem in temp_top_logprobs:
-                    text = elem["text"]
-                    logprob = elem["logprob"]
-                    top_alt_tokens[text] = logprob
-
-                # Add the token information to the 'token_info' list
-                cast(List[str], _logprob.tokens).append(token_text)
-                cast(List[float], _logprob.token_logprobs).append(token_logprob)
-                cast(List[Dict[str, float]], _logprob.top_logprobs).append(top_alt_tokens)
-
-                # Add the text offset of the token
-                # This is computed as the sum of the lengths of all previous tokens
-                cast(List[int], _logprob.text_offset).append(
-                    sum(len(t["text"]) for t in response_details["tokens"][:i])
-                )
-
-        return _logprob

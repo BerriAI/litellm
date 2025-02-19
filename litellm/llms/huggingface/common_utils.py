@@ -1,8 +1,12 @@
-from typing import Dict, Optional, Union
+from typing import Literal, Optional, Union
 
 import httpx
-
+import os
+from functools import lru_cache
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+
+HF_HUB_URL = "https://huggingface.co"
 
 
 class HuggingFaceError(BaseLLMException):
@@ -23,6 +27,21 @@ class HuggingFaceError(BaseLLMException):
         )
 
 
+hf_tasks = Literal[
+    "text-generation-inference",
+    "conversational",
+    "text-classification",
+    "text-generation",
+]
+
+hf_task_list = [
+    "text-generation-inference",
+    "conversational",
+    "text-classification",
+    "text-generation",
+]
+
+
 def output_parser(generated_text: str):
     """
     Parse the output text to remove any special characters. In our current approach we just check for ChatML tokens.
@@ -38,15 +57,40 @@ def output_parser(generated_text: str):
     return generated_text
 
 
-def _validate_environment(
-    headers: Dict,
-    api_key: Optional[str] = None,
-) -> Dict:
-    default_headers = {
-        "content-type": "application/json",
-    }
-    if api_key is not None:
-        default_headers["Authorization"] = f"Bearer {api_key}"
-
-    headers = {**headers, **default_headers}
-    return headers
+@lru_cache(maxsize=None)
+def _fetch_inference_provider_mapping(model: str) -> dict:
+    """
+    Fetch provider mappings for a model from the Hugging Face Hub.
+    
+    Args:
+        model: The model identifier (e.g., 'meta-llama/Llama-2-7b')
+    
+    Returns:
+        dict: The inference provider mapping for the model
+        
+    Raises:
+        ValueError: If no provider mapping is found
+        HuggingFaceError: If the API request fails
+    """
+    headers = {"Accept": "application/json"}
+    if os.getenv("HUGGINGFACE_API_KEY"):
+        headers["Authorization"] = f"Bearer {os.getenv('HUGGINGFACE_API_KEY')}"
+    
+    path = f"{HF_HUB_URL}/api/models/{model}"
+    params = {"expand": ["inferenceProviderMapping"]}
+    
+    try:
+        response = httpx.get(path, headers=headers, params=params)
+        response.raise_for_status()
+        provider_mapping = response.json().get("inferenceProviderMapping")
+        
+        if provider_mapping is None:
+            raise ValueError(f"No provider mapping found for model {model}")
+        
+        return provider_mapping
+    except httpx.HTTPError as e:
+        raise HuggingFaceError(
+            message=f"Failed to fetch provider mapping: {str(e)}", 
+            status_code=getattr(e.response, 'status_code', 500),
+            headers=getattr(e.response, 'headers', {})
+        )

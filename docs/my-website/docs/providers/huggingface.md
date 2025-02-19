@@ -6,7 +6,7 @@ import TabItem from '@theme/TabItem';
 LiteLLM supports running inference across multiple services for models hosted on the Hugging Face Hub.
 
 - **Serverless Inference Providers** - Hugging Face offers an easy and unified access to serverless AI inference through multiple inference providers, like [Together AI](https://together.ai) and [Sambanova](https://sambanova.ai). This is the fastest way to integrate AI in your products with a maintenance-free and scalable solution. More details in the [Inference Providers blogpost](https://huggingface.co/blog/inference-providers).
-- **Dedicated Inference Endpoints** - which is a product to easily deploy models to production. Inference is run by Hugging Face in a dedicated, fully managed infrastructure on a cloud provider of your choice. You can deploy your model on Hugging Face Inference Endpoints by following the steps [here](https://huggingface.co/docs/inference-endpoints/guides/create_endpoint).
+- **Dedicated Inference Endpoints** - which is a product to easily deploy models to production. Inference is run by Hugging Face in a dedicated, fully managed infrastructure on a cloud provider of your choice. You can deploy your model on Hugging Face Inference Endpoints by following [these steps](https://huggingface.co/docs/inference-endpoints/guides/create_endpoint).
 
 
 ## Supported Models
@@ -15,6 +15,9 @@ LiteLLM supports running inference across multiple services for models hosted on
 You can check available models for an inference provider by going to [huggingface.co/models](https://huggingface.co/models), clicking the "Other" filter tab, and selecting your desired provider:
 
 ![Filter models by Inference Provider](../../img/hf_filter_inference_providers.png)
+
+For example, you can find all Fireworks supported models [here](https://huggingface.co/models?inference_provider=fireworks-ai&sort=trending).
+
 
 ### Dedicated Inference Endpoints
 Refer to the [Inference Endpoints catalog](https://endpoints.huggingface.co/catalog) for a list of available models.
@@ -41,9 +44,9 @@ completion(..., api_key="hf_xxxxxx")
 
 To use a Hugging Face model, specify both the provider and model you want to use in the following format:
 ```
-huggingface/<provider>/<model_id>
+huggingface/<provider>/<hf_org_or_user>/<hf_model>
 ```
-Where `<model_id>` is the Hugging Face model ID and `<provider>` is the inference provider.
+Where `<hf_org_or_user>/<hf_model>` is the Hugging Face model ID and `<provider>` is the inference provider.  
 By default, if you don't specify a provider, LiteLLM will use the [HF Inference API](https://huggingface.co/docs/api-inference/en/index).
 
 Examples:
@@ -76,7 +79,12 @@ os.environ["HF_TOKEN"] = "hf_xxxxxx"
 
 response = completion(
     model="huggingface/together/deepseek-ai/DeepSeek-R1",
-    messages=[{"content": "How many r's are in the word `strawberry`?", "role": "user"}]
+    messages=[
+        {
+            "role": "user",
+            "content": "How many r's are in the word 'strawberry'?",
+        }
+    ],
 )
 print(response)
 ```
@@ -92,8 +100,14 @@ os.environ["HF_TOKEN"] = "hf_xxxxxx"
 
 response = completion(
     model="huggingface/together/deepseek-ai/DeepSeek-R1",
-    messages=[{"content": "How many r's are in the word `strawberry`?", "role": "user"}],
-    stream=True
+    messages=[
+        {
+            "role": "user",
+            "content": "How many r's are in the word `strawberry`?",
+            
+        }
+    ],
+    stream=True,
 )
 
 for chunk in response:
@@ -161,7 +175,12 @@ tools = [
     }
   }
 ]
-messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+messages = [
+    {
+        "role": "user",
+        "content": "What's the weather like in Boston today?",
+    }
+]
 
 response = completion(
     model="huggingface/sambanova/meta-llama/Llama-3.3-70B-Instruct", 
@@ -181,7 +200,7 @@ print(response)
 </a>
 
 ### Basic Completion
-Connect to your deployed Hugging Face Inference Endpoint for model inference. This provides dedicated infrastructure for your specific use case.
+After you have [deployed your Hugging Face Inference Endpoint](https://endpoints.huggingface.co/new) on dedicated infrastructure, you can run inference on it by providing the endpoint base URL in `api_base`, and indicating `huggingface/tgi` as the model name.
 
 ```python
 import os
@@ -282,7 +301,7 @@ print(response)
 </Tabs>
 
 ## LiteLLM Proxy Server with Hugging Face models
-Here is how to setup a [LiteLLM Proxy Server](https://docs.litellm.ai/#litellm-proxy-server-llm-gateway) to use Hugging Face models and how to use it:
+You can set up a [LiteLLM Proxy Server](https://docs.litellm.ai/#litellm-proxy-server-llm-gateway) to serve Hugging Face models through any of the supported Inference Providers. Here's how to do it:
 
 ### Step 1. Setup the config file
 ```yaml

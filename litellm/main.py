@@ -133,8 +133,7 @@ from .llms.databricks.chat.handler import DatabricksChatCompletion
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha, palm
 from .llms.groq.chat.handler import GroqChatCompletion
-from .llms.huggingface.chat.handler import HFCompletion
-from .llms.huggingface.embedding.handler import HFEmbedding
+from .llms.huggingface.embedding.handler import HuggingFaceEmbedding
 from .llms.nlp_cloud.chat.handler import completion as nlp_cloud_chat_completion
 from .llms.ollama.completion import handler as ollama
 from .llms.oobabooga.chat import oobabooga
@@ -214,8 +213,7 @@ azure_chat_completions = AzureChatCompletion()
 azure_o1_chat_completions = AzureOpenAIO1ChatCompletion()
 azure_text_completions = AzureTextCompletion()
 azure_audio_transcriptions = AzureAudioTranscription()
-huggingface = HFCompletion()
-huggingface_embedding = HFEmbedding()
+huggingface_embed = HuggingFaceEmbedding()
 predibase_chat_completions = PredibaseChatCompletion()
 codestral_text_completions = CodestralTextCompletion()
 bedrock_converse_chat_completion = BedrockConverseLLM()
@@ -2112,20 +2110,22 @@ def completion(  # type: ignore # noqa: PLR0915
                 or litellm.api_key
             )
             hf_headers = headers or litellm.headers
-
-            custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
-            response = huggingface.completion(
-                api_key=huggingface_key,
+            response = base_llm_http_handler.completion(
                 model=model,
                 messages=messages,
-                timeout=timeout,  # type: ignore
-                logging_obj=logging,
-                optional_params=optional_params,
+                headers=hf_headers,
+                model_response=model_response,
+                api_key=huggingface_key,
                 api_base=api_base,
                 acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
                 litellm_params=litellm_params,
-                client=client,  # pass huggingface_hub.AsyncInferenceClient or InferenceClient client
-                headers=hf_headers,
+                timeout=timeout,  # type: ignore
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                encoding=encoding,
+                stream=stream,
             )
         elif custom_llm_provider == "oobabooga":
             custom_llm_provider = "oobabooga"
@@ -3519,7 +3519,7 @@ def embedding(  # noqa: PLR0915
                 or get_secret("HUGGINGFACE_API_KEY")
                 or litellm.api_key
             )  # type: ignore
-            response = huggingface.embedding(
+            response = huggingface_embed.embedding(
                 model=model,
                 input=input,
                 encoding=encoding,  # type: ignore
