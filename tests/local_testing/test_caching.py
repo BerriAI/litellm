@@ -2478,3 +2478,47 @@ async def test_redis_get_ttl():
     except Exception as e:
         print(f"Error occurred: {str(e)}")
         raise e
+
+
+def test_redis_caching_multiple_namespaces():
+    """
+    Test that redis caching works with multiple namespaces
+
+    If client side request specifies a namespace, it should be used for caching
+
+    The same request with different namespaces should not be cached under the same key
+    """
+    import uuid
+
+    messages = [{"role": "user", "content": f"what is litellm? {uuid.uuid4()}"}]
+    litellm.cache = Cache(type="redis")
+    namespace_1 = "org-id1"
+    namespace_2 = "org-id2"
+
+    response_1 = completion(
+        model="gpt-3.5-turbo", messages=messages, cache={"namespace": namespace_1}
+    )
+
+    response_2 = completion(
+        model="gpt-3.5-turbo", messages=messages, cache={"namespace": namespace_2}
+    )
+
+    response_3 = completion(
+        model="gpt-3.5-turbo", messages=messages, cache={"namespace": namespace_1}
+    )
+
+    response_4 = completion(model="gpt-3.5-turbo", messages=messages)
+
+    print("response 1: ", response_1.model_dump_json(indent=4))
+    print("response 2: ", response_2.model_dump_json(indent=4))
+    print("response 3: ", response_3.model_dump_json(indent=4))
+    print("response 4: ", response_4.model_dump_json(indent=4))
+
+    # request 1 & 3 used under the same namespace
+    assert response_1.id == response_3.id
+
+    # request 2 used under a different namespace
+    assert response_2.id != response_1.id
+
+    # request 4 without a namespace should not be cached under the same key as request 3
+    assert response_4.id != response_3.id
