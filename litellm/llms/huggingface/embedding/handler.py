@@ -21,9 +21,10 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.types.utils import EmbeddingResponse
-from .transformation import HuggingFaceEmbeddingConfig
+
 from ...base import BaseLLM
 from ..common_utils import HuggingFaceError
+from .transformation import HuggingFaceEmbeddingConfig
 
 config = HuggingFaceEmbeddingConfig()
 
@@ -79,6 +80,7 @@ async def async_get_hf_task_embedding_for_model(
     pipeline_tag: Optional[str] = model_info_dict.get("pipeline_tag", None)
 
     return pipeline_tag
+
 
 class HuggingFaceEmbedding(BaseLLM):
     _client_session: Optional[httpx.Client] = None
