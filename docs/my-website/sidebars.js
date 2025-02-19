@@ -444,6 +444,7 @@ const sidebars = {
             "projects/smolagents",
             "projects/Docq.AI",
             "projects/OpenInterpreter",
+            "projects/Elroy",
             "projects/dbally",
             "projects/FastREPL",
             "projects/PROMPTMETHEUS",
