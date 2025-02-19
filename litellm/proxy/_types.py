@@ -1625,7 +1625,7 @@ class LiteLLM_ErrorLogs(LiteLLMPydanticObjectBase):
 class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
     id: str
     updated_at: datetime
-    changed_by: str
+    changed_by: Optional[Any] = None
     changed_by_api_key: Optional[str] = None
     action: Literal["created", "updated", "deleted", "blocked"]
     table_name: Literal[
@@ -1637,6 +1637,13 @@ class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
     object_id: str
     before_value: Optional[Json] = None
     updated_values: Optional[Json] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def cast_changed_by_to_str(cls, values):
+        if values.get("changed_by") is not None:
+            values["changed_by"] = str(values["changed_by"])
+        return values
 
 
 class LiteLLM_SpendLogs_ResponseObject(LiteLLMPydanticObjectBase):
