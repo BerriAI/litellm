@@ -62,7 +62,6 @@ completion(model="huggingface/sambanova/Qwen/Qwen2.5-72B-Instruct",...)
 completion(model="huggingface/meta-llama/Llama-3.3-70B-Instruct",...)
 ```
 
-For Hugging Face models, LiteLLM uses Hugging Face's Python client [InferenceClient](https://huggingface.co/docs/huggingface_hub/package_reference/inference_client) under the hood. `InferenceClient` is a drop-in replacement for OpenAI client with some extra features to handle providers.
 
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/LiteLLM_HuggingFace.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
@@ -339,11 +338,12 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 <TabItem value="python" label="python">
 
 ```python
-# pip install huggingface-hub
-from huggingface_hub import InferenceClient
+# pip install openai
+from openai import OpenAI
 
-client = InferenceClient(
-    base_url="http://0.0.0.0:4000"
+client = OpenAI(
+    base_url="http://0.0.0.0:4000",
+    api_key="anything",
 )
 
 response = client.chat.completions.create(
