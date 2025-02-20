@@ -542,7 +542,6 @@ class AmazonConverseConfig(BaseConfig):
             api_key=api_key,
             data=request_data,
             messages=messages,
-            print_verbose=None,
             encoding=encoding,
         )
 
@@ -557,7 +556,6 @@ class AmazonConverseConfig(BaseConfig):
         api_key: Optional[str],
         data: Union[dict, str],
         messages: List,
-        print_verbose: Optional[Callable],
         encoding,
     ) -> ModelResponse:
         ## LOGGING
