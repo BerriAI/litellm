@@ -8,7 +8,7 @@ import httpx
 from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
-from litellm.caching.caching import DualCache
+from litellm.caching.caching import InMemoryCache
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 if TYPE_CHECKING:
@@ -40,7 +40,7 @@ class AwsAuthError(Exception):
 
 class BaseAWSLLM:
     def __init__(self) -> None:
-        self.iam_cache = DualCache()
+        self.iam_cache = InMemoryCache()
         super().__init__()
         self.aws_authentication_params = [
             "aws_access_key_id",
