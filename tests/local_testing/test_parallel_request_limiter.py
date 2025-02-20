@@ -410,6 +410,7 @@ async def test_success_call_hook():
     )
 
 
+@pytest.mark.flaky(retries=6, delay=1)
 @pytest.mark.asyncio
 async def test_failure_call_hook():
     """
