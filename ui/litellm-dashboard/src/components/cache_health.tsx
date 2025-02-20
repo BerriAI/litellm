@@ -23,11 +23,10 @@ const TableClickableErrorField: React.FC<{ label: string; value: string }> = ({
 }) => {
   const [isExpanded, setIsExpanded] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
-  const safeValue = String(value || ''); // Convert to string and handle null/undefined
-  const truncated = safeValue.length > 50 ? safeValue.substring(0, 50) + "..." : safeValue;
+  const truncated = value.length > 50 ? value.substring(0, 50) + "..." : value;
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(safeValue);
+    navigator.clipboard.writeText(value);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -70,9 +69,32 @@ interface RedisDetails {
   startup_nodes?: string;
 }
 
-// Update HealthCheckDetails component to include Redis info
+// Add new interface for Error Details
+interface ErrorDetails {
+  message: string;
+  traceback: string;
+  litellm_params?: any;
+  redis_cache_params?: any;
+}
+
+// Update HealthCheckDetails component to handle errors
 const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
-  // Parse the JSON strings in the response
+  // Parse error information if present
+  let errorDetails: ErrorDetails | null = null;
+  if (response.error) {
+    try {
+      const errorMessage = JSON.parse(response.error.message);
+      errorDetails = {
+        message: errorMessage.message,
+        traceback: errorMessage.traceback,
+        litellm_params: errorMessage.litellm_cache_params,
+        redis_cache_params: errorMessage.redis_cache_params
+      };
+    } catch (e) {
+      console.error("Error parsing error details:", e);
+    }
+  }
+
   const parsedLitellmParams = deepParse(response.litellm_cache_params);
   const parsedRedisParams = deepParse(response.redis_cache_params);
   
@@ -118,45 +140,73 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
                   <XCircleIcon className="h-5 w-5 text-red-500 mr-2" />
                 )}
                 <Text className={`text-sm font-medium ${response.status === "healthy" ? "text-green-500" : "text-red-500"}`}>
-                  Cache Status: {response.status}
+                  Cache Status: {response.status || "unhealthy"}
                 </Text>
               </div>
 
               <table className="w-full border-collapse">
                 <tbody>
-                  <TableClickableErrorField
-                    label="Cache Type"
-                    value={response.cache_type}
-                  />
-                  <TableClickableErrorField
-                    label="Ping Response"
-                    value={String(response.ping_response)}
-                  />
-                  <TableClickableErrorField
-                    label="Set Cache Response"
-                    value={response.set_cache_response || "N/A"}
-                  />
-                  
-                  {/* Add Redis Details Section */}
-                  {response.cache_type === "redis" && (
+                  {/* Show error details if present */}
+                  {errorDetails && (
                     <>
-                      <tr><td colSpan={2} className="pt-4 pb-2 font-semibold">Redis Details</td></tr>
+                      <tr><td colSpan={2} className="pt-4 pb-2 font-semibold text-red-600">Error Details</td></tr>
                       <TableClickableErrorField
-                        label="Redis Host"
-                        value={redisDetails.redis_host || "N/A"}
+                        label="Error Message"
+                        value={errorDetails.message}
                       />
                       <TableClickableErrorField
-                        label="Redis Port"
-                        value={redisDetails.redis_port || "N/A"}
+                        label="Traceback"
+                        value={errorDetails.traceback}
                       />
                       <TableClickableErrorField
-                        label="Redis Version"
-                        value={redisDetails.redis_version || "N/A"}
+                        label="LiteLLM Parameters"
+                        value={errorDetails.litellm_params || "N/A"}
                       />
                       <TableClickableErrorField
-                        label="Startup Nodes"
-                        value={redisDetails.startup_nodes || "N/A"}
+                        label="Redis Parameters"
+                        value={errorDetails.redis_cache_params || "N/A"}
                       />
+                    </>
+                  )}
+
+                  {/* Show regular cache details if no error */}
+                  {!errorDetails && (
+                    <>
+                      <TableClickableErrorField
+                        label="Cache Type"
+                        value={response.cache_type}
+                      />
+                      <TableClickableErrorField
+                        label="Ping Response"
+                        value={String(response.ping_response)}
+                      />
+                      <TableClickableErrorField
+                        label="Set Cache Response"
+                        value={response.set_cache_response || "N/A"}
+                      />
+                      
+                      {/* Redis Details Section */}
+                      {response.cache_type === "redis" && (
+                        <>
+                          <tr><td colSpan={2} className="pt-4 pb-2 font-semibold">Redis Details</td></tr>
+                          <TableClickableErrorField
+                            label="Redis Host"
+                            value={redisDetails.redis_host || "N/A"}
+                          />
+                          <TableClickableErrorField
+                            label="Redis Port"
+                            value={redisDetails.redis_port || "N/A"}
+                          />
+                          <TableClickableErrorField
+                            label="Redis Version"
+                            value={redisDetails.redis_version || "N/A"}
+                          />
+                          <TableClickableErrorField
+                            label="Startup Nodes"
+                            value={redisDetails.startup_nodes || "N/A"}
+                          />
+                        </>
+                      )}
                     </>
                   )}
                 </tbody>
