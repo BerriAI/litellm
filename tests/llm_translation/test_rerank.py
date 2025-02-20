@@ -299,7 +299,8 @@ def test_complete_base_url_cohere():
 
         print("mock_post.call_args", mock_post.call_args)
         mock_post.assert_called_once()
-        assert "http://localhost:4000/v1/rerank" in mock_post.call_args.kwargs["url"]
+        # Default to the v2 client when calling the base /rerank
+        assert "http://localhost:4000/v2/rerank" in mock_post.call_args.kwargs["url"]
 
 
 @pytest.mark.asyncio()
