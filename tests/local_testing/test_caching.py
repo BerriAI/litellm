@@ -127,6 +127,8 @@ async def test_batch_get_cache_with_none_keys(sync_mode):
         print("result from async_batch_get_cache=", result)
     expected_result = {}
     for key in keys_to_lookup:
+        if key is None:
+            continue
         expected_result[key] = None
     assert result == expected_result
 
