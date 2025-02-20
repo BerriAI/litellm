@@ -2138,6 +2138,14 @@ class TeamModelDeleteRequest(BaseModel):
     models: List[str]
 
 
+class TeamModelUpdateRequest(BaseModel):
+    """Request to update models on a team"""
+
+    team_id: str
+    old_model: str  # The current model name on the team.
+    new_model: str  # The new model name to replace the old one.
+
+
 # Organization Member Requests
 class OrganizationMemberAddRequest(OrgMemberAddRequest):
     organization_id: str

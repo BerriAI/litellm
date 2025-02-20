@@ -49,6 +49,7 @@ from litellm.proxy._types import (
     TeamMemberUpdateResponse,
     TeamModelAddRequest,
     TeamModelDeleteRequest,
+    TeamModelUpdateRequest,
     UpdateTeamRequest,
     UserAPIKeyAuth,
 )
@@ -1769,7 +1770,7 @@ async def ui_view_teams(
 
 
 @router.post(
-    "/team/model/add",
+    "/team/model_add",
     tags=["team management"],
     dependencies=[Depends(user_api_key_auth)],
 )
@@ -1842,7 +1843,7 @@ async def team_model_add(
 
 
 @router.post(
-    "/team/model/delete",
+    "/team/model_delete",
     tags=["team management"],
     dependencies=[Depends(user_api_key_auth)],
 )
@@ -1907,6 +1908,88 @@ async def team_model_delete(
     updated_models = [m for m in current_models if m not in data.models]
 
     # Update team
+    updated_team = await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": data.team_id}, data={"models": updated_models}
+    )
+
+    return updated_team
+
+
+@router.post(
+    "/team/model_update",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def team_model_update(
+    data: TeamModelUpdateRequest,
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Update (rename) an existing model in a team's allowed model list.
+
+    Parameters:
+    - team_id: str - Required. The team in which to perform the update.
+    - old_model: str - The current value of the model name to be updated.
+    - new_model: str - The new model name to replace the old model.
+
+    Example Request:
+    ```
+    curl --location 'http://0.0.0.0:4000/team/model_update' \
+         --header 'Authorization: Bearer sk-1234' \
+         --header 'Content-Type: application/json' \
+         --data '{
+             "team_id": "team-1234",
+             "old_model": "gpt-3.5",
+             "new_model": "gpt-3.5-turbo"
+         }'
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    # Get existing team
+    team_row = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": data.team_id}
+    )
+    if team_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found, passed team_id={data.team_id}"},
+        )
+
+    team_obj = LiteLLM_TeamTable(**team_row.model_dump())
+
+    # Authorization check - only proxy admin or team admin can modify team models
+    if (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and not _is_user_team_admin(
+            user_api_key_dict=user_api_key_dict, team_obj=team_obj
+        )
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admin or team admin can modify team models"},
+        )
+
+    # Get the current models list (defaulting to an empty list if None)
+    current_models = team_obj.models or []
+
+    if data.old_model not in current_models:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Model '{data.old_model}' not found in team models"},
+        )
+
+    # Replace occurrences of the old model with the new model
+    updated_models = [
+        data.new_model if m == data.old_model else m for m in current_models
+    ]
+
+    # Update the team record in the DB
     updated_team = await prisma_client.db.litellm_teamtable.update(
         where={"team_id": data.team_id}, data={"models": updated_models}
     )
