@@ -2000,6 +2000,7 @@ class ProxyErrorTypes(str, enum.Enum):
     bad_request_error = "bad_request_error"
     not_found_error = "not_found_error"
     validation_error = "bad_request_error"
+    cache_ping_error = "cache_ping_error"
 
 
 DB_CONNECTION_ERROR_TYPES = (httpx.ConnectError, httpx.ReadError, httpx.ReadTimeout)

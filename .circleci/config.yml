@@ -678,6 +678,49 @@ jobs:
           paths:
             - llm_translation_coverage.xml
             - llm_translation_coverage
+  litellm_mapped_tests:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest-mock==3.12.0"
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "respx==0.21.1"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/litellm --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml litellm_mapped_tests_coverage.xml
+            mv .coverage litellm_mapped_tests_coverage
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - litellm_mapped_tests_coverage.xml
+            - litellm_mapped_tests_coverage
   batches_testing:
     docker:
       - image: cimg/python:3.11
@@ -2316,6 +2359,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - litellm_mapped_tests:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - batches_testing:
           filters:
             branches:
@@ -2349,6 +2398,7 @@ workflows:
       - upload-coverage:
           requires:
             - llm_translation_testing
+            - litellm_mapped_tests
             - batches_testing
             - litellm_utils_testing
             - pass_through_unit_testing
@@ -2406,6 +2456,7 @@ workflows:
             - load_testing
             - test_bad_database_url
             - llm_translation_testing
+            - litellm_mapped_tests
             - batches_testing
             - litellm_utils_testing
             - pass_through_unit_testing

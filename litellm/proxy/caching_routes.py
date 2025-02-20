@@ -5,8 +5,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import RedisCache
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.types.caching import CachePingResponse
 
 masker = SensitiveDataMasker()
 
@@ -18,6 +21,7 @@ router = APIRouter(
 
 @router.get(
     "/ping",
+    response_model=CachePingResponse,
     dependencies=[Depends(user_api_key_auth)],
 )
 async def cache_ping():
@@ -27,27 +31,17 @@ async def cache_ping():
     litellm_cache_params: Dict[str, Any] = {}
     specific_cache_params: Dict[str, Any] = {}
     try:
-
         if litellm.cache is None:
             raise HTTPException(
                 status_code=503, detail="Cache not initialized. litellm.cache is None"
             )
-        litellm_cache_params = {}
-        specific_cache_params = {}
-        for k, v in vars(litellm.cache).items():
-            try:
-                if k == "cache":
-                    continue
-                litellm_cache_params[k] = v
-            except Exception:
-                litellm_cache_params[k] = "<unable to copy or convert>"
-        for k, v in vars(litellm.cache.cache).items():
-            try:
-                specific_cache_params[k] = v
-            except Exception:
-                specific_cache_params[k] = "<unable to copy or convert>"
-        litellm_cache_params = masker.mask_dict(litellm_cache_params)
-        specific_cache_params = masker.mask_dict(specific_cache_params)
+        litellm_cache_params = masker.mask_dict(vars(litellm.cache))
+        # remove field that might reference itself
+        litellm_cache_params.pop("cache", None)
+        specific_cache_params = (
+            masker.mask_dict(vars(litellm.cache.cache)) if litellm.cache else {}
+        )
+
         if litellm.cache.type == "redis":
             # ping the redis cache
             ping_response = await litellm.cache.ping()
@@ -63,24 +57,35 @@ async def cache_ping():
             )
             verbose_proxy_logger.debug("/cache/ping: done with set_cache()")
 
-            return {
-                "status": "healthy",
-                "cache_type": litellm.cache.type,
-                "ping_response": True,
-                "set_cache_response": "success",
-                "litellm_cache_params": litellm_cache_params,
-                "redis_cache_params": specific_cache_params,
-            }
+            return CachePingResponse(
+                status="healthy",
+                cache_type=str(litellm.cache.type),
+                ping_response=True,
+                set_cache_response="success",
+                litellm_cache_params=safe_dumps(litellm_cache_params),
+                redis_cache_params=safe_dumps(specific_cache_params),
+            )
         else:
-            return {
-                "status": "healthy",
-                "cache_type": litellm.cache.type,
-                "litellm_cache_params": litellm_cache_params,
-            }
+            return CachePingResponse(
+                status="healthy",
+                cache_type=str(litellm.cache.type),
+                litellm_cache_params=safe_dumps(litellm_cache_params),
+            )
     except Exception as e:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Service Unhealthy ({str(e)}).Cache parameters: {litellm_cache_params}.specific_cache_params: {specific_cache_params}",
+        import traceback
+
+        traceback.print_exc()
+        error_message = {
+            "message": f"Service Unhealthy ({str(e)})",
+            "litellm_cache_params": safe_dumps(litellm_cache_params),
+            "redis_cache_params": safe_dumps(specific_cache_params),
+            "traceback": traceback.format_exc(),
+        }
+        raise ProxyException(
+            message=safe_dumps(error_message),
+            type=ProxyErrorTypes.cache_ping_error,
+            param="cache_ping",
+            code=503,
         )
 
 
