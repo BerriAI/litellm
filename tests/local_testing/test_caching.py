@@ -94,6 +94,45 @@ def test_dual_cache_batch_get_cache():
     assert result[1] == None
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_batch_get_cache_with_none_keys(sync_mode):
+    """
+    Unit testing for RedisCache batch_get_cache() and async_batch_get_cache()
+    - test with None keys. Ensure it can safely handle when keys are None.
+    - expect result = {key: None}
+    """
+    from litellm.caching.caching import RedisCache
+
+    litellm._turn_on_debug()
+
+    redis_cache = RedisCache(
+        host=os.environ.get("REDIS_HOST"),
+        port=os.environ.get("REDIS_PORT"),
+        password=os.environ.get("REDIS_PASSWORD"),
+    )
+    keys_to_lookup = [
+        None,
+        f"test_value_{uuid.uuid4()}",
+        None,
+        f"test_value_2_{uuid.uuid4()}",
+        None,
+        f"test_value_3_{uuid.uuid4()}",
+    ]
+    if sync_mode:
+        result = redis_cache.batch_get_cache(key_list=keys_to_lookup)
+        print("result from batch_get_cache=", result)
+    else:
+        result = await redis_cache.async_batch_get_cache(key_list=keys_to_lookup)
+        print("result from async_batch_get_cache=", result)
+    expected_result = {}
+    for key in keys_to_lookup:
+        if key is None:
+            continue
+        expected_result[key] = None
+    assert result == expected_result
+
+
 # @pytest.mark.skip(reason="")
 def test_caching_dynamic_args():  # test in memory cache
     try:
