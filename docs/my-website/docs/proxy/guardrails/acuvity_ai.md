@@ -86,6 +86,7 @@ Configure **Post LLM API Call** guardrails to filter inappropriate or malicious 
 
 Update your LiteLLM `config.yaml` file to include Acuvity guardrails:
 
+### config.yaml
 ```yaml
 model_list:
   - model_name: gpt-4
