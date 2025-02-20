@@ -23,7 +23,7 @@ const TableClickableErrorField: React.FC<{ label: string; value: string }> = ({
 }) => {
   const [isExpanded, setIsExpanded] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
-  const truncated = value.length > 50 ? value.substring(0, 50) + "..." : value;
+  const truncated = value ? (value.length > 50 ? value.substring(0, 50) + "..." : value) : "N/A";
 
   const handleCopy = () => {
     navigator.clipboard.writeText(value);
@@ -175,40 +175,40 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
                   {/* Always show cache details, regardless of error state */}
                   <tr><td colSpan={2} className="pt-4 pb-2 font-semibold">Cache Details</td></tr>
                   <TableClickableErrorField
-                    label="Cache Type"
-                        value={response.cache_type}
-                      />
-                      <TableClickableErrorField
-                        label="Ping Response"
-                        value={String(response.ping_response)}
-                      />
-                      <TableClickableErrorField
-                        label="Set Cache Response"
-                        value={response.set_cache_response || "N/A"}
+                    label="Cache Configuration"
+                    value={String(parsedLitellmParams?.type)}
+                  />
+                  <TableClickableErrorField
+                    label="Ping Response"
+                    value={String(response.ping_response)}
+                  />
+                  <TableClickableErrorField
+                    label="Set Cache Response"
+                    value={response.set_cache_response || "N/A"}
                   />
                   
                   {/* Redis Details Section */}
-                      {response.cache_type === "redis" && (
-                        <>
-                  <tr><td colSpan={2} className="pt-4 pb-2 font-semibold">Redis Details</td></tr>
-                  <TableClickableErrorField
-                    label="Redis Host"
-                            value={redisDetails.redis_host || "N/A"}
-                  />
-                  <TableClickableErrorField
-                    label="Redis Port"
-                            value={redisDetails.redis_port || "N/A"}
-                  />
-                  <TableClickableErrorField
-                    label="Redis Version"
-                            value={redisDetails.redis_version || "N/A"}
-                  />
-                  <TableClickableErrorField
-                    label="Startup Nodes"
-                            value={redisDetails.startup_nodes || "N/A"}
-                  />
-                </>
-              )}
+                  {parsedLitellmParams?.type === "redis" && (
+                    <>
+                      <tr><td colSpan={2} className="pt-4 pb-2 font-semibold">Redis Details</td></tr>
+                      <TableClickableErrorField
+                        label="Redis Host"
+                        value={redisDetails.redis_host || "N/A"}
+                      />
+                      <TableClickableErrorField
+                        label="Redis Port"
+                        value={redisDetails.redis_port || "N/A"}
+                      />
+                      <TableClickableErrorField
+                        label="Redis Version"
+                        value={redisDetails.redis_version || "N/A"}
+                      />
+                      <TableClickableErrorField
+                        label="Startup Nodes"
+                        value={redisDetails.startup_nodes || "N/A"}
+                      />
+                    </>
+                  )}
                 </tbody>
               </table>
             </div>
