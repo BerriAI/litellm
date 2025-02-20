@@ -16,14 +16,8 @@ from litellm.llms.anthropic.cost_calculation import (
 from litellm.llms.azure.cost_calculation import (
     cost_per_token as azure_openai_cost_per_token,
 )
-from litellm.llms.azure_ai.cost_calculator import (
-    cost_per_query as azure_ai_rerank_cost_per_query,
-)
 from litellm.llms.bedrock.image.cost_calculator import (
     cost_calculator as bedrock_image_cost_calculator,
-)
-from litellm.llms.cohere.cost_calculator import (
-    cost_per_query as cohere_rerank_cost_per_query,
 )
 from litellm.llms.databricks.cost_calculator import (
     cost_per_token as databricks_cost_per_token,
@@ -54,7 +48,9 @@ from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
     CallTypesLiteral,
+    LlmProviders,
     LlmProvidersSet,
+    ModelInfo,
     PassthroughCallTypes,
     Usage,
 )
@@ -64,6 +60,7 @@ from litellm.utils import (
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
+    ProviderConfigManager,
     TextCompletionResponse,
     TranscriptionResponse,
     _cached_get_model_info_helper,
@@ -847,16 +844,22 @@ def rerank_cost(
     )
 
     try:
-        if custom_llm_provider == "cohere":
-            return cohere_rerank_cost_per_query(
-                model=model, num_queries=default_num_queries
+        config = ProviderConfigManager.get_provider_rerank_config(
+            model=model, provider=LlmProviders(custom_llm_provider)
+        )
+
+        try:
+            model_info: Optional[ModelInfo] = litellm.get_model_info(
+                model=model, custom_llm_provider=custom_llm_provider
             )
-        elif custom_llm_provider == "azure_ai":
-            return azure_ai_rerank_cost_per_query(
-                model=model, num_queries=default_num_queries
-            )
-        raise ValueError(
-            f"invalid custom_llm_provider for rerank model: {model}, custom_llm_provider: {custom_llm_provider}"
+        except Exception:
+            model_info = None
+
+        return config.calculate_rerank_cost(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            num_queries=default_num_queries,
+            model_info=model_info,
         )
     except Exception as e:
         raise e

@@ -1,9 +1,10 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 
 from litellm.types.rerank import OptionalRerankParams, RerankResponse
+from litellm.types.utils import ModelInfo
 
 from ..chat.transformation import BaseLLMException
 
@@ -84,3 +85,34 @@ class BaseRerankConfig(ABC):
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
         pass
+
+    @staticmethod
+    def calculate_rerank_cost(
+        model: str,
+        custom_llm_provider: Optional[str] = None,
+        num_queries: int = 1,
+        model_info: Optional[ModelInfo] = None,
+    ) -> Tuple[float, float]:
+        """
+        Calculates the cost per query for a given rerank model.
+
+        Input:
+            - model: str, the model name without provider prefix
+            - custom_llm_provider: str, the provider used for the model. If provided, used to check if the litellm model info is for that provider.
+            - num_queries: int, the number of queries to calculate the cost for
+            - model_info: ModelInfo, the model info for the given model
+
+        Returns:
+            Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
+        """
+
+        if (
+            model_info is None
+            or "input_cost_per_query" not in model_info
+            or model_info["input_cost_per_query"] is None
+        ):
+            return 0.0, 0.0
+
+        prompt_cost = model_info["input_cost_per_query"] * num_queries
+
+        return prompt_cost, 0.0
