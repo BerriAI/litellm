@@ -22,10 +22,10 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.key_management_endpoints import (
-    duration_in_seconds,
     generate_key_helper_fn,
     prepare_metadata_fields,
 )
@@ -164,7 +164,9 @@ async def new_user(
                 user_api_key_dict=user_api_key_dict,
             )
         except HTTPException as e:
-            if e.status_code == 400 and "already exists" in str(e):
+            if e.status_code == 400 and (
+                "already exists" in str(e) or "doesn't exist" in str(e)
+            ):
                 verbose_proxy_logger.debug(
                     "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
                         str(e)
@@ -176,6 +178,15 @@ async def new_user(
                         str(e)
                     )
                 )
+        except Exception as e:
+            if "already exists" in str(e) or "doesn't exist" in str(e):
+                verbose_proxy_logger.debug(
+                    "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
+                        str(e)
+                    )
+                )
+            else:
+                raise e
 
     if data.send_invite_email is True:
         # check if user has setup email alerting
@@ -871,6 +882,11 @@ async def delete_user(
 
     ## DELETE ASSOCIATED INVITATION LINKS
     await prisma_client.db.litellm_invitationlink.delete_many(
+        where={"user_id": {"in": data.user_ids}}
+    )
+
+    ## DELETE ASSOCIATED ORGANIZATION MEMBERSHIPS
+    await prisma_client.db.litellm_organizationmembership.delete_many(
         where={"user_id": {"in": data.user_ids}}
     )
 

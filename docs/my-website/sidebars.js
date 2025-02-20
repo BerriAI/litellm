@@ -65,8 +65,8 @@ const sidebars = {
           items: [
             "proxy/user_keys",
             "proxy/clientside_auth",
-            "proxy/response_headers",
             "proxy/request_headers",
+            "proxy/response_headers",
           ],
         },
         {
@@ -163,7 +163,6 @@ const sidebars = {
           ]
         },
         "proxy/caching",
-
       ]
     },
     {
@@ -182,6 +181,7 @@ const sidebars = {
         "providers/openai_compatible",
         "providers/azure",
         "providers/azure_ai",
+        "providers/aiml",
         "providers/vertex",
         "providers/gemini",
         "providers/anthropic",
@@ -445,6 +445,7 @@ const sidebars = {
             "projects/smolagents",
             "projects/Docq.AI",
             "projects/OpenInterpreter",
+            "projects/Elroy",
             "projects/dbally",
             "projects/FastREPL",
             "projects/PROMPTMETHEUS",

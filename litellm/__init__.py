@@ -2,7 +2,7 @@
 import warnings
 
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
-### INIT VARIABLES ######
+### INIT VARIABLES #########
 import threading
 import os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
@@ -52,6 +52,7 @@ from litellm.constants import (
     open_ai_embedding_models,
     cohere_embedding_models,
     bedrock_embedding_models,
+    known_tokenizer_config,
 )
 from litellm.types.guardrails import GuardrailItem
 from litellm.proxy._types import (
@@ -360,7 +361,15 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-2-90b-instruct-v1:0",
 ]
 BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
-    "cohere", "anthropic", "mistral", "amazon", "meta", "llama"
+    "cohere",
+    "anthropic",
+    "mistral",
+    "amazon",
+    "meta",
+    "llama",
+    "ai21",
+    "nova",
+    "deepseek_r1",
 ]
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models: List = []
@@ -411,6 +420,7 @@ anyscale_models: List = []
 cerebras_models: List = []
 galadriel_models: List = []
 sambanova_models: List = []
+assemblyai_models: List = []
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -560,6 +570,8 @@ def add_known_models():
             galadriel_models.append(key)
         elif value.get("litellm_provider") == "sambanova_models":
             sambanova_models.append(key)
+        elif value.get("litellm_provider") == "assemblyai":
+            assemblyai_models.append(key)
 
 
 add_known_models()
@@ -631,6 +643,7 @@ model_list = (
     + galadriel_models
     + sambanova_models
     + azure_text_models
+    + assemblyai_models
 )
 
 model_list_set = set(model_list)
@@ -684,6 +697,7 @@ models_by_provider: dict = {
     "cerebras": cerebras_models,
     "galadriel": galadriel_models,
     "sambanova": sambanova_models,
+    "assemblyai": assemblyai_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -853,15 +867,39 @@ from .llms.bedrock.chat.invoke_handler import (
 )
 
 from .llms.bedrock.common_utils import (
-    AmazonTitanConfig,
-    AmazonAI21Config,
-    AmazonAnthropicConfig,
-    AmazonAnthropicClaude3Config,
-    AmazonCohereConfig,
-    AmazonLlamaConfig,
-    AmazonMistralConfig,
     AmazonBedrockGlobalConfig,
 )
+from .llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import (
+    AmazonAI21Config,
+)
+from .llms.bedrock.chat.invoke_transformations.amazon_nova_transformation import (
+    AmazonInvokeNovaConfig,
+)
+from .llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation import (
+    AmazonAnthropicConfig,
+)
+from .llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+    AmazonAnthropicClaude3Config,
+)
+from .llms.bedrock.chat.invoke_transformations.amazon_cohere_transformation import (
+    AmazonCohereConfig,
+)
+from .llms.bedrock.chat.invoke_transformations.amazon_llama_transformation import (
+    AmazonLlamaConfig,
+)
+from .llms.bedrock.chat.invoke_transformations.amazon_deepseek_transformation import (
+    AmazonDeepSeekR1Config,
+)
+from .llms.bedrock.chat.invoke_transformations.amazon_mistral_transformation import (
+    AmazonMistralConfig,
+)
+from .llms.bedrock.chat.invoke_transformations.amazon_titan_transformation import (
+    AmazonTitanConfig,
+)
+from .llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
+    AmazonInvokeConfig,
+)
+
 from .llms.bedrock.image.amazon_stability1_transformation import AmazonStabilityConfig
 from .llms.bedrock.image.amazon_stability3_transformation import AmazonStability3Config
 from .llms.bedrock.embed.amazon_titan_g1_transformation import AmazonTitanG1Config

@@ -3242,6 +3242,129 @@ def test_replicate_custom_prompt_dict():
     litellm.custom_prompt_dict = {}  # reset
 
 
+def test_bedrock_deepseek_custom_prompt_dict():
+    model = "llama/arn:aws:bedrock:us-east-1:1234:imported-model/45d34re"
+    litellm.register_prompt_template(
+        model=model,
+        tokenizer_config={
+            "add_bos_token": True,
+            "add_eos_token": False,
+            "bos_token": {
+                "__type": "AddedToken",
+                "content": "<｜begin▁of▁sentence｜>",
+                "lstrip": False,
+                "normalized": True,
+                "rstrip": False,
+                "single_word": False,
+            },
+            "clean_up_tokenization_spaces": False,
+            "eos_token": {
+                "__type": "AddedToken",
+                "content": "<｜end▁of▁sentence｜>",
+                "lstrip": False,
+                "normalized": True,
+                "rstrip": False,
+                "single_word": False,
+            },
+            "legacy": True,
+            "model_max_length": 16384,
+            "pad_token": {
+                "__type": "AddedToken",
+                "content": "<｜end▁of▁sentence｜>",
+                "lstrip": False,
+                "normalized": True,
+                "rstrip": False,
+                "single_word": False,
+            },
+            "sp_model_kwargs": {},
+            "unk_token": None,
+            "tokenizer_class": "LlamaTokenizerFast",
+            "chat_template": "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% set ns = namespace(is_first=false, is_tool=false, is_output_first=true, system_prompt='') %}{%- for message in messages %}{%- if message['role'] == 'system' %}{% set ns.system_prompt = message['content'] %}{%- endif %}{%- endfor %}{{bos_token}}{{ns.system_prompt}}{%- for message in messages %}{%- if message['role'] == 'user' %}{%- set ns.is_tool = false -%}{{'<｜User｜>' + message['content']}}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is none %}{%- set ns.is_tool = false -%}{%- for tool in message['tool_calls']%}{%- if not ns.is_first %}{{'<｜Assistant｜><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\\n' + '```json' + '\\n' + tool['function']['arguments'] + '\\n' + '```' + '<｜tool▁call▁end｜>'}}{%- set ns.is_first = true -%}{%- else %}{{'\\n' + '<｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\\n' + '```json' + '\\n' + tool['function']['arguments'] + '\\n' + '```' + '<｜tool▁call▁end｜>'}}{{'<｜tool▁calls▁end｜><｜end▁of▁sentence｜>'}}{%- endif %}{%- endfor %}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is not none %}{%- if ns.is_tool %}{{'<｜tool▁outputs▁end｜>' + message['content'] + '<｜end▁of▁sentence｜>'}}{%- set ns.is_tool = false -%}{%- else %}{% set content = message['content'] %}{% if '</think>' in content %}{% set content = content.split('</think>')[-1] %}{% endif %}{{'<｜Assistant｜>' + content + '<｜end▁of▁sentence｜>'}}{%- endif %}{%- endif %}{%- if message['role'] == 'tool' %}{%- set ns.is_tool = true -%}{%- if ns.is_output_first %}{{'<｜tool▁outputs▁begin｜><｜tool▁output▁begin｜>' + message['content'] + '<｜tool▁output▁end｜>'}}{%- set ns.is_output_first = false %}{%- else %}{{'\\n<｜tool▁output▁begin｜>' + message['content'] + '<｜tool▁output▁end｜>'}}{%- endif %}{%- endif %}{%- endfor -%}{% if ns.is_tool %}{{'<｜tool▁outputs▁end｜>'}}{% endif %}{% if add_generation_prompt and not ns.is_tool %}{{'<｜Assistant｜><think>\\n'}}{% endif %}",
+        },
+    )
+    assert model in litellm.known_tokenizer_config
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    messages = [
+        {"role": "system", "content": "You are a good assistant"},
+        {"role": "user", "content": "What is the weather in Copenhagen?"},
+    ]
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            completion(
+                model="bedrock/" + model,
+                messages=messages,
+                client=client,
+            )
+        except Exception as e:
+            pass
+
+        mock_post.assert_called_once()
+        print(mock_post.call_args.kwargs)
+        json_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert (
+            json_data["prompt"].rstrip()
+            == """<｜begin▁of▁sentence｜>You are a good assistant<｜User｜>What is the weather in Copenhagen?<｜Assistant｜><think>"""
+        )
+
+
+def test_bedrock_deepseek_known_tokenizer_config(monkeypatch):
+    model = (
+        "deepseek_r1/arn:aws:bedrock:us-west-2:888602223428:imported-model/bnnr6463ejgf"
+    )
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from unittest.mock import Mock
+    import httpx
+
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.headers = {
+        "x-amzn-bedrock-input-token-count": "20",
+        "x-amzn-bedrock-output-token-count": "30",
+    }
+
+    # The response format for deepseek_r1
+    response_data = {
+        "generation": "The weather in Copenhagen is currently sunny with a temperature of 20°C (68°F). The forecast shows clear skies throughout the day with a gentle breeze from the northwest.",
+        "stop_reason": "stop",
+        "stop_sequence": None,
+    }
+
+    mock_response.json.return_value = response_data
+    mock_response.text = json.dumps(response_data)
+
+    client = HTTPHandler()
+
+    messages = [
+        {"role": "system", "content": "You are a good assistant"},
+        {"role": "user", "content": "What is the weather in Copenhagen?"},
+    ]
+
+    with patch.object(client, "post", return_value=mock_response) as mock_post:
+        completion(
+            model="bedrock/" + model,
+            messages=messages,
+            client=client,
+        )
+
+        mock_post.assert_called_once()
+        print(mock_post.call_args.kwargs)
+        url = mock_post.call_args.kwargs["url"]
+        assert "deepseek_r1" not in url
+        assert "us-east-1" not in url
+        assert "us-west-2" in url
+        json_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert (
+            json_data["prompt"].rstrip()
+            == """<｜begin▁of▁sentence｜>You are a good assistant<｜User｜>What is the weather in Copenhagen?<｜Assistant｜><think>"""
+        )
+
+
 # test_replicate_custom_prompt_dict()
 
 # commenthing this out since we won't be always testing a custom, replicate deployment
@@ -4665,3 +4788,71 @@ def test_completion_o3_mini_temperature():
         assert resp.choices[0].message.content is not None
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+def test_completion_gpt_4o_empty_str():
+    litellm._turn_on_debug()
+    from openai import OpenAI
+    from unittest.mock import MagicMock
+
+    client = OpenAI()
+
+    # Create response object matching OpenAI's format
+    mock_response_data = {
+        "id": "chatcmpl-B0W3vmiM78Xkgx7kI7dr7PC949DMS",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "logprobs": None,
+                "message": {
+                    "content": "",
+                    "refusal": None,
+                    "role": "assistant",
+                    "audio": None,
+                    "function_call": None,
+                    "tool_calls": None,
+                },
+            }
+        ],
+        "created": 1739462947,
+        "model": "gpt-4o-mini-2024-07-18",
+        "object": "chat.completion",
+        "service_tier": "default",
+        "system_fingerprint": "fp_bd83329f63",
+        "usage": {
+            "completion_tokens": 1,
+            "prompt_tokens": 121,
+            "total_tokens": 122,
+            "completion_tokens_details": {
+                "accepted_prediction_tokens": 0,
+                "audio_tokens": 0,
+                "reasoning_tokens": 0,
+                "rejected_prediction_tokens": 0,
+            },
+            "prompt_tokens_details": {"audio_tokens": 0, "cached_tokens": 0},
+        },
+    }
+
+    # Create a mock response object
+    mock_raw_response = MagicMock()
+    mock_raw_response.headers = {
+        "x-request-id": "123",
+        "openai-organization": "org-123",
+        "x-ratelimit-limit-requests": "100",
+        "x-ratelimit-remaining-requests": "99",
+    }
+    mock_raw_response.parse.return_value = mock_response_data
+
+    # Set up the mock completion
+    mock_completion = MagicMock()
+    mock_completion.return_value = mock_raw_response
+
+    with patch.object(
+        client.chat.completions.with_raw_response, "create", mock_completion
+    ) as mock_create:
+        resp = litellm.completion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": ""}],
+        )
+        assert resp.choices[0].message.content is not None

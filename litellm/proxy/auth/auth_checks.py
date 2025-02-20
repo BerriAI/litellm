@@ -101,6 +101,7 @@ async def common_checks(
         team_object=team_object,
         model=_model,
         llm_router=llm_router,
+        team_model_aliases=valid_token.team_model_aliases if valid_token else None,
     )
 
     ## 2.1 If user can call model (if personal key)
@@ -200,6 +201,7 @@ def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
     - user_route: str - the route the user is trying to call
     - allowed_routes: List[str|LiteLLMRoutes] - the list of allowed routes for the user.
     """
+
     for allowed_route in allowed_routes:
         if (
             allowed_route in LiteLLMRoutes.__members__
@@ -402,6 +404,29 @@ def _update_last_db_access_time(
     last_db_access_time[key] = (value, time.time())
 
 
+def _get_role_based_permissions(
+    rbac_role: RBAC_ROLES,
+    general_settings: dict,
+    key: Literal["models", "routes"],
+) -> Optional[List[str]]:
+    """
+    Get the role based permissions from the general settings.
+    """
+    role_based_permissions = cast(
+        Optional[List[RoleBasedPermissions]],
+        general_settings.get("role_permissions", []),
+    )
+    if role_based_permissions is None:
+        return None
+
+    for role_based_permission in role_based_permissions:
+
+        if role_based_permission.role == rbac_role:
+            return getattr(role_based_permission, key)
+
+    return None
+
+
 def get_role_based_models(
     rbac_role: RBAC_ROLES,
     general_settings: dict,
@@ -412,18 +437,26 @@ def get_role_based_models(
     Used by JWT Auth.
     """
 
-    role_based_permissions = cast(
-        Optional[List[RoleBasedPermissions]],
-        general_settings.get("role_permissions", []),
+    return _get_role_based_permissions(
+        rbac_role=rbac_role,
+        general_settings=general_settings,
+        key="models",
     )
-    if role_based_permissions is None:
-        return None
 
-    for role_based_permission in role_based_permissions:
-        if role_based_permission["role"] == rbac_role:
-            return role_based_permission["models"]
 
-    return None
+def get_role_based_routes(
+    rbac_role: RBAC_ROLES,
+    general_settings: dict,
+) -> Optional[List[str]]:
+    """
+    Get the routes allowed for a user role.
+    """
+
+    return _get_role_based_permissions(
+        rbac_role=rbac_role,
+        general_settings=general_settings,
+        key="routes",
+    )
 
 
 async def _get_fuzzy_user_object(
@@ -623,10 +656,19 @@ async def _delete_cache_key_object(
 
 
 @log_db_metrics
-async def _get_team_db_check(team_id: str, prisma_client: PrismaClient):
-    return await prisma_client.db.litellm_teamtable.find_unique(
+async def _get_team_db_check(
+    team_id: str, prisma_client: PrismaClient, team_id_upsert: Optional[bool] = None
+):
+    response = await prisma_client.db.litellm_teamtable.find_unique(
         where={"team_id": team_id}
     )
+
+    if response is None and team_id_upsert:
+        response = await prisma_client.db.litellm_teamtable.create(
+            data={"team_id": team_id}
+        )
+
+    return response
 
 
 async def _get_team_object_from_db(team_id: str, prisma_client: PrismaClient):
@@ -643,6 +685,7 @@ async def _get_team_object_from_user_api_key_cache(
     db_cache_expiry: int,
     proxy_logging_obj: Optional[ProxyLogging],
     key: str,
+    team_id_upsert: Optional[bool] = None,
 ) -> LiteLLM_TeamTableCachedObj:
     db_access_time_key = key
     should_check_db = _should_check_db(
@@ -652,7 +695,7 @@ async def _get_team_object_from_user_api_key_cache(
     )
     if should_check_db:
         response = await _get_team_db_check(
-            team_id=team_id, prisma_client=prisma_client
+            team_id=team_id, prisma_client=prisma_client, team_id_upsert=team_id_upsert
         )
     else:
         response = None
@@ -720,6 +763,7 @@ async def get_team_object(
     proxy_logging_obj: Optional[ProxyLogging] = None,
     check_cache_only: Optional[bool] = None,
     check_db_only: Optional[bool] = None,
+    team_id_upsert: Optional[bool] = None,
 ) -> LiteLLM_TeamTableCachedObj:
     """
     - Check if team id in proxy Team Table
@@ -763,6 +807,7 @@ async def get_team_object(
             last_db_access_time=last_db_access_time,
             db_cache_expiry=db_cache_expiry,
             key=key,
+            team_id_upsert=team_id_upsert,
         )
     except Exception:
         raise Exception(
@@ -924,6 +969,7 @@ async def _can_object_call_model(
     model: str,
     llm_router: Optional[Router],
     models: List[str],
+    team_model_aliases: Optional[Dict[str, str]] = None,
 ) -> Literal[True]:
     """
     Checks if token can call a given model
@@ -958,6 +1004,9 @@ async def _can_object_call_model(
 
     verbose_proxy_logger.debug(f"model: {model}; allowed_models: {filtered_models}")
 
+    if _model_in_team_aliases(model=model, team_model_aliases=team_model_aliases):
+        return True
+
     if _model_matches_any_wildcard_pattern_in_list(
         model=model, allowed_model_list=filtered_models
     ):
@@ -982,6 +1031,26 @@ async def _can_object_call_model(
     return True
 
 
+def _model_in_team_aliases(
+    model: str, team_model_aliases: Optional[Dict[str, str]] = None
+) -> bool:
+    """
+    Returns True if `model` being accessed is an alias of a team model
+
+    - `model=gpt-4o`
+    - `team_model_aliases={"gpt-4o": "gpt-4o-team-1"}`
+        - returns True
+
+    - `model=gp-4o`
+    - `team_model_aliases={"o-3": "o3-preview"}`
+        - returns False
+    """
+    if team_model_aliases:
+        if model in team_model_aliases:
+            return True
+    return False
+
+
 async def can_key_call_model(
     model: str,
     llm_model_list: Optional[list],
@@ -1001,6 +1070,7 @@ async def can_key_call_model(
         model=model,
         llm_router=llm_router,
         models=valid_token.models,
+        team_model_aliases=valid_token.team_model_aliases,
     )
 
 
@@ -1173,6 +1243,7 @@ def _team_model_access_check(
     model: Optional[str],
     team_object: Optional[LiteLLM_TeamTable],
     llm_router: Optional[Router],
+    team_model_aliases: Optional[Dict[str, str]] = None,
 ):
     """
     Access check for team models
@@ -1199,6 +1270,8 @@ def _team_model_access_check(
         ):
             pass
         elif model and "*" in model:
+            pass
+        elif _model_in_team_aliases(model=model, team_model_aliases=team_model_aliases):
             pass
         elif _model_matches_any_wildcard_pattern_in_list(
             model=model, allowed_model_list=team_object.models

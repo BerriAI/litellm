@@ -423,6 +423,7 @@ class PrometheusLogger(CustomLogger):
             team=user_api_team,
             team_alias=user_api_team_alias,
             user=user_id,
+            user_email=standard_logging_payload["metadata"]["user_api_key_user_email"],
             status_code="200",
             model=model,
             litellm_model_name=model,
@@ -690,14 +691,14 @@ class PrometheusLogger(CustomLogger):
         start_time: Optional[datetime] = kwargs.get("start_time")
         api_call_start_time = kwargs.get("api_call_start_time", None)
         completion_start_time = kwargs.get("completion_start_time", None)
+        time_to_first_token_seconds = self._safe_duration_seconds(
+            start_time=api_call_start_time,
+            end_time=completion_start_time,
+        )
         if (
-            completion_start_time is not None
-            and isinstance(completion_start_time, datetime)
+            time_to_first_token_seconds is not None
             and kwargs.get("stream", False) is True  # only emit for streaming requests
         ):
-            time_to_first_token_seconds = (
-                completion_start_time - api_call_start_time
-            ).total_seconds()
             self.litellm_llm_api_time_to_first_token_metric.labels(
                 model,
                 user_api_key,
@@ -709,11 +710,12 @@ class PrometheusLogger(CustomLogger):
             verbose_logger.debug(
                 "Time to first token metric not emitted, stream option in model_parameters is not True"
             )
-        if api_call_start_time is not None and isinstance(
-            api_call_start_time, datetime
-        ):
-            api_call_total_time: timedelta = end_time - api_call_start_time
-            api_call_total_time_seconds = api_call_total_time.total_seconds()
+
+        api_call_total_time_seconds = self._safe_duration_seconds(
+            start_time=api_call_start_time,
+            end_time=end_time,
+        )
+        if api_call_total_time_seconds is not None:
             _labels = prometheus_label_factory(
                 supported_enum_labels=PrometheusMetricLabels.get_labels(
                     label_name="litellm_llm_api_latency_metric"
@@ -725,9 +727,11 @@ class PrometheusLogger(CustomLogger):
             )
 
         # total request latency
-        if start_time is not None and isinstance(start_time, datetime):
-            total_time: timedelta = end_time - start_time
-            total_time_seconds = total_time.total_seconds()
+        total_time_seconds = self._safe_duration_seconds(
+            start_time=start_time,
+            end_time=end_time,
+        )
+        if total_time_seconds is not None:
             _labels = prometheus_label_factory(
                 supported_enum_labels=PrometheusMetricLabels.get_labels(
                     label_name="litellm_request_total_latency_metric"
@@ -806,6 +810,7 @@ class PrometheusLogger(CustomLogger):
             enum_values = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
+                user_email=user_api_key_dict.user_email,
                 hashed_api_key=user_api_key_dict.api_key,
                 api_key_alias=user_api_key_dict.key_alias,
                 team=user_api_key_dict.team_id,
@@ -853,6 +858,7 @@ class PrometheusLogger(CustomLogger):
                 team=user_api_key_dict.team_id,
                 team_alias=user_api_key_dict.team_alias,
                 user=user_api_key_dict.user_id,
+                user_email=user_api_key_dict.user_email,
                 status_code="200",
             )
             _labels = prometheus_label_factory(
@@ -1439,6 +1445,7 @@ class PrometheusLogger(CustomLogger):
                 key_alias=None,
                 exclude_team_id=UI_SESSION_TOKEN_TEAM_ID,
                 return_full_object=True,
+                organization_id=None,
             )
             keys = key_list_response.get("keys", [])
             total_count = key_list_response.get("total_count")
@@ -1587,10 +1594,17 @@ class PrometheusLogger(CustomLogger):
         - Max Budget
         - Budget Reset At
         """
-        self.litellm_remaining_api_key_budget_metric.labels(
-            user_api_key_dict.token,
-            user_api_key_dict.key_alias or "",
-        ).set(
+        enum_values = UserAPIKeyLabelValues(
+            hashed_api_key=user_api_key_dict.token,
+            api_key_alias=user_api_key_dict.key_alias or "",
+        )
+        _labels = prometheus_label_factory(
+            supported_enum_labels=PrometheusMetricLabels.get_labels(
+                label_name="litellm_remaining_api_key_budget_metric"
+            ),
+            enum_values=enum_values,
+        )
+        self.litellm_remaining_api_key_budget_metric.labels(**_labels).set(
             self._safe_get_remaining_budget(
                 max_budget=user_api_key_dict.max_budget,
                 spend=user_api_key_dict.spend,
@@ -1598,14 +1612,18 @@ class PrometheusLogger(CustomLogger):
         )
 
         if user_api_key_dict.max_budget is not None:
-            self.litellm_api_key_max_budget_metric.labels(
-                user_api_key_dict.token, user_api_key_dict.key_alias
-            ).set(user_api_key_dict.max_budget)
+            _labels = prometheus_label_factory(
+                supported_enum_labels=PrometheusMetricLabels.get_labels(
+                    label_name="litellm_api_key_max_budget_metric"
+                ),
+                enum_values=enum_values,
+            )
+            self.litellm_api_key_max_budget_metric.labels(**_labels).set(
+                user_api_key_dict.max_budget
+            )
 
         if user_api_key_dict.budget_reset_at is not None:
-            self.litellm_api_key_budget_remaining_hours_metric.labels(
-                user_api_key_dict.token, user_api_key_dict.key_alias
-            ).set(
+            self.litellm_api_key_budget_remaining_hours_metric.labels(**_labels).set(
                 self._get_remaining_hours_for_budget_reset(
                     budget_reset_at=user_api_key_dict.budget_reset_at
                 )
@@ -1673,6 +1691,21 @@ class PrometheusLogger(CustomLogger):
         return (
             budget_reset_at - datetime.now(budget_reset_at.tzinfo)
         ).total_seconds() / 3600
+
+    def _safe_duration_seconds(
+        self,
+        start_time: Any,
+        end_time: Any,
+    ) -> Optional[float]:
+        """
+        Compute the duration in seconds between two objects.
+
+        Returns the duration as a float if both start and end are instances of datetime,
+        otherwise returns None.
+        """
+        if isinstance(start_time, datetime) and isinstance(end_time, datetime):
+            return (end_time - start_time).total_seconds()
+        return None
 
 
 def prometheus_label_factory(

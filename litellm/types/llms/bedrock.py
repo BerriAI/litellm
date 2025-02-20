@@ -184,6 +184,18 @@ class RequestObject(CommonRequestObject, total=False):
     messages: Required[List[MessageBlock]]
 
 
+class BedrockInvokeNovaRequest(TypedDict, total=False):
+    """
+    Request object for sending `nova` requests to `/bedrock/invoke/`
+    """
+
+    messages: List[MessageBlock]
+    inferenceConfig: InferenceConfig
+    system: List[SystemContentBlock]
+    toolConfig: ToolConfigBlock
+    guardrailConfig: Optional[GuardrailConfigBlock]
+
+
 class GenericStreamingChunk(TypedDict):
     text: Required[str]
     tool_use: Optional[ChatCompletionToolCallChunk]
@@ -401,3 +413,10 @@ class BedrockRerankRequest(TypedDict):
     queries: List[BedrockRerankQuery]
     rerankingConfiguration: BedrockRerankConfiguration
     sources: List[BedrockRerankSource]
+
+
+class AmazonDeepSeekR1StreamingResponse(TypedDict):
+    generation: str
+    generation_token_count: int
+    stop_reason: Optional[str]
+    prompt_token_count: int
