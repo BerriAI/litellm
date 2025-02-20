@@ -109,18 +109,6 @@ guardrails:
                 redact: true
               ssn:
                 redact: true
-  - guardrail_name: "acuvity-pii-detection"
-    litellm_params:
-      guardrail: acuvity
-      mode: "pre_call"
-      default_on: true
-      api_key: os.environ/ACUVITY_TOKEN
-      vendor_params:
-        guardrails:
-          - name: pii_detector
-            matches:
-              # no redaction, only detection.
-              person:
   - guardrail_name: "acuvity-exploits-detector"
     litellm_params:
       guardrail: acuvity
