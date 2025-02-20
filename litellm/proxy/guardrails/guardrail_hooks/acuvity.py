@@ -203,6 +203,7 @@ class AcuvityGuardrail(CustomGuardrail):
         return matched_guard_list
 
     def _check_violations(self, resp: ScanResponseMatch, redaction_set: set ,index: int) -> bool:
+        # find all the detected PII guards.
         detected_pii_detectors = [match
                 for detector in [
                 resp.guard_match(guard=GuardName.PII_DETECTOR, msg_index=index),
@@ -212,6 +213,7 @@ class AcuvityGuardrail(CustomGuardrail):
                 for match in detector
                 if match.response_match == ResponseMatch.YES
                 ]
+
         detected_guards = resp.match_details[index].matched_checks
         detected_pii_extraction_vals : list[str] = []
         for m in detected_guards:
