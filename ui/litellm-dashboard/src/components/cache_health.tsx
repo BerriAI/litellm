@@ -17,16 +17,17 @@ const deepParse = (input: any) => {
 };
 
 // TableClickableErrorField component with copy-to-clipboard functionality
-const TableClickableErrorField: React.FC<{ label: string; value: string }> = ({
+const TableClickableErrorField: React.FC<{ label: string; value: string | null | undefined }> = ({
   label,
   value,
 }) => {
   const [isExpanded, setIsExpanded] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
-  const truncated = value ? (value.length > 50 ? value.substring(0, 50) + "..." : value) : "N/A";
+  const safeValue = value?.toString() || "N/A";
+  const truncated = safeValue.length > 50 ? safeValue.substring(0, 50) + "..." : safeValue;
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(value);
+    navigator.clipboard.writeText(safeValue);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -45,7 +46,7 @@ const TableClickableErrorField: React.FC<{ label: string; value: string }> = ({
             <div>
               <div className="text-sm text-gray-600">{label}</div>
               <pre className="mt-1 text-sm font-mono text-gray-800 whitespace-pre-wrap">
-                {isExpanded ? value : truncated}
+                {isExpanded ? safeValue : truncated}
               </pre>
             </div>
           </div>
@@ -79,37 +80,48 @@ interface ErrorDetails {
 
 // Update HealthCheckDetails component to handle errors
 const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
-  // Parse error information if present
+  // Initialize with safe default values
   let errorDetails: ErrorDetails | null = null;
-  let parsedLitellmParams = null;
-  let parsedRedisParams = null;
+  let parsedLitellmParams: any = {};
+  let parsedRedisParams: any = {};
 
-  if (response.error) {
-    try {
-      const errorMessage = JSON.parse(response.error.message);
-      errorDetails = {
-        message: errorMessage.message,
-        traceback: errorMessage.traceback,
-        litellm_params: errorMessage.litellm_cache_params,
-        redis_cache_params: errorMessage.redis_cache_params 
-      };
-      
-      // Parse the cache parameters from the error response
-      parsedLitellmParams = deepParse(errorDetails.litellm_params);
-      parsedRedisParams = deepParse(errorDetails.redis_cache_params);
-    } catch (e) {
-      console.error("Error parsing error details:", e);
+  try {
+    if (response?.error) {
+      try {
+        const errorMessage = typeof response.error.message === 'string' 
+          ? JSON.parse(response.error.message)
+          : response.error.message;
+
+        errorDetails = {
+          message: errorMessage?.message || 'Unknown error',
+          traceback: errorMessage?.traceback || 'No traceback available',
+          litellm_params: errorMessage?.litellm_cache_params || {},
+          redis_cache_params: errorMessage?.redis_cache_params || {}
+        };
+        
+        parsedLitellmParams = deepParse(errorDetails.litellm_params) || {};
+        parsedRedisParams = deepParse(errorDetails.redis_cache_params) || {};
+      } catch (e) {
+        console.warn("Error parsing error details:", e);
+        errorDetails = {
+          message: String(response.error.message || 'Unknown error'),
+          traceback: 'Error parsing details',
+          litellm_params: {},
+          redis_cache_params: {}
+        };
+      }
+    } else {
+      parsedLitellmParams = deepParse(response?.litellm_cache_params) || {};
+      parsedRedisParams = deepParse(response?.redis_cache_params) || {};
     }
-  } else {
-    // Existing parsing for non-error responses
-    parsedLitellmParams = deepParse(response.litellm_cache_params);
-    parsedRedisParams = deepParse(response.redis_cache_params);
+  } catch (e) {
+    console.warn("Error in response parsing:", e);
+    // Provide safe fallback values
+    parsedLitellmParams = {};
+    parsedRedisParams = {};
   }
 
-  console.log("parsedLitellmParams", parsedLitellmParams);
-  console.log("parsedRedisParams", parsedRedisParams);
-  
-  // Extract Redis details from parsed response, checking multiple possible paths
+  // Safely extract Redis details with fallbacks
   const redisDetails: RedisDetails = {
     redis_host: parsedRedisParams?.redis_client?.connection_pool?.connection_kwargs?.host ||
                 parsedRedisParams?.redis_async_client?.connection_pool?.connection_kwargs?.host ||
@@ -123,14 +135,20 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
     
     redis_version: parsedRedisParams?.redis_version || "N/A",
     
-    startup_nodes: parsedRedisParams?.redis_kwargs?.startup_nodes ? 
-                  JSON.stringify(parsedRedisParams.redis_kwargs.startup_nodes) :
-                  JSON.stringify([{
-                    host: parsedRedisParams?.redis_client?.connection_pool?.connection_kwargs?.host ||
-                          parsedRedisParams?.redis_async_client?.connection_pool?.connection_kwargs?.host,
-                    port: parsedRedisParams?.redis_client?.connection_pool?.connection_kwargs?.port ||
-                          parsedRedisParams?.redis_async_client?.connection_pool?.connection_kwargs?.port
-                  }])
+    startup_nodes: (() => {
+      try {
+        if (parsedRedisParams?.redis_kwargs?.startup_nodes) {
+          return JSON.stringify(parsedRedisParams.redis_kwargs.startup_nodes);
+        }
+        const host = parsedRedisParams?.redis_client?.connection_pool?.connection_kwargs?.host ||
+                    parsedRedisParams?.redis_async_client?.connection_pool?.connection_kwargs?.host;
+        const port = parsedRedisParams?.redis_client?.connection_pool?.connection_kwargs?.port ||
+                    parsedRedisParams?.redis_async_client?.connection_pool?.connection_kwargs?.port;
+        return host && port ? JSON.stringify([{ host, port }]) : "N/A";
+      } catch (e) {
+        return "N/A";
+      }
+    })()
   };
 
   return (
@@ -145,13 +163,13 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
           <TabPanel className="p-4">
             <div>
               <div className="flex items-center mb-6">
-                {response.status === "healthy" ? (
+                {(response?.status === "healthy") ? (
                   <CheckCircleIcon className="h-5 w-5 text-green-500 mr-2" />
                 ) : (
                   <XCircleIcon className="h-5 w-5 text-red-500 mr-2" />
                 )}
-                <Text className={`text-sm font-medium ${response.status === "healthy" ? "text-green-500" : "text-red-500"}`}>
-                  Cache Status: {response.status || "unhealthy"}
+                <Text className={`text-sm font-medium ${response?.status === "healthy" ? "text-green-500" : "text-red-500"}`}>
+                  Cache Status: {response?.status || "unhealthy"}
                 </Text>
               </div>
 
@@ -220,12 +238,31 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
 
           <TabPanel className="p-4">
             <div className="bg-gray-50 rounded-md p-4 font-mono text-sm">
-              <pre className="overflow-auto max-h-[500px]">
-                {JSON.stringify({
-                  ...response,
-                  litellm_cache_params: parsedLitellmParams,
-                  redis_cache_params: parsedRedisParams
-                }, null, 2)}
+              <pre className="whitespace-pre-wrap break-words overflow-auto max-h-[500px]">
+                {(() => {
+                  try {
+                    const data = {
+                      ...response,
+                      litellm_cache_params: parsedLitellmParams,
+                      redis_cache_params: parsedRedisParams
+                    };
+                    // First parse any string JSON values
+                    const prettyData = JSON.parse(JSON.stringify(data, (key, value) => {
+                      if (typeof value === 'string') {
+                        try {
+                          return JSON.parse(value);
+                        } catch {
+                          return value;
+                        }
+                      }
+                      return value;
+                    }));
+                    // Then stringify with proper formatting
+                    return JSON.stringify(prettyData, null, 2);
+                  } catch (e) {
+                    return "Error formatting JSON: " + (e as Error).message;
+                  }
+                })()}
               </pre>
             </div>
           </TabPanel>
