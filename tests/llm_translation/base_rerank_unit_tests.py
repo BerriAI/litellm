@@ -52,13 +52,13 @@ def assert_response_shape(response, custom_llm_provider):
             response.meta["api_version"]["version"],
             expected_api_version_shape["version"],
         )
-        assert isinstance(
-            response.meta["billed_units"], expected_meta_shape["billed_units"]
-        )
-        assert isinstance(
-            response.meta["billed_units"]["search_units"],
-            expected_billed_units_shape["search_units"],
-        )
+    assert isinstance(
+        response.meta["billed_units"], expected_meta_shape["billed_units"]
+    )
+    assert isinstance(
+        response.meta["billed_units"]["search_units"],
+        expected_billed_units_shape["search_units"],
+    )
 
 
 class BaseLLMRerankTest(ABC):
