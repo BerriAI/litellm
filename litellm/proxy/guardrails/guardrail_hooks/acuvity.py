@@ -81,7 +81,7 @@ class AcuvityGuardrail(CustomGuardrail):
                                     "guard": self.matched_guards(resp.match_details[index])
                                 }
                             )
-                #If no voilations then, we need to replace the redacted response.
+                #If no voilations then, check if we need to replace the redacted response.
                 if isinstance(_messages[index]["content"], str):
                     if _messages[index]["content"] != extraction.data:
                         redacted = True
@@ -165,7 +165,7 @@ class AcuvityGuardrail(CustomGuardrail):
                                 }
                             )
 
-                #If no voilations then, we need to replace the redacted response.
+                #If no voilations then, check if we need to replace the redacted response.
                 if isinstance(response, ModelResponse) and not isinstance(response.choices[0], StreamingChoices):
                     if response.choices[0].message.content != extraction.data:
                         redacted = True
