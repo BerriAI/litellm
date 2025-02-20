@@ -122,7 +122,7 @@ def test_cache_ping_failure(mock_redis_failure):
     error_details = json.loads(error["message"])
     assert "message" in error_details
     assert "litellm_cache_params" in error_details
-    assert "redis_cache_params" in error_details
+    assert "health_check_cache_params" in error_details
     assert "traceback" in error_details
 
     # Verify specific error message
