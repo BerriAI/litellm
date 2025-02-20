@@ -78,7 +78,7 @@ async def cache_ping():
         error_message = {
             "message": f"Service Unhealthy ({str(e)})",
             "litellm_cache_params": str(litellm_cache_params),
-            "specific_cache_params": str(specific_cache_params),
+            "redis_cache_params": str(specific_cache_params),
             "traceback": traceback.format_exc(),
         }
         raise ProxyException(
