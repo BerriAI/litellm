@@ -393,3 +393,19 @@ def test_rerank_response_assertions():
     )
 
     assert_response_shape(r, custom_llm_provider="custom")
+
+
+@pytest.mark.flaky(retries=3, delay=1)
+def test_rerank_cohere_api():
+    response = litellm.rerank(
+        model="cohere/rerank-english-v3.0",
+        query="hello",
+        documents=["hello", "world"],
+        return_documents=True,
+        top_n=3,
+    )
+    print("rerank response", response)
+    assert response.results[0]["document"] is not None
+    assert response.results[0]["document"]["text"] is not None
+    assert response.results[0]["document"]["text"] == "hello"
+    assert response.results[1]["document"]["text"] == "world"
