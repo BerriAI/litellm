@@ -1789,7 +1789,7 @@ async def team_model_add(
 
     Example Request:
     ```
-    curl --location 'http://0.0.0.0:4000/team/model/add' \
+    curl --location 'http://0.0.0.0:4000/team/model_add' \
     --header 'Authorization: Bearer sk-1234' \
     --header 'Content-Type: application/json' \
     --data '{
@@ -1862,7 +1862,7 @@ async def team_model_delete(
 
     Example Request:
     ```
-    curl --location 'http://0.0.0.0:4000/team/model/delete' \
+    curl --location 'http://0.0.0.0:4000/team/model_delete' \
     --header 'Authorization: Bearer sk-1234' \
     --header 'Content-Type: application/json' \
     --data '{
