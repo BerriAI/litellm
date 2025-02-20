@@ -661,7 +661,7 @@ class RedisCache(BaseCache):
                 cache_key = self.check_and_fix_namespace(key=cache_key or "")
                 _keys.append(cache_key)
             start_time = time.time()
-            results: List = self.redis_client.mget(keys=_keys)  # type: ignore
+            results: List = self.redis_client.mget_nonatomic(keys=_keys)  # type: ignore
             end_time = time.time()
             _duration = end_time - start_time
             self.service_logger_obj.service_success_hook(
@@ -766,7 +766,7 @@ class RedisCache(BaseCache):
             for cache_key in _key_list:
                 cache_key = self.check_and_fix_namespace(key=cache_key)
                 _keys.append(cache_key)
-            results = await _redis_client.mget(keys=_keys)
+            results = await _redis_client.mget_nonatomic(keys=_keys)
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
