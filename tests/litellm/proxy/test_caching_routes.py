@@ -150,3 +150,36 @@ def test_cache_ping_no_cache_initialized():
 
     # Restore original cache
     litellm.cache = original_cache
+
+
+def test_cache_ping_health_check_includes_only_cache_attributes(mock_redis_success):
+    """
+    Ensure that the /cache/ping endpoint only pulls HealthCheckCacheParams from litellm.cache.cache,
+    and not from other attributes on litellm.cache.
+    """
+    # Add an unrelated field directly to the cache mock; it should NOT appear in health_check_cache_params
+    mock_redis_success.some_unrelated_field = "should-not-appear-in-health-check"
+
+    # Add a field on the underlying `cache` object that SHOULD appear
+    mock_redis_success.cache.redis_kwargs = {"host": "localhost", "port": 6379}
+
+    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-1234"})
+    assert (
+        response.status_code == 200
+    ), f"Unexpected status code: {response.status_code}"
+
+    data = response.json()
+    health_check_cache_params = data.get("health_check_cache_params", {})
+    # The unrelated field we attached at the top-level of litellm.cache should *not* be present
+    assert (
+        "some_unrelated_field" not in health_check_cache_params
+    ), "Found an unexpected field from the mock_redis_success object in health_check_cache_params"
+
+    # The field we attached to 'mock_redis_success.cache' should be present and correctly reported
+    assert (
+        "redis_kwargs" in health_check_cache_params
+    ), "Expected field on `litellm.cache.cache` was not found in health_check_cache_params"
+    assert health_check_cache_params["redis_kwargs"] == {
+        "host": "localhost",
+        "port": 6379,
+    }
