@@ -186,6 +186,10 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
                     label="Set Cache Response"
                     value={response.set_cache_response || "N/A"}
                   />
+                  <TableClickableErrorField
+                    label="litellm_settings.cache_params"
+                    value={JSON.stringify(parsedLitellmParams, null, 2)}
+                  />
                   
                   {/* Redis Details Section */}
                   {parsedLitellmParams?.type === "redis" && (
