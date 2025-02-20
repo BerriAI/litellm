@@ -11,5 +11,7 @@ general_settings:
 
 
 litellm_settings:
-  callbacks: ["gcs_bucket"]
-
+  cache: true
+  cache_params:
+    type: redis
+    ttl: 600
