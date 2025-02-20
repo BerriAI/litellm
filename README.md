@@ -358,10 +358,17 @@ poetry install -E extra_proxy -E proxy
 
 Step 3: Test your change:
 
+a. Add a pytest test within `tests/litellm/`
+
+This folder follows the same directory structure as `litellm/`.
+
+If a corresponding test file does not exist, create one.
+
+b. Run the test
+
 ```
-cd tests # pwd: Documents/litellm/litellm/tests
-poetry run flake8
-poetry run pytest .
+cd tests # pwd: Documents/litellm/litellm/tests/litellm
+pytest /path/to/test_file.py
 ```
 
 Step 4: Submit a PR with your changes! 🚀
