@@ -14,8 +14,10 @@ from litellm import rerank
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
-def test_rerank_infer_region_from_model_arn():
+def test_rerank_infer_region_from_model_arn(monkeypatch):
     mock_response = MagicMock()
+
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
     args = {
         "model": "bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0",
         "query": "hello",
@@ -45,3 +47,5 @@ def test_rerank_infer_region_from_model_arn():
         )
         mock_post.assert_called_once()
         print(f"mock_post.call_args: {mock_post.call_args.kwargs}")
+        assert "us-west-2" in mock_post.call_args.kwargs["url"]
+        assert "us-east-1" not in mock_post.call_args.kwargs["url"]
