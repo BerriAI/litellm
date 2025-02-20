@@ -79,7 +79,7 @@ class BaseLLMRerankTest(ABC):
     @pytest.mark.asyncio()
     @pytest.mark.parametrize("sync_mode", [True, False])
     async def test_basic_rerank(self, sync_mode):
-        litellm.set_verbose = True
+        litellm._turn_on_debug()
         rerank_call_args = self.get_base_rerank_call_args()
         custom_llm_provider = self.get_custom_llm_provider()
         if sync_mode is True:
@@ -94,6 +94,8 @@ class BaseLLMRerankTest(ABC):
 
             assert response.id is not None
             assert response.results is not None
+
+            assert response._hidden_params["response_cost"] is not None
 
             assert_response_shape(
                 response=response, custom_llm_provider=custom_llm_provider.value

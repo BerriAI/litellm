@@ -4,13 +4,15 @@ Utility functions for base LLM classes.
 
 import copy
 from abc import ABC, abstractmethod
-from typing import List, Optional, Type, Union
+from typing import List, Optional, Tuple, Type, Union
 
 from openai.lib import _parsing, _pydantic
 from pydantic import BaseModel
 
+from litellm._logger import verbose_logger
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ProviderSpecificModelInfo
+from litellm.utils import get_model_info
 
 
 class BaseLLMModelInfo(ABC):
@@ -44,6 +46,39 @@ class BaseLLMModelInfo(ABC):
             This function will return `anthropic.claude-3-opus-20240229-v1:0`
         """
         pass
+
+    @staticmethod
+    def get_rerank_cost(
+        model: str, num_queries: int = 1, custom_llm_provider: Optional[str] = None
+    ) -> Tuple[float, float]:
+        """
+        Calculates the cost per query for a given rerank model.
+
+        Input:
+            - model: str, the model name without provider prefix
+
+        Returns:
+            Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
+        """
+
+        try:
+            model_info = get_model_info(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+        except Exception as e:
+            verbose_logger.debug(f"Error getting model info for rerank model: {e}")
+            model_info = None
+
+        if (
+            model_info is None
+            or "input_cost_per_query" not in model_info
+            or model_info["input_cost_per_query"] is None
+        ):
+            return 0.0, 0.0
+
+        prompt_cost = model_info["input_cost_per_query"] * num_queries
+
+        return prompt_cost, 0.0
 
 
 def _dict_to_response_format_helper(
