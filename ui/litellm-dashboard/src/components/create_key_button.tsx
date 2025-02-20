@@ -1,5 +1,4 @@
 "use client";
-
 import React, { useState, useEffect, useRef } from "react";
 import { Button, TextInput, Grid, Col } from "@tremor/react";
 import {
@@ -24,6 +23,7 @@ import {
   Radio,
 } from "antd";
 import { unfurlWildcardModelsInList, getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import SchemaFormFields from './common_components/check_openapi_schema';
 import {
   keyCreateCall,
   slackBudgetAlertsHealthCheck,
@@ -340,6 +340,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 <b>Optional Settings</b>
               </AccordionHeader>
               <AccordionBody>
+                <SchemaFormFields form={form} />
                 <Form.Item
                   className="mt-8"
                   label="Max Budget (USD)"
