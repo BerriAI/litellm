@@ -343,6 +343,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 To contribute: Clone the repo locally -> Make a change -> Submit a PR with the change.
 
 Here's how to modify the repo locally:
+
 Step 1: Clone the repo
 
 ```
@@ -367,7 +368,7 @@ If a corresponding test file does not exist, create one.
 b. Run the test
 
 ```
-cd tests # pwd: Documents/litellm/litellm/tests/litellm
+cd tests/litellm # pwd: Documents/litellm/litellm/tests/litellm
 pytest /path/to/test_file.py
 ```
 
