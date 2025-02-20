@@ -76,4 +76,3 @@ class HealthCheckCacheParams(BaseModel):
     redis_kwargs: Optional[Dict[str, Any]] = None
     namespace: Optional[str] = None
     redis_version: Optional[str] = None
-    default_ttl: Optional[int] = None
