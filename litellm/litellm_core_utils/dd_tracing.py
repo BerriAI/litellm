@@ -10,6 +10,12 @@ except ImportError:
     @contextmanager
     def null_tracer(name, **kwargs):
         class NullSpan:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
             def finish(self):
                 pass
 
@@ -18,6 +24,12 @@ except ImportError:
     class NullTracer:
         def trace(self, name, **kwargs):
             class NullSpan:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    pass
+
                 def finish(self):
                     pass
 
