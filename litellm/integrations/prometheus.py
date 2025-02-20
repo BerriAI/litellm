@@ -691,7 +691,7 @@ class PrometheusLogger(CustomLogger):
         start_time: Optional[datetime] = kwargs.get("start_time")
         api_call_start_time = kwargs.get("api_call_start_time", None)
         completion_start_time = kwargs.get("completion_start_time", None)
-        time_to_first_token_seconds = self.safe_duration_seconds(
+        time_to_first_token_seconds = self._safe_duration_seconds(
             start_time=api_call_start_time,
             end_time=completion_start_time,
         )
@@ -711,7 +711,7 @@ class PrometheusLogger(CustomLogger):
                 "Time to first token metric not emitted, stream option in model_parameters is not True"
             )
 
-        api_call_total_time_seconds = self.safe_duration_seconds(
+        api_call_total_time_seconds = self._safe_duration_seconds(
             start_time=api_call_start_time,
             end_time=end_time,
         )
@@ -727,7 +727,7 @@ class PrometheusLogger(CustomLogger):
             )
 
         # total request latency
-        total_time_seconds = self.safe_duration_seconds(
+        total_time_seconds = self._safe_duration_seconds(
             start_time=start_time,
             end_time=end_time,
         )
@@ -741,21 +741,6 @@ class PrometheusLogger(CustomLogger):
             self.litellm_request_total_latency_metric.labels(**_labels).observe(
                 total_time_seconds
             )
-
-    def safe_duration_seconds(
-        self,
-        start_time: Any,
-        end_time: Any,
-    ) -> Optional[float]:
-        """
-        Compute the duration in seconds between two objects.
-
-        Returns the duration as a float if both start and end are instances of datetime,
-        otherwise returns None.
-        """
-        if isinstance(start_time, datetime) and isinstance(end_time, datetime):
-            return (end_time - start_time).total_seconds()
-        return None
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         from litellm.types.utils import StandardLoggingPayload
@@ -1706,6 +1691,21 @@ class PrometheusLogger(CustomLogger):
         return (
             budget_reset_at - datetime.now(budget_reset_at.tzinfo)
         ).total_seconds() / 3600
+
+    def _safe_duration_seconds(
+        self,
+        start_time: Any,
+        end_time: Any,
+    ) -> Optional[float]:
+        """
+        Compute the duration in seconds between two objects.
+
+        Returns the duration as a float if both start and end are instances of datetime,
+        otherwise returns None.
+        """
+        if isinstance(start_time, datetime) and isinstance(end_time, datetime):
+            return (end_time - start_time).total_seconds()
+        return None
 
 
 def prometheus_label_factory(
