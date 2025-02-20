@@ -209,7 +209,7 @@ async def test_single_deployment_no_cooldowns_test_prod():
 @pytest.mark.asyncio
 async def test_single_deployment_cooldown_with_allowed_fails():
     """
-    When `num_retries` is set, use the num_retries to determine cooldown for 1 deployment
+    When `allowed_fails` is set, use the allowed_fails to determine cooldown for 1 deployment
     """
     router = Router(
         model_list=[
@@ -257,7 +257,7 @@ async def test_single_deployment_cooldown_with_allowed_fails():
 @pytest.mark.asyncio
 async def test_single_deployment_cooldown_with_allowed_fail_policy():
     """
-    When `allowed_fails` is set, use the allowed_fails to determine cooldown for 1 deployment
+    When `allowed_fails_policy` is set, use the allowed_fails_policy to determine cooldown for 1 deployment
     """
     router = Router(
         model_list=[
