@@ -1,5 +1,4 @@
 "use client";
-
 import React, { useState, useEffect, useRef } from "react";
 import { Button, TextInput, Grid, Col } from "@tremor/react";
 import {
@@ -24,11 +23,13 @@ import {
   Radio,
 } from "antd";
 import { unfurlWildcardModelsInList, getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import SchemaFormFields from './common_components/check_openapi_schema';
 import {
   keyCreateCall,
   slackBudgetAlertsHealthCheck,
   modelAvailableCall,
   getGuardrailsList,
+  proxyBaseUrl,
 } from "./networking";
 import { Team } from "./key_team_helpers/key_list";
 import TeamDropdown from "./common_components/team_dropdown";
@@ -474,6 +475,36 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     options={predefinedTags}
                   />
                 </Form.Item>
+                <Accordion className="mt-20 mb-8">
+                  <AccordionHeader>
+                  <div className="flex items-center gap-2">
+
+                    <b>Advanced Settings</b>
+                    <Tooltip title={ 
+                      <span>
+                        Learn more about advanced settings in our{' '}
+                        <a 
+                          href={proxyBaseUrl ? `${proxyBaseUrl}/#/key%20management/generate_key_fn_key_generate_post`: `/#/key%20management/generate_key_fn_key_generate_post`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-400 hover:text-blue-300"
+                        >
+                          documentation
+                        </a>
+                      </span>
+                    }>
+                      <InfoCircleOutlined className="text-gray-400 hover:text-gray-300 cursor-help" />
+                    </Tooltip>
+                    </div>
+                  </AccordionHeader>
+                  <AccordionBody>
+                    <SchemaFormFields 
+                      schemaComponent="GenerateKeyRequest"
+                      form={form}
+                      excludedFields={['key_alias', 'team_id', 'models', 'duration', 'metadata', 'tags', 'guardrails', "max_budget", "budget_duration", "tpm_limit", "rpm_limit"]}
+                    />
+                  </AccordionBody>
+                </Accordion>
               </AccordionBody>
             </Accordion>
           </>
