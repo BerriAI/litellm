@@ -51,6 +51,29 @@ By integrating Acuvity's security functions at these critical points, users can 
 
 Add the **PII Detection** guardrail to your **Pre LLM API Call** configuration.
 
+**Redaction vs Detection:**
+- **Redacted PII** → The sensitive data is masked before being sent to the LLM (e.g., replacing emails and SSNs with `XXXXXXXX`).
+- **Detected PII** → The system identifies sensitive data but does not modify it. Detection alone does not prevent the request from being processed.
+
+> **How to configure Redaction vs Detection in `config.yaml`:**
+> - Use `redact: true` under `matches` to **redact** specific PII types.
+> - If `redact` is omitted, the system **only detects** the PII without modifying the request.
+
+> **Example:**
+> ```yaml
+> guardrails:
+>   - name: pii_detector
+>     matches:
+>       email_address:
+>         redact: true  # Email addresses will be redacted
+>       ssn:
+>         redact: true  # SSNs will be redacted
+>       person:         # Names will only be detected, not redacted
+> ```
+
+> **Note:** Redacting PII allows the request to proceed with masked data, while detecting PII without redaction simply rejects the call.
+
+
 ### **2. During-Call: Detect Prompt Injection**
 
 Enable **Prompt Injection Detection** for your **During LLM API Call** configuration.
