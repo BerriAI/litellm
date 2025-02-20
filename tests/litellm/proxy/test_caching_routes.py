@@ -140,8 +140,13 @@ def test_cache_ping_no_cache_initialized():
 
     data = response.json()
     print("response data=", json.dumps(data, indent=4))
-    assert "detail" in data
-    assert "Cache not initialized. litellm.cache is None" in data["detail"]
+    assert "error" in data
+    error = data["error"]
+
+    # Verify error contains all expected fields
+    assert "message" in error
+    error_details = json.loads(error["message"])
+    assert "Cache not initialized. litellm.cache is None" in error_details["message"]
 
     # Restore original cache
     litellm.cache = original_cache
