@@ -887,6 +887,9 @@ from .llms.bedrock.chat.invoke_transformations.amazon_cohere_transformation impo
 from .llms.bedrock.chat.invoke_transformations.amazon_llama_transformation import (
     AmazonLlamaConfig,
 )
+from .llms.bedrock.chat.invoke_transformations.amazon_deepseek_transformation import (
+    AmazonDeepSeekR1Config,
+)
 from .llms.bedrock.chat.invoke_transformations.amazon_mistral_transformation import (
     AmazonMistralConfig,
 )

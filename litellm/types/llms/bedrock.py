@@ -413,3 +413,10 @@ class BedrockRerankRequest(TypedDict):
     queries: List[BedrockRerankQuery]
     rerankingConfiguration: BedrockRerankConfiguration
     sources: List[BedrockRerankSource]
+
+
+class AmazonDeepSeekR1StreamingResponse(TypedDict):
+    generation: str
+    generation_token_count: int
+    stop_reason: Optional[str]
+    prompt_token_count: int

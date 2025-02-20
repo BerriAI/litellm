@@ -6138,6 +6138,7 @@ class ProviderConfigManager:
             bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
                 model
             )
+
             if bedrock_route == "converse" or bedrock_route == "converse_like":
                 return litellm.AmazonConverseConfig()
             elif bedrock_invoke_provider == "amazon":  # amazon titan llms
@@ -6152,6 +6153,8 @@ class ProviderConfigManager:
                 return litellm.AmazonCohereConfig()
             elif bedrock_invoke_provider == "mistral":  # mistral models on bedrock
                 return litellm.AmazonMistralConfig()
+            elif bedrock_invoke_provider == "deepseek_r1":  # deepseek models on bedrock
+                return litellm.AmazonDeepSeekR1Config()
             else:
                 return litellm.AmazonInvokeConfig()
         return litellm.OpenAIGPTConfig()
