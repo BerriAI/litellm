@@ -1,5 +1,5 @@
 import json
-from typing import Any
+from typing import Any, Union
 
 
 def safe_dumps(data: Any, max_depth: int = 10) -> str:
@@ -19,6 +19,7 @@ def safe_dumps(data: Any, max_depth: int = 10) -> str:
         if id(obj) in seen:
             return "CircularReference Detected"
         seen.add(id(obj))
+        result: Union[dict, list, tuple, set, str]
         if isinstance(obj, dict):
             result = {}
             for k, v in obj.items():
