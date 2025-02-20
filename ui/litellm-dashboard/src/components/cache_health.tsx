@@ -1,5 +1,5 @@
 import React from "react";
-import { Card, Text, Button } from "@tremor/react";
+import { Card, Text, Button, TabGroup, TabList, Tab, TabPanel, TabPanels } from "@tremor/react";
 import { CheckCircleIcon, XCircleIcon, ClipboardCopyIcon } from "@heroicons/react/outline";
 import { ResponseTimeIndicator } from "./response_time_indicator";
 
@@ -73,8 +73,6 @@ interface RedisDetails {
 
 // Update HealthCheckDetails component to include Redis info
 const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
-  const [showRawJson, setShowRawJson] = React.useState(false);
-  
   // Parse the JSON strings in the response
   const parsedLitellmParams = deepParse(response.litellm_cache_params);
   const parsedRedisParams = deepParse(response.redis_cache_params);
@@ -103,85 +101,83 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
                   }])
   };
 
-  if (showRawJson) {
-    return (
-      <div className="mt-4">
-        <Button
-          onClick={() => setShowRawJson(false)}
-          className="mb-4"
-        >
-          Show Summary View
-        </Button>
-        <pre className="bg-gray-100 p-4 rounded-md overflow-auto max-h-[500px]">
-          {JSON.stringify({
-            ...response,
-            litellm_cache_params: parsedLitellmParams,
-            redis_cache_params: parsedRedisParams
-          }, null, 2)}
-        </pre>
-      </div>
-    );
-  }
-
   return (
     <div>
-      <div className="flex items-center mb-4">
-        {response.status === "healthy" ? (
-          <CheckCircleIcon className="h-6 w-6 text-green-500 mr-2" />
-        ) : (
-          <XCircleIcon className="h-6 w-6 text-red-500 mr-2" />
-        )}
-        <Text className={response.status === "healthy" ? "text-green-500" : "text-red-500"}>
-          Cache Status: {response.status}
-        </Text>
-      </div>
+      <TabGroup>
+        <TabList className="mb-6">
+          <Tab>Summary</Tab>
+          <Tab>Raw Response</Tab>
+        </TabList>
 
-      <table className="min-w-full">
-        <tbody>
-          <TableClickableErrorField
-            label="Cache Type"
-            value={response.cache_type}
-          />
-          <TableClickableErrorField
-            label="Ping Response"
-            value={String(response.ping_response)}
-          />
-          <TableClickableErrorField
-            label="Set Cache Response"
-            value={response.set_cache_response || "N/A"}
-          />
-          
-          {/* Add Redis Details Section */}
-          {response.cache_type === "redis" && (
-            <>
-              <tr><td colSpan={2} className="pt-4 pb-2 font-semibold">Redis Details</td></tr>
-              <TableClickableErrorField
-                label="Redis Host"
-                value={redisDetails.redis_host || "N/A"}
-              />
-              <TableClickableErrorField
-                label="Redis Port"
-                value={redisDetails.redis_port || "N/A"}
-              />
-              <TableClickableErrorField
-                label="Redis Version"
-                value={redisDetails.redis_version || "N/A"}
-              />
-              <TableClickableErrorField
-                label="Startup Nodes"
-                value={redisDetails.startup_nodes || "N/A"}
-              />
-            </>
-          )}
-        </tbody>
-      </table>
+        <TabPanels>
+          <TabPanel>
+            <div>
+              <div className="flex items-center mb-4">
+                {response.status === "healthy" ? (
+                  <CheckCircleIcon className="h-6 w-6 text-green-500 mr-2" />
+                ) : (
+                  <XCircleIcon className="h-6 w-6 text-red-500 mr-2" />
+                )}
+                <Text className={response.status === "healthy" ? "text-green-500" : "text-red-500"}>
+                  Cache Status: {response.status}
+                </Text>
+              </div>
 
-      <Button
-        onClick={() => setShowRawJson(true)}
-        className="mt-4"
-      >
-        View Raw Response
-      </Button>
+              <table className="min-w-full">
+                <tbody>
+                  <TableClickableErrorField
+                    label="Cache Type"
+                    value={response.cache_type}
+                  />
+                  <TableClickableErrorField
+                    label="Ping Response"
+                    value={String(response.ping_response)}
+                  />
+                  <TableClickableErrorField
+                    label="Set Cache Response"
+                    value={response.set_cache_response || "N/A"}
+                  />
+                  
+                  {/* Add Redis Details Section */}
+                  {response.cache_type === "redis" && (
+                    <>
+                      <tr><td colSpan={2} className="pt-4 pb-2 font-semibold">Redis Details</td></tr>
+                      <TableClickableErrorField
+                        label="Redis Host"
+                        value={redisDetails.redis_host || "N/A"}
+                      />
+                      <TableClickableErrorField
+                        label="Redis Port"
+                        value={redisDetails.redis_port || "N/A"}
+                      />
+                      <TableClickableErrorField
+                        label="Redis Version"
+                        value={redisDetails.redis_version || "N/A"}
+                      />
+                      <TableClickableErrorField
+                        label="Startup Nodes"
+                        value={redisDetails.startup_nodes || "N/A"}
+                      />
+                    </>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </TabPanel>
+
+          <TabPanel>
+            <Card className="max-w-screen-lg">
+              <pre className="bg-gray-100 p-4 rounded-md overflow-auto max-h-[500px]">
+                {JSON.stringify({
+                  ...response,
+                  litellm_cache_params: parsedLitellmParams,
+                  redis_cache_params: parsedRedisParams
+                }, null, 2)}
+              </pre>
+            </Card>
+          </TabPanel>
+        </TabPanels>
+      </TabGroup>
     </div>
   );
 };
