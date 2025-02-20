@@ -63,87 +63,125 @@ const TableClickableErrorField: React.FC<{ label: string; value: string }> = ({
   );
 };
 
-// HealthCheckDetails component
-export const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
-  if (response.error) {
-    let errorData = deepParse(response.error);
-    if (errorData && typeof errorData.message === "string") {
-      const innerParsed = deepParse(errorData.message);
-      if (innerParsed && typeof innerParsed === "object") {
-        errorData = innerParsed;
-      }
-    }
+// Add new interface for Redis details
+interface RedisDetails {
+  redis_host?: string;
+  redis_port?: string;
+  redis_version?: string;
+  startup_nodes?: string;
+}
 
+// Update HealthCheckDetails component to include Redis info
+const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
+  const [showRawJson, setShowRawJson] = React.useState(false);
+  
+  // Parse the JSON strings in the response
+  const parsedLitellmParams = deepParse(response.litellm_cache_params);
+  const parsedRedisParams = deepParse(response.redis_cache_params);
+  
+  // Extract Redis details from parsed response, checking multiple possible paths
+  const redisDetails: RedisDetails = {
+    redis_host: parsedRedisParams?.redis_kwargs?.startup_nodes?.[0]?.host || 
+                parsedRedisParams?.redis_client?.connection_pool?.connection_kwargs?.host ||
+                parsedRedisParams?.redis_async_client?.connection_pool?.connection_kwargs?.host ||
+                "N/A",
+    
+    redis_port: parsedRedisParams?.redis_kwargs?.startup_nodes?.[0]?.port ||
+                parsedRedisParams?.redis_client?.connection_pool?.connection_kwargs?.port ||
+                parsedRedisParams?.redis_async_client?.connection_pool?.connection_kwargs?.port ||
+                "N/A",
+    
+    redis_version: parsedRedisParams?.redis_version || "N/A",
+    
+    startup_nodes: parsedRedisParams?.redis_kwargs?.startup_nodes ? 
+                  JSON.stringify(parsedRedisParams.redis_kwargs.startup_nodes) :
+                  JSON.stringify([{
+                    host: parsedRedisParams?.redis_client?.connection_pool?.connection_kwargs?.host ||
+                          parsedRedisParams?.redis_async_client?.connection_pool?.connection_kwargs?.host,
+                    port: parsedRedisParams?.redis_client?.connection_pool?.connection_kwargs?.port ||
+                          parsedRedisParams?.redis_async_client?.connection_pool?.connection_kwargs?.port
+                  }])
+  };
+
+  if (showRawJson) {
     return (
-      <div className="bg-white rounded-lg border border-gray-200">
-        <div className="flex items-center space-x-2 text-red-600 p-4 border-b border-gray-200">
-          <XCircleIcon className="h-5 w-5" />
-          <h3 className="text-lg font-medium">Cache Health Check Failed</h3>
-        </div>
-        <table className="w-full">
-          <tbody>
-            {errorData.message && (
-              <TableClickableErrorField 
-                label="Error Message" 
-                value={errorData.message} 
-              />
-            )}
-            {errorData.type && (
-              <TableClickableErrorField 
-                label="Error Type" 
-                value={errorData.type} 
-              />
-            )}
-            {errorData.traceback && (
-              <TableClickableErrorField 
-                label="Traceback" 
-                value={errorData.traceback} 
-              />
-            )}
-          </tbody>
-        </table>
+      <div className="mt-4">
+        <Button
+          onClick={() => setShowRawJson(false)}
+          className="mb-4"
+        >
+          Show Summary View
+        </Button>
+        <pre className="bg-gray-100 p-4 rounded-md overflow-auto max-h-[500px]">
+          {JSON.stringify({
+            ...response,
+            litellm_cache_params: parsedLitellmParams,
+            redis_cache_params: parsedRedisParams
+          }, null, 2)}
+        </pre>
       </div>
     );
   }
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200">
-      <div className="flex items-center space-x-2 text-green-600 p-4 border-b border-gray-200">
-        <CheckCircleIcon className="h-5 w-5" />
-        <h3 className="text-lg font-medium">Cache Health Check Passed</h3>
+    <div>
+      <div className="flex items-center mb-4">
+        {response.status === "healthy" ? (
+          <CheckCircleIcon className="h-6 w-6 text-green-500 mr-2" />
+        ) : (
+          <XCircleIcon className="h-6 w-6 text-red-500 mr-2" />
+        )}
+        <Text className={response.status === "healthy" ? "text-green-500" : "text-red-500"}>
+          Cache Status: {response.status}
+        </Text>
       </div>
-      <table className="w-full">
+
+      <table className="min-w-full">
         <tbody>
-          <TableClickableErrorField 
-            label="Status" 
-            value={String(response.status || "-")} 
+          <TableClickableErrorField
+            label="Cache Type"
+            value={response.cache_type}
           />
-          <TableClickableErrorField 
-            label="Cache Type" 
-            value={String(response.cache_type || "-")} 
+          <TableClickableErrorField
+            label="Ping Response"
+            value={String(response.ping_response)}
           />
-          <TableClickableErrorField 
-            label="Ping Response" 
-            value={String(response.ping_response || "-")} 
+          <TableClickableErrorField
+            label="Set Cache Response"
+            value={response.set_cache_response || "N/A"}
           />
-          <TableClickableErrorField 
-            label="Set Cache Response" 
-            value={String(response.set_cache_response || "-")} 
-          />
-          {response.litellm_cache_params && (
-            <TableClickableErrorField 
-              label="LiteLLM Cache Parameters" 
-              value={JSON.stringify(deepParse(response.litellm_cache_params), null, 2)} 
-            />
-          )}
-          {response.specific_cache_params && (
-            <TableClickableErrorField 
-              label="Specific Cache Parameters" 
-              value={JSON.stringify(deepParse(response.specific_cache_params), null, 2)} 
-            />
+          
+          {/* Add Redis Details Section */}
+          {response.cache_type === "redis" && (
+            <>
+              <tr><td colSpan={2} className="pt-4 pb-2 font-semibold">Redis Details</td></tr>
+              <TableClickableErrorField
+                label="Redis Host"
+                value={redisDetails.redis_host || "N/A"}
+              />
+              <TableClickableErrorField
+                label="Redis Port"
+                value={redisDetails.redis_port || "N/A"}
+              />
+              <TableClickableErrorField
+                label="Redis Version"
+                value={redisDetails.redis_version || "N/A"}
+              />
+              <TableClickableErrorField
+                label="Startup Nodes"
+                value={redisDetails.startup_nodes || "N/A"}
+              />
+            </>
           )}
         </tbody>
       </table>
+
+      <Button
+        onClick={() => setShowRawJson(true)}
+        className="mt-4"
+      >
+        View Raw Response
+      </Button>
     </div>
   );
 };
