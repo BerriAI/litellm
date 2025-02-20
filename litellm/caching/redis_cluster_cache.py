@@ -26,9 +26,7 @@ else:
 class RedisClusterCache(RedisCache):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.redis_async_redis_cluster_clientcluster_client: Optional[RedisCluster] = (
-            None
-        )
+        self.redis_async_redis_cluster_client: Optional[RedisCluster] = None
         self.redis_sync_redis_cluster_client: Optional[RedisCluster] = None
 
     def init_async_client(self):
@@ -36,14 +34,14 @@ class RedisClusterCache(RedisCache):
 
         from .._redis import get_redis_async_client
 
-        if self.async_redis_cluster_client:
-            return self.async_redis_cluster_client
+        if self.redis_async_redis_cluster_client:
+            return self.redis_async_redis_cluster_client
 
         _redis_client = get_redis_async_client(
             connection_pool=self.async_redis_conn_pool, **self.redis_kwargs
         )
         if isinstance(_redis_client, RedisCluster):
-            self.async_redis_cluster_client = _redis_client
+            self.redis_async_redis_cluster_client = _redis_client
 
         return _redis_client
 
