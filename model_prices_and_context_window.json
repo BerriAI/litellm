@@ -5986,9 +5986,9 @@
         "max_tokens": 32000,
         "max_input_tokens": 32000,
         "max_output_tokens": 32000,
-        "max_tokens_per_doc": 512,
         "max_query_tokens": 32000,
-        "max_documents_per_query": 100,
+        "max_document_chunks_per_query": 100,
+        "max_tokens_per_document_chunk": 512,
         "input_cost_per_token": 0.0,
         "input_cost_per_query": 0.001,
         "output_cost_per_token": 0.0,
@@ -7034,6 +7034,19 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_tool_choice": true
+    },
+    "cohere.rerank-v3-5:0": {
+        "max_tokens": 32000,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 32000,
+        "max_query_tokens": 32000,
+        "max_document_chunks_per_query": 100,
+        "max_tokens_per_document_chunk": 512,
+        "input_cost_per_token": 0.0,
+        "input_cost_per_query": 0.002,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "bedrock",
+        "mode": "rerank"
     },
     "cohere.command-text-v14": {
         "max_tokens": 4096, 
