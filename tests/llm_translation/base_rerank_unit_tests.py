@@ -96,6 +96,7 @@ class BaseLLMRerankTest(ABC):
             assert response.results is not None
 
             assert response._hidden_params["response_cost"] is not None
+            assert response._hidden_params["response_cost"] > 0
 
             assert_response_shape(
                 response=response, custom_llm_provider=custom_llm_provider.value

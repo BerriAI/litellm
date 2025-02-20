@@ -5982,6 +5982,19 @@
         "litellm_provider": "bedrock",
         "mode": "chat"
     },
+    "amazon.rerank-v1:0": {
+        "max_tokens": 32000,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 32000,
+        "max_tokens_per_doc": 512,
+        "max_query_tokens": 32000,
+        "max_documents_per_query": 100,
+        "input_cost_per_token": 0.0,
+        "input_cost_per_query": 0.001,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "bedrock",
+        "mode": "rerank"
+    },
     "amazon.titan-text-lite-v1": {
         "max_tokens": 4000, 
         "max_input_tokens": 42000,
