@@ -350,11 +350,10 @@ Step 1: Clone the repo
 git clone https://github.com/BerriAI/litellm.git
 ```
 
-Step 2: Navigate into the project, and install dependencies:
+Step 2: Install dependencies:
 
 ```
-cd litellm
-poetry install -E extra_proxy -E proxy
+pip install -r requirements.txt
 ```
 
 Step 3: Test your change:
