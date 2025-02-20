@@ -1,6 +1,6 @@
 import json
 import urllib
-from typing import Any, Callable, Optional, Union
+from typing import Any, Optional, Union
 
 import httpx
 
