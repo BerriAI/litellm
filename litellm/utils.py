@@ -1758,6 +1758,7 @@ def _get_num_tokens_from_content_list(
         for c in content_list:
             if c["type"] == "text":
                 text += c["text"]
+                num_tokens += len(encoding.encode(c["text"], disallowed_special=()))
             elif c["type"] == "image_url":
                 if isinstance(c["image_url"], dict):
                     image_url_dict = c["image_url"]
