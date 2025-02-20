@@ -49,6 +49,18 @@ def test_max_depth():
     assert "MaxDepthExceeded" in str(result)
 
 
+def test_default_max_depth():
+    # Test that default max depth still prevents infinite recursion
+    deep_dict = {}
+    current = deep_dict
+    for i in range(1000):  # Create a very deep dictionary
+        current["deeper"] = {}
+        current = current["deeper"]
+
+    result = json.loads(safe_dumps(deep_dict))  # No max_depth parameter provided
+    assert "MaxDepthExceeded" in str(result)
+
+
 def test_complex_types():
     # Test handling of sets and tuples
     data = {"set": {1, 2, 3}, "tuple": (4, 5, 6)}
