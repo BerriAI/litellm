@@ -888,6 +888,17 @@ export const organizationCreateCall = async (
   try {
     console.log("Form Values in organizationCreateCall:", formValues); // Log the form values before making the API call
 
+    if (formValues.metadata) {
+      console.log("formValues.metadata:", formValues.metadata);
+      // if there's an exception JSON.parse, show it in the message
+      try {
+        formValues.metadata = JSON.parse(formValues.metadata);
+      } catch (error) {
+        console.error("Failed to parse metadata:", error);
+        throw new Error("Failed to parse metadata: " + error);
+      }
+    }
+
     const url = proxyBaseUrl ? `${proxyBaseUrl}/organization/new` : `/organization/new`;
     const response = await fetch(url, {
       method: "POST",
