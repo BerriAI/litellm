@@ -57,7 +57,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import ChatCompletionMessageToolCall, Choices
 from litellm.types.utils import GenericStreamingChunk as GChunk
-from litellm.types.utils import ModelResponse, Usage
+from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 from litellm.utils import CustomStreamWrapper, get_secret
 
 from ..base_aws_llm import BaseAWSLLM
@@ -226,6 +226,14 @@ async def make_call(
             completion_stream = decoder.aiter_bytes(
                 response.aiter_bytes(chunk_size=1024)
             )
+        elif bedrock_invoke_provider == "deepseek_r1":
+            decoder = AmazonDeepSeekR1StreamDecoder(
+                model=model,
+                sync_stream=False,
+            )
+            completion_stream = decoder.aiter_bytes(
+                response.aiter_bytes(chunk_size=1024)
+            )
         else:
             decoder = AWSEventStreamDecoder(model=model)
             completion_stream = decoder.aiter_bytes(
@@ -298,6 +306,12 @@ def make_sync_call(
             )
         elif bedrock_invoke_provider == "anthropic":
             decoder: AWSEventStreamDecoder = AmazonAnthropicClaudeStreamDecoder(
+                model=model,
+                sync_stream=True,
+            )
+            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
+        elif bedrock_invoke_provider == "deepseek_r1":
+            decoder = AmazonDeepSeekR1StreamDecoder(
                 model=model,
                 sync_stream=True,
             )
@@ -1331,7 +1345,7 @@ class AWSEventStreamDecoder:
         except Exception as e:
             raise Exception("Received streaming error - {}".format(str(e)))
 
-    def _chunk_parser(self, chunk_data: dict) -> GChunk:
+    def _chunk_parser(self, chunk_data: dict) -> Union[GChunk, ModelResponseStream]:
         text = ""
         is_finished = False
         finish_reason = ""
@@ -1389,7 +1403,9 @@ class AWSEventStreamDecoder:
             tool_use=None,
         )
 
-    def iter_bytes(self, iterator: Iterator[bytes]) -> Iterator[GChunk]:
+    def iter_bytes(
+        self, iterator: Iterator[bytes]
+    ) -> Iterator[Union[GChunk, ModelResponseStream]]:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
 
@@ -1405,7 +1421,7 @@ class AWSEventStreamDecoder:
 
     async def aiter_bytes(
         self, iterator: AsyncIterator[bytes]
-    ) -> AsyncIterator[GChunk]:
+    ) -> AsyncIterator[Union[GChunk, ModelResponseStream]]:
         """Given an async iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
 
@@ -1472,6 +1488,27 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
 
     def _chunk_parser(self, chunk_data: dict) -> GChunk:
         return self.anthropic_model_response_iterator.chunk_parser(chunk=chunk_data)
+
+
+class AmazonDeepSeekR1StreamDecoder(AWSEventStreamDecoder):
+    def __init__(
+        self,
+        model: str,
+        sync_stream: bool,
+    ) -> None:
+
+        super().__init__(model=model)
+        from litellm.llms.bedrock.chat.invoke_transformations.amazon_deepseek_transformation import (
+            AmazonDeepseekR1ResponseIterator,
+        )
+
+        self.deepseek_model_response_iterator = AmazonDeepseekR1ResponseIterator(
+            streaming_response=None,
+            sync_stream=sync_stream,
+        )
+
+    def _chunk_parser(self, chunk_data: dict) -> Union[GChunk, ModelResponseStream]:
+        return self.deepseek_model_response_iterator.chunk_parser(chunk=chunk_data)
 
 
 class MockResponseIterator:  # for returning ai21 streaming responses

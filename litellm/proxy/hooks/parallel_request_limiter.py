@@ -690,15 +690,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if user_api_key is None:
                 return
 
-            verbose_proxy_logger.info("ENTERS FAILURE LOG EVENT")
-
             ## decrement call count if call failed
             if CommonProxyErrors.max_parallel_request_limit_reached.value in str(
                 kwargs["exception"]
             ):
-                verbose_proxy_logger.info(
-                    "IGNORE FAILED CALLS DUE TO MAX LIMIT BEING REACHED"
-                )
                 pass  # ignore failed calls due to max limit being reached
             else:
                 # ------------
