@@ -295,6 +295,7 @@ def rerank(  # noqa: PLR0915
                 optional_params=optional_params.model_dump(exclude_unset=True),
                 api_base=api_base,
                 logging_obj=litellm_logging_obj,
+                client=client,
             )
         else:
             raise ValueError(f"Unsupported provider: {_custom_llm_provider}")

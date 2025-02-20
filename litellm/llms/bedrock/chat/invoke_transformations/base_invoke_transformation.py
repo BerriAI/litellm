@@ -598,61 +598,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             )
         return modelId
 
-    def get_aws_region_from_model_arn(self, model: Optional[str]) -> Optional[str]:
-        try:
-            # First check if the string contains the expected prefix
-            if not isinstance(model, str) or "arn:aws:bedrock" not in model:
-                return None
-
-            # Split the ARN and check if we have enough parts
-            parts = model.split(":")
-            if len(parts) < 4:
-                return None
-
-            # Get the region from the correct position
-            region = parts[3]
-            if not region:  # Check if region is empty
-                return None
-
-            return region
-        except Exception:
-            # Catch any unexpected errors and return None
-            return None
-
-    def _get_aws_region_name(
-        self, optional_params: dict, model: Optional[str] = None
-    ) -> str:
-        """
-        Get the AWS region name from the environment variables
-        """
-        aws_region_name = optional_params.get("aws_region_name", None)
-        ### SET REGION NAME ###
-        if aws_region_name is None:
-            # check model arn #
-            aws_region_name = self.get_aws_region_from_model_arn(model)
-            # check env #
-            litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
-
-            if (
-                aws_region_name is None
-                and litellm_aws_region_name is not None
-                and isinstance(litellm_aws_region_name, str)
-            ):
-                aws_region_name = litellm_aws_region_name
-
-            standard_aws_region_name = get_secret("AWS_REGION", None)
-            if (
-                aws_region_name is None
-                and standard_aws_region_name is not None
-                and isinstance(standard_aws_region_name, str)
-            ):
-                aws_region_name = standard_aws_region_name
-
-        if aws_region_name is None:
-            aws_region_name = "us-west-2"
-
-        return aws_region_name
-
     def _get_model_id_from_model_with_spec(
         self,
         model: str,

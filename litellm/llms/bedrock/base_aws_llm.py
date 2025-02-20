@@ -200,6 +200,61 @@ class BaseAWSLLM:
         self.iam_cache.set_cache(cache_key, credentials, ttl=_cache_ttl)
         return credentials
 
+    def _get_aws_region_from_model_arn(self, model: Optional[str]) -> Optional[str]:
+        try:
+            # First check if the string contains the expected prefix
+            if not isinstance(model, str) or "arn:aws:bedrock" not in model:
+                return None
+
+            # Split the ARN and check if we have enough parts
+            parts = model.split(":")
+            if len(parts) < 4:
+                return None
+
+            # Get the region from the correct position
+            region = parts[3]
+            if not region:  # Check if region is empty
+                return None
+
+            return region
+        except Exception:
+            # Catch any unexpected errors and return None
+            return None
+
+    def _get_aws_region_name(
+        self, optional_params: dict, model: Optional[str] = None
+    ) -> str:
+        """
+        Get the AWS region name from the environment variables
+        """
+        aws_region_name = optional_params.get("aws_region_name", None)
+        ### SET REGION NAME ###
+        if aws_region_name is None:
+            # check model arn #
+            aws_region_name = self._get_aws_region_from_model_arn(model)
+            # check env #
+            litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
+
+            if (
+                aws_region_name is None
+                and litellm_aws_region_name is not None
+                and isinstance(litellm_aws_region_name, str)
+            ):
+                aws_region_name = litellm_aws_region_name
+
+            standard_aws_region_name = get_secret("AWS_REGION", None)
+            if (
+                aws_region_name is None
+                and standard_aws_region_name is not None
+                and isinstance(standard_aws_region_name, str)
+            ):
+                aws_region_name = standard_aws_region_name
+
+        if aws_region_name is None:
+            aws_region_name = "us-west-2"
+
+        return aws_region_name
+
     def _auth_with_web_identity_token(
         self,
         aws_web_identity_token: str,
@@ -408,7 +463,7 @@ class BaseAWSLLM:
         return endpoint_url, proxy_endpoint_url
 
     def _get_boto_credentials_from_optional_params(
-        self, optional_params: dict
+        self, optional_params: dict, model: Optional[str] = None
     ) -> Boto3CredentialsInfo:
         """
         Get boto3 credentials from optional params
@@ -428,7 +483,7 @@ class BaseAWSLLM:
         aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
         aws_access_key_id = optional_params.pop("aws_access_key_id", None)
         aws_session_token = optional_params.pop("aws_session_token", None)
-        aws_region_name = optional_params.pop("aws_region_name", None)
+        aws_region_name = self._get_aws_region_name(optional_params, model)
         aws_role_name = optional_params.pop("aws_role_name", None)
         aws_session_name = optional_params.pop("aws_session_name", None)
         aws_profile_name = optional_params.pop("aws_profile_name", None)
@@ -437,25 +492,6 @@ class BaseAWSLLM:
         aws_bedrock_runtime_endpoint = optional_params.pop(
             "aws_bedrock_runtime_endpoint", None
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
-
-        ### SET REGION NAME ###
-        if aws_region_name is None:
-            # check env #
-            litellm_aws_region_name = get_secret_str("AWS_REGION_NAME", None)
-
-            if litellm_aws_region_name is not None and isinstance(
-                litellm_aws_region_name, str
-            ):
-                aws_region_name = litellm_aws_region_name
-
-            standard_aws_region_name = get_secret_str("AWS_REGION", None)
-            if standard_aws_region_name is not None and isinstance(
-                standard_aws_region_name, str
-            ):
-                aws_region_name = standard_aws_region_name
-
-            if aws_region_name is None:
-                aws_region_name = "us-west-2"
 
         credentials: Credentials = self.get_credentials(
             aws_access_key_id=aws_access_key_id,
