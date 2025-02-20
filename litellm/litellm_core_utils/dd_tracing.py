@@ -9,11 +9,19 @@ except ImportError:
 
     @contextmanager
     def null_tracer(name, **kwargs):
-        yield
+        class NullSpan:
+            def finish(self):
+                pass
+
+        yield NullSpan()
 
     class NullTracer:
         def trace(self, name, **kwargs):
-            return null_tracer(name, **kwargs)
+            class NullSpan:
+                def finish(self):
+                    pass
+
+            return NullSpan()
 
         def wrap(self, name=None, **kwargs):
             def decorator(f):
