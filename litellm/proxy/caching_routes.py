@@ -7,6 +7,7 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import RedisCache
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -37,6 +38,7 @@ async def cache_ping():
                 status_code=503, detail="Cache not initialized. litellm.cache is None"
             )
         litellm_cache_params = masker.mask_dict(vars(litellm.cache))
+        # remove field that might reference itself
         litellm_cache_params.pop("cache", None)
         specific_cache_params = (
             masker.mask_dict(vars(litellm.cache.cache)) if litellm.cache else {}
@@ -62,14 +64,14 @@ async def cache_ping():
                 cache_type=str(litellm.cache.type),
                 ping_response=True,
                 set_cache_response="success",
-                litellm_cache_params=json.dumps(litellm_cache_params, default=str),
-                redis_cache_params=json.dumps(specific_cache_params, default=str),
+                litellm_cache_params=safe_dumps(litellm_cache_params),
+                redis_cache_params=safe_dumps(specific_cache_params),
             )
         else:
             return CachePingResponse(
                 status="healthy",
                 cache_type=str(litellm.cache.type),
-                litellm_cache_params=json.dumps(litellm_cache_params, default=str),
+                litellm_cache_params=safe_dumps(litellm_cache_params),
             )
     except Exception as e:
         import traceback
@@ -77,12 +79,12 @@ async def cache_ping():
         traceback.print_exc()
         error_message = {
             "message": f"Service Unhealthy ({str(e)})",
-            "litellm_cache_params": json.dumps(litellm_cache_params, default=str),
-            "redis_cache_params": json.dumps(specific_cache_params, default=str),
+            "litellm_cache_params": safe_dumps(litellm_cache_params),
+            "redis_cache_params": safe_dumps(specific_cache_params),
             "traceback": traceback.format_exc(),
         }
         raise ProxyException(
-            message=json.dumps(error_message),
+            message=safe_dumps(error_message),
             type=ProxyErrorTypes.cache_ping_error,
             param="cache_ping",
             code=503,
