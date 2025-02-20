@@ -227,7 +227,7 @@ async def make_call(
                 response.aiter_bytes(chunk_size=1024)
             )
         elif bedrock_invoke_provider == "deepseek_r1":
-            decoder: AWSEventStreamDecoder = AmazonDeepSeekR1StreamDecoder(
+            decoder = AmazonDeepSeekR1StreamDecoder(
                 model=model,
                 sync_stream=False,
             )
@@ -311,7 +311,7 @@ def make_sync_call(
             )
             completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
         elif bedrock_invoke_provider == "deepseek_r1":
-            decoder: AWSEventStreamDecoder = AmazonDeepSeekR1StreamDecoder(
+            decoder = AmazonDeepSeekR1StreamDecoder(
                 model=model,
                 sync_stream=True,
             )
