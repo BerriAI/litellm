@@ -1,7 +1,7 @@
 import os
-from typing import Literal, Optional, Union
+from typing import List, Literal, Optional, Union
 
-from acuvity import Acuvity, GuardConfig, GuardName, ResponseMatch, ScanResponseMatch, Security
+from acuvity import Acuvity, GuardConfig, GuardName, Matches, ResponseMatch, ScanResponseMatch, Security
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
@@ -78,7 +78,7 @@ class AcuvityGuardrail(CustomGuardrail):
                     raise HTTPException(
                                 status_code=400, detail={
                                     "error": "Violated guardrail policy",
-                                    "guard": resp.match_details[index].matched_guards
+                                    "guard": self.matched_guards(resp.match_details[index])
                                 }
                             )
                 #If no voilations then, we need to replace the redacted response.
@@ -122,7 +122,7 @@ class AcuvityGuardrail(CustomGuardrail):
                             raise HTTPException(
                                 status_code=400, detail={
                                     "error": "Violated guardrail policy",
-                                    "guard": resp.match_details[index].matched_guards
+                                    "guard": self.matched_guards(resp.match_details[index])
                                 }
                             )
         pass
@@ -161,7 +161,7 @@ class AcuvityGuardrail(CustomGuardrail):
                     raise HTTPException(
                                 status_code=400, detail={
                                     "error": "Violated guardrail policy",
-                                    "guard": resp.match_details[index].matched_guards
+                                    "guard": self.matched_guards(resp.match_details[index])
                                 }
                             )
 
@@ -196,8 +196,14 @@ class AcuvityGuardrail(CustomGuardrail):
                 return choice.message.content
         return None
 
+    def matched_guards(self, all_guard_list: Matches)-> List[str]:
+        matched_guard_list : List[str] = []
+        for m in all_guard_list.matched_checks:
+            matched_guard_list.append(m.guard_name.name)
+        return matched_guard_list
+
     def _check_violations(self, resp: ScanResponseMatch, redaction_set: set ,index: int) -> bool:
-        pii_detectors = [match
+        detected_pii_detectors = [match
                 for detector in [
                 resp.guard_match(guard=GuardName.PII_DETECTOR, msg_index=index),
                 resp.guard_match(guard=GuardName.SECRETS_DETECTOR, msg_index=index),
@@ -206,13 +212,15 @@ class AcuvityGuardrail(CustomGuardrail):
                 for match in detector
                 if match.response_match == ResponseMatch.YES
                 ]
-        matched_checks = resp.match_details[index].matched_checks
-        detected_extraction : list[str] = []
-        for m in matched_checks:
-            detected_extraction.extend(m.match_values)
+        detected_guards = resp.match_details[index].matched_checks
+        detected_pii_extraction_vals : list[str] = []
+        for m in detected_guards:
+            detected_pii_extraction_vals.extend(m.match_values)
 
         # we reject the call if either of the following condition meets
-        # 1. we found any voilations other than textual detections.
-        # 2. we found any textual detections which are not part of redacted set.
-        if len(matched_checks) > len(pii_detectors) or len([item for item in detected_extraction if item not in redaction_set]) > 0:
+        # 1. we found more voilations than the textual detections.
+        # 2. we found any textual detections which are not part of redaction set.
+        #   2a. example: if pii guard has detect ssn but no redaction was set, then we flag it for violations.
+        if len(detected_guards) > len(detected_pii_detectors) or \
+                len([item for item in detected_pii_extraction_vals if item not in redaction_set]) > 0:
             return True
