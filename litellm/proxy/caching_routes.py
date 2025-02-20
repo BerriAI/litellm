@@ -1,8 +1,6 @@
-import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
