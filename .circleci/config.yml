@@ -719,8 +719,8 @@ jobs:
       - persist_to_workspace:
           root: .
           paths:
-            - llm_translation_coverage.xml
-            - llm_translation_coverage
+            - litellm_mapped_tests_coverage.xml
+            - litellm_mapped_tests_coverage
   batches_testing:
     docker:
       - image: cimg/python:3.11
