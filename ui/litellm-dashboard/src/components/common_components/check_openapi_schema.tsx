@@ -4,12 +4,14 @@ import { TextInput } from "@tremor/react";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Tooltip } from 'antd';
 import { getOpenAPISchema } from '../networking';
+
 interface SchemaProperty {
   type?: string;
   title?: string;
   description?: string;
   anyOf?: Array<{ type: string }>;
   enum?: string[];
+  format?: string;
 }
 
 interface OpenAPISchema {
@@ -20,16 +22,75 @@ interface OpenAPISchema {
 }
 
 interface SchemaFormFieldsProps {
-  schemaComponent: string;  // Name of the component in OpenAPI schema (e.g., "GenerateKeyRequest")
+  schemaComponent: string;
   excludedFields?: string[];
-  form: any; // Ant Design form instance
-  overrideLabels?: { [key: string]: string }; // Optional label overrides
-  overrideTooltips?: { [key: string]: string }; // Optional tooltip overrides
+  form: any;
+  overrideLabels?: { [key: string]: string };
+  overrideTooltips?: { [key: string]: string };
   customValidation?: { 
     [key: string]: (rule: any, value: any) => Promise<void> 
-  }; // Custom validation rules
-  defaultValues?: { [key: string]: any }; // Default values for fields
+  };
+  defaultValues?: { [key: string]: any };
 }
+
+// Helper function to determine if a field should be treated as JSON
+const isJSONField = (key: string, property: SchemaProperty): boolean => {
+  const jsonFields = ['metadata', 'config', 'enforced_params', 'aliases'];
+  return jsonFields.includes(key) || property.format === 'json';
+};
+
+// Helper function to validate JSON input
+const validateJSON = (value: string): boolean => {
+  if (!value) return true;
+  try {
+    JSON.parse(value);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const getFieldHelp = (key: string, property: SchemaProperty, type: string): string => {
+  // Default help text based on type
+  const defaultHelp = {
+    string: 'Text input',
+    number: 'Numeric input',
+    integer: 'Whole number input',
+    boolean: 'True/False value',
+  }[type] || 'Text input';
+
+  // Specific field help text
+  const specificHelp: { [key: string]: string } = {
+    max_budget: 'Enter maximum budget in USD (e.g., 100.50)',
+    budget_duration: 'Select a time period for budget reset',
+    tpm_limit: 'Enter maximum tokens per minute (whole number)',
+    rpm_limit: 'Enter maximum requests per minute (whole number)',
+    duration: 'Enter duration (e.g., 30s, 24h, 7d)',
+    metadata: 'Enter JSON object with key-value pairs\nExample: {"team": "research", "project": "nlp"}',
+    config: 'Enter configuration as JSON object\nExample: {"setting": "value"}',
+    permissions: 'Enter comma-separated permission strings',
+    enforced_params: 'Enter parameters as JSON object\nExample: {"param": "value"}',
+    blocked: 'Enter true/false or specific block conditions',
+    aliases: 'Enter aliases as JSON object\nExample: {"alias1": "value1", "alias2": "value2"}',
+    models: 'Select one or more model names',
+    key_alias: 'Enter a unique identifier for this key',
+    tags: 'Enter comma-separated tag strings',
+  };
+
+  // Get specific help text or use default based on type
+  const helpText = specificHelp[key] || defaultHelp;
+
+  // Add format requirements for special cases
+  if (isJSONField(key, property)) {
+    return `${helpText}\nMust be valid JSON format`;
+  }
+  
+  if (property.enum) {
+    return `Select from available options\nAllowed values: ${property.enum.join(', ')}`;
+  }
+
+  return helpText;
+};
 
 const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({ 
   schemaComponent,
@@ -53,13 +114,8 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
           throw new Error(`Schema component "${schemaComponent}" not found`);
         }
 
-        if (!componentSchema) {
-          throw new Error(`Schema component "${schemaComponent}" not found`);
-        }
-
         setSchemaProperties(componentSchema);
         
-        // Set default values
         const defaultFormValues: { [key: string]: any } = {};
         Object.keys(componentSchema.properties)
           .filter(key => !excludedFields.includes(key) && defaultValues[key] !== undefined)
@@ -78,21 +134,13 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
     fetchOpenAPISchema();
   }, [schemaComponent, form, excludedFields]);
 
-  if (error) {
-    return <div className="text-red-500">Error: {error}</div>;
-  }
-
-  if (!schemaProperties?.properties) {
-    return null;
-  }
-
   const getPropertyType = (property: SchemaProperty): string => {
     if (property.type) {
       return property.type;
     }
     if (property.anyOf) {
       const types = property.anyOf.map(t => t.type);
-      if (types.includes('number')) return 'number';
+      if (types.includes('number') || types.includes('integer')) return 'number';
       if (types.includes('string')) return 'string';
     }
     return 'string';
@@ -102,11 +150,9 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
     const type = getPropertyType(property);
     const isRequired = schemaProperties?.required?.includes(key);
     
-    // Get custom label and tooltip if provided, otherwise use schema values
     const label = overrideLabels[key] || property.title || key;
     const tooltip = overrideTooltips[key] || property.description;
     
-    // Create validation rules
     const rules = [];
     if (isRequired) {
       rules.push({ required: true, message: `${label} is required` });
@@ -114,8 +160,16 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
     if (customValidation[key]) {
       rules.push({ validator: customValidation[key] });
     }
+    if (isJSONField(key, property)) {
+      rules.push({
+        validator: async (_: any, value: string) => {
+          if (value && !validateJSON(value)) {
+            throw new Error('Please enter valid JSON');
+          }
+        }
+      });
+    }
 
-    // Helper for rendering the label with optional tooltip
     const formLabel = tooltip ? (
       <span>
         {label}{' '}
@@ -125,6 +179,46 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
       </span>
     ) : label;
 
+    let inputComponent;
+    if (isJSONField(key, property)) {
+      inputComponent = (
+        <Input.TextArea
+          rows={4}
+          placeholder="Enter as JSON"
+          className="font-mono"
+        />
+      );
+    } else if (property.enum) {
+      inputComponent = (
+        <Select>
+          {property.enum.map(value => (
+            <Select.Option key={value} value={value}>
+              {value}
+            </Select.Option>
+          ))}
+        </Select>
+      );
+    } else if (type === 'number' || type === 'integer') {
+      inputComponent = (
+        <InputNumber 
+          style={{ width: '100%' }}
+          precision={type === 'integer' ? 0 : undefined}
+        />
+      );
+    } else if (key === 'duration') {
+      inputComponent = (
+        <TextInput 
+          placeholder="eg: 30s, 30h, 30d"
+        />
+      );
+    } else {
+      inputComponent = (
+        <TextInput 
+          placeholder={tooltip || ''}
+        />
+      );
+    }
+
     return (
       <Form.Item
         key={key}
@@ -133,23 +227,24 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
         className="mt-8"
         rules={rules}
         initialValue={defaultValues[key]}
+        help={
+          <div className="text-xs text-gray-500">
+            {getFieldHelp(key, property, type)}
+          </div>
+        }
       >
-        {property.enum ? (
-          <Select>
-            {property.enum.map(value => (
-              <Select.Option key={value} value={value}>
-                {value}
-              </Select.Option>
-            ))}
-          </Select>
-        ) : type === 'number' ? (
-          <InputNumber style={{ width: '100%' }} />
-        ) : (
-          <TextInput placeholder={tooltip || ''} />
-        )}
+        {inputComponent}
       </Form.Item>
     );
   };
+
+  if (error) {
+    return <div className="text-red-500">Error: {error}</div>;
+  }
+
+  if (!schemaProperties?.properties) {
+    return null;
+  }
 
   return (
     <div>
