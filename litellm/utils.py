@@ -1601,12 +1601,12 @@ def openai_token_counter(  # noqa: PLR0915
                     if key == "name":
                         num_tokens += tokens_per_name
                 elif isinstance(value, List):
-                    text, num_tokens = _get_num_tokens_from_content_list(
+                    text, num_tokens_from_list = _get_num_tokens_from_content_list(
                         content_list=value,
                         use_default_image_token_count=use_default_image_token_count,
                         default_token_count=default_token_count,
                     )
-                    num_tokens += num_tokens
+                    num_tokens += num_tokens_from_list
     elif text is not None and count_response_tokens is True:
         # This is the case where we need to count tokens for a streamed response. We should NOT add +3 tokens per message in this branch
         num_tokens = len(encoding.encode(text, disallowed_special=()))
