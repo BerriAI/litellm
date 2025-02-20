@@ -15,6 +15,12 @@ except ImportError:
         def trace(self, name, **kwargs):
             return null_tracer(name, **kwargs)
 
+        def wrap(self, name=None, **kwargs):
+            def decorator(f):
+                return f
+
+            return decorator
+
     dd_tracer = NullTracer()
 
 # Export the tracer instance
