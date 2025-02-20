@@ -81,6 +81,9 @@ interface ErrorDetails {
 const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
   // Parse error information if present
   let errorDetails: ErrorDetails | null = null;
+  let parsedLitellmParams = null;
+  let parsedRedisParams = null;
+
   if (response.error) {
     try {
       const errorMessage = JSON.parse(response.error.message);
@@ -88,26 +91,34 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
         message: errorMessage.message,
         traceback: errorMessage.traceback,
         litellm_params: errorMessage.litellm_cache_params,
-        redis_cache_params: errorMessage.redis_cache_params
+        redis_cache_params: errorMessage.redis_cache_params 
       };
+      
+      // Parse the cache parameters from the error response
+      parsedLitellmParams = deepParse(errorDetails.litellm_params);
+      parsedRedisParams = deepParse(errorDetails.redis_cache_params);
     } catch (e) {
       console.error("Error parsing error details:", e);
     }
+  } else {
+    // Existing parsing for non-error responses
+    parsedLitellmParams = deepParse(response.litellm_cache_params);
+    parsedRedisParams = deepParse(response.redis_cache_params);
   }
 
-  const parsedLitellmParams = deepParse(response.litellm_cache_params);
-  const parsedRedisParams = deepParse(response.redis_cache_params);
+  console.log("parsedLitellmParams", parsedLitellmParams);
+  console.log("parsedRedisParams", parsedRedisParams);
   
   // Extract Redis details from parsed response, checking multiple possible paths
   const redisDetails: RedisDetails = {
-    redis_host: parsedRedisParams?.redis_kwargs?.startup_nodes?.[0]?.host || 
-                parsedRedisParams?.redis_client?.connection_pool?.connection_kwargs?.host ||
+    redis_host: parsedRedisParams?.redis_client?.connection_pool?.connection_kwargs?.host ||
                 parsedRedisParams?.redis_async_client?.connection_pool?.connection_kwargs?.host ||
+                parsedRedisParams?.connection_kwargs?.host ||
                 "N/A",
     
-    redis_port: parsedRedisParams?.redis_kwargs?.startup_nodes?.[0]?.port ||
-                parsedRedisParams?.redis_client?.connection_pool?.connection_kwargs?.port ||
+    redis_port: parsedRedisParams?.redis_client?.connection_pool?.connection_kwargs?.port ||
                 parsedRedisParams?.redis_async_client?.connection_pool?.connection_kwargs?.port ||
+                parsedRedisParams?.connection_kwargs?.port ||
                 "N/A",
     
     redis_version: parsedRedisParams?.redis_version || "N/A",
@@ -146,7 +157,7 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
 
               <table className="w-full border-collapse">
                 <tbody>
-                  {/* Show error details if present */}
+                  {/* Show error message if present */}
                   {errorDetails && (
                     <>
                       <tr><td colSpan={2} className="pt-4 pb-2 font-semibold text-red-600">Error Details</td></tr>
@@ -158,22 +169,13 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
                         label="Traceback"
                         value={errorDetails.traceback}
                       />
-                      <TableClickableErrorField
-                        label="LiteLLM Parameters"
-                        value={errorDetails.litellm_params || "N/A"}
-                      />
-                      <TableClickableErrorField
-                        label="Redis Parameters"
-                        value={errorDetails.redis_cache_params || "N/A"}
-                      />
                     </>
                   )}
 
-                  {/* Show regular cache details if no error */}
-                  {!errorDetails && (
-                    <>
-                      <TableClickableErrorField
-                        label="Cache Type"
+                  {/* Always show cache details, regardless of error state */}
+                  <tr><td colSpan={2} className="pt-4 pb-2 font-semibold">Cache Details</td></tr>
+                  <TableClickableErrorField
+                    label="Cache Type"
                         value={response.cache_type}
                       />
                       <TableClickableErrorField
@@ -183,32 +185,30 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
                       <TableClickableErrorField
                         label="Set Cache Response"
                         value={response.set_cache_response || "N/A"}
-                      />
-                      
-                      {/* Redis Details Section */}
+                  />
+                  
+                  {/* Redis Details Section */}
                       {response.cache_type === "redis" && (
                         <>
-                          <tr><td colSpan={2} className="pt-4 pb-2 font-semibold">Redis Details</td></tr>
-                          <TableClickableErrorField
-                            label="Redis Host"
+                  <tr><td colSpan={2} className="pt-4 pb-2 font-semibold">Redis Details</td></tr>
+                  <TableClickableErrorField
+                    label="Redis Host"
                             value={redisDetails.redis_host || "N/A"}
-                          />
-                          <TableClickableErrorField
-                            label="Redis Port"
+                  />
+                  <TableClickableErrorField
+                    label="Redis Port"
                             value={redisDetails.redis_port || "N/A"}
-                          />
-                          <TableClickableErrorField
-                            label="Redis Version"
+                  />
+                  <TableClickableErrorField
+                    label="Redis Version"
                             value={redisDetails.redis_version || "N/A"}
-                          />
-                          <TableClickableErrorField
-                            label="Startup Nodes"
+                  />
+                  <TableClickableErrorField
+                    label="Startup Nodes"
                             value={redisDetails.startup_nodes || "N/A"}
-                          />
-                        </>
-                      )}
-                    </>
-                  )}
+                  />
+                </>
+              )}
                 </tbody>
               </table>
             </div>
