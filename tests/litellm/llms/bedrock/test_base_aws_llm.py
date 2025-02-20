@@ -24,8 +24,15 @@ from litellm.llms.bedrock.base_aws_llm import (
 )
 
 # Global variable for the base_aws_llm.py file path
+
+# LOCAL PATH
+# BASE_AWS_LLM_PATH = os.path.join(
+#     os.path.dirname(__file__), "../../../../litellm/llms/bedrock/base_aws_llm.py"
+# )
+
+# PATH ON CI/CD
 BASE_AWS_LLM_PATH = os.path.join(
-    os.path.dirname(__file__), "../../../../litellm/llms/bedrock/base_aws_llm.py"
+    os.path.dirname(__file__), "/litellm/llms/bedrock/base_aws_llm.py"
 )
 
 
