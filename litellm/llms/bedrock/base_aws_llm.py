@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 if TYPE_CHECKING:
@@ -63,6 +64,7 @@ class BaseAWSLLM:
         credential_str = json.dumps(credential_args, sort_keys=True)
         return hashlib.sha256(credential_str.encode()).hexdigest()
 
+    @tracer.wrap()
     def get_credentials(
         self,
         aws_access_key_id: Optional[str] = None,
@@ -200,6 +202,7 @@ class BaseAWSLLM:
         self.iam_cache.set_cache(cache_key, credentials, ttl=_cache_ttl)
         return credentials
 
+    @tracer.wrap()
     def _auth_with_web_identity_token(
         self,
         aws_web_identity_token: str,
@@ -263,6 +266,7 @@ class BaseAWSLLM:
         iam_creds = session.get_credentials()
         return iam_creds, self._get_default_ttl_for_boto3_credentials()
 
+    @tracer.wrap()
     def _auth_with_aws_role(
         self,
         aws_access_key_id: Optional[str],
@@ -288,7 +292,6 @@ class BaseAWSLLM:
 
         # Extract the credentials from the response and convert to Session Credentials
         sts_credentials = sts_response["Credentials"]
-
         credentials = Credentials(
             access_key=sts_credentials["AccessKeyId"],
             secret_key=sts_credentials["SecretAccessKey"],
@@ -301,6 +304,7 @@ class BaseAWSLLM:
         sts_ttl = (sts_expiry - current_time).total_seconds() - 60
         return credentials, sts_ttl
 
+    @tracer.wrap()
     def _auth_with_aws_profile(
         self, aws_profile_name: str
     ) -> Tuple[Credentials, Optional[int]]:
@@ -313,6 +317,7 @@ class BaseAWSLLM:
         client = boto3.Session(profile_name=aws_profile_name)
         return client.get_credentials(), None
 
+    @tracer.wrap()
     def _auth_with_aws_session_token(
         self,
         aws_access_key_id: str,
@@ -333,6 +338,7 @@ class BaseAWSLLM:
 
         return credentials, None
 
+    @tracer.wrap()
     def _auth_with_access_key_and_secret_key(
         self,
         aws_access_key_id: str,
@@ -355,6 +361,7 @@ class BaseAWSLLM:
         credentials = session.get_credentials()
         return credentials, self._get_default_ttl_for_boto3_credentials()
 
+    @tracer.wrap()
     def _auth_with_env_vars(self) -> Tuple[Credentials, Optional[int]]:
         """
         Authenticate with AWS Environment Variables
@@ -365,6 +372,7 @@ class BaseAWSLLM:
         credentials = session.get_credentials()
         return credentials, None
 
+    @tracer.wrap()
     def _get_default_ttl_for_boto3_credentials(self) -> int:
         """
         Get the default TTL for boto3 credentials
@@ -475,6 +483,7 @@ class BaseAWSLLM:
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
         )
 
+    @tracer.wrap()
     def get_request_headers(
         self,
         credentials: Credentials,
