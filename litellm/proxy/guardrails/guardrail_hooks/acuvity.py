@@ -56,9 +56,13 @@ class AcuvityGuardrail(CustomGuardrail):
         ],
     ) -> Optional[Union[Exception, str, dict]]:
         """
-        Runs before the LLM API call
-        Runs on only Input
-        We just update the data here if there is a pii detection else if more detections are detected then we raise exception.
+        Runs on request before the LLM API call
+
+        Returns:
+            The processed request, potentially with redacted content
+
+        Raises:
+            HTTPException: If guardrail policies are violated
         """
         redacted = False
         _messages = data.get("messages")
@@ -81,7 +85,7 @@ class AcuvityGuardrail(CustomGuardrail):
                                     "guard": self.matched_guards(resp.match_details[index])
                                 }
                             )
-                #If no voilations then, check if we need to replace the redacted response.
+                #If no violations then, check if we need to replace the redacted response.
                 if isinstance(_messages[index]["content"], str):
                     if _messages[index]["content"] != extraction.data:
                         redacted = True
@@ -107,7 +111,7 @@ class AcuvityGuardrail(CustomGuardrail):
         ],
     ):
         """
-        We decide here based on the config whether to reject the call based on violations.
+        For any triggered guards we raise exceptions.
         """
         _messages = data.get("messages")
         if _messages:
@@ -165,7 +169,7 @@ class AcuvityGuardrail(CustomGuardrail):
                                 }
                             )
 
-                #If no voilations then, check if we need to replace the redacted response.
+                #If no violations then, check if we need to replace the redacted response.
                 if isinstance(response, ModelResponse) and not isinstance(response.choices[0], StreamingChoices):
                     if response.choices[0].message.content != extraction.data:
                         redacted = True
@@ -220,7 +224,7 @@ class AcuvityGuardrail(CustomGuardrail):
             detected_pii_extraction_vals.extend(m.match_values)
 
         # we reject the call if either of the following condition meets
-        # 1. we found more voilations than the textual detections.
+        # 1. we found more violations than the textual detections.
         # 2. we found any textual detections which are not part of redaction set.
         #   2a. example: if pii guard has detect ssn but no redaction was set, then we flag it for violations.
         if len(detected_guards) > len(detected_pii_detectors) or \
