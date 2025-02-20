@@ -196,15 +196,18 @@ class BaseLLMChatTest(ABC):
         assert response is not None
 
     def test_message_with_name(self):
-        litellm.set_verbose = True
-        base_completion_call_args = self.get_base_completion_call_args()
-        messages = [
-            {"role": "user", "content": "Hello", "name": "test_name"},
-        ]
-        response = self.completion_function(
-            **base_completion_call_args, messages=messages
-        )
-        assert response is not None
+        try:
+            litellm.set_verbose = True
+            base_completion_call_args = self.get_base_completion_call_args()
+            messages = [
+                {"role": "user", "content": "Hello", "name": "test_name"},
+            ]
+            response = self.completion_function(
+                **base_completion_call_args, messages=messages
+            )
+            assert response is not None
+        except litellm.RateLimitError:
+            pass
 
     @pytest.mark.parametrize(
         "response_format",
@@ -730,6 +733,8 @@ class BaseLLMChatTest(ABC):
                 second_response.choices[0].message.content is not None
                 or second_response.choices[0].message.tool_calls is not None
             )
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
         except litellm.RateLimitError:
             pass
         except Exception as e:

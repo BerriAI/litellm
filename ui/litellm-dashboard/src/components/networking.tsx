@@ -4,7 +4,7 @@
 import { message } from "antd";
 
 const isLocal = process.env.NODE_ENV === "development";
-const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+export const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 if (isLocal != true) {
   console.log = function() {};
 }
@@ -69,6 +69,12 @@ export function setGlobalLitellmHeaderName(headerName: string = "Authorization")
   globalLitellmHeaderName = headerName;
 }
 
+export const getOpenAPISchema = async () => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/openapi.json` : `/openapi.json`;
+  const response = await fetch(url);
+  const jsonData = await response.json();
+  return jsonData;
+}
 
 export const modelCostMap = async (
   accessToken: string,
@@ -882,6 +888,17 @@ export const organizationCreateCall = async (
   try {
     console.log("Form Values in organizationCreateCall:", formValues); // Log the form values before making the API call
 
+    if (formValues.metadata) {
+      console.log("formValues.metadata:", formValues.metadata);
+      // if there's an exception JSON.parse, show it in the message
+      try {
+        formValues.metadata = JSON.parse(formValues.metadata);
+      } catch (error) {
+        console.error("Failed to parse metadata:", error);
+        throw new Error("Failed to parse metadata: " + error);
+      }
+    }
+
     const url = proxyBaseUrl ? `${proxyBaseUrl}/organization/new` : `/organization/new`;
     const response = await fetch(url, {
       method: "POST",
@@ -910,6 +927,42 @@ export const organizationCreateCall = async (
     throw error;
   }
 };
+
+export const organizationUpdateCall = async (
+  accessToken: string,
+  formValues: Record<string, any> // Assuming formValues is an object
+) => {
+  try {
+    console.log("Form Values in organizationUpdateCall:", formValues); // Log the form values before making the API call
+
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/organization/update` : `/organization/update`;
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...formValues, // Include formValues in the request body
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      console.error("Error response from the server:", errorData);
+      throw new Error("Network response was not ok");
+    }
+    const data = await response.json();
+    console.log("Update Team Response:", data);
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
 
 export const organizationDeleteCall = async (
   accessToken: string,
@@ -2377,6 +2430,15 @@ export const teamCreateCall = async (
 ) => {
   try {
     console.log("Form Values in teamCreateCall:", formValues); // Log the form values before making the API call
+    if (formValues.metadata) {
+      console.log("formValues.metadata:", formValues.metadata);
+      // if there's an exception JSON.parse, show it in the message
+      try {
+        formValues.metadata = JSON.parse(formValues.metadata);
+      } catch (error) {
+        throw new Error("Failed to parse metadata: " + error);
+      }
+    }
 
     const url = proxyBaseUrl ? `${proxyBaseUrl}/team/new` : `/team/new`;
     const response = await fetch(url, {
@@ -3391,7 +3453,7 @@ export const cachingHealthCheckCall = async (accessToken: String) => {
     if (!response.ok) {
       const errorData = await response.text();
       handleError(errorData);
-      throw new Error("Network response was not ok");
+      throw new Error(errorData);
     }
 
     const data = await response.json();
