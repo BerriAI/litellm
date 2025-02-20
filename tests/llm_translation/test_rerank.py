@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import io
 import os
+from typing import Optional, Dict
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -29,7 +30,11 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 def assert_response_shape(response, custom_llm_provider):
     expected_response_shape = {"id": str, "results": list, "meta": dict}
 
-    expected_results_shape = {"index": int, "relevance_score": float}
+    expected_results_shape = {
+        "index": int,
+        "relevance_score": float,
+        "document": Optional[Dict[str, str]],
+    }
 
     expected_meta_shape = {"api_version": dict, "billed_units": dict}
 
@@ -44,6 +49,9 @@ def assert_response_shape(response, custom_llm_provider):
         assert isinstance(
             result["relevance_score"], expected_results_shape["relevance_score"]
         )
+        if "document" in result:
+            assert isinstance(result["document"], Dict)
+            assert isinstance(result["document"]["text"], str)
     assert isinstance(response.meta, expected_response_shape["meta"])
 
     if custom_llm_provider == "cohere":
