@@ -28,34 +28,32 @@ const TableClickableErrorField: React.FC<{ label: string; value: string }> = ({
   const handleCopy = () => {
     navigator.clipboard.writeText(value);
     setCopied(true);
-    setTimeout(() => {
-      setCopied(false);
-    }, 2000);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
-    <tr className="border-t first:border-t-0">
-      <td className="px-6 py-4 align-top w-full" colSpan={2}>
-        <div className="flex items-center">
-          <button
-            onClick={() => setIsExpanded(!isExpanded)}
-            className="mr-2 text-gray-500 hover:text-gray-700 focus:outline-none"
-          >
-            {isExpanded ? "▼" : "▶"}
-          </button>
-          <div className="flex-1">
-            <div className="font-medium">{label}</div>
-            <pre className="mt-1 text-sm text-gray-700 whitespace-pre-wrap">
-              {isExpanded ? value : truncated}
-            </pre>
+    <tr className="hover:bg-gray-50">
+      <td className="px-4 py-2 align-top" colSpan={2}>
+        <div className="flex items-center justify-between group">
+          <div className="flex items-center flex-1">
+            <button
+              onClick={() => setIsExpanded(!isExpanded)}
+              className="text-gray-400 hover:text-gray-600 mr-2"
+            >
+              {isExpanded ? "▼" : "▶"}
+            </button>
+            <div>
+              <div className="text-sm text-gray-600">{label}</div>
+              <pre className="mt-1 text-sm font-mono text-gray-800 whitespace-pre-wrap">
+                {isExpanded ? value : truncated}
+              </pre>
+            </div>
           </div>
           <button
             onClick={handleCopy}
-            className="ml-2 text-gray-500 hover:text-gray-700 focus:outline-none"
-            title="Copy to clipboard"
+            className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-gray-600"
           >
-            <ClipboardCopyIcon className="h-5 w-5" />
-            <span className="sr-only">{copied ? "Copied" : "Copy"}</span>
+            <ClipboardCopyIcon className="h-4 w-4" />
           </button>
         </div>
       </td>
@@ -102,28 +100,28 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
   };
 
   return (
-    <div>
+    <div className="bg-white rounded-lg shadow">
       <TabGroup>
-        <TabList className="mb-6">
-          <Tab>Summary</Tab>
-          <Tab>Raw Response</Tab>
+        <TabList className="border-b border-gray-200 px-4">
+          <Tab className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800">Summary</Tab>
+          <Tab className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800">Raw Response</Tab>
         </TabList>
 
         <TabPanels>
-          <TabPanel>
+          <TabPanel className="p-4">
             <div>
-              <div className="flex items-center mb-4">
+              <div className="flex items-center mb-6">
                 {response.status === "healthy" ? (
-                  <CheckCircleIcon className="h-6 w-6 text-green-500 mr-2" />
+                  <CheckCircleIcon className="h-5 w-5 text-green-500 mr-2" />
                 ) : (
-                  <XCircleIcon className="h-6 w-6 text-red-500 mr-2" />
+                  <XCircleIcon className="h-5 w-5 text-red-500 mr-2" />
                 )}
-                <Text className={response.status === "healthy" ? "text-green-500" : "text-red-500"}>
+                <Text className={`text-sm font-medium ${response.status === "healthy" ? "text-green-500" : "text-red-500"}`}>
                   Cache Status: {response.status}
                 </Text>
               </div>
 
-              <table className="min-w-full">
+              <table className="w-full border-collapse">
                 <tbody>
                   <TableClickableErrorField
                     label="Cache Type"
@@ -165,16 +163,16 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
             </div>
           </TabPanel>
 
-          <TabPanel>
-            <Card className="max-w-screen-lg">
-              <pre className="bg-gray-100 p-4 rounded-md overflow-auto max-h-[500px]">
+          <TabPanel className="p-4">
+            <div className="bg-gray-50 rounded-md p-4 font-mono text-sm">
+              <pre className="overflow-auto max-h-[500px]">
                 {JSON.stringify({
                   ...response,
                   litellm_cache_params: parsedLitellmParams,
                   redis_cache_params: parsedRedisParams
                 }, null, 2)}
               </pre>
-            </Card>
+            </div>
           </TabPanel>
         </TabPanels>
       </TabGroup>
@@ -201,23 +199,20 @@ export const CacheHealthTab: React.FC<{
   };
 
   return (
-    <div className="p-4">
-      <Button 
-        onClick={handleHealthCheck}
-        disabled={isLoading}
-        className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md"
-      >
-        {isLoading ? "Running Cache Health..." : "Run cache health"}
-      </Button>
-
-      <div className="flex items-center justify-end">
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <Button 
+          onClick={handleHealthCheck}
+          disabled={isLoading}
+          className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white text-sm px-4 py-2 rounded-md"
+        >
+          {isLoading ? "Running Health Check..." : "Run Health Check"}
+        </Button>
         <ResponseTimeIndicator responseTimeMs={localResponseTimeMs} />
       </div>
 
       {healthCheckResponse && (
-        <div className="mt-4">
-          <HealthCheckDetails response={healthCheckResponse} />
-        </div>
+        <HealthCheckDetails response={healthCheckResponse} />
       )}
     </div>
   );
