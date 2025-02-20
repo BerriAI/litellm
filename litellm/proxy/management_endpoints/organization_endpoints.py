@@ -218,9 +218,13 @@ async def update_organization(
     if data.updated_by is None:
         data.updated_by = user_api_key_dict.user_id
 
+    updated_organization_row = prisma_client.jsonify_object(
+        data.model_dump(exclude_none=True)
+    )
+
     response = await prisma_client.db.litellm_organizationtable.update(
         where={"organization_id": data.organization_id},
-        data=data.model_dump(exclude_none=True),
+        data=updated_organization_row,
         include={"members": True, "teams": True, "litellm_budget_table": True},
     )
 
