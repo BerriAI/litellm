@@ -69,6 +69,12 @@ export function setGlobalLitellmHeaderName(headerName: string = "Authorization")
   globalLitellmHeaderName = headerName;
 }
 
+export const getOpenAPISchema = async () => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/openapi.json` : `/openapi.json`;
+  const response = await fetch(url);
+  const jsonData = await response.json();
+  return jsonData;
+}
 
 export const modelCostMap = async (
   accessToken: string,

@@ -340,7 +340,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 <b>Optional Settings</b>
               </AccordionHeader>
               <AccordionBody>
-                <SchemaFormFields form={form} />
                 <Form.Item
                   className="mt-8"
                   label="Max Budget (USD)"
@@ -475,6 +474,18 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     options={predefinedTags}
                   />
                 </Form.Item>
+                <Accordion className="mt-20 mb-8">
+                  <AccordionHeader>
+                    <b>Advanced Settings</b>
+                  </AccordionHeader>
+                  <AccordionBody>
+                    <SchemaFormFields 
+                      schemaComponent="GenerateKeyRequest"
+                      form={form}
+                      excludedFields={['key_alias', 'team_id', 'models', 'duration', 'metadata', 'tags', 'guardrails', "max_budget", "budget_duration", "tpm_limit", "rpm_limit"]}
+                    />
+                  </AccordionBody>
+                </Accordion>
               </AccordionBody>
             </Accordion>
           </>
