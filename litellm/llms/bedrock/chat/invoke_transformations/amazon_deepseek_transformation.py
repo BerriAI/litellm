@@ -94,7 +94,7 @@ class AmazonDeepseekR1ResponseIterator(BaseModelResponseIterator):
         Deepseek r1 starts by thinking, then it generates the response.
         """
         try:
-            typed_chunk = AmazonDeepSeekR1StreamingResponse(**chunk)
+            typed_chunk = AmazonDeepSeekR1StreamingResponse(**chunk)  # type: ignore
             if "</think>" in typed_chunk["generation"]:
                 self.has_finished_thinking = True
 
