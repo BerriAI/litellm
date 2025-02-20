@@ -62,12 +62,11 @@ async def new_organization(
     - soft_budget: *Optional[float]* - [Not Implemented Yet] Get a slack alert when this soft budget is reached. Don't block requests.
     - model_max_budget: *Optional[dict]* - Max budget for a specific model
     - budget_duration: *Optional[str]* - Frequency of reseting org budget
-    - metadata: *Optional[dict]* - Metadata for team, store information for team. Example metadata - {"extra_info": "some info"}
+    - metadata: *Optional[dict]* - Metadata for organization, store information for organization. Example metadata - {"extra_info": "some info"}
     - blocked: *bool* - Flag indicating if the org is blocked or not - will stop all calls from keys with this org_id.
     - tags: *Optional[List[str]]* - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - organization_id: *Optional[str]* - The organization id of the team. Default is None. Create via `/organization/new`.
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
-
 
     Case 1: Create new org **without** a budget_id
 
@@ -103,6 +102,7 @@ async def new_organization(
     }'
     ```
     """
+
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
     if prisma_client is None:
@@ -174,6 +174,9 @@ async def new_organization(
     new_organization_row = prisma_client.jsonify_object(
         organization_row.json(exclude_none=True)
     )
+    verbose_proxy_logger.info(
+        f"new_organization_row: {json.dumps(new_organization_row, indent=2)}"
+    )
     response = await prisma_client.db.litellm_organizationtable.create(
         data={
             **new_organization_row,  # type: ignore
@@ -215,9 +218,13 @@ async def update_organization(
     if data.updated_by is None:
         data.updated_by = user_api_key_dict.user_id
 
+    updated_organization_row = prisma_client.jsonify_object(
+        data.model_dump(exclude_none=True)
+    )
+
     response = await prisma_client.db.litellm_organizationtable.update(
         where={"organization_id": data.organization_id},
-        data=data.model_dump(exclude_none=True),
+        data=updated_organization_row,
         include={"members": True, "teams": True, "litellm_budget_table": True},
     )
 

@@ -1114,6 +1114,7 @@ class NewOrganizationRequest(LiteLLM_BudgetTable):
     organization_alias: str
     models: List = []
     budget_id: Optional[str] = None
+    metadata: Optional[dict] = None
 
 
 class OrganizationRequest(LiteLLMPydanticObjectBase):

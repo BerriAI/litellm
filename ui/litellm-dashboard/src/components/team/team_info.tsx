@@ -348,7 +348,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     rpm_limit: info.rpm_limit,
                     max_budget: info.max_budget,
                     budget_duration: info.budget_duration,
-                    guardrails: info.metadata?.guardrails || []
+                    guardrails: info.metadata?.guardrails || [],
+                    metadata: info.metadata ? JSON.stringify(info.metadata, null, 2) : "",
                   }}
                   layout="vertical"
                 >
@@ -420,6 +421,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       placeholder="Select or enter guardrails"
                     />
                   </Form.Item>
+                  <Form.Item label="Metadata" name="metadata">
+                    <Input.TextArea rows={10} />
+                  </Form.Item>
+
 
                   <div className="flex justify-end gap-2 mt-6">
                     <Button onClick={() => setIsEditing(false)}>

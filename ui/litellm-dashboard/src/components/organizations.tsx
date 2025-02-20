@@ -19,6 +19,7 @@ import {
   TabPanels,
   TabPanel,
 } from "@tremor/react";
+import { Input } from "antd";
 import { Modal, Form, InputNumber, Tooltip, Select as Select2 } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { PencilAltIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
@@ -101,6 +102,8 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
   const handleCreate = async (values: any) => {
     try {
       if (!accessToken) return;
+
+      console.log(`values in organizations new create call: ${JSON.stringify(values)}`);
 
       await organizationCreateCall(accessToken, values);
       setIsOrgModalVisible(false);
@@ -332,6 +335,10 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                     </Form.Item>
                     <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
                       <InputNumber step={1} width={400} />
+                    </Form.Item>
+
+                    <Form.Item label="Metadata" name="metadata">  
+                      <Input.TextArea rows={4} />
                     </Form.Item>
 
                     <div style={{ textAlign: "right", marginTop: "10px" }}>
