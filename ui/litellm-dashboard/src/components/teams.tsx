@@ -267,15 +267,9 @@ const Teams: React.FC<TeamProps> = ({
         } else {
           formValues.organization_id = organizationId.trim();
         }
-        
-        // Create metadata object with guardrails if they exist
-        formValues.metadata = {
-          ...(formValues.guardrails ? { guardrails: formValues.guardrails } : {})
-        };
+
         
         // Remove guardrails from top level since it's now in metadata
-        delete formValues.guardrails;
-
         if (existingTeamAliases.includes(newTeamAlias)) {
           throw new Error(
             `Team alias ${newTeamAlias} already exists, please pick another alias`
@@ -702,6 +696,7 @@ const Teams: React.FC<TeamProps> = ({
                 >
                   <InputNumber step={1} width={400} />
                 </Form.Item>
+
                 <Accordion className="mt-20 mb-8">
                   <AccordionHeader>
                     <b>Additional Settings</b>
@@ -717,6 +712,9 @@ const Teams: React.FC<TeamProps> = ({
                           e.target.value = e.target.value.trim();
                         }} 
                       />
+                    </Form.Item>
+                    <Form.Item label="Metadata" name="metadata" help="Additional team metadata. Enter metadata as JSON object.">
+                      <Input.TextArea rows={4} />
                     </Form.Item>
                     <Form.Item 
                       label={
