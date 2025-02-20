@@ -169,6 +169,7 @@ def test_cache_ping_health_check_includes_only_cache_attributes(mock_redis_succe
     ), f"Unexpected status code: {response.status_code}"
 
     data = response.json()
+    print("/cache/ping response data=", json.dumps(data, indent=4))
     health_check_cache_params = data.get("health_check_cache_params", {})
     # The unrelated field we attached at the top-level of litellm.cache should *not* be present
     assert (
