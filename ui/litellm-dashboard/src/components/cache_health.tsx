@@ -23,10 +23,11 @@ const TableClickableErrorField: React.FC<{ label: string; value: string }> = ({
 }) => {
   const [isExpanded, setIsExpanded] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
-  const truncated = value.length > 50 ? value.substring(0, 50) + "..." : value;
+  const safeValue = String(value || ''); // Convert to string and handle null/undefined
+  const truncated = safeValue.length > 50 ? safeValue.substring(0, 50) + "..." : safeValue;
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(value);
+    navigator.clipboard.writeText(safeValue);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
