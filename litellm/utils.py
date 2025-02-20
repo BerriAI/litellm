@@ -1553,6 +1553,7 @@ def openai_token_counter(  # noqa: PLR0915
         bool
     ] = False,  # Flag passed from litellm.stream_chunk_builder, to indicate counting tokens for LLM Response. We need this because for LLM input we add +3 tokens per message - based on OpenAI's token counter
     use_default_image_token_count: Optional[bool] = False,
+    default_token_count: Optional[int] = None,
 ):
     """
     Return the number of tokens used by a list of messages.
@@ -1601,7 +1602,9 @@ def openai_token_counter(  # noqa: PLR0915
                         num_tokens += tokens_per_name
                 elif isinstance(value, List):
                     text, num_tokens = _get_num_tokens_from_content_list(
-                        value, use_default_image_token_count
+                        content_list=value,
+                        use_default_image_token_count=use_default_image_token_count,
+                        default_token_count=default_token_count,
                     )
                     num_tokens += num_tokens
     elif text is not None and count_response_tokens is True:
@@ -1741,6 +1744,7 @@ def _format_type(props, indent):
 def _get_num_tokens_from_content_list(
     content_list: List[Dict[str, Any]],
     use_default_image_token_count: Optional[bool] = False,
+    default_token_count: Optional[int] = None,
 ) -> Tuple[str, int]:
     """
     Get the number of tokens from a list of content.
@@ -1775,7 +1779,11 @@ def _get_num_tokens_from_content_list(
                     )
         return text, num_tokens
     except Exception as e:
-        raise ValueError(f"Error getting number of tokens from content list: {e}")
+        if default_token_count is not None:
+            return "", default_token_count
+        raise ValueError(
+            f"Error getting number of tokens from content list: {e}, default_token_count={default_token_count}"
+        )
 
 
 def token_counter(
@@ -1787,6 +1795,7 @@ def token_counter(
     tools: Optional[List[ChatCompletionToolParam]] = None,
     tool_choice: Optional[ChatCompletionNamedToolChoiceParam] = None,
     use_default_image_token_count: Optional[bool] = False,
+    default_token_count: Optional[int] = None,
 ) -> int:
     """
     Count the number of tokens in a given text using a specified model.
@@ -1796,6 +1805,7 @@ def token_counter(
     custom_tokenizer (Optional[dict]): A custom tokenizer created with the `create_pretrained_tokenizer` or `create_tokenizer` method. Must be a dictionary with a string value for `type` and Tokenizer for `tokenizer`. Default is None.
     text (str): The raw text string to be passed to the model. Default is None.
     messages (Optional[List[Dict[str, str]]]): Alternative to passing in text. A list of dictionaries representing messages with "role" and "content" keys. Default is None.
+    default_token_count (Optional[int]): The default number of tokens to return for a message block, if an error occurs. Default is None.
 
     Returns:
     int: The number of tokens in the text.
@@ -1814,7 +1824,9 @@ def token_counter(
                         text += message["content"]
                     elif isinstance(content, List):
                         text, num_tokens = _get_num_tokens_from_content_list(
-                            content, use_default_image_token_count
+                            content_list=content,
+                            use_default_image_token_count=use_default_image_token_count,
+                            default_token_count=default_token_count,
                         )
                 if message.get("tool_calls"):
                     is_tool_call = True
@@ -1859,6 +1871,7 @@ def token_counter(
                     tool_choice=tool_choice,
                     use_default_image_token_count=use_default_image_token_count
                     or False,
+                    default_token_count=default_token_count,
                 )
             else:
                 print_verbose(
@@ -1874,6 +1887,7 @@ def token_counter(
                     tool_choice=tool_choice,
                     use_default_image_token_count=use_default_image_token_count
                     or False,
+                    default_token_count=default_token_count,
                 )
     else:
         num_tokens = len(encoding.encode(text, disallowed_special=()))  # type: ignore

@@ -527,4 +527,5 @@ def test_bad_input_token_counter(model, messages):
     token_counter(
         model=model,
         messages=messages,
+        default_token_count=1000,
     )
