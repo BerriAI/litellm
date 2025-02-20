@@ -638,7 +638,9 @@ class RedisCache(BaseCache):
             )
 
     def batch_get_cache(
-        self, key_list: List[Optional[str]], parent_otel_span: Optional[Span] = None
+        self,
+        key_list: Union[List[str], List[Optional[str]]],
+        parent_otel_span: Optional[Span] = None,
     ) -> dict:
         """
         Use Redis for bulk read operations
@@ -738,7 +740,9 @@ class RedisCache(BaseCache):
             )
 
     async def async_batch_get_cache(
-        self, key_list: List[Optional[str]], parent_otel_span: Optional[Span] = None
+        self,
+        key_list: Union[List[str], List[Optional[str]]],
+        parent_otel_span: Optional[Span] = None,
     ) -> dict:
         """
         Use Redis for bulk read operations
