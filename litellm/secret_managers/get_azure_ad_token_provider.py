@@ -1,6 +1,5 @@
 import os
 from typing import Callable
-from litellm._logging import verbose_logger
 
 
 def get_azure_ad_token_provider() -> Callable[[], str]:
@@ -15,9 +14,12 @@ def get_azure_ad_token_provider() -> Callable[[], str]:
     Returns:
         Callable that returns a temporary authentication token.
     """
-    from azure.identity import get_bearer_token_provider
     import azure.identity as identity
-    azure_scope = os.environ.get("AZURE_SCOPE", "https://cognitiveservices.azure.com/.default")
+    from azure.identity import get_bearer_token_provider
+
+    azure_scope = os.environ.get(
+        "AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"
+    )
     cred = os.environ.get("AZURE_CREDENTIAL", "ClientSecretCredential")
 
     cred_cls = getattr(identity, cred)
