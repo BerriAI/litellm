@@ -18,16 +18,9 @@ test("add and verify model", async ({ page }) => {
   });
   await modelsTab.click();
 
-  // Wait for the page to load
-//   await page.waitForTimeout(1000);
-
   // Click the Add Model tab (using role='tab' to be more specific)
   const addModelTab = page.getByRole('tab', { name: 'Add Model' });
   await addModelTab.click();
-
-//   await page.waitForTimeout(2000);
-
-  console.log(`Created model "${testModelName}" successfully...`);
 
   // Validate that there is an h2 with text Add new model
   const addModelHeader = page.locator("h2", { hasText: "Add new model" });
@@ -88,5 +81,4 @@ test("add and verify model", async ({ page }) => {
   await page.waitForTimeout(3000);
   await page.reload();
   await expect(modelRow).not.toBeVisible({ timeout: 10000 });
-  console.log(`Deleted model "${testModelName}" successfully...`);
 });

@@ -41,8 +41,6 @@ test("view internal user page", async ({ page }) => {
     elements.map((el) => parseInt(el.textContent.split(" ")[0], 10))
   );
 
-  console.log("Keys count array:", keysCountArray);
-
   const hasNonZeroKeys = keysCountArray.some((count) => count > 0);
   expect(hasNonZeroKeys).toBe(true);
 
