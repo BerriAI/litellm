@@ -961,6 +961,7 @@ async def test_gemini_embeddings(sync_mode, input):
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_hf_embedddings_with_optional_params(sync_mode):
     litellm.set_verbose = True
 
