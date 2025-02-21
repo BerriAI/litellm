@@ -6198,8 +6198,6 @@ class ProviderConfigManager:
             return litellm.AzureAIRerankConfig()
         elif litellm.LlmProviders.INFINITY == provider:
             return litellm.InfinityRerankConfig()
-        elif litellm.LlmProviders.BEDROCK == provider:
-            return litellm.BedrockRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
