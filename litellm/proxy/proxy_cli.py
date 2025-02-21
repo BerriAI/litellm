@@ -607,10 +607,10 @@ def run_server(  # noqa: PLR0915
 
             if is_prisma_runnable:
                 from litellm.proxy.db.check_migration import check_prisma_schema_diff
-                from litellm.proxy.db.prisma_client import should_update_schema
+                from litellm.proxy.db.prisma_client import should_update_prisma_schema
 
                 if (
-                    should_update_schema(
+                    should_update_prisma_schema(
                         general_settings.get("disable_prisma_schema_update")
                     )
                     is False

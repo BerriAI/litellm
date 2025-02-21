@@ -296,7 +296,6 @@ class TestOpenAIChatCompletion(BaseLLMChatTest):
         except litellm.InternalServerError:
             pytest.skip("Skipping test due to InternalServerError")
 
-
 def test_completion_bad_org():
     import litellm
 

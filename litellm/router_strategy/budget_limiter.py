@@ -33,12 +33,7 @@ from litellm.router_utils.cooldown_callbacks import (
     _get_prometheus_logger_from_callbacks,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.router import (
-    DeploymentTypedDict,
-    LiteLLM_Params,
-    ModelInfo,
-    RouterErrors,
-)
+from litellm.types.router import DeploymentTypedDict, LiteLLM_Params, RouterErrors
 from litellm.types.utils import BudgetConfig
 from litellm.types.utils import BudgetConfig as GenericBudgetInfo
 from litellm.types.utils import GenericBudgetConfigType, StandardLoggingPayload
@@ -771,7 +766,7 @@ class RouterBudgetLimiting(CustomLogger):
             return
         for _model in model_list:
             _litellm_params = _model.get("litellm_params", {})
-            _model_info: ModelInfo = _model.get("model_info") or ModelInfo()
+            _model_info: Dict = _model.get("model_info") or {}
             _model_id = _model_info.get("id")
             _max_budget = _litellm_params.get("max_budget")
             _budget_duration = _litellm_params.get("budget_duration")

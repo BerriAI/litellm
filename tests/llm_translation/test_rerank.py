@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import io
 import os
+from typing import Optional, Dict
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -29,7 +30,11 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 def assert_response_shape(response, custom_llm_provider):
     expected_response_shape = {"id": str, "results": list, "meta": dict}
 
-    expected_results_shape = {"index": int, "relevance_score": float}
+    expected_results_shape = {
+        "index": int,
+        "relevance_score": float,
+        "document": Optional[Dict[str, str]],
+    }
 
     expected_meta_shape = {"api_version": dict, "billed_units": dict}
 
@@ -44,6 +49,9 @@ def assert_response_shape(response, custom_llm_provider):
         assert isinstance(
             result["relevance_score"], expected_results_shape["relevance_score"]
         )
+        if "document" in result:
+            assert isinstance(result["document"], Dict)
+            assert isinstance(result["document"]["text"], str)
     assert isinstance(response.meta, expected_response_shape["meta"])
 
     if custom_llm_provider == "cohere":
@@ -66,6 +74,7 @@ def assert_response_shape(response, custom_llm_provider):
 
 @pytest.mark.asyncio()
 @pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_basic_rerank(sync_mode):
     litellm.set_verbose = True
     if sync_mode is True:
@@ -311,6 +320,7 @@ def test_complete_base_url_cohere():
         (3, None, False),
     ],
 )
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_basic_rerank_caching(sync_mode, top_n_1, top_n_2, expect_cache_hit):
     from litellm.caching.caching import Cache
 
@@ -362,17 +372,15 @@ def test_rerank_response_assertions():
         **{
             "id": "ab0fcca0-b617-11ef-b292-0242ac110002",
             "results": [
-                {"index": 2, "relevance_score": 0.9958819150924683, "document": None},
-                {"index": 0, "relevance_score": 0.001293411129154265, "document": None},
+                {"index": 2, "relevance_score": 0.9958819150924683},
+                {"index": 0, "relevance_score": 0.001293411129154265},
                 {
                     "index": 1,
                     "relevance_score": 7.641685078851879e-05,
-                    "document": None,
                 },
                 {
                     "index": 3,
                     "relevance_score": 7.621097756782547e-05,
-                    "document": None,
                 },
             ],
             "meta": {
@@ -385,3 +393,19 @@ def test_rerank_response_assertions():
     )
 
     assert_response_shape(r, custom_llm_provider="custom")
+
+
+@pytest.mark.flaky(retries=3, delay=1)
+def test_rerank_cohere_api():
+    response = litellm.rerank(
+        model="cohere/rerank-english-v3.0",
+        query="hello",
+        documents=["hello", "world"],
+        return_documents=True,
+        top_n=3,
+    )
+    print("rerank response", response)
+    assert response.results[0]["document"] is not None
+    assert response.results[0]["document"]["text"] is not None
+    assert response.results[0]["document"]["text"] == "hello"
+    assert response.results[1]["document"]["text"] == "world"

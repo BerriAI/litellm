@@ -2186,6 +2186,16 @@ class TestBedrockRerank(BaseLLMRerankTest):
         }
 
 
+class TestBedrockCohereRerank(BaseLLMRerankTest):
+    def get_custom_llm_provider(self) -> litellm.LlmProviders:
+        return litellm.LlmProviders.BEDROCK
+
+    def get_base_rerank_call_args(self) -> dict:
+        return {
+            "model": "bedrock/arn:aws:bedrock:us-west-2::foundation-model/cohere.rerank-v3-5:0",
+        }
+
+
 @pytest.mark.parametrize(
     "messages, continue_message_index",
     [
@@ -2614,7 +2624,7 @@ def test_bedrock_custom_deepseek():
             # Verify the URL
             assert (
                 mock_post.call_args.kwargs["url"]
-                == "https://bedrock-runtime.us-west-2.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A086734376398%3Aimported-model%2Fr4c4kewx2s0n/invoke"
+                == "https://bedrock-runtime.us-east-1.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A086734376398%3Aimported-model%2Fr4c4kewx2s0n/invoke"
             )
 
             # Verify the request body format
