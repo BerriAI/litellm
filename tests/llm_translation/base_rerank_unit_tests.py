@@ -33,6 +33,7 @@ def assert_response_shape(response, custom_llm_provider):
     expected_api_version_shape = {"version": str}
 
     expected_billed_units_shape = {"search_units": int}
+    expected_billed_units_total_tokens_shape = {"total_tokens": int}
 
     assert isinstance(response.id, expected_response_shape["id"])
     assert isinstance(response.results, expected_response_shape["results"])
@@ -55,10 +56,16 @@ def assert_response_shape(response, custom_llm_provider):
     assert isinstance(
         response.meta["billed_units"], expected_meta_shape["billed_units"]
     )
-    assert isinstance(
-        response.meta["billed_units"]["search_units"],
-        expected_billed_units_shape["search_units"],
-    )
+    if "total_tokens" in response.meta["billed_units"]:
+        assert isinstance(
+            response.meta["billed_units"]["total_tokens"],
+            expected_billed_units_total_tokens_shape["total_tokens"],
+        )
+    else:
+        assert isinstance(
+            response.meta["billed_units"]["search_units"],
+            expected_billed_units_shape["search_units"],
+        )
 
 
 class BaseLLMRerankTest(ABC):
@@ -79,7 +86,7 @@ class BaseLLMRerankTest(ABC):
     @pytest.mark.asyncio()
     @pytest.mark.parametrize("sync_mode", [True, False])
     async def test_basic_rerank(self, sync_mode):
-        litellm.set_verbose = True
+        litellm._turn_on_debug()
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
         rerank_call_args = self.get_base_rerank_call_args()

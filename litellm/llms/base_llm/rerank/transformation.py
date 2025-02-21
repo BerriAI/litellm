@@ -80,11 +80,14 @@ class BaseRerankConfig(ABC):
     ) -> OptionalRerankParams:
         pass
 
-    @abstractmethod
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
-        pass
+        raise BaseLLMException(
+            status_code=status_code,
+            message=error_message,
+            headers=headers,
+        )
 
     @staticmethod
     def calculate_rerank_cost(

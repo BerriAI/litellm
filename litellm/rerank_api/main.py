@@ -264,16 +264,26 @@ def rerank(  # noqa: PLR0915
                 raise ValueError(
                     "Jina AI API key is required, please set 'JINA_AI_API_KEY' in your environment"
                 )
-            response = jina_ai_rerank.rerank(
+
+            api_base = (
+                dynamic_api_base
+                or optional_params.api_base
+                or litellm.api_base
+                or get_secret("BEDROCK_API_BASE")  # type: ignore
+            )
+
+            response = base_llm_http_handler.rerank(
                 model=model,
-                api_key=dynamic_api_key,
-                query=query,
-                documents=documents,
-                top_n=top_n,
-                rank_fields=rank_fields,
-                return_documents=return_documents,
-                max_chunks_per_doc=max_chunks_per_doc,
+                custom_llm_provider=_custom_llm_provider,
+                optional_rerank_params=optional_rerank_params,
+                logging_obj=litellm_logging_obj,
+                timeout=optional_params.timeout,
+                api_key=dynamic_api_key or optional_params.api_key,
+                api_base=api_base,
                 _is_async=_is_async,
+                headers=headers or litellm.headers or {},
+                client=client,
+                model_response=model_response,
             )
         elif _custom_llm_provider == "bedrock":
             api_base = (
