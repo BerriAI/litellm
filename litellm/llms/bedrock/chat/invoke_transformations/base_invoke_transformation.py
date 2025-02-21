@@ -27,7 +27,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
-from litellm.utils import CustomStreamWrapper, get_secret
+from litellm.utils import CustomStreamWrapper
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj

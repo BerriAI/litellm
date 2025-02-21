@@ -12,10 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from httpx import URL, Response
 
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
-from litellm.llms.base_llm.rerank.transformation import (
-    BaseRerankConfig,
-    LiteLLMLoggingObj,
-)
+from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.types.rerank import (
     OptionalRerankParams,
     RerankBilledUnits,

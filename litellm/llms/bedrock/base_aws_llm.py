@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
-from litellm.secret_managers.main import get_secret, get_secret_str
+from litellm.secret_managers.main import get_secret
 
 if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest

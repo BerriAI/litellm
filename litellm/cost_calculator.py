@@ -849,8 +849,6 @@ def rerank_cost(
     Returns
     - float or None: cost of response OR none if error.
     """
-
-    default_num_queries = 1
     _, custom_llm_provider, _, _ = litellm.get_llm_provider(
         model=model, custom_llm_provider=custom_llm_provider
     )
