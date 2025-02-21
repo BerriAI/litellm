@@ -1113,6 +1113,22 @@ jobs:
     steps:
       - checkout
       - run:
+          name: Install Python 3.9
+          command: |
+            curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
+            bash miniconda.sh -b -p $HOME/miniconda
+            export PATH="$HOME/miniconda/bin:$PATH"
+            conda init bash
+            source ~/.bashrc
+            conda create -n myenv python=3.9 -y
+            conda activate myenv
+            python --version
+      - run:
+          name: Install Dependencies
+          command: |
+            pip install "pytest==7.3.1"
+            pip install "pytest-asyncio==0.21.1"
+      - run:
           name: Build Docker image
           command: |
             docker build -t myapp . -f ./docker/Dockerfile.database
@@ -1138,6 +1154,7 @@ jobs:
             sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
             sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
             sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
+
       - run:
           name: Wait for container to be ready
           command: dockerize -wait http://localhost:4000 -timeout 1m
