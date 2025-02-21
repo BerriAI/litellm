@@ -15,7 +15,18 @@ export const columns = (
   handleRefreshClick: () => void,
 ): ColumnDef<ModelData>[] => [
   {
-    header: "Model ID",
+    header: ({ column }) => (
+      <div
+        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+        className="flex items-center gap-2 text-xs cursor-pointer text-gray-600 hover:text-gray-900"
+      >
+        Model ID
+        {{
+          asc: " ↑",
+          desc: " ↓",
+        }[column.getIsSorted() as string] ?? " ↕"}
+      </div>
+    ),
     accessorKey: "model_info.id",
     cell: ({ row }) => {
       const model = row.original;
@@ -36,14 +47,36 @@ export const columns = (
     },
   },
   {
-    header: "Model Name",
+    header: ({ column }) => (
+      <div
+        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+        className="flex items-center gap-2 text-xs cursor-pointer text-gray-600 hover:text-gray-900"
+      >
+        Model Name
+        {{
+          asc: " ↑",
+          desc: " ↓",
+        }[column.getIsSorted() as string] ?? " ↕"}
+      </div>
+    ),
     accessorKey: "model_name",
     cell: ({ row }) => (
       <p className="text-xs">{getDisplayModelName(row.original) || "-"}</p>
     ),
   },
   {
-    header: "Provider",
+    header: ({ column }) => (
+      <div
+        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+        className="flex items-center gap-2 text-xs cursor-pointer text-gray-600 hover:text-gray-900"
+      >
+        Provider
+        {{
+          asc: " ↑",
+          desc: " ↓",
+        }[column.getIsSorted() as string] ?? " ↕"}
+      </div>
+    ),
     accessorKey: "provider",
     cell: ({ row }) => {
       const model = row.original;
@@ -87,62 +120,20 @@ export const columns = (
     },
   },
   {
-    header: "Input Cost (per 1M tokens)",
-    cell: ({ row }) => {
-      const model = row.original;
+    header: ({ column }) => {
       return (
-        <pre className="text-xs">
-          {model.input_cost || "-"}
-        </pre>
-      );
-    },
-  },
-  {
-    header: "Output Cost (per 1M tokens)",
-    cell: ({ row }) => {
-      const model = row.original;
-      return (
-        <pre className="text-xs">
-          {model.output_cost || "-"}
-        </pre>
-      );
-    },
-  },
-  {
-    header: "API Base",
-    cell: ({ row }) => {
-      const model = row.original;
-      return (
-        <Tooltip title={model.api_base}>
-          <pre className="text-xs">
-            {model.api_base
-              ? model.api_base.slice(0, 20) + (model.api_base.length > 20 ? "..." : "")
-              : "-"}
-          </pre>
-        </Tooltip>
-      );
-    },
-  },
-  {
-    header: "Team ID",
-    cell: ({ row }) => {
-      const model = row.original;
-      return model.model_info.team_id ? (
-        <Button
-          size="xs"
-          variant="light"
-          className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100"
-          onClick={() => setSelectedTeamId(model.model_info.team_id)}
+        <div
+          onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+          className="flex items-center gap-2 text-xs cursor-pointer text-gray-600 hover:text-gray-900"
         >
-          {model.model_info.team_id}
-        </Button>
-      ) : (
-        "-"
+          Created At
+          {{
+            asc: " ↑",
+            desc: " ↓",
+          }[column.getIsSorted() as string] ?? " ↕"}
+        </div>
       );
     },
-  },
-  {
-    header: "Created At",
     accessorKey: "model_info.created_at",
     sortingFn: "datetime",
     cell: ({ row }) => {
@@ -162,6 +153,99 @@ export const columns = (
         <span className="text-xs">
           {model.model_info.created_by || "-"}
         </span>
+      );
+    },
+  },
+  {
+    header: ({ column }) => (
+      <div
+        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+        className="flex items-center gap-2 text-xs cursor-pointer text-gray-600 hover:text-gray-900"
+      >
+        Input Cost (per 1M tokens)
+        {{
+          asc: " ↑",
+          desc: " ↓",
+        }[column.getIsSorted() as string] ?? " ↕"}
+      </div>
+    ),
+    accessorKey: "input_cost",
+    cell: ({ row }) => {
+      const model = row.original;
+      return (
+        <pre className="text-xs">
+          {model.input_cost || "-"}
+        </pre>
+      );
+    },
+  },
+  {
+    header: ({ column }) => (
+      <div
+        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+        className="flex items-center gap-2 text-xs cursor-pointer text-gray-600 hover:text-gray-900"
+      >
+        Output Cost (per 1M tokens)
+        {{
+          asc: " ↑",
+          desc: " ↓",
+        }[column.getIsSorted() as string] ?? " ↕"}
+      </div>
+    ),
+    accessorKey: "output_cost",
+    cell: ({ row }) => {
+      const model = row.original;
+      return (
+        <pre className="text-xs">
+          {model.output_cost || "-"}
+        </pre>
+      );
+    },
+  },
+  {
+    header: "API Base",
+    cell: ({ row }) => {
+      const model = row.original;
+      return (
+        <div className="max-w-[200px]">
+          <Tooltip title={model.api_base}>
+            <pre className="text-xs truncate">
+              {model.api_base || "-"}
+            </pre>
+          </Tooltip>
+        </div>
+      );
+    },
+  },
+  {
+    header: ({ column }) => (
+      <div
+        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+        className="flex items-center gap-2 text-xs cursor-pointer text-gray-600 hover:text-gray-900"
+      >
+        Team ID
+        {{
+          asc: " ↑",
+          desc: " ↓",
+        }[column.getIsSorted() as string] ?? " ↕"}
+      </div>
+    ),
+    accessorKey: "model_info.team_id",
+    cell: ({ row }) => {
+      const model = row.original;
+      return model.model_info.team_id ? (
+        <div className="max-w-[200px]">
+          <Button
+            size="xs"
+            variant="light"
+            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 truncate w-full"
+            onClick={() => setSelectedTeamId(model.model_info.team_id)}
+          >
+            {model.model_info.team_id}
+          </Button>
+        </div>
+      ) : (
+        "-"
       );
     },
   },
