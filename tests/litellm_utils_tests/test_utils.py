@@ -1165,6 +1165,9 @@ def test_models_by_provider():
     """
     Make sure all providers from model map are in the valid providers list
     """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
     from litellm import models_by_provider
 
     providers = set()
