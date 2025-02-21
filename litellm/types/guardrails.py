@@ -19,7 +19,6 @@ guardrails:
 
 
 class SupportedGuardrailIntegrations(Enum):
-    ACUVITY = "acuvity"
     APORIA = "aporia"
     BEDROCK = "bedrock"
     GURDRAILS_AI = "guardrails_ai"
@@ -105,9 +104,6 @@ class LitellmParams(TypedDict):
     # guardrails ai params
     guard_name: Optional[str]
     default_on: Optional[bool]
-
-    vendor_params: Optional[Dict]
-
 
 
 class Guardrail(TypedDict, total=False):
