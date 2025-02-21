@@ -165,4 +165,21 @@ export const columns = (
       );
     },
   },
+  {
+    header: "Status",
+    accessorKey: "model_info.db_model",
+    cell: ({ row }) => {
+      const model = row.original;
+      return (
+        <div className={`
+          inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium
+          ${model.model_info.db_model 
+            ? 'bg-blue-50 text-blue-600' 
+            : 'bg-gray-100 text-gray-600'}
+        `}>
+          {model.model_info.db_model ? "DB Model" : "Config Model"}
+        </div>
+      );
+    },
+  },
 ];
