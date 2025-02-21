@@ -56,8 +56,8 @@ def test_bedrock_embedding_models(model, input_type, embed_response):
                 model=model,
                 input=input_data,
                 client=client,
-                aws_region_name="us-east-1",
-                aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
+                aws_region_name="us-west-2",
+                aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-west-2.amazonaws.com",
             )
 
             # Verify response structure
@@ -66,13 +66,13 @@ def test_bedrock_embedding_models(model, input_type, embed_response):
             assert isinstance(response.data[0]['embedding'], list)
             assert len(response.data[0]['embedding']) == 3  # Based on mock response
 
-            # Get the request body
-            request_body = response._hidden_params.get('complete_input_dict', {})
+            # Fetch request body
+            request_data = json.loads(mock_post.call_args.kwargs["data"])
 
             # Verify AWS params are not in request body
             aws_params = ["aws_region_name", "aws_bedrock_runtime_endpoint"]
             for param in aws_params:
-                assert param not in request_body, f"AWS param {param} should not be in request body"
+                assert param not in request_data, f"AWS param {param} should not be in request body"
 
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
