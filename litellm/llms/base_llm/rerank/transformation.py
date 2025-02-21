@@ -86,8 +86,43 @@ class BaseRerankConfig(ABC):
     ) -> BaseLLMException:
         pass
 
-    @staticmethod
+    def calculate_total_queries(
+        self, query_tokens: int, document_tokens: list[int]
+    ) -> int:
+        """
+        Calculate the cost of a request based on token counts and document chunks.
+
+        Args:
+            query_tokens (int): Number of tokens in the query
+            document_tokens (list[int]): List of token counts for each document
+            cost_per_1000_queries (float): Cost per 1000 queries in dollars (default: $1.00)
+
+        Returns:
+            float: Total cost in dollars
+        """
+        TOKENS_PER_DOCUMENT = 512
+        CHUNKS_PER_QUERY = 100
+
+        # Validate query length
+        if query_tokens >= TOKENS_PER_DOCUMENT:
+            raise ValueError("Query tokens exceed maximum allowed tokens per document")
+
+        # Calculate total chunks needed
+        total_chunks = 0
+        available_tokens = TOKENS_PER_DOCUMENT - query_tokens
+
+        for doc_tokens in document_tokens:
+            # Calculate chunks needed for this document
+            chunks_needed = (doc_tokens + available_tokens - 1) // available_tokens
+            total_chunks += max(1, chunks_needed)
+
+        # Calculate total queries needed (rounded up to nearest multiple of CHUNKS_PER_QUERY)
+        total_queries = (total_chunks + CHUNKS_PER_QUERY - 1) // CHUNKS_PER_QUERY
+
+        return total_queries
+
     def calculate_rerank_cost(
+        self,
         model: str,
         custom_llm_provider: Optional[str] = None,
         num_queries: int = 1,

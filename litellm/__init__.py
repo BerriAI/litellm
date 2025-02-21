@@ -872,6 +872,7 @@ from .llms.bedrock.common_utils import (
 from .llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import (
     AmazonAI21Config,
 )
+from .llms.bedrock.rerank.transformation import BedrockRerankConfig
 from .llms.bedrock.chat.invoke_transformations.amazon_nova_transformation import (
     AmazonInvokeNovaConfig,
 )
