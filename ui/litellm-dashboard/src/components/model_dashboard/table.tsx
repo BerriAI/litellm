@@ -16,7 +16,7 @@ import {
   TableRow,
   TableCell,
 } from "@tremor/react";
-import { ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
+import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
 
 interface ModelDataTableProps<TData, TValue> {
   data: TData[];
@@ -30,7 +30,7 @@ export function ModelDataTable<TData, TValue>({
   isLoading = false,
 }: ModelDataTableProps<TData, TValue>) {
   const [sorting, setSorting] = React.useState<SortingState>([
-    { id: "model_info.created_at", desc: true } // Updated to match the correct accessor path
+    { id: "model_info.created_at", desc: true }
   ]);
 
   const table = useReactTable({
@@ -42,6 +42,7 @@ export function ModelDataTable<TData, TValue>({
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
+    enableSorting: true,
   });
 
   return (
@@ -50,28 +51,34 @@ export function ModelDataTable<TData, TValue>({
         <TableHead>
           {table.getHeaderGroups().map((headerGroup) => (
             <TableRow key={headerGroup.id}>
-              {headerGroup.headers.map((header) => {
-                return (
-                  <TableHeaderCell 
-                    key={header.id} 
-                    className="py-1 h-8 cursor-pointer"
-                    onClick={header.column.getToggleSortingHandler()}
-                  >
-                    <div className="flex items-center gap-1">
+              {headerGroup.headers.map((header) => (
+                <TableHeaderCell 
+                  key={header.id} 
+                  className="py-1 h-8 cursor-pointer hover:bg-gray-50"
+                  onClick={header.column.getToggleSortingHandler()}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center">
                       {header.isPlaceholder ? null : (
                         flexRender(
                           header.column.columnDef.header,
                           header.getContext()
                         )
                       )}
-                      {{
-                        asc: <ChevronUpIcon className="h-4 w-4" />,
-                        desc: <ChevronDownIcon className="h-4 w-4" />
-                      }[header.column.getIsSorted() as string] ?? null}
                     </div>
-                  </TableHeaderCell>
-                );
-              })}
+                    <div className="w-4">
+                      {header.column.getIsSorted() ? (
+                        {
+                          asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
+                          desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />
+                        }[header.column.getIsSorted() as string]
+                      ) : (
+                        <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
+                      )}
+                    </div>
+                  </div>
+                </TableHeaderCell>
+              ))}
             </TableRow>
           ))}
         </TableHead>

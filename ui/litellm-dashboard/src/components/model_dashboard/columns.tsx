@@ -15,18 +15,7 @@ export const columns = (
   handleRefreshClick: () => void,
 ): ColumnDef<ModelData>[] => [
   {
-    header: ({ column }) => (
-      <div
-        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-        className="flex items-center gap-2 text-xs cursor-pointer text-gray-600 hover:text-gray-900"
-      >
-        Model ID
-        {{
-          asc: " ↑",
-          desc: " ↓",
-        }[column.getIsSorted() as string] ?? " ↕"}
-      </div>
-    ),
+    header: "Model ID",
     accessorKey: "model_info.id",
     cell: ({ row }) => {
       const model = row.original;
@@ -47,36 +36,14 @@ export const columns = (
     },
   },
   {
-    header: ({ column }) => (
-      <div
-        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-        className="flex items-center gap-2 text-xs cursor-pointer text-gray-600 hover:text-gray-900"
-      >
-        Model Name
-        {{
-          asc: " ↑",
-          desc: " ↓",
-        }[column.getIsSorted() as string] ?? " ↕"}
-      </div>
-    ),
+    header: "Model Name",
     accessorKey: "model_name",
     cell: ({ row }) => (
       <p className="text-xs">{getDisplayModelName(row.original) || "-"}</p>
     ),
   },
   {
-    header: ({ column }) => (
-      <div
-        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-        className="flex items-center gap-2 text-xs cursor-pointer text-gray-600 hover:text-gray-900"
-      >
-        Provider
-        {{
-          asc: " ↑",
-          desc: " ↓",
-        }[column.getIsSorted() as string] ?? " ↕"}
-      </div>
-    ),
+    header: "Provider",
     accessorKey: "provider",
     cell: ({ row }) => {
       const model = row.original;
@@ -120,20 +87,7 @@ export const columns = (
     },
   },
   {
-    header: ({ column }) => {
-      return (
-        <div
-          onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-          className="flex items-center gap-2 text-xs cursor-pointer text-gray-600 hover:text-gray-900"
-        >
-          Created At
-          {{
-            asc: " ↑",
-            desc: " ↓",
-          }[column.getIsSorted() as string] ?? " ↕"}
-        </div>
-      );
-    },
+    header: "Created At",
     accessorKey: "model_info.created_at",
     sortingFn: "datetime",
     cell: ({ row }) => {
@@ -157,18 +111,7 @@ export const columns = (
     },
   },
   {
-    header: ({ column }) => (
-      <div
-        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-        className="flex items-center gap-2 text-xs cursor-pointer text-gray-600 hover:text-gray-900"
-      >
-        Input Cost (per 1M tokens)
-        {{
-          asc: " ↑",
-          desc: " ↓",
-        }[column.getIsSorted() as string] ?? " ↕"}
-      </div>
-    ),
+    header: "Input Cost (per 1M tokens)",
     accessorKey: "input_cost",
     cell: ({ row }) => {
       const model = row.original;
@@ -180,18 +123,7 @@ export const columns = (
     },
   },
   {
-    header: ({ column }) => (
-      <div
-        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-        className="flex items-center gap-2 text-xs cursor-pointer text-gray-600 hover:text-gray-900"
-      >
-        Output Cost (per 1M tokens)
-        {{
-          asc: " ↑",
-          desc: " ↓",
-        }[column.getIsSorted() as string] ?? " ↕"}
-      </div>
-    ),
+    header: "Output Cost (per 1M tokens)",
     accessorKey: "output_cost",
     cell: ({ row }) => {
       const model = row.original;
@@ -218,18 +150,7 @@ export const columns = (
     },
   },
   {
-    header: ({ column }) => (
-      <div
-        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-        className="flex items-center gap-2 text-xs cursor-pointer text-gray-600 hover:text-gray-900"
-      >
-        Team ID
-        {{
-          asc: " ↑",
-          desc: " ↓",
-        }[column.getIsSorted() as string] ?? " ↕"}
-      </div>
-    ),
+    header: "Team ID",
     accessorKey: "model_info.team_id",
     cell: ({ row }) => {
       const model = row.original;
