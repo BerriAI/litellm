@@ -31,29 +31,29 @@ class JinaAIRerankConfig(BaseRerankConfig):
             "query",
             "top_n",
             "documents",
-            "rank_fields",
             "return_documents",
         ]
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: Optional[dict],
+        non_default_params: dict,
         model: str,
         drop_params: bool,
         query: str,
-        documents: List[str | Dict[str, Any]],
+        documents: List[Union[str, Dict[str, Any]]],
         custom_llm_provider: Optional[str] = None,
         top_n: Optional[int] = None,
         rank_fields: Optional[List[str]] = None,
         return_documents: Optional[bool] = True,
         max_chunks_per_doc: Optional[int] = None,
     ) -> OptionalRerankParams:
+        optional_params = {}
+        supported_params = self.get_supported_cohere_rerank_params(model)
+        for k, v in non_default_params.items():
+            if k in supported_params:
+                optional_params[k] = v
         return OptionalRerankParams(
-            query=query,
-            top_n=top_n,
-            documents=documents,
-            rank_fields=rank_fields,
-            return_documents=return_documents,
+            **optional_params,
         )
 
     def get_complete_url(self, api_base: Optional[str], model: str) -> str:
@@ -70,10 +70,7 @@ class JinaAIRerankConfig(BaseRerankConfig):
     def transform_rerank_request(
         self, model: str, optional_rerank_params: OptionalRerankParams, headers: Dict
     ) -> Dict:
-        return {
-            "model": model,
-            **optional_rerank_params,
-        }
+        return {"model": model, **optional_rerank_params}
 
     def transform_rerank_response(
         self,
@@ -88,6 +85,8 @@ class JinaAIRerankConfig(BaseRerankConfig):
     ) -> RerankResponse:
         if raw_response.status_code != 200:
             raise Exception(raw_response.text)
+
+        logging_obj.post_call(original_response=raw_response.text)
 
         _json_response = raw_response.json()
 
