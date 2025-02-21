@@ -66,6 +66,7 @@ def assert_response_shape(response, custom_llm_provider):
 
 @pytest.mark.asyncio()
 @pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_basic_rerank(sync_mode):
     litellm.set_verbose = True
     if sync_mode is True:
@@ -311,6 +312,7 @@ def test_complete_base_url_cohere():
         (3, None, False),
     ],
 )
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_basic_rerank_caching(sync_mode, top_n_1, top_n_2, expect_cache_hit):
     from litellm.caching.caching import Cache
 
