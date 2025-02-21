@@ -9,7 +9,7 @@ Use **Acuvity** to detect **PII**, **Prompt Injection**, and other security risk
 ## 1. Setup LiteLLM Guardrails with Acuvity
 
 #### For more details on using Acuvity with guardrails, visit [Acuvity Documentation](https://docs.acuvity.ai).
-#### To Signup and get a app token to use Acuvity Guardrails, visit [Acuvity Signup](https://console.acuvity.ai/signup)
+#### To Signup and get a api_key (ACUVITY_TOKEN) to use Acuvity Guardrails, visit [Acuvity Signup](https://console.acuvity.ai/signup)
 
 ### **Define Guardrails for Different Stages**
 
@@ -122,6 +122,9 @@ guardrails:
               person:
                 redact: true
 ```
+
+Under the `api_key`, insert the API key you created when you signed up on [Acuvity Signup](https://console.acuvity.ai/signup).
+You can also set `ACUVITY_TOKEN` as an environment variable.
 
 ## 3. Start LiteLLM Gateway
 
