@@ -45,7 +45,7 @@ from litellm.llms.vertex_ai.image_generation.cost_calculator import (
     cost_calculator as vertex_ai_image_cost_calculator,
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent
-from litellm.types.rerank import RerankResponse
+from litellm.types.rerank import RerankBilledUnits, RerankResponse
 from litellm.types.utils import (
     CallTypesLiteral,
     LlmProviders,
@@ -111,6 +111,8 @@ def cost_per_token(  # noqa: PLR0915
     number_of_queries: Optional[int] = None,
     ### USAGE OBJECT ###
     usage_object: Optional[Usage] = None,  # just read the usage object if provided
+    ### BILLED UNITS ###
+    rerank_billed_units: Optional[RerankBilledUnits] = None,
     ### CALL TYPE ###
     call_type: CallTypesLiteral = "completion",
     audio_transcription_file_duration: float = 0.0,  # for audio transcription calls - the file time in seconds
@@ -235,6 +237,7 @@ def cost_per_token(  # noqa: PLR0915
         return rerank_cost(
             model=model,
             custom_llm_provider=custom_llm_provider,
+            billed_units=rerank_billed_units,
         )
     elif call_type == "atranscription" or call_type == "transcription":
         return openai_cost_per_second(
@@ -549,6 +552,7 @@ def completion_cost(  # noqa: PLR0915
         cost_per_token_usage_object: Optional[Usage] = _get_usage_object(
             completion_response=completion_response
         )
+        rerank_billed_units: Optional[RerankBilledUnits] = None
         model = _select_model_name_for_cost_calc(
             model=model,
             completion_response=completion_response,
@@ -695,6 +699,11 @@ def completion_cost(  # noqa: PLR0915
                 else:
                     billed_units = {}
 
+                rerank_billed_units = RerankBilledUnits(
+                    search_units=billed_units.get("search_units"),
+                    total_tokens=billed_units.get("total_tokens"),
+                )
+
                 search_units = (
                     billed_units.get("search_units") or 1
                 )  # cohere charges per request by default.
@@ -760,6 +769,7 @@ def completion_cost(  # noqa: PLR0915
             usage_object=cost_per_token_usage_object,
             call_type=call_type,
             audio_transcription_file_duration=audio_transcription_file_duration,
+            rerank_billed_units=rerank_billed_units,
         )
         _final_cost = prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
 
@@ -833,6 +843,7 @@ def response_cost_calculator(
 def rerank_cost(
     model: str,
     custom_llm_provider: Optional[str],
+    billed_units: Optional[RerankBilledUnits] = None,
 ) -> Tuple[float, float]:
     """
     Returns
@@ -859,7 +870,7 @@ def rerank_cost(
         return config.calculate_rerank_cost(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            num_queries=default_num_queries,
+            billed_units=billed_units,
             model_info=model_info,
         )
     except Exception as e:

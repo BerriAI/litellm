@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 
-from litellm.types.rerank import OptionalRerankParams, RerankResponse
+from litellm.types.rerank import OptionalRerankParams, RerankBilledUnits, RerankResponse
 from litellm.types.utils import ModelInfo
 
 from ..chat.transformation import BaseLLMException
@@ -89,11 +89,11 @@ class BaseRerankConfig(ABC):
             headers=headers,
         )
 
-    @staticmethod
     def calculate_rerank_cost(
+        self,
         model: str,
         custom_llm_provider: Optional[str] = None,
-        num_queries: int = 1,
+        billed_units: Optional[RerankBilledUnits] = None,
         model_info: Optional[ModelInfo] = None,
     ) -> Tuple[float, float]:
         """
@@ -113,9 +113,15 @@ class BaseRerankConfig(ABC):
             model_info is None
             or "input_cost_per_query" not in model_info
             or model_info["input_cost_per_query"] is None
+            or billed_units is None
         ):
             return 0.0, 0.0
 
-        prompt_cost = model_info["input_cost_per_query"] * num_queries
+        search_units = billed_units.get("search_units")
+
+        if search_units is None:
+            return 0.0, 0.0
+
+        prompt_cost = model_info["input_cost_per_query"] * search_units
 
         return prompt_cost, 0.0

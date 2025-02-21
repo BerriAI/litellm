@@ -9180,5 +9180,15 @@
         "input_cost_per_second": 0.00003333,
         "output_cost_per_second": 0.00, 
         "litellm_provider": "assemblyai"
+    },
+    "jina-reranker-v2-base-multilingual": {
+        "max_tokens": 1024,
+        "max_input_tokens": 1024,
+        "max_output_tokens": 1024,
+        "max_document_chunks_per_query": 2048,
+        "input_cost_per_token": 0.000000018,
+        "output_cost_per_token": 0.000000018,
+        "litellm_provider": "jina_ai",
+        "mode": "rerank"
     }
 }
