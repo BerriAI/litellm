@@ -48,6 +48,7 @@ from litellm.caching.caching import DualCache, InMemoryCache, RedisCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
@@ -2857,6 +2858,7 @@ class Router:
 
     #### [END] ASSISTANTS API ####
 
+    @tracer.wrap()
     async def async_function_with_fallbacks(self, *args, **kwargs):  # noqa: PLR0915
         """
         Try calling the function_with_retries
@@ -3127,6 +3129,7 @@ class Router:
                     Context_Policy_Fallbacks={content_policy_fallbacks}",
             )
 
+    @tracer.wrap()
     async def async_function_with_retries(self, *args, **kwargs):  # noqa: PLR0915
         verbose_router_logger.debug("Inside async function with retries.")
         original_function = kwargs.pop("original_function")
