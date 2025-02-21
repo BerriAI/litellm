@@ -407,6 +407,7 @@ gemini_models: List = []
 xai_models: List = []
 deepseek_models: List = []
 azure_ai_models: List = []
+jina_ai_models: List = []
 voyage_models: List = []
 databricks_models: List = []
 cloudflare_models: List = []
@@ -572,6 +573,8 @@ def add_known_models():
             sambanova_models.append(key)
         elif value.get("litellm_provider") == "assemblyai":
             assemblyai_models.append(key)
+        elif value.get("litellm_provider") == "jina_ai":
+            jina_ai_models.append(key)
 
 
 add_known_models()
@@ -644,6 +647,7 @@ model_list = (
     + sambanova_models
     + azure_text_models
     + assemblyai_models
+    + jina_ai_models
 )
 
 model_list_set = set(model_list)
@@ -698,6 +702,7 @@ models_by_provider: dict = {
     "galadriel": galadriel_models,
     "sambanova": sambanova_models,
     "assemblyai": assemblyai_models,
+    "jina_ai": jina_ai_models,
 }
 
 # mapping for those models which have larger equivalents
