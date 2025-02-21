@@ -4,10 +4,10 @@ https://docs.cohere.com/reference/rerank
 
 """
 
-from typing import List, Optional, Required, Union
+from typing import List, Optional, Union
 
 from pydantic import BaseModel, PrivateAttr
-from typing_extensions import TypedDict
+from typing_extensions import Required, TypedDict
 
 
 class RerankRequest(BaseModel):
