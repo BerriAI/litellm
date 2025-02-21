@@ -1154,6 +1154,12 @@ jobs:
               echo "Expected message not found in logs. Test failed."
               exit 1
             fi
+      - run:
+          name: Run Basic Proxy Startup Tests (Health Readiness and Chat Completion)
+          command: |
+            python -m pytest -vv tests/basic_proxy_startup_tests -x --junitxml=test-results/junit-2.xml --durations=5
+          no_output_timeout: 120m
+
 
   build_and_test:
     machine:
