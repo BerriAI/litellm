@@ -2775,6 +2775,8 @@ def test_bedrock_cost_calc_with_region():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
+    litellm.add_known_models()
+
     hidden_params = {
         "custom_llm_provider": "bedrock",
         "region_name": "us-east-1",
