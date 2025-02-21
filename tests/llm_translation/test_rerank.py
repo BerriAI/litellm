@@ -372,17 +372,15 @@ def test_rerank_response_assertions():
         **{
             "id": "ab0fcca0-b617-11ef-b292-0242ac110002",
             "results": [
-                {"index": 2, "relevance_score": 0.9958819150924683, "document": None},
-                {"index": 0, "relevance_score": 0.001293411129154265, "document": None},
+                {"index": 2, "relevance_score": 0.9958819150924683},
+                {"index": 0, "relevance_score": 0.001293411129154265},
                 {
                     "index": 1,
                     "relevance_score": 7.641685078851879e-05,
-                    "document": None,
                 },
                 {
                     "index": 3,
                     "relevance_score": 7.621097756782547e-05,
-                    "document": None,
                 },
             ],
             "meta": {
