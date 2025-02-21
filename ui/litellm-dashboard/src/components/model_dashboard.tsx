@@ -735,20 +735,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   }
   // when users click request access show pop up to allow them to request access
 
-  // sort modelData.data by provider alphabetically, check if provider exists and is not null / undefined
-  if (modelData.data && modelData.data.length > 0) {
-    modelData.data.sort((a: any, b: any) => {
-      if (a.provider && b.provider) {
-        return a.provider.localeCompare(b.provider);
-      } else if (a.provider && !b.provider) {
-        return -1;
-      } else if (!a.provider && b.provider) {
-        return 1;
-      } else {
-        return 0;
-      }
-    });
-  }
   if (userRole && userRole == "Admin Viewer") {
     const { Title, Paragraph } = Typography;
     return (

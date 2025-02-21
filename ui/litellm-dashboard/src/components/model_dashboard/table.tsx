@@ -30,7 +30,7 @@ export function ModelDataTable<TData, TValue>({
   isLoading = false,
 }: ModelDataTableProps<TData, TValue>) {
   const [sorting, setSorting] = React.useState<SortingState>([
-    { id: "created_at", desc: true } // Default sort by created_at descending
+    { id: "model_info.created_at", desc: true } // Updated to match the correct accessor path
   ]);
 
   const table = useReactTable({
