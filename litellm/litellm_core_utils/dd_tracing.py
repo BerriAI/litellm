@@ -1,3 +1,9 @@
+"""
+Handles Tracing on DataDog Traces.
+
+If the ddtrace package is not installed, the tracer will be a no-op.
+"""
+
 from contextlib import contextmanager
 
 try:
