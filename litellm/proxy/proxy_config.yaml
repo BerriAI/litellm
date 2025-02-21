@@ -15,3 +15,4 @@ litellm_settings:
   cache_params:
     type: redis
     ttl: 600
+    redis_startup_nodes: [{"host": "127.0.0.1", "port": "7100"}] 
