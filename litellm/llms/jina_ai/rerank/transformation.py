@@ -107,7 +107,7 @@ class JinaAIRerankConfig(BaseRerankConfig):
         )  # Return response
 
     def validate_environment(
-        self, headers: Dict, model: str, api_key: str | None = None
+        self, headers: Dict, model: str, api_key: Optional[str] = None
     ) -> Dict:
         if api_key is None:
             raise ValueError(
