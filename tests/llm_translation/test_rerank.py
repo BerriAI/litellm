@@ -177,6 +177,7 @@ async def test_basic_rerank_azure_ai(sync_mode):
 @pytest.mark.parametrize("version", ["v1", "v2"])
 async def test_rerank_custom_api_base(version):
     mock_response = AsyncMock()
+    litellm.cohere_key="test_api_key"
 
     def return_val():
         return {
@@ -199,6 +200,10 @@ async def test_rerank_custom_api_base(version):
         "documents": ["hello", "world"],
     }
 
+    api_base = "https://exampleopenaiendpoint-production.up.railway.app/"
+    if version == "v1":
+        api_base += "v1/rerank"
+
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         return_value=mock_response,
@@ -208,7 +213,7 @@ async def test_rerank_custom_api_base(version):
             query="hello",
             documents=["hello", "world"],
             top_n=3,
-            api_base="https://exampleopenaiendpoint-production.up.railway.app/",
+            api_base=api_base,
         )
 
         print("async re rank response: ", response)
@@ -221,7 +226,7 @@ async def test_rerank_custom_api_base(version):
         print("Arguments passed to API=", args_to_api)
         print("url = ", _url)
         assert (
-            _url == f"https://exampleopenaiendpoint-production.up.railway.app/${version}/rerank"
+            _url == f"https://exampleopenaiendpoint-production.up.railway.app/{version}/rerank"
         )
 
         request_data = json.loads(args_to_api)
@@ -234,7 +239,6 @@ async def test_rerank_custom_api_base(version):
         assert response.results is not None
 
         assert_response_shape(response, custom_llm_provider="cohere")
-
 
 class TestLogger(CustomLogger):
 
@@ -278,6 +282,7 @@ def test_complete_base_url_cohere():
 
     client = HTTPHandler()
     litellm.api_base = "http://localhost:4000"
+    litellm.cohere_key="test_api_key"
     litellm.set_verbose = True
 
     text = "Hello there!"
@@ -299,7 +304,8 @@ def test_complete_base_url_cohere():
 
         print("mock_post.call_args", mock_post.call_args)
         mock_post.assert_called_once()
-        assert "http://localhost:4000/v1/rerank" in mock_post.call_args.kwargs["url"]
+        # Default to the v2 client when calling the base /rerank
+        assert "http://localhost:4000/v2/rerank" in mock_post.call_args.kwargs["url"]
 
 
 @pytest.mark.asyncio()
