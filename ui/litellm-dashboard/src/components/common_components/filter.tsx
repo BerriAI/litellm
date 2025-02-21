@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Button, Input, Dropdown, MenuProps } from 'antd';
-import { Card } from '@tremor/react';
+import { Card, Button as TremorButton } from '@tremor/react';
 import {
   FilterIcon,
   XIcon,
@@ -90,15 +90,18 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
 
   return (
     <div className="relative" ref={filtersRef}>
-      <Button
-        icon={<FilterIcon className="h-4 w-4" />}
+      <TremorButton
+        icon={FilterIcon}
         onClick={() => setShowFilters(!showFilters)}
+        variant="secondary"
+        size='xs'
+        className="flex items-center pr-2"
       >
         {buttonLabel}
-      </Button>
+      </TremorButton>
 
       {showFilters && (
-        <Card className="absolute left-0 mt-2 w-96 z-50">
+        <Card className="absolute left-0 mt-2 w-96 z-50 border border-gray-200 shadow-lg">
           <div className="flex flex-col gap-4">
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium">Where</span>
@@ -129,6 +132,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
                 placeholder="Enter value..."
                 value={tempValues[selectedFilter] || ''}
                 onChange={(e) => handleFilterChange(e.target.value)}
+                className="px-3 py-1.5 border rounded-md text-sm flex-1 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 suffix={
                   tempValues[selectedFilter] ? (
                     <XIcon

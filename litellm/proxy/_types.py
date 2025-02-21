@@ -2,7 +2,7 @@ import enum
 import json
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
 
 import httpx
 from pydantic import (
@@ -29,6 +29,8 @@ from litellm.types.utils import (
     StandardPassThroughResponseObject,
     TextCompletionResponse,
 )
+
+from .types_utils.utils import get_instance_fn, validate_custom_validate_return_type
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -1113,6 +1115,7 @@ class NewOrganizationRequest(LiteLLM_BudgetTable):
     organization_alias: str
     models: List = []
     budget_id: Optional[str] = None
+    metadata: Optional[dict] = None
 
 
 class OrganizationRequest(LiteLLMPydanticObjectBase):
@@ -1624,7 +1627,7 @@ class LiteLLM_ErrorLogs(LiteLLMPydanticObjectBase):
 class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
     id: str
     updated_at: datetime
-    changed_by: str
+    changed_by: Optional[Any] = None
     changed_by_api_key: Optional[str] = None
     action: Literal["created", "updated", "deleted", "blocked"]
     table_name: Literal[
@@ -1636,6 +1639,13 @@ class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
     object_id: str
     before_value: Optional[Json] = None
     updated_values: Optional[Json] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def cast_changed_by_to_str(cls, values):
+        if values.get("changed_by") is not None:
+            values["changed_by"] = str(values["changed_by"])
+        return values
 
 
 class LiteLLM_SpendLogs_ResponseObject(LiteLLMPydanticObjectBase):
@@ -1971,6 +1981,9 @@ class CommonProxyErrors(str, enum.Enum):
     no_llm_router = "No models configured on proxy"
     not_allowed_access = "Admin-only endpoint. Not allowed to access this."
     not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. Get a 7 day trial key here: https://www.litellm.ai/#trial. \nPricing: https://www.litellm.ai/#pricing"
+    max_parallel_request_limit_reached = (
+        "Crossed TPM / RPM / Max Parallel Request Limit"
+    )
 
 
 class SpendCalculateRequest(LiteLLMPydanticObjectBase):
@@ -1989,6 +2002,7 @@ class ProxyErrorTypes(str, enum.Enum):
     bad_request_error = "bad_request_error"
     not_found_error = "not_found_error"
     validation_error = "bad_request_error"
+    cache_ping_error = "cache_ping_error"
 
 
 DB_CONNECTION_ERROR_TYPES = (httpx.ConnectError, httpx.ReadError, httpx.ReadTimeout)
@@ -2110,6 +2124,20 @@ class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
 class TeamMemberUpdateResponse(MemberUpdateResponse):
     team_id: str
     max_budget_in_team: Optional[float] = None
+
+
+class TeamModelAddRequest(BaseModel):
+    """Request to add models to a team"""
+
+    team_id: str
+    models: List[str]
+
+
+class TeamModelDeleteRequest(BaseModel):
+    """Request to delete models from a team"""
+
+    team_id: str
+    models: List[str]
 
 
 # Organization Member Requests
@@ -2396,6 +2424,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     - public_key_ttl: Default - 600s. TTL for caching public JWT keys.
     - public_allowed_routes: list of allowed routes for authenticated but unknown litellm role jwt tokens.
     - enforce_rbac: If true, enforce RBAC for all routes.
+    - custom_validate: A custom function to validates the JWT token.
 
     See `auth_checks.py` for the specific routes
     """
@@ -2440,6 +2469,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     scope_mappings: Optional[List[ScopeMapping]] = None
     enforce_scope_based_access: bool = False
     enforce_team_based_model_access: bool = False
+    custom_validate: Optional[Callable[..., Literal[True]]] = None
 
     def __init__(self, **kwargs: Any) -> None:
         # get the attribute names for this Pydantic model
@@ -2452,6 +2482,12 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         role_mappings = kwargs.get("role_mappings")
         scope_mappings = kwargs.get("scope_mappings")
         enforce_scope_based_access = kwargs.get("enforce_scope_based_access")
+        custom_validate = kwargs.get("custom_validate")
+
+        if custom_validate is not None:
+            fn = get_instance_fn(custom_validate)
+            validate_custom_validate_return_type(fn)
+            kwargs["custom_validate"] = fn
 
         if invalid_keys:
             raise ValueError(

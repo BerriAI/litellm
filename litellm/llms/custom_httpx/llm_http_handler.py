@@ -215,6 +215,7 @@ class BaseLLMHTTPHandler:
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
         )
+
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
             api_key=api_key,
@@ -247,6 +248,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             stream=stream,
             fake_stream=fake_stream,
+            model=model,
         )
 
         ## LOGGING

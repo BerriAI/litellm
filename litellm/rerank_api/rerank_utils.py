@@ -18,6 +18,17 @@ def get_optional_rerank_params(
     max_tokens_per_doc: Optional[int] = None,
     non_default_params: Optional[dict] = None,
 ) -> OptionalRerankParams:
+    all_non_default_params = non_default_params or {}
+    if query is not None:
+        all_non_default_params["query"] = query
+    if top_n is not None:
+        all_non_default_params["top_n"] = top_n
+    if documents is not None:
+        all_non_default_params["documents"] = documents
+    if return_documents is not None:
+        all_non_default_params["return_documents"] = return_documents
+    if max_chunks_per_doc is not None:
+        all_non_default_params["max_chunks_per_doc"] = max_chunks_per_doc
     return rerank_provider_config.map_cohere_rerank_params(
         model=model,
         drop_params=drop_params,
