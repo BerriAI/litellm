@@ -3,20 +3,20 @@ from typing import TYPE_CHECKING, Any
 from litellm.integrations.arize import _utils
 from litellm._logging import verbose_logger
 from litellm.types.integrations.arize_phoenix import ArizePhoenixConfig
-from opentelemetry.trace import Span as Span
 
 if TYPE_CHECKING:
     from .opentelemetry import OpenTelemetryConfig as _OpenTelemetryConfig
     from litellm.types.integrations.arize import Protocol as _Protocol
+    from opentelemetry.trace import Span as _Span
 
     Protocol = _Protocol
     OpenTelemetryConfig = _OpenTelemetryConfig
+    Span = _Span
 else:
     Protocol = Any
     OpenTelemetryConfig = Any
+    Span = Any
 
-import os
-from typing import Literal
 
 ARIZE_HOSTED_PHOENIX_ENDPOINT = "https://app.phoenix.arize.com/v1/traces"
 

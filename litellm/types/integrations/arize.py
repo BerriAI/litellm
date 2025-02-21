@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Literal, Optional, Any
+from typing import TYPE_CHECKING, Literal, Any
 
 from pydantic import BaseModel
 

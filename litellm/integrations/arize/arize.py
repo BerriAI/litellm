@@ -9,15 +9,16 @@ from typing import TYPE_CHECKING, Any
 from litellm.integrations.arize import _utils
 from litellm.types.integrations.arize import ArizeConfig
 
-from litellm._logging import verbose_logger
-from opentelemetry.trace import Span
-
 if TYPE_CHECKING:
     from litellm.types.integrations.arize import Protocol as _Protocol
+    from opentelemetry.trace import Span as _Span
 
     Protocol = _Protocol
+    Span = _Span
 else:
     Protocol = Any
+    Span = Any
+    
 
 
 class ArizeLogger:
