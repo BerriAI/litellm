@@ -5,7 +5,7 @@ Why separate file? Make it easy to see how transformation works
 """
 
 import uuid
-from typing import List, Optional, cast
+from typing import Any, Dict, List, Optional, cast
 
 from litellm.types.rerank import (
     RerankBilledUnits,
@@ -30,20 +30,31 @@ class TogetherAIRerankConfig:
             raise ValueError(f"No results found in the response={response}")
 
         rerank_results: List[RerankResponseResult] = []
+
         for result in _results:
-            initial_result = {}
-            if result.get("index"):
-                initial_result["index"] = cast(int, result.get("index"))
-            if result.get("relevance_score"):
-                initial_result["relevance_score"] = cast(
-                    float, result.get("relevance_score")
-                )
-            if result.get("document"):
-                initial_result["document"] = RerankResponseDocument(
-                    text=cast(str, result.get("document", {}).get("text"))
-                )
-            initial_result_typed = RerankResponseResult(**initial_result)
-            rerank_results.append(initial_result_typed)
+            # Validate required fields exist
+            if not all(key in result for key in ["index", "relevance_score"]):
+                raise ValueError(f"Missing required fields in the result={result}")
+
+            # Get document data if it exists
+            document_data = result.get("document", {})
+            document = (
+                RerankResponseDocument(text=str(document_data.get("text", "")))
+                if document_data
+                else None
+            )
+
+            # Create typed result
+            rerank_result = RerankResponseResult(
+                index=int(result["index"]),
+                relevance_score=float(result["relevance_score"]),
+            )
+
+            # Only add document if it exists
+            if document:
+                rerank_result["document"] = document
+
+            rerank_results.append(rerank_result)
 
         return RerankResponse(
             id=response.get("id") or str(uuid.uuid4()),
