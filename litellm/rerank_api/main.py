@@ -9,7 +9,6 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.bedrock.rerank.handler import BedrockRerankHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.llms.jina_ai.rerank.handler import JinaAIRerank
 from litellm.llms.together_ai.rerank.handler import TogetherAIRerank
 from litellm.rerank_api.rerank_utils import get_optional_rerank_params
 from litellm.secret_managers.main import get_secret, get_secret_str
@@ -20,7 +19,6 @@ from litellm.utils import ProviderConfigManager, client, exception_type
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
 together_rerank = TogetherAIRerank()
-jina_ai_rerank = JinaAIRerank()
 bedrock_rerank = BedrockRerankHandler()
 base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
