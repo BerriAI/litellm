@@ -73,6 +73,7 @@ export const columns = (
   },
   {
     header: "LiteLLM Model Name",
+    accessorKey: "litellm_model_name",
     cell: ({ row }) => {
       const model = row.original;
       return (
@@ -101,6 +102,7 @@ export const columns = (
   },
   {
     header: "Created By",
+    accessorKey: "model_info.created_by",
     cell: ({ row }) => {
       const model = row.original;
       return (
@@ -135,35 +137,22 @@ export const columns = (
     },
   },
   {
-    header: "API Base",
-    cell: ({ row }) => {
-      const model = row.original;
-      return (
-        <div className="max-w-[200px]">
-          <Tooltip title={model.api_base}>
-            <pre className="text-xs truncate">
-              {model.api_base || "-"}
-            </pre>
-          </Tooltip>
-        </div>
-      );
-    },
-  },
-  {
     header: "Team ID",
     accessorKey: "model_info.team_id",
     cell: ({ row }) => {
       const model = row.original;
       return model.model_info.team_id ? (
-        <div className="max-w-[200px]">
-          <Button
-            size="xs"
-            variant="light"
-            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 truncate w-full"
-            onClick={() => setSelectedTeamId(model.model_info.team_id)}
-          >
-            {model.model_info.team_id}
-          </Button>
+        <div className="overflow-hidden">
+          <Tooltip title={model.model_info.team_id}>
+            <Button
+              size="xs"
+              variant="light"
+              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+              onClick={() => setSelectedTeamId(model.model_info.team_id)}
+            >
+              {model.model_info.team_id.slice(0, 7)}...
+            </Button>
+          </Tooltip>
         </div>
       ) : (
         "-"
