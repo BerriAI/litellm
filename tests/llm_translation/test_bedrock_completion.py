@@ -2185,6 +2185,20 @@ class TestBedrockRerank(BaseLLMRerankTest):
             "model": "bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0",
         }
 
+    def test_bedrock_rerank_large_query(self):
+        from litellm import rerank
+
+        response = rerank(
+            model="bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0",
+            query="What is the capital of France?",
+            documents=["Paris", "London", "Berlin", "Madrid", "Rome"] * 100,
+            top_n=3,
+        )
+        assert response is not None
+        search_units = response.meta["billed_units"]["search_units"]
+        assert search_units == 5
+        assert response._hidden_params["response_cost"] == round(5 * 0.001, 4)
+
 
 class TestBedrockCohereRerank(BaseLLMRerankTest):
     def get_custom_llm_provider(self) -> litellm.LlmProviders:
