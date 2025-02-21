@@ -2186,6 +2186,16 @@ class TestBedrockRerank(BaseLLMRerankTest):
         }
 
 
+class TestBedrockCohereRerank(BaseLLMRerankTest):
+    def get_custom_llm_provider(self) -> litellm.LlmProviders:
+        return litellm.LlmProviders.BEDROCK
+
+    def get_base_rerank_call_args(self) -> dict:
+        return {
+            "model": "bedrock/arn:aws:bedrock:us-west-2::foundation-model/cohere.rerank-v3-5:0",
+        }
+
+
 @pytest.mark.parametrize(
     "messages, continue_message_index",
     [
