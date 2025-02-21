@@ -1105,7 +1105,7 @@ jobs:
       - run: python ./tests/code_coverage_tests/prevent_key_leaks_in_exceptions.py
       - run: helm lint ./deploy/charts/litellm-helm
 
-  db_migration_disable_update_check:
+    db_migration_disable_update_check:
     machine:
       image: ubuntu-2204:2023.10.1
     resource_class: xlarge
@@ -1119,27 +1119,36 @@ jobs:
       - run:
           name: Run Docker container
           command: |
-            docker run --name my-app \
+            docker run -d \
               -p 4000:4000 \
               -e DATABASE_URL=$PROXY_DATABASE_URL \
               -e DISABLE_SCHEMA_UPDATE="True" \
               -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/schema.prisma \
               -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/litellm/proxy/schema.prisma \
               -v $(pwd)/litellm/proxy/example_config_yaml/disable_schema_update.yaml:/app/config.yaml \
+              --name my-app \
               myapp:latest \
               --config /app/config.yaml \
-              --port 4000 > docker_output.log 2>&1 || true
+              --port 4000
       - run:
-          name: Display Docker logs
-          command: cat docker_output.log
-      - run:
-          name: Check for expected error
+          name: Install curl and dockerize
           command: |
-            if grep -q "prisma schema out of sync with db. Consider running these sql_commands to sync the two" docker_output.log; then
-              echo "Expected error found. Test passed."
+            sudo apt-get update
+            sudo apt-get install -y curl
+            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Wait for container to be ready
+          command: dockerize -wait http://localhost:4000 -timeout 1m
+      - run:
+          name: Check container logs for expected message
+          command: |
+            if docker logs my-app 2>&1 | grep -q "prisma schema out of sync with db. Consider running these sql_commands to sync the two"; then
+              echo "Expected message found in logs. Test passed."
             else
-              echo "Expected error not found. Test failed."
-              cat docker_output.log
+              echo "Expected message not found in logs. Test failed."
+              docker logs my-app
               exit 1
             fi
 
