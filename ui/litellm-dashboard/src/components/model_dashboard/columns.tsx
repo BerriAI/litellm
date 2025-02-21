@@ -16,6 +16,7 @@ export const columns = (
 ): ColumnDef<ModelData>[] => [
   {
     header: "Model ID",
+    accessorKey: "model_info.id",
     cell: ({ row }) => {
       const model = row.original;
       return (
@@ -36,12 +37,14 @@ export const columns = (
   },
   {
     header: "Model Name",
+    accessorKey: "model_name",
     cell: ({ row }) => (
       <p className="text-xs">{getDisplayModelName(row.original) || "-"}</p>
     ),
   },
   {
     header: "Provider",
+    accessorKey: "provider",
     cell: ({ row }) => {
       const model = row.original;
       return (
@@ -106,28 +109,6 @@ export const columns = (
     },
   },
   {
-    header: "Max Tokens",
-    cell: ({ row }) => {
-      const model = row.original;
-      return (
-        <pre className="text-xs">
-          {model.max_tokens || "-"}
-        </pre>
-      );
-    },
-  },
-  {
-    header: "Max Input Tokens",
-    cell: ({ row }) => {
-      const model = row.original;
-      return (
-        <pre className="text-xs">
-          {model.max_input_tokens || "-"}
-        </pre>
-      );
-    },
-  },
-  {
     header: "API Base",
     cell: ({ row }) => {
       const model = row.original;
@@ -162,6 +143,8 @@ export const columns = (
   },
   {
     header: "Created At",
+    accessorKey: "model_info.created_at",
+    sortingFn: "datetime",
     cell: ({ row }) => {
       const model = row.original;
       return (

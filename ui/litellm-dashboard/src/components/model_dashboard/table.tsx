@@ -3,9 +3,11 @@ import {
   ColumnDef,
   flexRender,
   getCoreRowModel,
+  getSortedRowModel,
+  SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-
+import React from "react";
 import {
   Table,
   TableHead,
@@ -14,6 +16,7 @@ import {
   TableRow,
   TableCell,
 } from "@tremor/react";
+import { ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
 
 interface ModelDataTableProps<TData, TValue> {
   data: TData[];
@@ -26,10 +29,19 @@ export function ModelDataTable<TData, TValue>({
   columns,
   isLoading = false,
 }: ModelDataTableProps<TData, TValue>) {
+  const [sorting, setSorting] = React.useState<SortingState>([
+    { id: "created_at", desc: true } // Default sort by created_at descending
+  ]);
+
   const table = useReactTable({
     data,
     columns,
+    state: {
+      sorting,
+    },
+    onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
   });
 
   return (
@@ -40,13 +52,23 @@ export function ModelDataTable<TData, TValue>({
             <TableRow key={headerGroup.id}>
               {headerGroup.headers.map((header) => {
                 return (
-                  <TableHeaderCell key={header.id} className="py-1 h-8">
-                    {header.isPlaceholder ? null : (
-                      flexRender(
-                        header.column.columnDef.header,
-                        header.getContext()
-                      )
-                    )}
+                  <TableHeaderCell 
+                    key={header.id} 
+                    className="py-1 h-8 cursor-pointer"
+                    onClick={header.column.getToggleSortingHandler()}
+                  >
+                    <div className="flex items-center gap-1">
+                      {header.isPlaceholder ? null : (
+                        flexRender(
+                          header.column.columnDef.header,
+                          header.getContext()
+                        )
+                      )}
+                      {{
+                        asc: <ChevronUpIcon className="h-4 w-4" />,
+                        desc: <ChevronDownIcon className="h-4 w-4" />
+                      }[header.column.getIsSorted() as string] ?? null}
+                    </div>
                   </TableHeaderCell>
                 );
               })}

@@ -1099,7 +1099,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     ))}
                   </Select>
                 </div>
-                <Card>
                   <ModelDataTable
                     columns={columns(
                       premiumUser,
@@ -1117,7 +1116,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     )}
                     isLoading={false} // Add loading state if needed
                   />
-                </Card>
               </Grid>
               <EditModelModal
                 visible={editModalVisible}
