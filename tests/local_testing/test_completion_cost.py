@@ -1574,7 +1574,11 @@ def test_completion_cost_azure_ai_rerank(model):
                 "relevance_score": 0.990732,
             },
         ],
-        meta={},
+        meta={
+            "billed_units": {
+                "search_units": 1,
+            }
+        },
     )
     print("response", response)
     model = model
