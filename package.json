@@ -5,6 +5,7 @@
     "react-copy-to-clipboard": "^5.1.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.50.1",
     "@types/react-copy-to-clipboard": "^5.0.7"
   }
 }
