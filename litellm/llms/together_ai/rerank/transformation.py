@@ -10,7 +10,9 @@ from typing import List, Optional
 from litellm.types.rerank import (
     RerankBilledUnits,
     RerankResponse,
+    RerankResponseDocument,
     RerankResponseMeta,
+    RerankResponseResult,
     RerankTokens,
 )
 
@@ -27,8 +29,20 @@ class TogetherAIRerankConfig:
         if _results is None:
             raise ValueError(f"No results found in the response={response}")
 
+        rerank_results: List[RerankResponseResult] = []
+        for result in _results:
+            initial_result = RerankResponseResult(
+                index=result.get("index"),
+                relevance_score=result.get("relevance_score"),
+            )
+            if "document" in result and result.get("document"):
+                initial_result["document"] = RerankResponseDocument(
+                    text=result.get("document", {}).get("text")
+                )
+            rerank_results.append(initial_result)
+
         return RerankResponse(
             id=response.get("id") or str(uuid.uuid4()),
-            results=_results,  # type: ignore
+            results=rerank_results,
             meta=rerank_meta,
         )  # Return response
