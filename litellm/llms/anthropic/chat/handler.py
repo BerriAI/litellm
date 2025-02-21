@@ -403,10 +403,8 @@ class AnthropicChatCompletion(BaseLLM):
                 )
 
             else:
-                _close_client = False
                 if client is None or not isinstance(client, HTTPHandler):
-                    client = HTTPHandler(timeout=timeout)  # type: ignore
-                    _close_client = True
+                    client = client = litellm.module_level_client
 
                 try:
                     response = client.post(
@@ -429,9 +427,6 @@ class AnthropicChatCompletion(BaseLLM):
                         status_code=status_code,
                         headers=error_headers,
                     )
-                finally:
-                    if _close_client:
-                        client.close()
 
         return config.transform_response(
             model=model,
