@@ -5,7 +5,7 @@ Why separate file? Make it easy to see how transformation works
 """
 
 import uuid
-from typing import List, Optional
+from typing import List, Optional, cast
 
 from litellm.types.rerank import (
     RerankBilledUnits,
@@ -31,15 +31,19 @@ class TogetherAIRerankConfig:
 
         rerank_results: List[RerankResponseResult] = []
         for result in _results:
-            initial_result = RerankResponseResult(
-                index=result.get("index"),
-                relevance_score=result.get("relevance_score"),
-            )
-            if "document" in result and result.get("document"):
-                initial_result["document"] = RerankResponseDocument(
-                    text=result.get("document", {}).get("text")
+            initial_result = {}
+            if result.get("index"):
+                initial_result["index"] = cast(int, result.get("index"))
+            if result.get("relevance_score"):
+                initial_result["relevance_score"] = cast(
+                    float, result.get("relevance_score")
                 )
-            rerank_results.append(initial_result)
+            if result.get("document"):
+                initial_result["document"] = RerankResponseDocument(
+                    text=cast(str, result.get("document", {}).get("text"))
+                )
+            initial_result_typed = RerankResponseResult(**initial_result)
+            rerank_results.append(initial_result_typed)
 
         return RerankResponse(
             id=response.get("id") or str(uuid.uuid4()),
