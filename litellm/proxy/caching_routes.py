@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 from litellm.types.caching import CachePingResponse, HealthCheckCacheParams
 
 masker = SensitiveDataMasker()
@@ -120,7 +121,10 @@ async def cache_ping():
     tags=["caching"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def cache_delete(request: Request):
+async def cache_delete(
+    request: Request,
+    data: dict = Depends(read_request_body),
+):
     """
     Endpoint for deleting a key from the cache. All responses from litellm proxy have `x-litellm-cache-key` in the headers
 
@@ -140,8 +144,7 @@ async def cache_delete(request: Request):
                 status_code=503, detail="Cache not initialized. litellm.cache is None"
             )
 
-        request_data = await request.json()
-        keys = request_data.get("keys", None)
+        keys = data.get("keys", None)
 
         if litellm.cache.type == "redis":
             await litellm.cache.delete_cache_keys(keys=keys)
