@@ -13,6 +13,7 @@ export const columns = (
   getDisplayModelName: (model: any) => string,
   handleEditClick: (model: any) => void,
   handleRefreshClick: () => void,
+  setEditModel: (edit: boolean) => void,
 ): ColumnDef<ModelData>[] => [
   {
     header: "Model ID",
@@ -201,12 +202,18 @@ export const columns = (
           <Icon
             icon={PencilAltIcon}
             size="sm"
-            onClick={() => handleEditClick(model)}
+            onClick={() => {
+              setSelectedModelId(model.model_info.id);
+              setEditModel(true);
+            }}
           />
           <Icon
             icon={TrashIcon}
             size="sm"
-            onClick={() => handleRefreshClick()}
+            onClick={() => {
+              setSelectedModelId(model.model_info.id);
+              setEditModel(false);
+            }}
           />
         </div>
       );
