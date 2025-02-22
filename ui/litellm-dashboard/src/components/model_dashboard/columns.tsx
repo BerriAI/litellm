@@ -1,9 +1,9 @@
 import { ColumnDef } from "@tanstack/react-table";
-import { Button, Badge } from "@tremor/react";
+import { Button, Badge, Icon } from "@tremor/react";
 import { Tooltip } from "antd";
 import { getProviderLogoAndName } from "../provider_info_helpers";
 import { ModelData } from "./types";
-import { TrashIcon, PencilIcon } from "@heroicons/react/outline";
+import { TrashIcon, PencilIcon, PencilAltIcon } from "@heroicons/react/outline";
 import DeleteModelButton from "../delete_model_button";
 
 export const columns = (
@@ -13,6 +13,7 @@ export const columns = (
   getDisplayModelName: (model: any) => string,
   handleEditClick: (model: any) => void,
   handleRefreshClick: () => void,
+  setEditModel: (edit: boolean) => void,
 ): ColumnDef<ModelData>[] => [
   {
     header: "Model ID",
@@ -36,11 +37,18 @@ export const columns = (
     },
   },
   {
-    header: "Model Name",
+    header: "Public Model Name",
     accessorKey: "model_name",
-    cell: ({ row }) => (
-      <p className="text-xs">{getDisplayModelName(row.original) || "-"}</p>
-    ),
+    cell: ({ row }) => {
+      const displayName = getDisplayModelName(row.original) || "-";
+      return (
+        <Tooltip title={displayName}>
+          <p className="text-xs">
+            {displayName.length > 20 ? displayName.slice(0, 20) + "..." : displayName}
+          </p>
+        </Tooltip>
+      );
+    },
   },
   {
     header: "Provider",
@@ -101,6 +109,19 @@ export const columns = (
     },
   },
   {
+    header: "Updated At",
+    accessorKey: "model_info.updated_at",
+    sortingFn: "datetime",
+    cell: ({ row }) => {
+      const model = row.original;
+      return (
+        <span className="text-xs">
+          {model.model_info.updated_at ? new Date(model.model_info.updated_at).toLocaleDateString() : "-"}
+        </span>
+      );
+    },
+  },
+  {
     header: "Created By",
     accessorKey: "model_info.created_by",
     cell: ({ row }) => {
@@ -113,7 +134,11 @@ export const columns = (
     },
   },
   {
-    header: "Input Cost (per 1M tokens)",
+    header: () => (
+      <Tooltip title="Cost per 1M tokens">
+        <span>Input Cost</span>
+      </Tooltip>
+    ),
     accessorKey: "input_cost",
     cell: ({ row }) => {
       const model = row.original;
@@ -125,7 +150,11 @@ export const columns = (
     },
   },
   {
-    header: "Output Cost (per 1M tokens)",
+    header: () => (
+      <Tooltip title="Cost per 1M tokens">
+        <span>Output Cost</span>
+      </Tooltip>
+    ),
     accessorKey: "output_cost",
     cell: ({ row }) => {
       const model = row.original;
@@ -172,6 +201,33 @@ export const columns = (
             : 'bg-gray-100 text-gray-600'}
         `}>
           {model.model_info.db_model ? "DB Model" : "Config Model"}
+        </div>
+      );
+    },
+  },
+  {
+    id: "actions",
+    header: "",
+    cell: ({ row }) => {
+      const model = row.original;
+      return (
+        <div className="flex items-center justify-end gap-2 pr-4">
+          <Icon
+            icon={PencilAltIcon}
+            size="sm"
+            onClick={() => {
+              setSelectedModelId(model.model_info.id);
+              setEditModel(true);
+            }}
+          />
+          <Icon
+            icon={TrashIcon}
+            size="sm"
+            onClick={() => {
+              setSelectedModelId(model.model_info.id);
+              setEditModel(false);
+            }}
+          />
         </div>
       );
     },
