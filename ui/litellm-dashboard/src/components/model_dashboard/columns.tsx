@@ -176,4 +176,28 @@ export const columns = (
       );
     },
   },
+  {
+    id: "actions",
+    header: "",
+    cell: ({ row }) => {
+      const model = row.original;
+      return (
+        <div className="flex items-center justify-end gap-2 pr-4">
+          <Button
+            size="xs"
+            variant="light"
+            icon={PencilIcon}
+            onClick={() => handleEditClick(model)}
+          >
+            Edit
+          </Button>
+          <DeleteModelButton
+            modelId={model.model_info.id}
+            accessToken={model.accessToken}
+            onSuccess={handleRefreshClick}
+          />
+        </div>
+      );
+    },
+  },
 ];
