@@ -282,7 +282,7 @@ async def new_team(  # noqa: PLR0915
 
         # Set Management Endpoint Metadata Fields
         for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-            if getattr(data, field) is not None:
+            if getattr(data, field, None) is not None:
                 _set_team_metadata_field(
                     team_data=complete_team_data,
                     field_name=field,
@@ -348,6 +348,7 @@ async def new_team(  # noqa: PLR0915
         except Exception:
             return team_row.dict()
     except Exception as e:
+        verbose_proxy_logger.exception(f"Error creating team: {e}")
         raise handle_exception_on_proxy(e)
 
 
