@@ -11,6 +11,8 @@ import {
   Grid,
   Badge,
   Button as TremorButton,
+  TextInput,
+  NumberInput,
 } from "@tremor/react";
 import { ArrowLeftIcon, TrashIcon } from "@heroicons/react/outline";
 import { modelDeleteCall, modelUpdateCall } from "./networking";
@@ -255,7 +257,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">Model Name</Text>
                       {isEditing ? (
                         <Form.Item name="model_name" className="mb-0">
-                          <Input />
+                          <TextInput placeholder="Enter model name" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">{localModelData.model_name}</div>
@@ -266,7 +268,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">LiteLLM Model Name</Text>
                       {isEditing ? (
                         <Form.Item name="litellm_model_name" className="mb-0">
-                          <Input />
+                          <TextInput placeholder="Enter LiteLLM model name" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">{localModelData.litellm_model_name}</div>
@@ -277,7 +279,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">Input Cost (per 1M tokens)</Text>
                       {isEditing ? (
                         <Form.Item name="input_cost" className="mb-0">
-                          <InputNumber step={0.0001} style={{ width: "100%" }} />
+                          <NumberInput placeholder="Enter input cost" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
@@ -292,7 +294,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">Output Cost (per 1M tokens)</Text>
                       {isEditing ? (
                         <Form.Item name="output_cost" className="mb-0">
-                          <InputNumber step={0.0001} style={{ width: "100%" }} />
+                          <NumberInput placeholder="Enter output cost" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
@@ -307,7 +309,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">API Base</Text>
                       {isEditing ? (
                         <Form.Item name="api_base" className="mb-0">
-                          <Input />
+                          <TextInput placeholder="Enter API base" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
@@ -320,7 +322,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">Custom LLM Provider</Text>
                       {isEditing ? (
                         <Form.Item name="custom_llm_provider" className="mb-0">
-                          <Input />
+                          <TextInput placeholder="Enter custom LLM provider" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
@@ -333,7 +335,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">Organization</Text>
                       {isEditing ? (
                         <Form.Item name="organization" className="mb-0">
-                          <Input />
+                          <TextInput placeholder="Enter organization" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
@@ -346,7 +348,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">TPM (Tokens per Minute)</Text>
                       {isEditing ? (
                         <Form.Item name="tpm" className="mb-0">
-                          <InputNumber style={{ width: "100%" }} />
+                          <NumberInput placeholder="Enter TPM" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
@@ -359,7 +361,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">RPM (Requests per Minute)</Text>
                       {isEditing ? (
                         <Form.Item name="rpm" className="mb-0">
-                          <InputNumber style={{ width: "100%" }} />
+                          <NumberInput placeholder="Enter RPM" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
@@ -372,7 +374,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">Max Retries</Text>
                       {isEditing ? (
                         <Form.Item name="max_retries" className="mb-0">
-                          <InputNumber style={{ width: "100%" }} />
+                          <NumberInput placeholder="Enter max retries" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
@@ -385,7 +387,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">Timeout (seconds)</Text>
                       {isEditing ? (
                         <Form.Item name="timeout" className="mb-0">
-                          <InputNumber style={{ width: "100%" }} />
+                          <NumberInput placeholder="Enter timeout" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
@@ -398,7 +400,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">Stream Timeout (seconds)</Text>
                       {isEditing ? (
                         <Form.Item name="stream_timeout" className="mb-0">
-                          <InputNumber style={{ width: "100%" }} />
+                          <NumberInput placeholder="Enter stream timeout" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
@@ -437,8 +439,9 @@ export default function ModelInfoView({
                   </div>
 
                   {isDirty && (
-                    <div className="fixed bottom-4 right-4 flex gap-2 bg-white p-4 shadow-lg rounded-lg z-10">
-                      <Button 
+                    <div className="sticky top-0 z-10 bg-white border-b border-gray-200 p-4 mb-6 -mx-4 flex justify-end gap-2">
+                      <TremorButton
+                        variant="secondary"
                         onClick={() => {
                           form.resetFields();
                           setIsDirty(false);
@@ -446,14 +449,14 @@ export default function ModelInfoView({
                         }}
                       >
                         Cancel
-                      </Button>
-                      <Button 
-                        type="primary" 
+                      </TremorButton>
+                      <TremorButton
+                        variant="primary"
                         onClick={() => form.submit()}
                         loading={isSaving}
                       >
                         Save Changes
-                      </Button>
+                      </TremorButton>
                     </div>
                   )}
                 </div>
