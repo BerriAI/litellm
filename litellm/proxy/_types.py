@@ -928,6 +928,8 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     blocked: Optional[bool] = None
     budget_duration: Optional[str] = None
     guardrails: Optional[List[str]] = None
+    model_rpm_limit: Optional[dict] = None
+    model_tpm_limit: Optional[dict] = None
     """
 
     team_id: str  # required
@@ -943,6 +945,8 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     tags: Optional[list] = None
     model_aliases: Optional[dict] = None
     guardrails: Optional[List[str]] = None
+    model_rpm_limit: Optional[dict] = None
+    model_tpm_limit: Optional[dict] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
@@ -2312,6 +2316,8 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
 LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
     "guardrails",
     "tags",
+    "model_rpm_limit",
+    "model_tpm_limit",
 ]
 
 

@@ -185,11 +185,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         budget_duration: values.budget_duration,
         metadata: {
           ...teamData?.team_info?.metadata,
-          guardrails: values.guardrails || []
-        }
+          guardrails: values.guardrails || [],
+        },
+        model_tpm_limit: values.model_tpm_limit ? JSON.parse(values.model_tpm_limit) : null,
+        model_rpm_limit: values.model_rpm_limit ? JSON.parse(values.model_rpm_limit) : null,
       };
       
-      const response = await teamUpdateCall(accessToken, updateData);
+      await teamUpdateCall(accessToken, updateData);
       
       message.success("Team settings updated successfully");
       setIsEditing(false);
@@ -397,6 +399,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <InputNumber step={1} style={{ width: "100%" }} />
                   </Form.Item>
 
+                  <Form.Item label="Model TPM Limit" name="model_tpm_limit">
+                    <Input.TextArea rows={4}  placeholder='{"gpt-4": 100, "claude-v1": 200}'/>
+                  </Form.Item>
+
+                  <Form.Item label="Model RPM Limit" name="model_rpm_limit">
+                    <Input.TextArea rows={4}  placeholder='{"gpt-4": 100, "claude-v1": 200}'/>
+                  </Form.Item>
+
                   <Form.Item
                     label={
                       <span>
@@ -424,6 +434,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   <Form.Item label="Metadata" name="metadata">
                     <Input.TextArea rows={10} />
                   </Form.Item>
+
+
 
 
                   <div className="flex justify-end gap-2 mt-6">

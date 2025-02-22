@@ -469,7 +469,7 @@ async def update_team(
             detail={"error": f"Team not found, passed team_id={data.team_id}"},
         )
 
-    updated_kv = data.json(exclude_unset=True)
+    updated_kv = data.json(exclude_unset=True, exclude_none=True)
 
     # Check budget_duration and budget_reset_at
     if data.budget_duration is not None:
@@ -480,6 +480,7 @@ async def update_team(
         updated_kv["budget_reset_at"] = reset_at
 
     # update team metadata fields
+
     _team_metadata_fields = LiteLLM_ManagementEndpoint_MetadataFields_Premium
     for field in _team_metadata_fields:
         if field in updated_kv and updated_kv[field] is not None:
@@ -1661,6 +1662,7 @@ def _update_team_metadata_field(updated_kv: dict, field_name: str) -> None:
         updated_kv: The key-value dict being used for the update
         field_name: Name of the metadata field being updated
     """
+
     if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
         _premium_user_check()
 
