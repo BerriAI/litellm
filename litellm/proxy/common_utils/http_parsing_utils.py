@@ -1,38 +1,14 @@
 import json
-from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 import orjson
-from fastapi import Request, UploadFile, status
+from fastapi import Depends, Request, UploadFile, status
 
 from litellm._logging import verbose_proxy_logger
 from litellm.types.router import Deployment
 
 
-@dataclass
-class InternalRequestBody:
-    """Wrapper to handle request body parsing and caching"""
-
-    _parsed_body: Optional[Dict] = None
-
-    async def get_parsed_body(self, request: Request) -> Dict:
-        """Get parsed body, reading it only once"""
-        if self._parsed_body is not None:
-            return self._parsed_body
-
-        try:
-            if "form" in request.headers.get("content-type", ""):
-                self._parsed_body = dict(await request.form())
-            else:
-                body = await request.body()
-                self._parsed_body = orjson.loads(body) if body else {}
-        except Exception:
-            self._parsed_body = {}
-
-        return self._parsed_body or {}
-
-
-async def _read_request_body(request: Optional[Request]) -> Dict:
+async def read_request_body(request: Request) -> Dict:
     """
     Safely read the request body and parse it as JSON.
 
@@ -42,33 +18,34 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
     Returns:
     - dict: Parsed request data as a dictionary or an empty dictionary if parsing fails
     """
-    if request is None:
-        return {}
-
-    internal_body = InternalRequestBody()
-    return await internal_body.get_parsed_body(request)
-
-
-def _safe_get_request_parsed_body(request: Optional[Request]) -> Optional[dict]:
-    if request is None:
-        return None
-    if hasattr(request, "state") and hasattr(request.state, "parsed_body"):
-        return request.state.parsed_body
-    return None
-
-
-def _safe_set_request_parsed_body(
-    request: Optional[Request],
-    parsed_body: dict,
-) -> None:
     try:
         if request is None:
-            return
-        request.state.parsed_body = parsed_body
+            return {}
+
+        _request_headers: dict = _safe_get_request_headers(request=request)
+        content_type = _request_headers.get("content-type", "")
+
+        if "form" in content_type:
+            parsed_body = dict(await request.form())
+        else:
+            # Read the request body
+            body = await request.body()
+
+            # Return empty dict if body is empty or None
+            if not body:
+                parsed_body = {}
+            else:
+                parsed_body = orjson.loads(body)
+        return parsed_body
+    except (json.JSONDecodeError, orjson.JSONDecodeError):
+        verbose_proxy_logger.exception("Invalid JSON payload received.")
+        return {}
     except Exception as e:
-        verbose_proxy_logger.debug(
-            "Unexpected error setting request parsed body - {}".format(e)
+        # Catch unexpected errors to avoid crashes
+        verbose_proxy_logger.exception(
+            "Unexpected error reading request body - {}".format(e)
         )
+        return {}
 
 
 def _safe_get_request_headers(request: Optional[Request]) -> dict:
