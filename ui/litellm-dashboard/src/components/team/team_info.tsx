@@ -475,6 +475,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Text className="font-medium">Rate Limits</Text>
                     <div>TPM: {info.tpm_limit || 'Unlimited'}</div>
                     <div>RPM: {info.rpm_limit || 'Unlimited'}</div>
+                    <div>Model TPM Limits: {info.metadata?.model_tpm_limit ? JSON.stringify(info.metadata.model_tpm_limit) : "Unlimited"}</div>
+                    <div>Model RPM Limits: {info.metadata?.model_rpm_limit ? JSON.stringify(info.metadata.model_rpm_limit) : "Unlimited"}</div>
                   </div>
                   <div>
                     <Text className="font-medium">Budget</Text>
