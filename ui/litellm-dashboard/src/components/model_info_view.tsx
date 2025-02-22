@@ -45,9 +45,54 @@ export default function ModelInfoView({
 }: ModelInfoViewProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
+  const [localModelData, setLocalModelData] = useState(modelData);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
 
   const canEditModel = userRole === "Admin";
+
+  const handleModelUpdate = async (values: any) => {
+    try {
+      if (!accessToken) return;
+      
+      const updateData = {
+        model_name: values.model_name,
+        litellm_params: {
+          ...localModelData.litellm_params,
+          model: values.litellm_model_name,
+          api_base: values.api_base,
+          custom_llm_provider: values.custom_llm_provider,
+          organization: values.organization,
+          tpm: values.tpm,
+          rpm: values.rpm,
+          max_retries: values.max_retries,
+          timeout: values.timeout,
+          stream_timeout: values.stream_timeout,
+          input_cost_per_token: values.input_cost / 1_000_000,
+          output_cost_per_token: values.output_cost / 1_000_000,
+        },
+        model_info: {
+          id: modelId,
+        }
+        
+      };
+
+      await modelUpdateCall(accessToken, updateData);
+      
+      // Update local state immediately
+      setLocalModelData({
+        ...localModelData,
+        model_name: values.model_name,
+        litellm_model_name: values.litellm_model_name,
+        litellm_params: updateData.litellm_params
+      });
+
+      message.success("Model settings updated successfully");
+      setIsEditing(false);
+    } catch (error) {
+      console.error("Error updating model:", error);
+      message.error("Failed to update model settings");
+    }
+  };
 
   if (!modelData) {
     return (
@@ -169,12 +214,73 @@ export default function ModelInfoView({
               </div>
 
               {isEditing ? (
-                <EditModelModal
-                  visible={isEditing}
-                  onCancel={() => setIsEditing(false)}
-                  model={modelData}
-                  onSubmit={(data: FormData) => handleEditModelSubmit(data, accessToken, setEditModalVisible, setSelectedModel)}
-                />
+                <Form
+                  form={form}
+                  onFinish={handleModelUpdate}
+                  initialValues={{
+                    model_name: localModelData.model_name,
+                    litellm_model_name: localModelData.litellm_model_name,
+                    api_base: localModelData.litellm_params?.api_base,
+                    custom_llm_provider: localModelData.litellm_params?.custom_llm_provider,
+                    organization: localModelData.litellm_params?.organization,
+                    tpm: localModelData.litellm_params?.tpm,
+                    rpm: localModelData.litellm_params?.rpm,
+                    max_retries: localModelData.litellm_params?.max_retries,
+                    timeout: localModelData.litellm_params?.timeout,
+                    stream_timeout: localModelData.litellm_params?.stream_timeout,
+                    input_cost: localModelData.litellm_params?.input_cost_per_token ? 
+                      (localModelData.litellm_params.input_cost_per_token * 1_000_000) : 0,
+                    output_cost: localModelData.litellm_params?.output_cost_per_token ? 
+                      (localModelData.litellm_params.output_cost_per_token * 1_000_000) : 0,
+                  }}
+                  layout="vertical"
+                >
+                  <Form.Item label="Model Name" name="model_name">
+                    <Input />
+                  </Form.Item>
+                  <Form.Item label="LiteLLM Model Name" name="litellm_model_name">
+                    <Input />
+                  </Form.Item>
+                  <Form.Item label="Input Cost (per 1M tokens)" name="input_cost">
+                    <InputNumber step={0.0001} style={{ width: "100%" }} />
+                  </Form.Item>
+                  <Form.Item label="Output Cost (per 1M tokens)" name="output_cost">
+                    <InputNumber step={0.0001} style={{ width: "100%" }} />
+                  </Form.Item>
+                  <Form.Item label="API Base" name="api_base">
+                    <Input />
+                  </Form.Item>
+                  <Form.Item label="Custom LLM Provider" name="custom_llm_provider">
+                    <Input />
+                  </Form.Item>
+                  <Form.Item label="Organization" name="organization">
+                    <Input />
+                  </Form.Item>
+                  <Form.Item label="TPM Limit" name="tpm">
+                    <InputNumber style={{ width: "100%" }} />
+                  </Form.Item>
+                  <Form.Item label="RPM Limit" name="rpm">
+                    <InputNumber style={{ width: "100%" }} />
+                  </Form.Item>
+                  <Form.Item label="Max Retries" name="max_retries">
+                    <InputNumber style={{ width: "100%" }} />
+                  </Form.Item>
+                  <Form.Item label="Timeout (seconds)" name="timeout">
+                    <InputNumber style={{ width: "100%" }} />
+                  </Form.Item>
+                  <Form.Item label="Stream Timeout (seconds)" name="stream_timeout">
+                    <InputNumber style={{ width: "100%" }} />
+                  </Form.Item>
+
+                  <div className="flex justify-end gap-2 mt-6">
+                    <Button onClick={() => setIsEditing(false)}>
+                      Cancel
+                    </Button>
+                    <Button type="primary" htmlType="submit">
+                      Save Changes
+                    </Button>
+                  </div>
+                </Form>
               ) : (
                 <div className="space-y-4">
                   <div>

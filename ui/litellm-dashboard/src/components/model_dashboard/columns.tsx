@@ -1,9 +1,9 @@
 import { ColumnDef } from "@tanstack/react-table";
-import { Button, Badge } from "@tremor/react";
+import { Button, Badge, Icon } from "@tremor/react";
 import { Tooltip } from "antd";
 import { getProviderLogoAndName } from "../provider_info_helpers";
 import { ModelData } from "./types";
-import { TrashIcon, PencilIcon } from "@heroicons/react/outline";
+import { TrashIcon, PencilIcon, PencilAltIcon } from "@heroicons/react/outline";
 import DeleteModelButton from "../delete_model_button";
 
 export const columns = (
@@ -36,11 +36,18 @@ export const columns = (
     },
   },
   {
-    header: "Model Name",
+    header: "Public Model Name",
     accessorKey: "model_name",
-    cell: ({ row }) => (
-      <p className="text-xs">{getDisplayModelName(row.original) || "-"}</p>
-    ),
+    cell: ({ row }) => {
+      const displayName = getDisplayModelName(row.original) || "-";
+      return (
+        <Tooltip title={displayName}>
+          <p className="text-xs">
+            {displayName.length > 20 ? displayName.slice(0, 20) + "..." : displayName}
+          </p>
+        </Tooltip>
+      );
+    },
   },
   {
     header: "Provider",
@@ -113,7 +120,11 @@ export const columns = (
     },
   },
   {
-    header: "Input Cost (per 1M tokens)",
+    header: () => (
+      <Tooltip title="Cost per 1M tokens">
+        <span>Input Cost</span>
+      </Tooltip>
+    ),
     accessorKey: "input_cost",
     cell: ({ row }) => {
       const model = row.original;
@@ -125,7 +136,11 @@ export const columns = (
     },
   },
   {
-    header: "Output Cost (per 1M tokens)",
+    header: () => (
+      <Tooltip title="Cost per 1M tokens">
+        <span>Output Cost</span>
+      </Tooltip>
+    ),
     accessorKey: "output_cost",
     cell: ({ row }) => {
       const model = row.original;
@@ -183,18 +198,15 @@ export const columns = (
       const model = row.original;
       return (
         <div className="flex items-center justify-end gap-2 pr-4">
-          <Button
-            size="xs"
-            variant="light"
-            icon={PencilIcon}
+          <Icon
+            icon={PencilAltIcon}
+            size="sm"
             onClick={() => handleEditClick(model)}
-          >
-            Edit
-          </Button>
-          <DeleteModelButton
-            modelId={model.model_info.id}
-            accessToken={model.accessToken}
-            onSuccess={handleRefreshClick}
+          />
+          <Icon
+            icon={TrashIcon}
+            size="sm"
+            onClick={() => handleRefreshClick()}
           />
         </div>
       );
