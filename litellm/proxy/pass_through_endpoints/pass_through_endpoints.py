@@ -22,7 +22,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
@@ -100,6 +100,7 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
     request: Request,
     adapter_id: str,
     user_api_key_dict: UserAPIKeyAuth,
+    data: dict = Depends(read_request_body),
 ):
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
@@ -116,15 +117,7 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
         version,
     )
 
-    data = {}
     try:
-        body = await request.body()
-        body_str = body.decode()
-        try:
-            data = ast.literal_eval(body_str)
-        except Exception:
-            data = json.loads(body_str)
-
         data["adapter_id"] = adapter_id
 
         verbose_proxy_logger.debug(
@@ -312,6 +305,7 @@ async def pass_through_request(  # noqa: PLR0915
     forward_headers: Optional[bool] = False,
     query_params: Optional[dict] = None,
     stream: Optional[bool] = None,
+    data: dict = Depends(read_request_body),
 ):
     try:
         import uuid
@@ -331,7 +325,7 @@ async def pass_through_request(  # noqa: PLR0915
         if custom_body:
             _parsed_body = custom_body
         else:
-            _parsed_body = await _read_request_body(request)
+            _parsed_body = data
         verbose_proxy_logger.debug(
             "Pass through endpoint sending request to \nURL {}\nheaders: {}\nbody: {}\n".format(
                 url, headers, _parsed_body
