@@ -9,12 +9,13 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 
 import litellm
 from litellm.constants import BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     create_pass_through_route,
 )
@@ -167,6 +168,7 @@ async def anthropic_proxy_route(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    data: dict = Depends(read_request_body),
 ):
     """
     [Docs](https://docs.litellm.ai/docs/anthropic_completion)
@@ -192,8 +194,7 @@ async def anthropic_proxy_route(
     is_streaming_request = False
     # anthropic is streaming when 'stream' = True is in the body
     if request.method == "POST":
-        _request_body = await request.json()
-        if _request_body.get("stream"):
+        if data.get("stream"):
             is_streaming_request = True
 
     ## CREATE PASS-THROUGH
@@ -223,6 +224,7 @@ async def bedrock_proxy_route(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    data: dict = Depends(read_request_body),
 ):
     """
     [Docs](https://docs.litellm.ai/docs/pass_through/bedrock)
@@ -259,11 +261,6 @@ async def bedrock_proxy_route(
     credentials: Credentials = BedrockConverseLLM().get_credentials()
     sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
     headers = {"Content-Type": "application/json"}
-    # Assuming the body contains JSON data, parse it
-    try:
-        data = await request.json()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail={"error": e})
     _request = AWSRequest(
         method="POST", url=str(updated_url), data=json.dumps(data), headers=headers
     )
@@ -318,6 +315,7 @@ async def assemblyai_proxy_route(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    data: dict = Depends(read_request_body),
 ):
     from litellm.proxy.pass_through_endpoints.llm_provider_handlers.assembly_passthrough_logging_handler import (
         AssemblyAIPassthroughLoggingHandler,
@@ -354,8 +352,7 @@ async def assemblyai_proxy_route(
     is_streaming_request = False
     # assemblyai is streaming when 'stream' = True is in the body
     if request.method == "POST":
-        _request_body = await request.json()
-        if _request_body.get("stream"):
+        if data.get("stream"):
             is_streaming_request = True
 
     ## CREATE PASS-THROUGH

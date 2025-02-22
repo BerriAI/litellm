@@ -15,6 +15,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 from litellm.proxy.utils import handle_exception_on_proxy
 
 router = APIRouter()
@@ -391,6 +392,7 @@ async def cancel_fine_tuning_job(
     fastapi_response: Response,
     fine_tuning_job_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    data: dict = Depends(read_request_body),
 ):
     """
     Cancel a fine-tuning job.
@@ -411,7 +413,6 @@ async def cancel_fine_tuning_job(
         version,
     )
 
-    data: dict = {}
     try:
         if premium_user is not True:
             raise ValueError(
@@ -427,9 +428,7 @@ async def cancel_fine_tuning_job(
             proxy_config=proxy_config,
         )
 
-        request_body = await request.json()
-
-        custom_llm_provider = request_body.get("custom_llm_provider", None)
+        custom_llm_provider = data.get("custom_llm_provider", None)
 
         # get configs for custom_llm_provider
         llm_provider_config = get_fine_tuning_provider_config(

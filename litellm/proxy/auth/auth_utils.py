@@ -199,7 +199,7 @@ async def pre_db_read_auth_checks(
     from litellm.proxy.proxy_server import general_settings, llm_router, premium_user
 
     # Check 1. request size
-    await check_if_request_size_is_safe(request=request)
+    await check_if_request_size_is_safe(request=request, request_data=request_data)
 
     # Check 2. Request body is safe
     is_request_body_safe(
@@ -303,7 +303,10 @@ def get_request_route(request: Request) -> str:
         return request.url.path
 
 
-async def check_if_request_size_is_safe(request: Request) -> bool:
+async def check_if_request_size_is_safe(
+    request: Request,
+    request_data: dict,
+) -> bool:
     """
     Enterprise Only:
         - Checks if the request size is within the limit
@@ -348,8 +351,7 @@ async def check_if_request_size_is_safe(request: Request) -> bool:
                 )
         else:
             # If Content-Length is not available, read the body
-            body = await request.body()
-            body_size = len(body)
+            body_size = len(request_data)
             request_size_mb = bytes_to_mb(bytes_value=body_size)
 
             verbose_proxy_logger.debug(
