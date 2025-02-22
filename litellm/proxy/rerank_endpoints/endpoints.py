@@ -7,6 +7,7 @@ from fastapi.responses import ORJSONResponse
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 
 router = APIRouter()
 import asyncio
@@ -28,6 +29,7 @@ async def rerank(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    data: dict = Depends(read_request_body),
 ):
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
@@ -41,12 +43,9 @@ async def rerank(
         version,
     )
 
-    data = {}
     try:
-        body = await request.body()
-        data = orjson.loads(body)
-
         # Include original request and headers in the data
+
         data = await add_litellm_data_to_request(
             data=data,
             request=request,
