@@ -215,6 +215,28 @@ export default function ModelInfoView({
               </Card>
             </Grid>
 
+            {/* Audit info shown as a subtle banner below the overview */}
+            <div className="mb-6 text-sm text-gray-500 flex items-center gap-x-6">
+              <div className="flex items-center gap-x-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Created At {modelData.model_info.created_at 
+                  ? new Date(modelData.model_info.created_at).toLocaleDateString('en-US', {
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric'
+                    })
+                  : "Not Set"}
+              </div>
+              <div className="flex items-center gap-x-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                </svg>
+                Created By {modelData.model_info.created_by || "Not Set"}
+              </div>
+            </div>
+
             {/* Settings Card */}
             <Card>
               <div className="flex justify-between items-center mb-4">
@@ -413,20 +435,6 @@ export default function ModelInfoView({
                       <Text className="font-medium">Team ID</Text>
                       <div className="mt-1 p-2 bg-gray-50 rounded">
                         {modelData.model_info.team_id || "Not Set"}
-                      </div>
-                    </div>
-
-                    <div>
-                      <Text className="font-medium">Created At</Text>
-                      <div className="mt-1 p-2 bg-gray-50 rounded">
-                        {modelData.model_info.created_at ? new Date(modelData.model_info.created_at).toLocaleString() : "Not Set"}
-                      </div>
-                    </div>
-
-                    <div>
-                      <Text className="font-medium">Created By</Text>
-                      <div className="mt-1 p-2 bg-gray-50 rounded">
-                        {modelData.model_info.created_by || "Not Set"}
                       </div>
                     </div>
 
