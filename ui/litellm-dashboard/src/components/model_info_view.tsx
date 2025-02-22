@@ -145,15 +145,6 @@ export default function ModelInfoView({
         </div>
         {canEditModel && (
           <div className="flex gap-2">
-            {!isEditing && (
-              <TremorButton
-                variant="secondary"
-                onClick={() => setIsEditing(true)}
-                className="flex items-center"
-              >
-                Edit Model
-              </TremorButton>
-            )}
             <TremorButton
               icon={TrashIcon}
               variant="secondary"
@@ -266,9 +257,9 @@ export default function ModelInfoView({
                   timeout: localModelData.litellm_params?.timeout,
                   stream_timeout: localModelData.litellm_params?.stream_timeout,
                   input_cost: localModelData.litellm_params?.input_cost_per_token ? 
-                    (localModelData.litellm_params.input_cost_per_token * 1_000_000) : 0,
+                    (localModelData.litellm_params.input_cost_per_token * 1_000_000) : modelData.input_cost * 1_000_000,
                   output_cost: localModelData.litellm_params?.output_cost_per_token ? 
-                    (localModelData.litellm_params.output_cost_per_token * 1_000_000) : 0,
+                    (localModelData.litellm_params.output_cost_per_token * 1_000_000) : modelData.output_cost * 1_000_000,
                 }}
                 layout="vertical"
                 onValuesChange={() => setIsDirty(true)}
@@ -307,7 +298,7 @@ export default function ModelInfoView({
                         <div className="mt-1 p-2 bg-gray-50 rounded">
                           {localModelData.litellm_params?.input_cost_per_token 
                             ? (localModelData.litellm_params.input_cost_per_token * 1_000_000).toFixed(4) 
-                            : "Not Set"}
+                            : modelData.input_cost * 1_000_000}
                         </div>
                       )}
                     </div>
@@ -322,7 +313,7 @@ export default function ModelInfoView({
                         <div className="mt-1 p-2 bg-gray-50 rounded">
                           {localModelData.litellm_params?.output_cost_per_token 
                             ? (localModelData.litellm_params.output_cost_per_token * 1_000_000).toFixed(4) 
-                            : "Not Set"}
+                            : modelData.output_cost * 1_000_000}
                         </div>
                       )}
                     </div>
@@ -436,13 +427,6 @@ export default function ModelInfoView({
                       <div className="mt-1 p-2 bg-gray-50 rounded">
                         {modelData.model_info.team_id || "Not Set"}
                       </div>
-                    </div>
-
-                    <div>
-                      <Text className="font-medium">LiteLLM Parameters</Text>
-                      <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
-                        {JSON.stringify(modelData.cleanedLitellmParams, null, 2)}
-                      </pre>
                     </div>
                   </div>
 
