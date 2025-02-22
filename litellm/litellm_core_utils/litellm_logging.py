@@ -1513,6 +1513,8 @@ class Logging(LiteLLMLoggingBaseClass):
                     str(e)
                 ),
             )
+        finally:
+            complete_streaming_response = None
 
     async def async_success_handler(  # noqa: PLR0915
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
@@ -1759,6 +1761,8 @@ class Logging(LiteLLMLoggingBaseClass):
                     f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
                 )
                 pass
+            finally:
+                complete_streaming_response = None
 
     def _failure_handler_helper_fn(
         self, exception, traceback_exception, start_time=None, end_time=None
