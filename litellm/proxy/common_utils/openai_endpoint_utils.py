@@ -6,7 +6,7 @@ from typing import Optional
 
 from fastapi import Request
 
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 
 
 def remove_sensitive_info_from_deployment(deployment_dict: dict) -> dict:
@@ -33,7 +33,7 @@ async def get_custom_llm_provider_from_request_body(request: Request) -> Optiona
 
     Safely reads the request body
     """
-    request_body: dict = await _read_request_body(request=request) or {}
+    request_body: dict = await read_request_body(request=request) or {}
     if "custom_llm_provider" in request_body:
         return request_body["custom_llm_provider"]
     return None

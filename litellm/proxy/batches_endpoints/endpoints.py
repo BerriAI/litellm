@@ -18,7 +18,7 @@ from litellm.batches.main import (
 )
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
 )
@@ -78,7 +78,7 @@ async def create_batch(
 
     data: Dict = {}
     try:
-        data = await _read_request_body(request=request)
+        data = await read_request_body(request=request)
         verbose_proxy_logger.debug(
             "Request received by LiteLLM:\n{}".format(json.dumps(data, indent=4)),
         )
@@ -405,7 +405,7 @@ async def cancel_batch(
 
     data: Dict = {}
     try:
-        data = await _read_request_body(request=request)
+        data = await read_request_body(request=request)
         verbose_proxy_logger.debug(
             "Request received by LiteLLM:\n{}".format(json.dumps(data, indent=4)),
         )

@@ -26,7 +26,7 @@ from litellm.proxy._types import (  # key request types; user request types; tea
     UserAPIKeyAuth,
     VirtualKeyEvent,
 )
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 from litellm.proxy.utils import PrismaClient
 
 
@@ -180,7 +180,7 @@ def _delete_api_key_from_cache(kwargs):
 
         # delete key request
         if isinstance(update_request, KeyRequest):
-            for key in update_request.keys:
+            for key in update_request.keys or []:
                 user_api_key_cache.delete_cache(key=key)
     pass
 
@@ -307,7 +307,7 @@ def management_endpoint_wrapper(func):
                     if open_telemetry_logger is not None:
                         if _http_request:
                             _route = _http_request.url.path
-                            _request_body: dict = await _read_request_body(
+                            _request_body: dict = await read_request_body(
                                 request=_http_request
                             )
                             _response = dict(result) if result is not None else None
@@ -352,7 +352,7 @@ def management_endpoint_wrapper(func):
                     _http_request = kwargs.get("http_request")
                     if _http_request:
                         _route = _http_request.url.path
-                        _request_body: dict = await _read_request_body(
+                        _request_body: dict = await read_request_body(
                             request=_http_request
                         )
                         logging_payload = ManagementEndpointLoggingPayload(

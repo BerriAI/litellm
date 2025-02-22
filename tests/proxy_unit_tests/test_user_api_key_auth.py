@@ -487,8 +487,8 @@ def test_allowed_route_inside_route(
     )
 
 
-def test_read_request_body():
-    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+def testread_request_body():
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
     from fastapi import Request
 
     payload = "()" * 1000000
@@ -498,7 +498,7 @@ def test_read_request_body():
         return payload
 
     request.body = return_body
-    result = _read_request_body(request)
+    result = read_request_body(request)
     assert result is not None
 
 
