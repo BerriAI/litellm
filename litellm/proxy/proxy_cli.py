@@ -5,12 +5,16 @@ import random
 import subprocess
 import sys
 import urllib.parse as urlparse
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import click
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
+else:
+    FastAPI = Any
 
 sys.path.append(os.getcwd())
 
