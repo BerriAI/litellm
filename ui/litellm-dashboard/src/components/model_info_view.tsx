@@ -438,8 +438,8 @@ export default function ModelInfoView({
                     </div>
                   </div>
 
-                  {isDirty && (
-                    <div className="sticky top-0 z-10 bg-white border-b border-gray-200 p-4 mb-6 -mx-4 flex justify-end gap-2">
+                  {isEditing && (
+                    <div className="mt-6 flex justify-end gap-2">
                       <TremorButton
                         variant="secondary"
                         onClick={() => {
