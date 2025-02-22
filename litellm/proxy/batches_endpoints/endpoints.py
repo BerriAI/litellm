@@ -48,6 +48,7 @@ async def create_batch(
     fastapi_response: Response,
     provider: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    data: dict = Depends(read_request_body),
 ):
     """
     Create large batches of API requests for asynchronous processing.
@@ -76,9 +77,7 @@ async def create_batch(
         version,
     )
 
-    data: Dict = {}
     try:
-        data = await read_request_body(request=request)
         verbose_proxy_logger.debug(
             "Request received by LiteLLM:\n{}".format(json.dumps(data, indent=4)),
         )
@@ -378,6 +377,7 @@ async def cancel_batch(
     fastapi_response: Response,
     provider: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    data: dict = Depends(read_request_body),
 ):
     """
     Cancel a batch.
@@ -403,9 +403,7 @@ async def cancel_batch(
         version,
     )
 
-    data: Dict = {}
     try:
-        data = await read_request_body(request=request)
         verbose_proxy_logger.debug(
             "Request received by LiteLLM:\n{}".format(json.dumps(data, indent=4)),
         )
