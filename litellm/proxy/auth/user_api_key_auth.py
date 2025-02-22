@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Optional, cast
 
 import fastapi
-from fastapi import HTTPException, Request, WebSocket, status
+from fastapi import Depends, HTTPException, Request, WebSocket, status
 from fastapi.security.api_key import APIKeyHeader
 
 import litellm
@@ -49,7 +49,7 @@ from litellm.proxy.auth.oauth2_check import check_oauth2_token
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.service_account_checks import service_account_checks
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 from litellm.proxy.utils import PrismaClient, ProxyLogging, _to_ns
 from litellm.types.services import ServiceTypes
 
@@ -1134,6 +1134,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 @tracer.wrap()
 async def user_api_key_auth(
     request: Request,
+    request_data: dict = Depends(read_request_body),
     api_key: str = fastapi.Security(api_key_header),
     azure_api_key_header: str = fastapi.Security(azure_api_key_header),
     anthropic_api_key_header: Optional[str] = fastapi.Security(
@@ -1146,8 +1147,6 @@ async def user_api_key_auth(
     """
     Parent function to authenticate user api key / jwt token.
     """
-
-    request_data = await _read_request_body(request=request)
 
     user_api_key_auth_obj = await _user_api_key_auth_builder(
         request=request,
