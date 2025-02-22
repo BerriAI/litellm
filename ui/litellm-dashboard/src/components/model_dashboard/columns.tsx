@@ -109,6 +109,19 @@ export const columns = (
     },
   },
   {
+    header: "Updated At",
+    accessorKey: "model_info.updated_at",
+    sortingFn: "datetime",
+    cell: ({ row }) => {
+      const model = row.original;
+      return (
+        <span className="text-xs">
+          {model.model_info.updated_at ? new Date(model.model_info.updated_at).toLocaleDateString() : "-"}
+        </span>
+      );
+    },
+  },
+  {
     header: "Created By",
     accessorKey: "model_info.created_by",
     cell: ({ row }) => {

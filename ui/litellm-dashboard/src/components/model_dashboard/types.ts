@@ -1,6 +1,7 @@
 export interface ModelInfo {
   id: string;
   created_at: string;
+  updated_at: string;
   created_by: string;
   team_id: string;
   db_model: boolean;
