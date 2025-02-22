@@ -5,7 +5,10 @@ import orjson
 from fastapi import Request, UploadFile, status
 
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.types.router import Deployment
+
+_request_body_cache = InMemoryCache(max_size_in_memory=100, default_ttl=100)
 
 
 async def _read_request_body(request: Optional[Request]) -> Dict:
@@ -62,9 +65,9 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
 def _safe_get_request_parsed_body(request: Optional[Request]) -> Optional[dict]:
     if request is None:
         return None
-    if hasattr(request, "state") and hasattr(request.state, "parsed_body"):
-        return request.state.parsed_body
-    return None
+    # Use request object's id as the cache key
+    cache_key = id(request)
+    return _request_body_cache.get_cache(key=cache_key)
 
 
 def _safe_set_request_parsed_body(
@@ -74,7 +77,8 @@ def _safe_set_request_parsed_body(
     try:
         if request is None:
             return
-        request.state.parsed_body = parsed_body
+        cache_key = id(request)
+        _request_body_cache.set_cache(key=cache_key, value=parsed_body)
     except Exception as e:
         verbose_proxy_logger.debug(
             "Unexpected error setting request parsed body - {}".format(e)
