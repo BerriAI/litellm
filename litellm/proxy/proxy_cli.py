@@ -138,6 +138,7 @@ class ProxyInitializationHelpers:
 
     @staticmethod
     def _init_hypercorn_server(
+        app: FastAPI,
         host: str,
         port: int,
         ssl_certfile_path: str,
@@ -791,6 +792,7 @@ def run_server(  # noqa: PLR0915
             )
         elif run_hypercorn is True:
             ProxyInitializationHelpers._init_hypercorn_server(
+                app=app,
                 host=host,
                 port=port,
                 ssl_certfile_path=ssl_certfile_path,
