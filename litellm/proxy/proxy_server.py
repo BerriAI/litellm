@@ -149,8 +149,8 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (
-    _read_request_body,
     check_file_size_under_limit,
+    read_request_body,
 )
 from litellm.proxy.common_utils.load_config_utils import (
     get_config_file_contents_from_gcs,
@@ -3487,6 +3487,7 @@ async def chat_completion(  # noqa: PLR0915
     fastapi_response: Response,
     model: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    data: dict = Depends(read_request_body),
 ):
     """
 
@@ -3513,9 +3514,7 @@ async def chat_completion(  # noqa: PLR0915
     """
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
 
-    data = {}
     try:
-        data = await _read_request_body(request=request)
         verbose_proxy_logger.debug(
             "Request received by LiteLLM:\n{}".format(json.dumps(data, indent=4)),
         )
@@ -3776,6 +3775,7 @@ async def completion(  # noqa: PLR0915
     fastapi_response: Response,
     model: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    data: dict = Depends(read_request_body),
 ):
     """
     Follows the exact same API spec as `OpenAI's Completions API https://platform.openai.com/docs/api-reference/completions`
@@ -3796,9 +3796,7 @@ async def completion(  # noqa: PLR0915
     ```
     """
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
-    data = {}
     try:
-        data = await _read_request_body(request=request)
 
         data["model"] = (
             general_settings.get("completion_model", None)  # server default
@@ -3996,6 +3994,7 @@ async def embeddings(  # noqa: PLR0915
     fastapi_response: Response,
     model: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    data: dict = Depends(read_request_body),
 ):
     """
     Follows the exact same API spec as `OpenAI's Embeddings API https://platform.openai.com/docs/api-reference/embeddings`
@@ -4015,12 +4014,7 @@ async def embeddings(  # noqa: PLR0915
 
 """
     global proxy_logging_obj
-    data: Any = {}
     try:
-        # Use orjson to parse JSON data, orjson speeds up requests significantly
-        body = await request.body()
-        data = orjson.loads(body)
-
         verbose_proxy_logger.debug(
             "Request received by LiteLLM:\n%s",
             json.dumps(data, indent=4),
@@ -4192,14 +4186,10 @@ async def image_generation(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    data: dict = Depends(read_request_body),
 ):
     global proxy_logging_obj
-    data = {}
     try:
-        # Use orjson to parse JSON data, orjson speeds up requests significantly
-        body = await request.body()
-        data = orjson.loads(body)
-
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
             data=data,
@@ -4309,6 +4299,7 @@ async def audio_speech(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    data: dict = Depends(read_request_body),
 ):
     """
     Same params as:
@@ -4316,11 +4307,7 @@ async def audio_speech(
     https://platform.openai.com/docs/api-reference/audio/createSpeech
     """
     global proxy_logging_obj
-    data: Dict = {}
     try:
-        # Use orjson to parse JSON data, orjson speeds up requests significantly
-        body = await request.body()
-        data = orjson.loads(body)
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -4622,6 +4609,7 @@ async def get_assistants(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    data: dict = Depends(read_request_body),
 ):
     """
     Returns a list of assistants.
@@ -4629,11 +4617,7 @@ async def get_assistants(
     API Reference docs - https://platform.openai.com/docs/api-reference/assistants/listAssistants
     """
     global proxy_logging_obj
-    data: Dict = {}
     try:
-        # Use orjson to parse JSON data, orjson speeds up requests significantly
-        await request.body()
-
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
             data=data,
@@ -4719,6 +4703,7 @@ async def create_assistant(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    data: dict = Depends(read_request_body),
 ):
     """
     Create assistant
@@ -4726,12 +4711,7 @@ async def create_assistant(
     API Reference docs - https://platform.openai.com/docs/api-reference/assistants/createAssistant
     """
     global proxy_logging_obj
-    data = {}  # ensure data always dict
     try:
-        # Use orjson to parse JSON data, orjson speeds up requests significantly
-        body = await request.body()
-        data = orjson.loads(body)
-
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
             data=data,
@@ -4914,6 +4894,7 @@ async def create_threads(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    data: dict = Depends(read_request_body),
 ):
     """
     Create a thread.
@@ -4921,10 +4902,7 @@ async def create_threads(
     API Reference - https://platform.openai.com/docs/api-reference/threads/createThread
     """
     global proxy_logging_obj
-    data: Dict = {}
     try:
-        # Use orjson to parse JSON data, orjson speeds up requests significantly
-        await request.body()
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -5108,6 +5086,7 @@ async def add_messages(
     thread_id: str,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    data: dict = Depends(read_request_body),
 ):
     """
     Create a message.
@@ -5115,11 +5094,7 @@ async def add_messages(
     API Reference - https://platform.openai.com/docs/api-reference/messages/createMessage
     """
     global proxy_logging_obj
-    data: Dict = {}
     try:
-        # Use orjson to parse JSON data, orjson speeds up requests significantly
-        body = await request.body()
-        data = orjson.loads(body)
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -5302,6 +5277,7 @@ async def run_thread(
     thread_id: str,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    data: dict = Depends(read_request_body),
 ):
     """
     Create a run.
@@ -5309,10 +5285,7 @@ async def run_thread(
     API Reference: https://platform.openai.com/docs/api-reference/runs/createRun
     """
     global proxy_logging_obj
-    data: Dict = {}
     try:
-        body = await request.body()
-        data = orjson.loads(body)
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
             data=data,
@@ -5412,6 +5385,7 @@ async def moderations(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    data: dict = Depends(read_request_body),
 ):
     """
     The moderations endpoint is a tool you can use to check whether content complies with an LLM Providers policies.
@@ -5425,11 +5399,7 @@ async def moderations(
     ```
     """
     global proxy_logging_obj
-    data: Dict = {}
     try:
-        # Use orjson to parse JSON data, orjson speeds up requests significantly
-        body = await request.body()
-        data = orjson.loads(body)
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -5532,6 +5502,7 @@ async def anthropic_response(  # noqa: PLR0915
     anthropic_data: AnthropicMessagesRequest,
     fastapi_response: Response,
     request: Request,
+    request_data: dict = Depends(read_request_body),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -5547,7 +5518,6 @@ async def anthropic_response(  # noqa: PLR0915
     litellm.adapters = [{"id": "anthropic", "adapter": anthropic_adapter}]
 
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
-    request_data = await _read_request_body(request=request)
     data: dict = {**request_data, "adapter_id": "anthropic"}
     try:
         data["model"] = (
@@ -7227,6 +7197,7 @@ async def async_queue_request(
     fastapi_response: Response,
     model: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    data: dict = Depends(read_request_body),
 ):
     global general_settings, user_debug, proxy_logging_obj
     """
@@ -7236,9 +7207,7 @@ async def async_queue_request(
 
     Now using a FastAPI background task + /chat/completions compatible endpoint
     """
-    data = {}
     try:
-        data = await request.json()  # type: ignore
 
         # Include original request and headers in the data
         data["proxy_server_request"] = {
