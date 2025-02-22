@@ -1092,7 +1092,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       setSelectedTeamId,
                       getDisplayModelName,
                       handleEditClick,
-                      handleRefreshClick
+                      handleRefreshClick,
+                      setEditModel
                     )}
                     data={modelData.data.filter(
                       (model: any) =>
