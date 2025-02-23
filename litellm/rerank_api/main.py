@@ -99,8 +99,13 @@ def rerank(  # noqa: PLR0915
         _is_async = kwargs.pop("arerank", False) is True
         optional_params = GenericLiteLLMParams(**kwargs)
         # Params that are unique to specific versions of the client for the rerank call
-        unique_version_params = {"max_chunks_per_doc": max_chunks_per_doc, "max_tokens_per_doc": max_tokens_per_doc}
-        present_version_params = [k for k, v in unique_version_params.items() if v is not None]
+        unique_version_params = {
+            "max_chunks_per_doc": max_chunks_per_doc,
+            "max_tokens_per_doc": max_tokens_per_doc,
+        }
+        present_version_params = [
+            k for k, v in unique_version_params.items() if v is not None
+        ]
 
         model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = (
             litellm.get_llm_provider(
@@ -116,7 +121,7 @@ def rerank(  # noqa: PLR0915
                 model=model,
                 provider=litellm.LlmProviders(_custom_llm_provider),
                 api_base=optional_params.api_base,
-                present_version_params=present_version_params
+                present_version_params=present_version_params,
             )
         )
 
@@ -285,6 +290,7 @@ def rerank(  # noqa: PLR0915
                 custom_llm_provider=_custom_llm_provider,
                 optional_rerank_params=optional_rerank_params,
                 logging_obj=litellm_logging_obj,
+                provider_config=rerank_provider_config,
                 timeout=optional_params.timeout,
                 api_key=dynamic_api_key or optional_params.api_key,
                 api_base=api_base,
