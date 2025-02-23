@@ -112,34 +112,39 @@ async def test_basic_rerank(sync_mode):
 @pytest.mark.asyncio()
 @pytest.mark.parametrize("sync_mode", [True, False])
 async def test_basic_rerank_together_ai(sync_mode):
-    if sync_mode is True:
-        response = litellm.rerank(
-            model="together_ai/Salesforce/Llama-Rank-V1",
-            query="hello",
-            documents=["hello", "world"],
-            top_n=3,
-        )
+    try:
+        if sync_mode is True:
+            response = litellm.rerank(
+                model="together_ai/Salesforce/Llama-Rank-V1",
+                query="hello",
+                documents=["hello", "world"],
+                top_n=3,
+            )
 
-        print("re rank response: ", response)
+            print("re rank response: ", response)
 
-        assert response.id is not None
-        assert response.results is not None
+            assert response.id is not None
+            assert response.results is not None
 
-        assert_response_shape(response, custom_llm_provider="together_ai")
-    else:
-        response = await litellm.arerank(
-            model="together_ai/Salesforce/Llama-Rank-V1",
-            query="hello",
-            documents=["hello", "world"],
-            top_n=3,
-        )
+            assert_response_shape(response, custom_llm_provider="together_ai")
+        else:
+            response = await litellm.arerank(
+                model="together_ai/Salesforce/Llama-Rank-V1",
+                query="hello",
+                documents=["hello", "world"],
+                top_n=3,
+            )
 
-        print("async re rank response: ", response)
+            print("async re rank response: ", response)
 
-        assert response.id is not None
-        assert response.results is not None
+            assert response.id is not None
+            assert response.results is not None
 
-        assert_response_shape(response, custom_llm_provider="together_ai")
+            assert_response_shape(response, custom_llm_provider="together_ai")
+    except Exception as e:
+        if "503 Service Temporarily Unavailable" in str(e):
+            pytest.skip("Skipping test due to 503 Service Temporarily Unavailable")
+        raise e
 
 
 @pytest.mark.asyncio()
@@ -182,11 +187,12 @@ async def test_basic_rerank_azure_ai(sync_mode):
 
         assert_response_shape(response, custom_llm_provider="together_ai")
 
+
 @pytest.mark.asyncio()
 @pytest.mark.parametrize("version", ["v1", "v2"])
 async def test_rerank_custom_api_base(version):
     mock_response = AsyncMock()
-    litellm.cohere_key="test_api_key"
+    litellm.cohere_key = "test_api_key"
 
     def return_val():
         return {
@@ -235,7 +241,8 @@ async def test_rerank_custom_api_base(version):
         print("Arguments passed to API=", args_to_api)
         print("url = ", _url)
         assert (
-            _url == f"https://exampleopenaiendpoint-production.up.railway.app/{version}/rerank"
+            _url
+            == f"https://exampleopenaiendpoint-production.up.railway.app/{version}/rerank"
         )
 
         request_data = json.loads(args_to_api)
@@ -248,6 +255,7 @@ async def test_rerank_custom_api_base(version):
         assert response.results is not None
 
         assert_response_shape(response, custom_llm_provider="cohere")
+
 
 class TestLogger(CustomLogger):
 
@@ -291,7 +299,7 @@ def test_complete_base_url_cohere():
 
     client = HTTPHandler()
     litellm.api_base = "http://localhost:4000"
-    litellm.cohere_key="test_api_key"
+    litellm.cohere_key = "test_api_key"
     litellm.set_verbose = True
 
     text = "Hello there!"
@@ -400,6 +408,7 @@ def test_rerank_response_assertions():
 
     assert_response_shape(r, custom_llm_provider="custom")
 
+
 def test_cohere_rerank_v2_client():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
@@ -420,11 +429,11 @@ def test_cohere_rerank_v2_client():
                 "results": [
                     {"index": 0, "relevance_score": 0.95},
                     {"index": 1, "relevance_score": 0.75},
-                    {"index": 2, "relevance_score": 0.65}
+                    {"index": 2, "relevance_score": 0.65},
                 ],
                 "usage": {"prompt_tokens": 100, "total_tokens": 150},
-            }        
-        ) 
+            }
+        )
         mock_response.status_code = 200
         mock_response.headers = {"Content-Type": "application/json"}
         mock_response.json = lambda: json.loads(mock_response.text)
@@ -444,17 +453,18 @@ def test_cohere_rerank_v2_client():
 
         # Ensure Cohere API is called with the expected params
         mock_post.assert_called_once()
-        assert(mock_post.call_args.kwargs["url"] == "http://localhost:4000/v2/rerank")
+        assert mock_post.call_args.kwargs["url"] == "http://localhost:4000/v2/rerank"
 
         request_data = json.loads(mock_post.call_args.kwargs["data"])
-        assert(request_data["model"] == rerank_model)
-        assert(request_data["query"] == text)
-        assert(request_data["documents"] == list_texts)
-        assert(request_data["max_tokens_per_doc"] == 3)
-        assert(request_data["top_n"] == 2)
+        assert request_data["model"] == rerank_model
+        assert request_data["query"] == text
+        assert request_data["documents"] == list_texts
+        assert request_data["max_tokens_per_doc"] == 3
+        assert request_data["top_n"] == 2
 
         # Ensure litellm response is what we expect
-        assert(response["results"] == mock_response.json()["results"])
+        assert response["results"] == mock_response.json()["results"]
+
 
 @pytest.mark.flaky(retries=3, delay=1)
 def test_rerank_cohere_api():
