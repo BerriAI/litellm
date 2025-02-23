@@ -1,6 +1,6 @@
 # What is this?
 ## Helper utilities
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
 
 import httpx
 
@@ -13,6 +13,8 @@ if TYPE_CHECKING:
     Span = _Span
 else:
     Span = Any
+
+POTENTIAL_LITELLM_METADATA_NAMES = ["metadata", "litellm_metadata"]
 
 
 def map_finish_reason(
@@ -70,11 +72,18 @@ def remove_index_from_tool_calls(
     return
 
 
-def get_litellm_metadata_from_kwargs(kwargs: dict):
+def get_litellm_metadata_from_kwargs(kwargs: dict) -> dict:
     """
     Helper to get litellm metadata from all litellm request kwargs
     """
-    return kwargs.get("litellm_params", {}).get("metadata", {})
+    litellm_params = cast(Optional[dict], kwargs.get("litellm_params", {}))
+    if litellm_params is None:
+        return {}
+    for metadata_name in POTENTIAL_LITELLM_METADATA_NAMES:
+        _metadata = litellm_params.get(metadata_name, {})
+        if _metadata is not None:
+            return _metadata
+    return {}
 
 
 # Helper functions used for OTEL logging
