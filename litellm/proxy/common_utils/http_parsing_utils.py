@@ -62,8 +62,8 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
 def _safe_get_request_parsed_body(request: Optional[Request]) -> Optional[dict]:
     if request is None:
         return None
-    if hasattr(request, "state") and hasattr(request.state, "parsed_body"):
-        return request.state.parsed_body
+    if hasattr(request, "scope") and "parsed_body" in request.scope:
+        return request.scope["parsed_body"]
     return None
 
 
@@ -74,7 +74,7 @@ def _safe_set_request_parsed_body(
     try:
         if request is None:
             return
-        request.state.parsed_body = parsed_body
+        request.scope["parsed_body"] = parsed_body
     except Exception as e:
         verbose_proxy_logger.debug(
             "Unexpected error setting request parsed body - {}".format(e)
