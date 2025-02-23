@@ -18,9 +18,7 @@ import pytest
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, headers
-from litellm.proxy.utils import (
-    duration_in_seconds,
-)
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.duration_parser import (
     get_last_day_of_month,
     _extract_from_regex,
@@ -721,6 +719,14 @@ def test_duration_in_seconds():
     assert value - expected_duration < 2
 
 
+def test_duration_in_seconds_basic():
+    assert duration_in_seconds(duration="3s") == 3
+    assert duration_in_seconds(duration="3m") == 180
+    assert duration_in_seconds(duration="3h") == 10800
+    assert duration_in_seconds(duration="3d") == 259200
+    assert duration_in_seconds(duration="3w") == 1814400
+
+
 def test_get_llm_provider_ft_models():
     """
     All ft prefixed models should map to OpenAI
@@ -864,17 +870,24 @@ def test_convert_model_response_object():
             == '{"type":"error","error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}'
         )
 
+
 @pytest.mark.parametrize(
-    "content, expected_reasoning, expected_content", 
+    "content, expected_reasoning, expected_content",
     [
         (None, None, None),
-        ("<think>I am thinking here</think>The sky is a canvas of blue", "I am thinking here", "The sky is a canvas of blue"),
+        (
+            "<think>I am thinking here</think>The sky is a canvas of blue",
+            "I am thinking here",
+            "The sky is a canvas of blue",
+        ),
         ("I am a regular response", None, "I am a regular response"),
-
-    ]
+    ],
 )
 def test_parse_content_for_reasoning(content, expected_reasoning, expected_content):
-    assert(litellm.utils._parse_content_for_reasoning(content) == (expected_reasoning, expected_content))
+    assert litellm.utils._parse_content_for_reasoning(content) == (
+        expected_reasoning,
+        expected_content,
+    )
 
 
 @pytest.mark.parametrize(
@@ -1152,6 +1165,9 @@ def test_models_by_provider():
     """
     Make sure all providers from model map are in the valid providers list
     """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
     from litellm import models_by_provider
 
     providers = set()
@@ -1874,3 +1890,121 @@ def test_validate_user_messages_invalid_content_type():
 
     assert "Invalid message" in str(e)
     print(e)
+
+
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.utils import get_applied_guardrails
+from unittest.mock import Mock
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        {
+            "name": "default_on_guardrail",
+            "callbacks": [
+                CustomGuardrail(guardrail_name="test_guardrail", default_on=True)
+            ],
+            "kwargs": {"metadata": {"requester_metadata": {"guardrails": []}}},
+            "expected": ["test_guardrail"],
+        },
+        {
+            "name": "request_specific_guardrail",
+            "callbacks": [
+                CustomGuardrail(guardrail_name="test_guardrail", default_on=False)
+            ],
+            "kwargs": {
+                "metadata": {"requester_metadata": {"guardrails": ["test_guardrail"]}}
+            },
+            "expected": ["test_guardrail"],
+        },
+        {
+            "name": "multiple_guardrails",
+            "callbacks": [
+                CustomGuardrail(guardrail_name="default_guardrail", default_on=True),
+                CustomGuardrail(guardrail_name="request_guardrail", default_on=False),
+            ],
+            "kwargs": {
+                "metadata": {
+                    "requester_metadata": {"guardrails": ["request_guardrail"]}
+                }
+            },
+            "expected": ["default_guardrail", "request_guardrail"],
+        },
+        {
+            "name": "empty_metadata",
+            "callbacks": [
+                CustomGuardrail(guardrail_name="test_guardrail", default_on=False)
+            ],
+            "kwargs": {},
+            "expected": [],
+        },
+        {
+            "name": "none_callback",
+            "callbacks": [
+                None,
+                CustomGuardrail(guardrail_name="test_guardrail", default_on=True),
+            ],
+            "kwargs": {},
+            "expected": ["test_guardrail"],
+        },
+        {
+            "name": "non_guardrail_callback",
+            "callbacks": [
+                Mock(),
+                CustomGuardrail(guardrail_name="test_guardrail", default_on=True),
+            ],
+            "kwargs": {},
+            "expected": ["test_guardrail"],
+        },
+    ],
+)
+def test_get_applied_guardrails(test_case):
+
+    # Setup
+    litellm.callbacks = test_case["callbacks"]
+
+    # Execute
+    result = get_applied_guardrails(test_case["kwargs"])
+
+    # Assert
+    assert sorted(result) == sorted(test_case["expected"])
+
+@pytest.mark.parametrize(
+    "endpoint, params, expected_bool",
+    [
+        ("localhost:4000/v1/rerank", ["max_chunks_per_doc"], True),
+        ("localhost:4000/v2/rerank", ["max_chunks_per_doc"], False),
+        ("localhost:4000", ["max_chunks_per_doc"], True),
+
+        ("localhost:4000/v1/rerank", ["max_tokens_per_doc"], True),
+        ("localhost:4000/v2/rerank", ["max_tokens_per_doc"], False),
+        ("localhost:4000", ["max_tokens_per_doc"], False),
+
+        ("localhost:4000/v1/rerank", ["max_chunks_per_doc", "max_tokens_per_doc"], True),
+        ("localhost:4000/v2/rerank", ["max_chunks_per_doc", "max_tokens_per_doc"], False),
+        ("localhost:4000", ["max_chunks_per_doc", "max_tokens_per_doc"], False),
+
+    ],
+)
+def test_should_use_cohere_v1_client(endpoint, params, expected_bool):
+    assert(litellm.utils.should_use_cohere_v1_client(endpoint, params) == expected_bool)
+
+
+def test_add_openai_metadata():
+    from litellm.utils import add_openai_metadata
+
+    metadata = {
+        "user_api_key_end_user_id": "123",
+        "hidden_params": {"api_key": "123"},
+        "litellm_parent_otel_span": MagicMock(),
+        "none-val": None,
+        "int-val": 1,
+        "dict-val": {"a": 1, "b": 2},
+    }
+
+    result = add_openai_metadata(metadata)
+
+    assert result == {
+        "user_api_key_end_user_id": "123",
+    }

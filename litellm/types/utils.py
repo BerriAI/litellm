@@ -59,6 +59,7 @@ class LiteLLMPydanticObjectBase(BaseModel):
 
 class LiteLLMCommonStrings(Enum):
     redacted_by_litellm = "redacted by litellm. 'litellm.turn_off_message_logging=True'"
+    llm_provider_not_provided = "Unmapped LLM provider for this endpoint. You passed model={model}, custom_llm_provider={custom_llm_provider}. Check supported provider and route: https://docs.litellm.ai/docs/providers"
 
 
 SupportedCacheControls = ["ttl", "s-maxage", "no-cache", "no-store"]
@@ -1504,6 +1505,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_org_id: Optional[str]
     user_api_key_team_id: Optional[str]
     user_api_key_user_id: Optional[str]
+    user_api_key_user_email: Optional[str]
     user_api_key_team_alias: Optional[str]
     user_api_key_end_user_id: Optional[str]
 
@@ -1525,6 +1527,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     requester_ip_address: Optional[str]
     requester_metadata: Optional[dict]
     prompt_management_metadata: Optional[StandardLoggingPromptManagementMetadata]
+    applied_guardrails: Optional[List[str]]
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):

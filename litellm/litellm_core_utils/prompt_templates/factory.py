@@ -325,26 +325,6 @@ def phind_codellama_pt(messages):
     return prompt
 
 
-known_tokenizer_config = {
-    "mistralai/Mistral-7B-Instruct-v0.1": {
-        "tokenizer": {
-            "chat_template": "{{ bos_token }}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + message['content'] + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token + ' ' }}{% else %}{{ raise_exception('Only user and assistant roles are supported!') }}{% endif %}{% endfor %}",
-            "bos_token": "<s>",
-            "eos_token": "</s>",
-        },
-        "status": "success",
-    },
-    "meta-llama/Meta-Llama-3-8B-Instruct": {
-        "tokenizer": {
-            "chat_template": "{% set loop_messages = messages %}{% for message in loop_messages %}{% set content = '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ message['content'] | trim + '<|eot_id|>' %}{% if loop.index0 == 0 %}{% set content = bos_token + content %}{% endif %}{{ content }}{% endfor %}{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}",
-            "bos_token": "<|begin_of_text|>",
-            "eos_token": "",
-        },
-        "status": "success",
-    },
-}
-
-
 def hf_chat_template(  # noqa: PLR0915
     model: str, messages: list, chat_template: Optional[Any] = None
 ):
@@ -378,11 +358,11 @@ def hf_chat_template(  # noqa: PLR0915
             else:
                 return {"status": "failure"}
 
-        if model in known_tokenizer_config:
-            tokenizer_config = known_tokenizer_config[model]
+        if model in litellm.known_tokenizer_config:
+            tokenizer_config = litellm.known_tokenizer_config[model]
         else:
             tokenizer_config = _get_tokenizer_config(model)
-            known_tokenizer_config.update({model: tokenizer_config})
+            litellm.known_tokenizer_config.update({model: tokenizer_config})
 
         if (
             tokenizer_config["status"] == "failure"
@@ -473,6 +453,12 @@ def hf_chat_template(  # noqa: PLR0915
         raise Exception(
             f"Error rendering template - {str(e)}"
         )  # don't use verbose_logger.exception, if exception is raised
+
+
+def deepseek_r1_pt(messages):
+    return hf_chat_template(
+        model="deepseek-r1/deepseek-r1-7b-instruct", messages=messages
+    )
 
 
 # Anthropic template

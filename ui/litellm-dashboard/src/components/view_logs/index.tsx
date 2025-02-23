@@ -1,12 +1,13 @@
 import moment from "moment";
 import { useQuery } from "@tanstack/react-query";
 import { useState, useRef, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { uiSpendLogsCall } from "../networking";
 import { DataTable } from "./table";
 import { columns, LogEntry } from "./columns";
 import { Row } from "@tanstack/react-table";
-
+import { prefetchLogDetails } from "./prefetch";
 interface SpendLogsTableProps {
   accessToken: string | null;
   token: string | null;
@@ -20,6 +21,11 @@ interface PaginatedResponse {
   page: number;
   page_size: number;
   total_pages: number;
+}
+
+interface PrefetchedLog {
+  messages: any[];
+  response: any;
 }
 
 export default function SpendLogsTable({
@@ -53,6 +59,8 @@ export default function SpendLogsTable({
   const [selectedTeamId, setSelectedTeamId] = useState("");
   const [selectedKeyHash, setSelectedKeyHash] = useState("");
   const [selectedFilter, setSelectedFilter] = useState("Team ID");
+
+  const queryClient = useQueryClient();
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -105,13 +113,13 @@ export default function SpendLogsTable({
         };
       }
 
-      // Convert times to UTC before formatting
       const formattedStartTime = moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss");
       const formattedEndTime = isCustomDate 
         ? moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss")
         : moment().utc().format("YYYY-MM-DD HH:mm:ss");
 
-      return await uiSpendLogsCall(
+      // Get base response from API
+      const response = await uiSpendLogsCall(
         accessToken,
         selectedKeyHash || undefined,
         selectedTeamId || undefined,
@@ -121,6 +129,30 @@ export default function SpendLogsTable({
         currentPage,
         pageSize
       );
+
+      // Trigger prefetch for all logs
+      await prefetchLogDetails(
+        response.data,
+        formattedStartTime,
+        accessToken,
+        queryClient
+      );
+
+      // Update logs with prefetched data if available
+      response.data = response.data.map((log: LogEntry) => {
+        const prefetchedData = queryClient.getQueryData<PrefetchedLog>(
+          ["logDetails", log.request_id, formattedStartTime]
+        );
+
+        if (prefetchedData?.messages && prefetchedData?.response) {
+          log.messages = prefetchedData.messages;
+          log.response = prefetchedData.response;
+          return log;
+        }
+        return log;
+      });
+
+      return response;
     },
     enabled: !!accessToken && !!token && !!userRole && !!userID,
     refetchInterval: 5000,

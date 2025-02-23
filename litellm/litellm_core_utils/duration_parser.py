@@ -13,7 +13,7 @@ from typing import Tuple
 
 
 def _extract_from_regex(duration: str) -> Tuple[int, str]:
-    match = re.match(r"(\d+)(mo|[smhd]?)", duration)
+    match = re.match(r"(\d+)(mo|[smhdw]?)", duration)
 
     if not match:
         raise ValueError("Invalid duration format")
@@ -42,6 +42,7 @@ def duration_in_seconds(duration: str) -> int:
         - "<number>m" - minutes
         - "<number>h" - hours
         - "<number>d" - days
+        - "<number>w" - weeks
         - "<number>mo" - months
 
     Returns time in seconds till when budget needs to be reset
@@ -56,6 +57,8 @@ def duration_in_seconds(duration: str) -> int:
         return value * 3600
     elif unit == "d":
         return value * 86400
+    elif unit == "w":
+        return value * 604800
     elif unit == "mo":
         now = time.time()
         current_time = datetime.fromtimestamp(now)

@@ -5,22 +5,33 @@ import { Row, Col } from "antd";
 import { Providers } from "../provider_info_helpers";
 
 interface LiteLLMModelNameFieldProps {
-  selectedProvider: string;
+  selectedProvider: Providers;
   providerModels: string[];
-  getPlaceholder: (provider: string) => string;
+  getPlaceholder: (provider: Providers) => string;
 }
 
 const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
   selectedProvider,
-  providerModels,
+  providerModels, 
   getPlaceholder,
 }) => {
   const form = Form.useFormInstance();
 
-  const handleModelChange = (value: string[]) => {
+  const handleModelChange = (value: string | string[]) => {
+    // Ensure value is always treated as an array
+    const values = Array.isArray(value) ? value : [value];
+    
     // If "all-wildcard" is selected, clear the model_name field
-    if (value.includes("all-wildcard")) {
-      form.setFieldsValue({ model_name: undefined });
+    if (values.includes("all-wildcard")) {
+      form.setFieldsValue({ model_name: undefined, model_mappings: [] });
+    } else {
+      // Update model mappings immediately for each selected model
+      const mappings = values
+        .map(model => ({
+          public_name: model,
+          litellm_model: model
+        }));
+      form.setFieldsValue({ model_mappings: mappings });
     }
   };
 
@@ -39,9 +50,10 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
           {(selectedProvider === Providers.Azure) || 
            (selectedProvider === Providers.OpenAI_Compatible) || 
            (selectedProvider === Providers.Ollama) ? (
-            <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
+            <TextInput placeholder={getPlaceholder(selectedProvider)} />
           ) : providerModels.length > 0 ? (
             <AntSelect
+              mode="multiple"
               allowClear
               showSearch
               placeholder="Select models"
@@ -67,7 +79,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
               style={{ width: '100%' }}
             />
           ) : (
-            <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
+            <TextInput placeholder={getPlaceholder(selectedProvider)} />
           )}
         </Form.Item>
 

@@ -1,7 +1,7 @@
 import asyncio
 import copy
 import time
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from fastapi import Request
 from starlette.datastructures import Headers
@@ -17,6 +17,7 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
+from litellm.router import Router
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -238,6 +239,7 @@ class LiteLLMProxyRequestSetup:
             return None
         for header, value in headers.items():
             if header.lower() == "openai-organization":
+                verbose_logger.info(f"found openai org id: {value}, sending to llm")
                 return value
         return None
 
@@ -311,6 +313,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_org_id=user_api_key_dict.org_id,
             user_api_key_team_alias=user_api_key_dict.team_alias,
             user_api_key_end_user_id=user_api_key_dict.end_user_id,
+            user_api_key_user_email=user_api_key_dict.user_email,
         )
         return user_api_key_logged_metadata
 
@@ -404,6 +407,28 @@ class LiteLLMProxyRequestSetup:
             failure_callback=team_config.get("failure_callback", None),
             callback_vars=callback_vars_dict,
         )
+
+    @staticmethod
+    def add_request_tag_to_metadata(
+        llm_router: Optional[Router],
+        headers: dict,
+        data: dict,
+    ) -> Optional[List[str]]:
+        tags = None
+
+        if llm_router and llm_router.enable_tag_filtering is True:
+            # Check request headers for tags
+            if "x-litellm-tags" in headers:
+                if isinstance(headers["x-litellm-tags"], str):
+                    _tags = headers["x-litellm-tags"].split(",")
+                    tags = [tag.strip() for tag in _tags]
+                elif isinstance(headers["x-litellm-tags"], list):
+                    tags = headers["x-litellm-tags"]
+            # Check request body for tags
+            if "tags" in data and isinstance(data["tags"], list):
+                tags = data["tags"]
+
+        return tags
 
 
 async def add_litellm_data_to_request(  # noqa: PLR0915
@@ -609,10 +634,15 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             requester_ip_address = request.client.host
     data[_metadata_variable_name]["requester_ip_address"] = requester_ip_address
 
-    # Enterprise Only - Check if using tag based routing
-    if llm_router and llm_router.enable_tag_filtering is True:
-        if "tags" in data:
-            data[_metadata_variable_name]["tags"] = data["tags"]
+    # Check if using tag based routing
+    tags = LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
+        llm_router=llm_router,
+        headers=dict(request.headers),
+        data=data,
+    )
+
+    if tags is not None:
+        data[_metadata_variable_name]["tags"] = tags
 
     # Team Callbacks controls
     callback_settings_obj = _get_dynamic_logging_metadata(
@@ -631,6 +661,12 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     move_guardrails_to_metadata(
         data=data,
         _metadata_variable_name=_metadata_variable_name,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    # Team Model Aliases
+    _update_model_if_team_alias_exists(
+        data=data,
         user_api_key_dict=user_api_key_dict,
     )
 
@@ -661,6 +697,32 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     )
 
     return data
+
+
+def _update_model_if_team_alias_exists(
+    data: dict,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    Update the model if the team alias exists
+
+    If a alias map has been set on a team, then we want to make the request with the model the team alias is pointing to
+
+    eg.
+        - user calls `gpt-4o`
+        - team.model_alias_map = {
+            "gpt-4o": "gpt-4o-team-1"
+        }
+        - requested_model = "gpt-4o-team-1"
+    """
+    _model = data.get("model")
+    if (
+        _model
+        and user_api_key_dict.team_model_aliases
+        and _model in user_api_key_dict.team_model_aliases
+    ):
+        data["model"] = user_api_key_dict.team_model_aliases[_model]
+    return
 
 
 def _get_enforced_params(

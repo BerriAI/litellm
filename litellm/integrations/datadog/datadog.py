@@ -35,17 +35,23 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.integrations.datadog import *
-from litellm.types.services import ServiceLoggerPayload
+from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 from litellm.types.utils import StandardLoggingPayload
 
-from ..base_health_check import HealthCheckIntegration
+from ..additional_logging_utils import AdditionalLoggingUtils
 
-DD_MAX_BATCH_SIZE = 1000  # max number of logs DD API can accept
+# max number of logs DD API can accept
+DD_MAX_BATCH_SIZE = 1000
+
+# specify what ServiceTypes are logged as success events to DD. (We don't want to spam DD traces with large number of service types)
+DD_LOGGED_SUCCESS_SERVICE_TYPES = [
+    ServiceTypes.RESET_BUDGET_JOB,
+]
 
 
 class DataDogLogger(
     CustomBatchLogger,
-    HealthCheckIntegration,
+    AdditionalLoggingUtils,
 ):
     # Class variables or attributes
     def __init__(
@@ -340,18 +346,16 @@ class DataDogLogger(
 
         - example - Redis is failing / erroring, will be logged on DataDog
         """
-
         try:
-            import json
-
             _payload_dict = payload.model_dump()
+            _payload_dict.update(event_metadata or {})
             _dd_message_str = json.dumps(_payload_dict, default=str)
             _dd_payload = DatadogPayload(
-                ddsource="litellm",
-                ddtags="",
-                hostname="",
+                ddsource=self._get_datadog_source(),
+                ddtags=self._get_datadog_tags(),
+                hostname=self._get_datadog_hostname(),
                 message=_dd_message_str,
-                service="litellm-server",
+                service=self._get_datadog_service(),
                 status=DataDogStatus.WARN,
             )
 
@@ -377,7 +381,30 @@ class DataDogLogger(
 
         No user has asked for this so far, this might be spammy on datatdog. If need arises we can implement this
         """
-        return
+        try:
+            # intentionally done. Don't want to log all service types to DD
+            if payload.service not in DD_LOGGED_SUCCESS_SERVICE_TYPES:
+                return
+
+            _payload_dict = payload.model_dump()
+            _payload_dict.update(event_metadata or {})
+
+            _dd_message_str = json.dumps(_payload_dict, default=str)
+            _dd_payload = DatadogPayload(
+                ddsource=self._get_datadog_source(),
+                ddtags=self._get_datadog_tags(),
+                hostname=self._get_datadog_hostname(),
+                message=_dd_message_str,
+                service=self._get_datadog_service(),
+                status=DataDogStatus.INFO,
+            )
+
+            self.log_queue.append(_dd_payload)
+
+        except Exception as e:
+            verbose_logger.exception(
+                f"Datadog: Logger - Exception in async_service_failure_hook: {e}"
+            )
 
     def _create_v0_logging_payload(
         self,
@@ -543,3 +570,13 @@ class DataDogLogger(
                 status="unhealthy",
                 error_message=str(e),
             )
+
+    async def get_request_response_payload(
+        self,
+        request_id: str,
+        start_time_utc: Optional[datetimeObj],
+        end_time_utc: Optional[datetimeObj],
+    ) -> Optional[dict]:
+        raise NotImplementedError(
+            "Datdog Integration for getting request/response payloads not implemented as yet"
+        )

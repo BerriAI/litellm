@@ -13,8 +13,14 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.cohere.rerank.transformation import CohereRerankConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.rerank import RerankBilledUnits, RerankResponseMeta, RerankTokens
-from litellm.types.utils import RerankResponse
+from litellm.types.rerank import (
+    RerankBilledUnits,
+    RerankResponse,
+    RerankResponseDocument,
+    RerankResponseMeta,
+    RerankResponseResult,
+    RerankTokens,
+)
 
 from .common_utils import InfinityError
 
@@ -88,13 +94,23 @@ class InfinityRerankConfig(CohereRerankConfig):
         )
         rerank_meta = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
-        _results: Optional[List[dict]] = raw_response_json.get("results")
-
-        if _results is None:
+        cohere_results: List[RerankResponseResult] = []
+        if raw_response_json.get("results"):
+            for result in raw_response_json.get("results"):
+                _rerank_response = RerankResponseResult(
+                    index=result.get("index"),
+                    relevance_score=result.get("relevance_score"),
+                )
+                if result.get("document"):
+                    _rerank_response["document"] = RerankResponseDocument(
+                        text=result.get("document")
+                    )
+                cohere_results.append(_rerank_response)
+        if cohere_results is None:
             raise ValueError(f"No results found in the response={raw_response_json}")
 
         return RerankResponse(
             id=raw_response_json.get("id") or str(uuid.uuid4()),
-            results=_results,  # type: ignore
+            results=cohere_results,
             meta=rerank_meta,
         )  # Return response

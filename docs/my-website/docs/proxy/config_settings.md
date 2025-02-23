@@ -466,6 +466,9 @@ router_settings:
 | OTEL_SERVICE_NAME | Service name identifier for OpenTelemetry
 | OTEL_TRACER_NAME | Tracer name for OpenTelemetry tracing
 | PAGERDUTY_API_KEY | API key for PagerDuty Alerting
+| PHOENIX_API_KEY | API key for Arize Phoenix
+| PHOENIX_COLLECTOR_ENDPOINT | API endpoint for Arize Phoenix
+| PHOENIX_COLLECTOR_HTTP_ENDPOINT | API http endpoint for Arize Phoenix
 | POD_NAME | Pod name for the server, this will be [emitted to `datadog` logs](https://docs.litellm.ai/docs/proxy/logging#datadog) as `POD_NAME` 
 | PREDIBASE_API_BASE | Base URL for Predibase API
 | PRESIDIO_ANALYZER_API_BASE | Base URL for Presidio Analyzer service
@@ -488,12 +491,12 @@ router_settings:
 | SLACK_DAILY_REPORT_FREQUENCY | Frequency of daily Slack reports (e.g., daily, weekly)
 | SLACK_WEBHOOK_URL | Webhook URL for Slack integration
 | SMTP_HOST | Hostname for the SMTP server
-| SMTP_PASSWORD | Password for SMTP authentication
+| SMTP_PASSWORD | Password for SMTP authentication (do not set if SMTP does not require auth)
 | SMTP_PORT | Port number for SMTP server
 | SMTP_SENDER_EMAIL | Email address used as the sender in SMTP transactions
 | SMTP_SENDER_LOGO | Logo used in emails sent via SMTP
 | SMTP_TLS | Flag to enable or disable TLS for SMTP connections
-| SMTP_USERNAME | Username for SMTP authentication
+| SMTP_USERNAME | Username for SMTP authentication (do not set if SMTP does not require auth)
 | SPEND_LOGS_URL | URL for retrieving spend logs
 | SSL_CERTIFICATE | Path to the SSL certificate file
 | SSL_VERIFY | Flag to enable or disable SSL certificate verification

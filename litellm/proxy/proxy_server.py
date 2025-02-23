@@ -107,6 +107,7 @@ import litellm
 from litellm import Router
 from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
+from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.core_helpers import (
@@ -159,6 +160,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
 )
 from litellm.proxy.common_utils.proxy_state import ProxyState
+from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
@@ -197,6 +199,11 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     router as key_management_router,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
+    _add_model_to_db,
+    _add_team_model_to_db,
+    check_if_team_id_matches_key,
+)
+from litellm.proxy.management_endpoints.model_management_endpoints import (
     router as model_management_router,
 )
 from litellm.proxy.management_endpoints.organization_endpoints import (
@@ -231,6 +238,7 @@ from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     router as ui_crud_endpoints_router,
 )
@@ -244,9 +252,7 @@ from litellm.proxy.utils import (
     _is_projected_spend_over_limit,
     _is_valid_team_configs,
     get_error_message_str,
-    get_instance_fn,
     hash_token,
-    reset_budget,
     update_spend,
 )
 from litellm.proxy.vertex_ai_endpoints.langfuse_endpoints import (
@@ -750,7 +756,7 @@ health_check_details = None
 health_check_results = {}
 queue: List = []
 litellm_proxy_budget_name = "litellm-proxy-budget"
-litellm_proxy_admin_name = "default_user_id"
+litellm_proxy_admin_name = LITELLM_PROXY_ADMIN_NAME
 ui_access_mode: Literal["admin", "all"] = "all"
 proxy_budget_rescheduler_min_time = 597
 proxy_budget_rescheduler_max_time = 605
@@ -1903,10 +1909,6 @@ class ProxyConfig:
                                 callback
                             )
                             if "prometheus" in callback:
-                                if not premium_user:
-                                    raise Exception(
-                                        CommonProxyErrors.not_premium_user.value
-                                    )
                                 verbose_proxy_logger.debug(
                                     "Starting Prometheus Metrics on /metrics"
                                 )
@@ -3254,8 +3256,14 @@ class ProxyStartupEvent:
 
         ### RESET BUDGET ###
         if general_settings.get("disable_reset_budget", False) is False:
+            budget_reset_job = ResetBudgetJob(
+                proxy_logging_obj=proxy_logging_obj,
+                prisma_client=prisma_client,
+            )
             scheduler.add_job(
-                reset_budget, "interval", seconds=interval, args=[prisma_client]
+                budget_reset_job.reset_budget,
+                "interval",
+                seconds=interval,
             )
 
         ### UPDATE SPEND ###
@@ -5835,97 +5843,6 @@ async def supported_openai_params(model: str):
         )
 
 
-#### MODEL MANAGEMENT ####
-
-
-async def _add_model_to_db(
-    model_params: Deployment,
-    user_api_key_dict: UserAPIKeyAuth,
-    prisma_client: PrismaClient,
-):
-    # encrypt litellm params #
-    _litellm_params_dict = model_params.litellm_params.dict(exclude_none=True)
-    _orignal_litellm_model_name = model_params.litellm_params.model
-    for k, v in _litellm_params_dict.items():
-        encrypted_value = encrypt_value_helper(value=v)
-        model_params.litellm_params[k] = encrypted_value
-    _data: dict = {
-        "model_id": model_params.model_info.id,
-        "model_name": model_params.model_name,
-        "litellm_params": model_params.litellm_params.model_dump_json(exclude_none=True),  # type: ignore
-        "model_info": model_params.model_info.model_dump_json(  # type: ignore
-            exclude_none=True
-        ),
-        "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-        "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-    }
-    if model_params.model_info.id is not None:
-        _data["model_id"] = model_params.model_info.id
-    model_response = await prisma_client.db.litellm_proxymodeltable.create(
-        data=_data  # type: ignore
-    )
-    return model_response
-
-
-async def _add_team_model_to_db(
-    model_params: Deployment,
-    user_api_key_dict: UserAPIKeyAuth,
-    prisma_client: PrismaClient,
-):
-    """
-    If 'team_id' is provided,
-
-    - generate a unique 'model_name' for the model (e.g. 'model_name_{team_id}_{uuid})
-    - store the model in the db with the unique 'model_name'
-    - store a team model alias mapping {"model_name": "model_name_{team_id}_{uuid}"}
-    """
-    _team_id = model_params.model_info.team_id
-    original_model_name = model_params.model_name
-    if _team_id is None:
-        return None
-
-    unique_model_name = f"model_name_{_team_id}_{uuid.uuid4()}"
-
-    model_params.model_name = unique_model_name
-
-    ## CREATE MODEL IN DB ##
-    model_response = await _add_model_to_db(
-        model_params=model_params,
-        user_api_key_dict=user_api_key_dict,
-        prisma_client=prisma_client,
-    )
-
-    ## CREATE MODEL ALIAS IN DB ##
-    await update_team(
-        data=UpdateTeamRequest(
-            team_id=_team_id,
-            model_aliases={original_model_name: unique_model_name},
-        ),
-        user_api_key_dict=user_api_key_dict,
-        http_request=Request(scope={"type": "http"}),
-    )
-
-    return model_response
-
-
-def check_if_team_id_matches_key(
-    team_id: Optional[str], user_api_key_dict: UserAPIKeyAuth
-) -> bool:
-    can_make_call = True
-    if (
-        user_api_key_dict.user_role
-        and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
-    ):
-        return True
-    if team_id is None:
-        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-            can_make_call = False
-    else:
-        if user_api_key_dict.team_id != team_id:
-            can_make_call = False
-    return can_make_call
-
-
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
 @router.post(
     "/model/new",
@@ -6470,9 +6387,9 @@ async def model_metrics(
             if _day not in _daily_entries:
                 _daily_entries[_day] = {}
             _combined_model_name = str(_model)
-            if "https://" in _api_base:
+            if _api_base is not None and "https://" in _api_base:
                 _combined_model_name = str(_api_base)
-            if "/openai/" in _combined_model_name:
+            if _combined_model_name is not None and "/openai/" in _combined_model_name:
                 _combined_model_name = _combined_model_name.split("/openai/")[0]
 
             _all_api_bases.add(_combined_model_name)
