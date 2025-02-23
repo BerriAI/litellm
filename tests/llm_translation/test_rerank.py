@@ -143,7 +143,8 @@ async def test_basic_rerank_together_ai(sync_mode):
             assert_response_shape(response, custom_llm_provider="together_ai")
     except litellm.InternalServerError as e:
         print(f"Error in test_basic_rerank_together_ai: {e}")
-        pytest.skip("Skipping test due to internal server error")
+        if "503 Service Temporarily Unavailable" in str(e):
+            pytest.skip("Skipping test due to internal server error")
 
 
 @pytest.mark.asyncio()
