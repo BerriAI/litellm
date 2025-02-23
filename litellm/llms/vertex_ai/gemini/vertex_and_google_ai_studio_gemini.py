@@ -812,6 +812,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> Dict:
         default_headers = {
             "Content-Type": "application/json",
+            "Connection": "close",
         }
         if api_key is not None:
             default_headers["Authorization"] = f"Bearer {api_key}"
