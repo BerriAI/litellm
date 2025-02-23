@@ -112,34 +112,38 @@ async def test_basic_rerank(sync_mode):
 @pytest.mark.asyncio()
 @pytest.mark.parametrize("sync_mode", [True, False])
 async def test_basic_rerank_together_ai(sync_mode):
-    if sync_mode is True:
-        response = litellm.rerank(
-            model="together_ai/Salesforce/Llama-Rank-V1",
-            query="hello",
-            documents=["hello", "world"],
-            top_n=3,
-        )
+    try:
+        if sync_mode is True:
+            response = litellm.rerank(
+                model="together_ai/Salesforce/Llama-Rank-V1",
+                query="hello",
+                documents=["hello", "world"],
+                top_n=3,
+            )
 
-        print("re rank response: ", response)
+            print("re rank response: ", response)
 
-        assert response.id is not None
-        assert response.results is not None
+            assert response.id is not None
+            assert response.results is not None
 
-        assert_response_shape(response, custom_llm_provider="together_ai")
-    else:
-        response = await litellm.arerank(
-            model="together_ai/Salesforce/Llama-Rank-V1",
-            query="hello",
-            documents=["hello", "world"],
-            top_n=3,
-        )
+            assert_response_shape(response, custom_llm_provider="together_ai")
+        else:
+            response = await litellm.arerank(
+                model="together_ai/Salesforce/Llama-Rank-V1",
+                query="hello",
+                documents=["hello", "world"],
+                top_n=3,
+            )
 
-        print("async re rank response: ", response)
+            print("async re rank response: ", response)
 
-        assert response.id is not None
-        assert response.results is not None
+            assert response.id is not None
+            assert response.results is not None
 
-        assert_response_shape(response, custom_llm_provider="together_ai")
+            assert_response_shape(response, custom_llm_provider="together_ai")
+    except litellm.InternalServerError as e:
+        print(f"Error in test_basic_rerank_together_ai: {e}")
+        pytest.skip("Skipping test due to internal server error")
 
 
 @pytest.mark.asyncio()
