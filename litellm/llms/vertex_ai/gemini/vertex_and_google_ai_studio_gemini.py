@@ -1431,7 +1431,8 @@ class ModelResponseIterator:
 
     def _common_chunk_parsing_logic(self, chunk: str) -> GenericStreamingChunk:
         try:
-            chunk = chunk.replace("data:", "")
+            if chunk.startswith("data: "):
+                chunk = chunk[len("data: "):]
             if len(chunk) > 0:
                 """
                 Check if initial chunk valid json
