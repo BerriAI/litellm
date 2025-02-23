@@ -102,6 +102,7 @@ async def test_basic_rerank(sync_mode):
 
 @pytest.mark.asyncio()
 @pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.skip(reason="Together AI has 503 Service Unavailable Error")
 async def test_basic_rerank_together_ai(sync_mode):
     if sync_mode is True:
         response = litellm.rerank(
