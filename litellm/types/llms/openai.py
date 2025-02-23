@@ -480,6 +480,7 @@ ValidUserMessageContentTypes = [
     "image_url",
     "input_audio",
     "document",
+    "video_url",
 ]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
 
 AllMessageValues = Union[
