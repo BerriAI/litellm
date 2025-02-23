@@ -776,6 +776,7 @@ async def get_users(
 
     # Execute the query
     results = await prisma_client.db.query_raw(sql_query)
+    users_without_password = [{k: v for k, v in user.items() if k != "password"} for user in results]
     # Get total count from the first row (if results exist)
     total_count = 0
     if len(results) > 0:
@@ -785,7 +786,7 @@ async def get_users(
     total_pages = -(-total_count // page_size)  # Ceiling division
 
     return {
-        "users": results,
+        "users": users_without_password,
         "total": total_count,
         "page": page,
         "page_size": page_size,
