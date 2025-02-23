@@ -2643,6 +2643,17 @@
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
+    "cerebras/llama3.3-70b": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 0.00000085,
+        "output_cost_per_token": 0.0000012,
+        "litellm_provider": "cerebras",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
     "friendliai/meta-llama-3.1-8b-instruct": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
@@ -5982,6 +5993,19 @@
         "litellm_provider": "bedrock",
         "mode": "chat"
     },
+    "amazon.rerank-v1:0": {
+        "max_tokens": 32000,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 32000,
+        "max_query_tokens": 32000,
+        "max_document_chunks_per_query": 100,
+        "max_tokens_per_document_chunk": 512,
+        "input_cost_per_token": 0.0,
+        "input_cost_per_query": 0.001,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "bedrock",
+        "mode": "rerank"
+    },
     "amazon.titan-text-lite-v1": {
         "max_tokens": 4000, 
         "max_input_tokens": 42000,
@@ -7022,6 +7046,19 @@
         "mode": "chat",
         "supports_tool_choice": true
     },
+    "cohere.rerank-v3-5:0": {
+        "max_tokens": 32000,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 32000,
+        "max_query_tokens": 32000,
+        "max_document_chunks_per_query": 100,
+        "max_tokens_per_document_chunk": 512,
+        "input_cost_per_token": 0.0,
+        "input_cost_per_query": 0.002,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "bedrock",
+        "mode": "rerank"
+    },
     "cohere.command-text-v14": {
         "max_tokens": 4096, 
         "max_input_tokens": 4096,
@@ -7424,7 +7461,8 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true, 
-        "supports_tool_choice": false
+        "supports_tool_choice": false,
+        "supports_vision": true
     },
     "us.meta.llama3-2-11b-instruct-v1:0": {
         "max_tokens": 128000,
@@ -7435,7 +7473,8 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true, 
-        "supports_tool_choice": false
+        "supports_tool_choice": false,
+        "supports_vision": true
     },
     "meta.llama3-2-90b-instruct-v1:0": {
         "max_tokens": 128000,
@@ -7446,7 +7485,8 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true, 
-        "supports_tool_choice": false
+        "supports_tool_choice": false,
+        "supports_vision": true
     },
     "us.meta.llama3-2-90b-instruct-v1:0": {
         "max_tokens": 128000,
@@ -7457,7 +7497,8 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true, 
-        "supports_tool_choice": false
+        "supports_tool_choice": false,
+        "supports_vision": true
     },
     "us.meta.llama3-3-70b-instruct-v1:0": {
         "max_tokens": 4096, 
@@ -9154,5 +9195,15 @@
         "input_cost_per_second": 0.00003333,
         "output_cost_per_second": 0.00, 
         "litellm_provider": "assemblyai"
+    },
+    "jina-reranker-v2-base-multilingual": {
+        "max_tokens": 1024,
+        "max_input_tokens": 1024,
+        "max_output_tokens": 1024,
+        "max_document_chunks_per_query": 2048,
+        "input_cost_per_token": 0.000000018,
+        "output_cost_per_token": 0.000000018,
+        "litellm_provider": "jina_ai",
+        "mode": "rerank"
     }
 }
