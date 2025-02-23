@@ -61,9 +61,7 @@ def is_port_in_use(port):
 
 
 @click.command()
-@click.option(
-    "--host", default="0.0.0.0", help="Host for the server to listen on.", envvar="HOST"
-)
+@click.option("--host", default="0.0.0.0", help="Host for the server to listen on.", envvar="HOST")
 @click.option("--port", default=4000, help="Port to bind the server to.", envvar="PORT")
 @click.option(
     "--num_workers",
@@ -77,17 +75,13 @@ def is_port_in_use(port):
     default="2024-07-01-preview",
     help="For azure - pass in the api version.",
 )
-@click.option(
-    "--model", "-m", default=None, help="The model name to pass to litellm expects"
-)
+@click.option("--model", "-m", default=None, help="The model name to pass to litellm expects")
 @click.option(
     "--alias",
     default=None,
     help='The alias for the model - use this to give a litellm model name (e.g. "huggingface/codellama/CodeLlama-7b-Instruct-hf") a more user-friendly name ("codellama")',
 )
-@click.option(
-    "--add_key", default=None, help="The model name to pass to litellm expects"
-)
+@click.option("--add_key", default=None, help="The model name to pass to litellm expects")
 @click.option("--headers", default=None, help="headers for the API call")
 @click.option("--save", is_flag=True, type=bool, help="Save the model-specific config")
 @click.option(
@@ -113,12 +107,8 @@ def is_port_in_use(port):
     type=bool,
     help="To use celery workers for async endpoints",
 )
-@click.option(
-    "--temperature", default=None, type=float, help="Set temperature for the model"
-)
-@click.option(
-    "--max_tokens", default=None, type=int, help="Set max tokens for the model"
-)
+@click.option("--temperature", default=None, type=float, help="Set temperature for the model")
+@click.option("--max_tokens", default=None, type=int, help="Set max tokens for the model")
 @click.option(
     "--request_timeout",
     default=None,
@@ -218,6 +208,12 @@ def is_port_in_use(port):
     envvar="SSL_CERTFILE_PATH",
 )
 @click.option("--local", is_flag=True, default=False, help="for local debugging")
+@click.option(
+    "--uds",
+    default=None,
+    type=str,
+    help="Path to the Unix Domain Socket (UDS) to bind the server to.",
+)
 def run_server(  # noqa: PLR0915
     host,
     port,
@@ -252,6 +248,7 @@ def run_server(  # noqa: PLR0915
     ssl_keyfile_path,
     ssl_certfile_path,
     log_config,
+    uds,
 ):
     args = locals()
     if local:
@@ -298,9 +295,7 @@ def run_server(  # noqa: PLR0915
         def _make_openai_completion():
             data = {
                 "model": "gpt-3.5-turbo",
-                "messages": [
-                    {"role": "user", "content": "Write a short poem about the moon"}
-                ],
+                "messages": [{"role": "user", "content": "Write a short poem about the moon"}],
             }
 
             response = httpx.post("http://0.0.0.0:4000/queue/request", json=data)
@@ -333,9 +328,7 @@ def run_server(  # noqa: PLR0915
         futures = []
         start_time = time.time()
         # Make concurrent calls
-        with concurrent.futures.ThreadPoolExecutor(  # type: ignore
-            max_workers=concurrent_calls
-        ) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=concurrent_calls) as executor:  # type: ignore
             for _ in range(concurrent_calls):
                 futures.append(executor.submit(_make_openai_completion))
 
@@ -367,9 +360,7 @@ def run_server(  # noqa: PLR0915
         return
     if test is not False:
         request_model = model or "gpt-3.5-turbo"
-        click.echo(
-            f"\nLiteLLM: Making a test ChatCompletions request to your proxy. Model={request_model}"
-        )
+        click.echo(f"\nLiteLLM: Making a test ChatCompletions request to your proxy. Model={request_model}")
         import openai
 
         if test is True:  # flag value set
@@ -390,9 +381,7 @@ def run_server(  # noqa: PLR0915
         )
         click.echo(f"\nLiteLLM: response from proxy {response}")
 
-        print(  # noqa
-            f"\n LiteLLM: Making a test ChatCompletions + streaming r equest to proxy. Model={request_model}"
-        )
+        print(f"\n LiteLLM: Making a test ChatCompletions + streaming r equest to proxy. Model={request_model}")  # noqa
 
         response = client.chat.completions.create(
             model=request_model,
@@ -407,9 +396,7 @@ def run_server(  # noqa: PLR0915
         for chunk in response:
             click.echo(f"LiteLLM: streaming response from proxy {chunk}")
         print("\n making completion request to proxy")  # noqa
-        response = client.completions.create(
-            model=request_model, prompt="this is a test request, write a short poem"
-        )
+        response = client.completions.create(model=request_model, prompt="this is a test request, write a short poem")
         print(response)  # noqa
 
         return
@@ -443,9 +430,7 @@ def run_server(  # noqa: PLR0915
             else:
                 import gunicorn.app.base
         except Exception:
-            raise ImportError(
-                "uvicorn, gunicorn needs to be imported. Run - `pip install 'litellm[proxy]'`"
-            )
+            raise ImportError("uvicorn, gunicorn needs to be imported. Run - `pip install 'litellm[proxy]'`")
 
         db_connection_pool_limit = 100
         db_connection_timeout = 60
@@ -461,9 +446,7 @@ def run_server(  # noqa: PLR0915
             db_name = os.getenv("DATABASE_NAME")
             db_schema = os.getenv("DATABASE_SCHEMA")
 
-            token = generate_iam_auth_token(
-                db_host=db_host, db_port=db_port, db_user=db_user
-            )
+            token = generate_iam_auth_token(db_host=db_host, db_port=db_port, db_user=db_user)
 
             # print(f"token: {token}")
             _db_url = f"postgresql://{db_user}:{token}@{db_host}:{db_port}/{db_name}"
@@ -477,10 +460,7 @@ def run_server(  # noqa: PLR0915
 
         from litellm.secret_managers.aws_secret_manager import decrypt_env_var
 
-        if (
-            os.getenv("USE_AWS_KMS", None) is not None
-            and os.getenv("USE_AWS_KMS") == "True"
-        ):
+        if os.getenv("USE_AWS_KMS", None) is not None and os.getenv("USE_AWS_KMS") == "True":
             ## V2 IMPLEMENTATION OF AWS KMS - USER WANTS TO DECRYPT MULTIPLE KEYS IN THEIR ENV
             new_env_var = decrypt_env_var()
 
@@ -497,9 +477,7 @@ def run_server(  # noqa: PLR0915
                 import asyncio
 
             except Exception:
-                raise ImportError(
-                    "yaml needs to be imported. Run - `pip install 'litellm[proxy]'`"
-                )
+                raise ImportError("yaml needs to be imported. Run - `pip install 'litellm[proxy]'`")
 
             proxy_config = ProxyConfig()
             _config = asyncio.run(proxy_config.get_config(config_file_path=config))
@@ -522,19 +500,13 @@ def run_server(  # noqa: PLR0915
                 general_settings = {}
             if general_settings:
                 ### LOAD SECRET MANAGER ###
-                key_management_system = general_settings.get(
-                    "key_management_system", None
-                )
+                key_management_system = general_settings.get("key_management_system", None)
                 proxy_config.initialize_secret_manager(key_management_system)
-            key_management_settings = general_settings.get(
-                "key_management_settings", None
-            )
+            key_management_settings = general_settings.get("key_management_settings", None)
             if key_management_settings is not None:
                 import litellm
 
-                litellm._key_management_settings = KeyManagementSettings(
-                    **key_management_settings
-                )
+                litellm._key_management_settings = KeyManagementSettings(**key_management_settings)
             database_url = general_settings.get("database_url", None)
             if database_url is None:
                 # Check if all required variables are provided
@@ -543,14 +515,11 @@ def run_server(  # noqa: PLR0915
                 database_password = os.getenv("DATABASE_PASSWORD")
                 database_name = os.getenv("DATABASE_NAME")
 
-                if (
-                    database_host
-                    and database_username
-                    and database_password
-                    and database_name
-                ):
+                if database_host and database_username and database_password and database_name:
                     # Construct DATABASE_URL from the provided variables
-                    database_url = f"postgresql://{database_username}:{database_password}@{database_host}/{database_name}"
+                    database_url = (
+                        f"postgresql://{database_username}:{database_password}@{database_host}/{database_name}"
+                    )
                     os.environ["DATABASE_URL"] = database_url
             db_connection_pool_limit = general_settings.get(
                 "database_connection_pool_limit",
@@ -574,10 +543,7 @@ def run_server(  # noqa: PLR0915
             if database_url is not None and isinstance(database_url, str):
                 os.environ["DATABASE_URL"] = database_url
 
-        if (
-            os.getenv("DATABASE_URL", None) is not None
-            or os.getenv("DIRECT_URL", None) is not None
-        ):
+        if os.getenv("DATABASE_URL", None) is not None or os.getenv("DIRECT_URL", None) is not None:
             try:
                 from litellm.secret_managers.main import get_secret
 
@@ -609,12 +575,7 @@ def run_server(  # noqa: PLR0915
                 from litellm.proxy.db.check_migration import check_prisma_schema_diff
                 from litellm.proxy.db.prisma_client import should_update_prisma_schema
 
-                if (
-                    should_update_prisma_schema(
-                        general_settings.get("disable_prisma_schema_update")
-                    )
-                    is False
-                ):
+                if should_update_prisma_schema(general_settings.get("disable_prisma_schema_update")) is False:
                     check_prisma_schema_diff(db_url=None)
                 else:
                     for _ in range(4):
@@ -626,9 +587,7 @@ def run_server(  # noqa: PLR0915
                         dname = os.path.dirname(abspath)
                         os.chdir(dname)
                         try:
-                            subprocess.run(
-                                ["prisma", "db", "push", "--accept-data-loss"]
-                            )
+                            subprocess.run(["prisma", "db", "push", "--accept-data-loss"])
                             break  # Exit the loop if the subprocess succeeds
                         except subprocess.CalledProcessError as e:
                             import time
@@ -664,6 +623,17 @@ def run_server(  # noqa: PLR0915
             print("Using json logs. Setting log_config to None.")  # noqa
             uvicorn_args["log_config"] = None
 
+        if uds:
+            uvicorn_args["uds"] = uds
+            # host, portは不要なので削除
+            if "host" in uvicorn_args:
+                del uvicorn_args["host"]
+            if "port" in uvicorn_args:
+                del uvicorn_args["port"]
+        else:
+            uvicorn_args["host"] = host
+            uvicorn_args["port"] = port
+
         if run_gunicorn is False and run_hypercorn is False:
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
                 print(  # noqa
@@ -684,9 +654,7 @@ def run_server(  # noqa: PLR0915
                     self.application = app  # FastAPI app
                     super().__init__()
 
-                    _endpoint_str = (
-                        f"curl --location 'http://0.0.0.0:{port}/chat/completions' \\"
-                    )
+                    _endpoint_str = f"curl --location 'http://0.0.0.0:{port}/chat/completions' \\"
                     curl_command = (
                         _endpoint_str
                         + """
@@ -710,12 +678,8 @@ def run_server(  # noqa: PLR0915
                     print(  # noqa
                         f"\033[1;34mLiteLLM: Curl Command Test for your local proxy\n {curl_command} \033[0m\n"
                     )
-                    print(  # noqa
-                        "\033[1;34mDocs: https://docs.litellm.ai/docs/simple_proxy\033[0m\n"
-                    )  # noqa
-                    print(  # noqa
-                        f"\033[1;34mSee all Router/Swagger docs on http://0.0.0.0:{port} \033[0m\n"
-                    )  # noqa
+                    print("\033[1;34mDocs: https://docs.litellm.ai/docs/simple_proxy\033[0m\n")  # noqa  # noqa
+                    print(f"\033[1;34mSee all Router/Swagger docs on http://0.0.0.0:{port} \033[0m\n")  # noqa  # noqa
 
                 def load_config(self):
                     # note: This Loads the gunicorn config - has nothing to do with LiteLLM Proxy config
@@ -755,9 +719,7 @@ def run_server(  # noqa: PLR0915
                 gunicorn_options["certfile"] = ssl_certfile_path
                 gunicorn_options["keyfile"] = ssl_keyfile_path
 
-            StandaloneApplication(
-                app=app, options=gunicorn_options
-            ).run()  # Run gunicorn
+            StandaloneApplication(app=app, options=gunicorn_options).run()  # Run gunicorn
         elif run_hypercorn is True:
             import asyncio
 
