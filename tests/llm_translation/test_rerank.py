@@ -111,6 +111,7 @@ async def test_basic_rerank(sync_mode):
 
 @pytest.mark.asyncio()
 @pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.skip(reason="Skipping test due to 503 Service Temporarily Unavailable")
 async def test_basic_rerank_together_ai(sync_mode):
     try:
         if sync_mode is True:
