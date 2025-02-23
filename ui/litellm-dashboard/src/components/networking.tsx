@@ -2476,6 +2476,25 @@ export const keyUpdateCall = async (
   try {
     console.log("Form Values in keyUpdateCall:", formValues); // Log the form values before making the API call
 
+    if (formValues.model_tpm_limit) {
+      console.log("formValues.model_tpm_limit:", formValues.model_tpm_limit);
+      // if there's an exception JSON.parse, show it in the message
+      try {
+        formValues.model_tpm_limit = JSON.parse(formValues.model_tpm_limit);
+      } catch (error) {
+        throw new Error("Failed to parse model_tpm_limit: " + error);
+      }
+    }
+
+    if (formValues.model_rpm_limit) {
+      console.log("formValues.model_rpm_limit:", formValues.model_rpm_limit);
+      // if there's an exception JSON.parse, show it in the message
+      try {
+        formValues.model_rpm_limit = JSON.parse(formValues.model_rpm_limit);
+      } catch (error) {
+        throw new Error("Failed to parse model_rpm_limit: " + error);
+      }
+    }
     const url = proxyBaseUrl ? `${proxyBaseUrl}/key/update` : `/key/update`;
     const response = await fetch(url, {
       method: "POST",

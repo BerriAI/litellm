@@ -239,6 +239,7 @@ class LiteLLMRoutes(enum.Enum):
         # rerank
         "/rerank",
         "/v1/rerank",
+        "/v2/rerank"
         # realtime
         "/realtime",
         "/v1/realtime",
@@ -278,6 +279,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model_group/info",
         "/health",
         "/key/list",
+        "/user/filter/ui",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
@@ -354,7 +356,6 @@ class LiteLLMRoutes(enum.Enum):
         "/key/info",
         "/config",
         "/spend",
-        "/user",
         "/model/info",
         "/v2/model/info",
         "/v2/key/info",
@@ -1566,6 +1567,11 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
         return values
 
     model_config = ConfigDict(protected_namespaces=())
+
+
+class LiteLLM_UserTableFiltered(BaseModel):  # done to avoid exposing sensitive data
+    user_id: str
+    user_email: str
 
 
 class LiteLLM_EndUserTable(LiteLLMPydanticObjectBase):

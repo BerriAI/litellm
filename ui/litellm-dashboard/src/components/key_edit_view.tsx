@@ -133,11 +133,23 @@ export function KeyEditView({
       </Form.Item>
 
       <Form.Item label="TPM Limit" name="tpm_limit">
-        <InputNumber style={{ width: "100%" }} />
+        <InputNumber style={{ width: "100%" }} min={0}/>
       </Form.Item>
 
       <Form.Item label="RPM Limit" name="rpm_limit">
-        <InputNumber style={{ width: "100%" }} />
+        <InputNumber style={{ width: "100%" }} min={0}/>
+      </Form.Item>
+
+      <Form.Item label="Max Parallel Requests" name="max_parallel_requests">  
+        <InputNumber style={{ width: "100%" }} min={0}/>
+      </Form.Item>
+
+      <Form.Item label="Model TPM Limit" name="model_tpm_limit">
+        <Input.TextArea rows={4}  placeholder='{"gpt-4": 100, "claude-v1": 200}'/>
+      </Form.Item>
+
+      <Form.Item label="Model RPM Limit" name="model_rpm_limit">
+        <Input.TextArea rows={4}  placeholder='{"gpt-4": 100, "claude-v1": 200}'/>
       </Form.Item>
 
       <Form.Item label="Guardrails" name="guardrails">

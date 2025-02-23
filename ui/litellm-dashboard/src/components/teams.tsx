@@ -389,7 +389,6 @@ const Teams: React.FC<TeamProps> = ({
                         >
                           {team["team_alias"]}
                         </TableCell>
-                        <TableRow>
                         <TableCell>
                           <div className="overflow-hidden">
                             <Tooltip title={team.team_id}>
@@ -408,8 +407,6 @@ const Teams: React.FC<TeamProps> = ({
                             </Tooltip>
                           </div>
                         </TableCell>
-                      </TableRow>
-
                         <TableCell
                           style={{
                             maxWidth: "4px",
