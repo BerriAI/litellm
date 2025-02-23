@@ -94,7 +94,7 @@ class ProxyInitializationHelpers:
             f"\n LiteLLM: Making a test ChatCompletions + streaming r equest to proxy. Model={request_model}"
         )
 
-        response = client.chat.completions.create(
+        stream_response = client.chat.completions.create(
             model=request_model,
             messages=[
                 {
@@ -104,13 +104,13 @@ class ProxyInitializationHelpers:
             ],
             stream=True,
         )
-        for chunk in response:
+        for chunk in stream_response:
             click.echo(f"LiteLLM: streaming response from proxy {chunk}")
         print("\n making completion request to proxy")  # noqa
-        response = client.completions.create(
+        completion_response = client.completions.create(
             model=request_model, prompt="this is a test request, write a short poem"
         )
-        print(response)  # noqa
+        print(completion_response)  # noqa
 
     @staticmethod
     def _get_default_unvicorn_init_args(
