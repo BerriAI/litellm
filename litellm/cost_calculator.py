@@ -823,7 +823,9 @@ def response_cost_calculator(
         if cache_hit is not None and cache_hit is True:
             response_cost = 0.0
         else:
-            if isinstance(response_object, BaseModel):
+            if isinstance(response_object, BaseModel) and hasattr(
+                response_object, "_hidden_params"
+            ):
                 response_object._hidden_params["optional_params"] = optional_params
             response_cost = completion_cost(
                 completion_response=response_object,

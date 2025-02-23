@@ -66,7 +66,9 @@ async def arerank(
             response = init_response
         return response
     except Exception as e:
-        raise e
+        raise exception_type(
+            model=model, custom_llm_provider=custom_llm_provider, original_exception=e
+        )
 
 
 @client
