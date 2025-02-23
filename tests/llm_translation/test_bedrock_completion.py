@@ -2535,6 +2535,7 @@ def test_bedrock_error_handling_streaming():
 )
 @pytest.mark.flaky(retries=6, delay=2)
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Bedrock Raising Internal Server Error for this API call")
 async def test_bedrock_document_understanding(image_url):
     from litellm import acompletion
 
