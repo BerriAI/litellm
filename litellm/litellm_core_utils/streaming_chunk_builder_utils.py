@@ -83,7 +83,7 @@ class ChunkProcessor:
                 "choices": [
                     {
                         "index": 0,
-                        "message": {"role": role, "content": ""},
+                        "message": {"role": role, "content": "", "reasoning_content": ""},
                         "finish_reason": finish_reason,
                     }
                 ],
@@ -219,6 +219,22 @@ class ChunkProcessor:
         combined_content = "".join(content_list)
 
         # Update the "content" field within the response dictionary
+        return combined_content
+
+    def get_combined_reasoning_content(
+        self, chunks: List[Dict[str, Any]]
+    ) -> ChatCompletionAssistantContentValue:
+        content_list: List[str] = []
+        for chunk in chunks:
+            content = chunk.get("reasoning_content", "")
+            if content is None:
+                continue  # openai v1.0.0 sets content = None for chunks
+            content_list.append(content)
+
+        # Combine the "reasoning_content" strings into a single string || combine the 'function' strings into a single string
+        combined_content = "".join(content_list)
+
+        # Update the "reasoning_content" field within the response dictionary
         return combined_content
 
     def get_combined_audio_content(
