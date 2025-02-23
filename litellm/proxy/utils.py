@@ -63,7 +63,7 @@ from litellm.proxy.hooks.parallel_request_limiter import (
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
-from litellm.types.utils import CallTypes, LoggedLiteLLMParams
+from litellm.types.utils import CallTypes, LoggedLiteLLMParams, ModelResponseStream
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -967,7 +967,7 @@ class ProxyLogging:
         1. /chat/completions
         """
         response_str: Optional[str] = None
-        if isinstance(response, ModelResponse):
+        if isinstance(response, ModelResponseStream):
             response_str = litellm.get_response_string(response_obj=response)
         if response_str is not None:
             for callback in litellm.callbacks:
