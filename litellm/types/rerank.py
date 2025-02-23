@@ -18,6 +18,8 @@ class RerankRequest(BaseModel):
     rank_fields: Optional[List[str]] = None
     return_documents: Optional[bool] = None
     max_chunks_per_doc: Optional[int] = None
+    max_tokens_per_doc: Optional[int] = None
+
 
 
 class OptionalRerankParams(TypedDict, total=False):
@@ -27,6 +29,7 @@ class OptionalRerankParams(TypedDict, total=False):
     rank_fields: Optional[List[str]]
     return_documents: Optional[bool]
     max_chunks_per_doc: Optional[int]
+    max_tokens_per_doc: Optional[int]
 
 
 class RerankBilledUnits(TypedDict, total=False):
