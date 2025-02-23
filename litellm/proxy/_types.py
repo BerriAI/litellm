@@ -355,7 +355,6 @@ class LiteLLMRoutes(enum.Enum):
         "/key/info",
         "/config",
         "/spend",
-        # "/user",
         "/model/info",
         "/v2/model/info",
         "/v2/key/info",
