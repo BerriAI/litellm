@@ -1970,6 +1970,26 @@ def test_get_applied_guardrails(test_case):
     # Assert
     assert sorted(result) == sorted(test_case["expected"])
 
+@pytest.mark.parametrize(
+    "endpoint, params, expected_bool",
+    [
+        ("localhost:4000/v1/rerank", ["max_chunks_per_doc"], True),
+        ("localhost:4000/v2/rerank", ["max_chunks_per_doc"], False),
+        ("localhost:4000", ["max_chunks_per_doc"], True),
+
+        ("localhost:4000/v1/rerank", ["max_tokens_per_doc"], True),
+        ("localhost:4000/v2/rerank", ["max_tokens_per_doc"], False),
+        ("localhost:4000", ["max_tokens_per_doc"], False),
+
+        ("localhost:4000/v1/rerank", ["max_chunks_per_doc", "max_tokens_per_doc"], True),
+        ("localhost:4000/v2/rerank", ["max_chunks_per_doc", "max_tokens_per_doc"], False),
+        ("localhost:4000", ["max_chunks_per_doc", "max_tokens_per_doc"], False),
+
+    ],
+)
+def test_should_use_cohere_v1_client(endpoint, params, expected_bool):
+    assert(litellm.utils.should_use_cohere_v1_client(endpoint, params) == expected_bool)
+
 
 def test_add_openai_metadata():
     from litellm.utils import add_openai_metadata

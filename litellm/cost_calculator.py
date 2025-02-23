@@ -855,7 +855,10 @@ def rerank_cost(
 
     try:
         config = ProviderConfigManager.get_provider_rerank_config(
-            model=model, provider=LlmProviders(custom_llm_provider)
+            model=model,
+            api_base=None,
+            present_version_params=[],
+            provider=LlmProviders(custom_llm_provider),
         )
 
         try:
