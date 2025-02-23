@@ -377,6 +377,15 @@ class ChatCompletionImageObject(TypedDict):
     type: Literal["image_url"]
     image_url: Union[str, ChatCompletionImageUrlObject]
 
+class ChatCompletionVideoUrlObject(TypedDict, total=False):
+    url: Required[str]
+    detail: str
+
+
+class ChatCompletionVideoObject(TypedDict):
+    type: Literal["video_url"]
+    video_url: Union[str, ChatCompletionVideoUrlObject]
+
 
 class ChatCompletionAudioObject(ChatCompletionContentPartInputAudioParam):
     pass
@@ -405,6 +414,7 @@ OpenAIMessageContentListBlock = Union[
     ChatCompletionImageObject,
     ChatCompletionAudioObject,
     ChatCompletionDocumentObject,
+    ChatCompletionVideoObject,
 ]
 
 OpenAIMessageContent = Union[
