@@ -21,7 +21,7 @@ test('view internal user page', async ({ page }) => {
   // Optionally, you can click the login button to submit the form
   await loginButton.click();
 
-  const tabElement = page.locator('p.text-tremor-default.text-tremor-content.dark\\:text-dark-tremor-content', { hasText: 'Internal User' });
+  const tabElement = page.locator('span.ant-menu-title-content', { hasText: 'Internal User' });
   await tabElement.click();
 
   // try to click on button 

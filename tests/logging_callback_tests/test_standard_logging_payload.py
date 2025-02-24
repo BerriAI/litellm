@@ -8,8 +8,6 @@ import sys
 from datetime import datetime
 from unittest.mock import AsyncMock
 
-from pydantic.main import Model
-
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system-path
@@ -30,8 +28,9 @@ from create_mock_standard_logging_payload import (
 )
 from litellm.litellm_core_utils.litellm_logging import (
     StandardLoggingPayloadSetup,
-    truncate_standard_logging_payload_content,
 )
+
+from litellm.integrations.custom_logger import CustomLogger
 
 
 @pytest.mark.parametrize(
@@ -334,6 +333,7 @@ def test_truncate_standard_logging_payload():
     1. original messages, response, and error_str should NOT BE MODIFIED, since these are from kwargs
     2. the `messages`, `response`, and `error_str` in new standard_logging_payload should be truncated
     """
+    _custom_logger = CustomLogger()
     standard_logging_payload: StandardLoggingPayload = (
         create_standard_logging_payload_with_long_content()
     )
@@ -344,7 +344,7 @@ def test_truncate_standard_logging_payload():
     original_error_str = standard_logging_payload["error_str"]
     len_original_error_str = len(str(original_error_str))
 
-    truncate_standard_logging_payload_content(standard_logging_payload)
+    _custom_logger.truncate_standard_logging_payload_content(standard_logging_payload)
 
     # Original messages, response, and error_str should NOT BE MODIFIED
     assert standard_logging_payload["messages"] != original_messages

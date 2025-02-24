@@ -1,5 +1,5 @@
 import json
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import List, Literal, Optional, Union
 
 import httpx
 
@@ -18,11 +18,10 @@ from litellm.types.llms.vertex_ai import (
     Instance,
     InstanceImage,
     InstanceVideo,
-    MultimodalPrediction,
     MultimodalPredictions,
     VertexMultimodalEmbeddingRequest,
 )
-from litellm.types.utils import Embedding
+from litellm.types.utils import Embedding, EmbeddingResponse
 from litellm.utils import is_base64_encoded
 
 
@@ -39,7 +38,7 @@ class VertexMultimodalEmbedding(VertexLLM):
         model: str,
         input: Union[list, str],
         print_verbose,
-        model_response: litellm.EmbeddingResponse,
+        model_response: EmbeddingResponse,
         custom_llm_provider: Literal["gemini", "vertex_ai"],
         optional_params: dict,
         logging_obj: LiteLLMLoggingObj,
@@ -52,7 +51,7 @@ class VertexMultimodalEmbedding(VertexLLM):
         aembedding=False,
         timeout=300,
         client=None,
-    ) -> litellm.EmbeddingResponse:
+    ) -> EmbeddingResponse:
 
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,

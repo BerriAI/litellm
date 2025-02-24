@@ -31,12 +31,21 @@ model_list:
      api_key: fake-key
    model_info:
      supports_vision: True
-
+ - model_name: bedrock/*
+   litellm_params:
+     model:  bedrock/*
+     api_base: https://exampleopenaiendpoint-production.up.railway.app/
+ - model_name: openai/*
+   litellm_params:
+     model: openai/*
+     api_key: os.environ/OPENAI_API_KEY
+     api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 
 litellm_settings:
   cache: true
   callbacks: ["otel", "prometheus"]
+  disable_end_user_cost_tracking_prometheus_only: True
 
 guardrails:
   - guardrail_name: "aporia-pre-guard"

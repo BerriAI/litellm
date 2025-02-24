@@ -3,8 +3,7 @@ from typing import List, Literal, Optional, Union
 
 from pydantic import BaseModel
 
-import litellm
-from litellm.utils import Usage
+from litellm.types.utils import EmbeddingResponse, Usage
 
 from .types import *
 
@@ -49,7 +48,7 @@ class VertexAITextEmbeddingConfig(BaseModel):
         ] = None,
         title: Optional[str] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -198,8 +197,8 @@ class VertexAITextEmbeddingConfig(BaseModel):
         return text_embedding_input
 
     def transform_vertex_response_to_openai(
-        self, response: dict, model: str, model_response: litellm.EmbeddingResponse
-    ) -> litellm.EmbeddingResponse:
+        self, response: dict, model: str, model_response: EmbeddingResponse
+    ) -> EmbeddingResponse:
         """
         Transforms a vertex embedding response to an openai response.
         """
@@ -234,8 +233,8 @@ class VertexAITextEmbeddingConfig(BaseModel):
         return model_response
 
     def _transform_vertex_response_to_openai_for_fine_tuned_models(
-        self, response: dict, model: str, model_response: litellm.EmbeddingResponse
-    ) -> litellm.EmbeddingResponse:
+        self, response: dict, model: str, model_response: EmbeddingResponse
+    ) -> EmbeddingResponse:
         """
         Transforms a vertex fine-tuned model embedding response to an openai response format.
         """

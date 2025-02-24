@@ -16,13 +16,10 @@ Sent to this route when `model` is in the format `vertex_ai/openai/{MODEL_ID}`
 Vertex Documentation for using the OpenAI /chat/completions endpoint: https://github.com/GoogleCloudPlatform/vertex-ai-samples/blob/main/notebooks/community/model_garden/model_garden_pytorch_llama3_deployment.ipynb
 """
 
-import types
-from enum import Enum
-from typing import Callable, Literal, Optional, Union
+from typing import Callable, Optional, Union
 
 import httpx  # type: ignore
 
-import litellm
 from litellm.utils import ModelResponse
 
 from ..common_utils import VertexAIError
@@ -73,17 +70,16 @@ class VertexAIModelGardenModels(VertexBase):
         """
         try:
             import vertexai
-            from google.cloud import aiplatform
 
             from litellm.llms.openai_like.chat.handler import OpenAILikeChatHandler
             from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
                 VertexLLM,
             )
-        except Exception:
+        except Exception as e:
 
             raise VertexAIError(
                 status_code=400,
-                message="""vertexai import failed please run `pip install -U "google-cloud-aiplatform>=1.38"`""",
+                message=f"""vertexai import failed please run `pip install -U "google-cloud-aiplatform>=1.38"`. Got error: {e}""",
             )
 
         if not (

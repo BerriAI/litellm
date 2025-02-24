@@ -2,13 +2,10 @@
 Helper functions to query prometheus API
 """
 
-import asyncio
-import os
 import time
 from datetime import datetime, timedelta
 from typing import Optional
 
-import litellm
 from litellm import get_secret
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (

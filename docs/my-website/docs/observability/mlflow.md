@@ -1,4 +1,6 @@
-# MLflow
+import Image from '@theme/IdealImage';
+
+# 🔁 MLflow - OSS LLM Observability and Evaluation
 
 ## What is MLflow?
 
@@ -18,7 +20,7 @@ Install MLflow:
 pip install mlflow
 ```
 
-To enable LiteLLM tracing:
+To enable MLflow auto tracing for LiteLLM:
 
 ```python
 import mlflow
@@ -29,9 +31,9 @@ mlflow.litellm.autolog()
 # litellm.callbacks = ["mlflow"]
 ```
 
-Since MLflow is open-source, no sign-up or API key is needed to log traces!
+Since MLflow is open-source and free, **no sign-up or API key is needed to log traces!**
 
-```
+```python
 import litellm
 import os
 
@@ -52,6 +54,63 @@ Open the MLflow UI and go to the `Traces` tab to view logged traces:
 ```bash
 mlflow ui
 ```
+
+## Tracing Tool Calls
+
+MLflow integration with LiteLLM support tracking tool calls in addition to the messages.
+
+```python
+import mlflow
+
+# Enable MLflow auto-tracing for LiteLLM
+mlflow.litellm.autolog()
+
+# Define the tool function.
+def get_weather(location: str) -> str:
+    if location == "Tokyo":
+        return "sunny"
+    elif location == "Paris":
+        return "rainy"
+    return "unknown"
+
+# Define function spec
+get_weather_tool = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Get the current weather in a given location",
+        "parameters": {
+            "properties": {
+                "location": {
+                    "description": "The city and state, e.g., San Francisco, CA",
+                    "type": "string",
+                },
+            },
+            "required": ["location"],
+            "type": "object",
+        },
+    },
+}
+
+# Call LiteLLM as usual
+response = litellm.completion(
+    model="gpt-4o-mini",
+    messages=[
+      {"role": "user", "content": "What's the weather like in Paris today?"}
+    ],
+    tools=[get_weather_tool]
+)
+```
+
+<Image img={require('../../img/mlflow_tool_calling_tracing.png')} />
+
+
+## Evaluation
+
+MLflow LiteLLM integration allow you to run qualitative assessment against LLM to evaluate or/and monitor your GenAI application.
+
+Visit [Evaluate LLMs Tutorial](../tutorials/eval_suites.md) for the complete guidance on how to run evaluation suite with LiteLLM and MLflow.
+
 
 ## Exporting Traces to OpenTelemetry collectors
 
@@ -75,7 +134,7 @@ import litellm
 import mlflow
 from mlflow.entities import SpanType
 
-# Enable LiteLLM tracing
+# Enable MLflow auto-tracing for LiteLLM
 mlflow.litellm.autolog()
 
 

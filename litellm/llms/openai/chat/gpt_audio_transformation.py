@@ -4,11 +4,7 @@ Support for GPT-4o audio Family
 OpenAI Doc: https://platform.openai.com/docs/guides/audio/quickstart?audio-generation-quickstart-example=audio-in&lang=python
 """
 
-import types
-from typing import Optional, Union
-
 import litellm
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 
 from .gpt_transformation import OpenAIGPTConfig
 

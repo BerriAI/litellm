@@ -7,28 +7,24 @@
 # +-------------------------------------------------------------+
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-import sys, os
+import sys
+import os
 from collections.abc import Iterable
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-from typing import Optional, Literal, Union
-import litellm, traceback, sys, uuid
-from litellm.caching.caching import DualCache
+from typing import Optional, Literal
+import litellm
+import sys
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_logger import CustomLogger
 from fastapi import HTTPException
 from litellm._logging import verbose_proxy_logger
 from litellm.types.utils import (
     ModelResponse,
-    EmbeddingResponse,
-    ImageResponse,
-    StreamingChoices,
     Choices,
 )
-from datetime import datetime
-import aiohttp, asyncio
 
 litellm.set_verbose = True
 

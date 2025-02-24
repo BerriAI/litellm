@@ -2,19 +2,22 @@
 OpenAI-like chat completion transformation
 """
 
-import types
-from typing import List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 
 import httpx
-from pydantic import BaseModel
 
-import litellm
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage
+from litellm.types.llms.openai import ChatCompletionAssistantMessage
 from litellm.types.utils import ModelResponse
 
-from ....utils import _remove_additional_properties, _remove_strict_from_schema
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
 
 
 class OpenAILikeChatConfig(OpenAIGPTConfig):
@@ -64,7 +67,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         response: httpx.Response,
         model_response: ModelResponse,
         stream: bool,
-        logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,  # type: ignore
+        logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         api_key: Optional[str],
         data: Union[dict, str],
@@ -75,7 +78,6 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         custom_llm_provider: str,
         base_model: Optional[str],
     ) -> ModelResponse:
-        print(f"response: {response}")
         response_json = response.json()
         logging_obj.post_call(
             input=messages,

@@ -4,7 +4,6 @@ Class to handle llm wildcard routing and regex pattern matching
 
 import copy
 import re
-from functools import cached_property
 from re import Match
 from typing import Dict, List, Optional, Tuple
 
@@ -129,7 +128,7 @@ class PatternMatchRouter:
         if no pattern is found, return None
 
         Args:
-            request: Optional[str]
+            request: str - the received model name from the user (can be a wildcard route). If none, No deployments will be returned.
             filtered_model_names: Optional[List[str]] - if provided, only return deployments that match the filtered_model_names
         Returns:
             Optional[List[Deployment]]: llm deployments

@@ -22,7 +22,7 @@
 
 <!-- List of changes -->
 
-## [REQUIRED] Testing - Attach a screenshot of any new tests passing locall
+## [REQUIRED] Testing - Attach a screenshot of any new tests passing locally
 If UI changes, send a screenshot/GIF of working UI fixes
 
 <!-- Test procedure -->

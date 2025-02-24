@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Literal, Optional, Union
 
 import fastapi
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -51,7 +51,6 @@ async def test_endpoint(request: Request):
     "/health/services",
     tags=["health"],
     dependencies=[Depends(user_api_key_auth)],
-    include_in_schema=False,
 )
 async def health_services_endpoint(  # noqa: PLR0915
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -64,14 +63,19 @@ async def health_services_endpoint(  # noqa: PLR0915
             "webhook",
             "email",
             "braintrust",
+            "datadog",
         ],
         str,
     ] = fastapi.Query(description="Specify the service being hit."),
 ):
     """
-    Hidden endpoint.
+    Use this admin-only endpoint to check if the service is healthy.
 
-    Used by the UI to let user check if slack alerting is working as expected.
+    Example:
+    ```
+    curl -L -X GET 'http://0.0.0.0:4000/health/services?service=datadog' \
+    -H 'Authorization: Bearer sk-1234'
+    ```
     """
     try:
         from litellm.proxy.proxy_server import (
@@ -84,6 +88,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             raise HTTPException(
                 status_code=400, detail={"error": "Service must be specified."}
             )
+
         if service not in [
             "slack_budget_alerts",
             "email",
@@ -95,6 +100,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "otel",
             "custom_callback_api",
             "langsmith",
+            "datadog",
         ]:
             raise HTTPException(
                 status_code=400,
@@ -118,8 +124,20 @@ async def health_services_endpoint(  # noqa: PLR0915
                 "status": "success",
                 "message": "Mock LLM request made - check {}.".format(service),
             }
+        elif service == "datadog":
+            from litellm.integrations.datadog.datadog import DataDogLogger
 
-        if service == "langfuse":
+            datadog_logger = DataDogLogger()
+            response = await datadog_logger.async_health_check()
+            return {
+                "status": response["status"],
+                "message": (
+                    response["error_message"]
+                    if response["status"] == "unhealthy"
+                    else "Datadog is healthy"
+                ),
+            }
+        elif service == "langfuse":
             from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
             langfuse_logger = LangFuseLogger()
@@ -473,7 +491,7 @@ async def health_readiness():
     """
     Unprotected endpoint for checking if worker can receive requests
     """
-    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, version
+    from litellm.proxy.proxy_server import prisma_client, version
 
     try:
         # get success callback

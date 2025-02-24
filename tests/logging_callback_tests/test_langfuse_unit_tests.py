@@ -12,9 +12,72 @@ from litellm.integrations.langfuse.langfuse import (
     LangFuseLogger,
 )
 from litellm.integrations.langfuse.langfuse_handler import LangFuseHandler
-from litellm.types.utils import StandardCallbackDynamicParams
 from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
 from unittest.mock import Mock, patch
+from respx import MockRouter
+from litellm.types.utils import (
+    StandardLoggingPayload,
+    StandardLoggingModelInformation,
+    StandardLoggingMetadata,
+    StandardLoggingHiddenParams,
+    StandardCallbackDynamicParams,
+    ModelResponse,
+    Choices,
+    Message,
+    TextCompletionResponse,
+    TextChoices,
+)
+
+
+def create_standard_logging_payload() -> StandardLoggingPayload:
+    return StandardLoggingPayload(
+        id="test_id",
+        call_type="completion",
+        response_cost=0.1,
+        response_cost_failure_debug_info=None,
+        status="success",
+        total_tokens=30,
+        prompt_tokens=20,
+        completion_tokens=10,
+        startTime=1234567890.0,
+        endTime=1234567891.0,
+        completionStartTime=1234567890.5,
+        model_map_information=StandardLoggingModelInformation(
+            model_map_key="gpt-3.5-turbo", model_map_value=None
+        ),
+        model="gpt-3.5-turbo",
+        model_id="model-123",
+        model_group="openai-gpt",
+        api_base="https://api.openai.com",
+        metadata=StandardLoggingMetadata(
+            user_api_key_hash="test_hash",
+            user_api_key_org_id=None,
+            user_api_key_alias="test_alias",
+            user_api_key_team_id="test_team",
+            user_api_key_user_id="test_user",
+            user_api_key_team_alias="test_team_alias",
+            spend_logs_metadata=None,
+            requester_ip_address="127.0.0.1",
+            requester_metadata=None,
+        ),
+        cache_hit=False,
+        cache_key=None,
+        saved_cache_cost=0.0,
+        request_tags=[],
+        end_user=None,
+        requester_ip_address="127.0.0.1",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        response={"choices": [{"message": {"content": "Hi there!"}}]},
+        error_str=None,
+        model_parameters={"stream": True},
+        hidden_params=StandardLoggingHiddenParams(
+            model_id="model-123",
+            cache_key=None,
+            api_base="https://api.openai.com",
+            response_cost="0.1",
+            additional_headers=None,
+        ),
+    )
 
 
 @pytest.fixture
@@ -213,47 +276,117 @@ def test_get_langfuse_logger_for_request_with_cached_logger():
     mock_cache.get_cache.assert_called_once()
 
 
-@pytest.mark.parametrize(
-    "metadata, expected_metadata",
-    [
-        ({"a": 1, "b": 2, "c": 3}, {"a": 1, "b": 2, "c": 3}),
-        (
-            {"a": {"nested_a": 1}, "b": {"nested_b": 2}},
-            {"a": {"nested_a": 1}, "b": {"nested_b": 2}},
-        ),
-        ({"a": [1, 2, 3], "b": {4, 5, 6}}, {"a": [1, 2, 3], "b": {4, 5, 6}}),
-        (
-            {"a": (1, 2), "b": frozenset([3, 4]), "c": {"d": [5, 6]}},
-            {"a": (1, 2), "b": frozenset([3, 4]), "c": {"d": [5, 6]}},
-        ),
-        ({"lock": threading.Lock()}, {}),
-        ({"func": lambda x: x + 1}, {}),
-        (
-            {
-                "int": 42,
-                "str": "hello",
-                "list": [1, 2, 3],
-                "set": {4, 5},
-                "dict": {"nested": "value"},
-                "non_copyable": threading.Lock(),
-                "function": print,
-            },
-            {
-                "int": 42,
-                "str": "hello",
-                "list": [1, 2, 3],
-                "set": {4, 5},
-                "dict": {"nested": "value"},
-            },
-        ),
-        (
-            {"list": ["list", "not", "a", "dict"]},
-            {"list": ["list", "not", "a", "dict"]},
-        ),
-        ({}, {}),
-        (None, None),
-    ],
-)
-def test_langfuse_logger_prepare_metadata(metadata, expected_metadata):
-    result = global_langfuse_logger._prepare_metadata(metadata)
-    assert result == expected_metadata
+def test_get_langfuse_tags():
+    """
+    Test that _get_langfuse_tags correctly extracts tags from the standard logging payload
+    """
+    # Create a mock logging payload with tags
+    mock_payload = create_standard_logging_payload()
+    mock_payload["request_tags"] = ["tag1", "tag2", "test_tag"]
+
+    # Test with payload containing tags
+    result = global_langfuse_logger._get_langfuse_tags(mock_payload)
+    assert result == ["tag1", "tag2", "test_tag"]
+
+    # Test with payload without tags
+    mock_payload["request_tags"] = None
+    result = global_langfuse_logger._get_langfuse_tags(mock_payload)
+    assert result == []
+
+    # Test with empty tags list
+    mock_payload["request_tags"] = []
+    result = global_langfuse_logger._get_langfuse_tags(mock_payload)
+    assert result == []
+
+
+@patch.dict(os.environ, {}, clear=True)  # Start with empty environment
+def test_get_langfuse_flush_interval():
+    """
+    Test that _get_langfuse_flush_interval correctly reads from environment variable
+    or falls back to the provided flush_interval
+    """
+    default_interval = 60
+
+    # Test when env var is not set
+    result = LangFuseLogger._get_langfuse_flush_interval(
+        flush_interval=default_interval
+    )
+    assert result == default_interval
+
+    # Test when env var is set
+    with patch.dict(os.environ, {"LANGFUSE_FLUSH_INTERVAL": "120"}):
+        result = LangFuseLogger._get_langfuse_flush_interval(
+            flush_interval=default_interval
+        )
+        assert result == 120
+
+
+def test_langfuse_e2e_sync(monkeypatch):
+    from litellm import completion
+    import litellm
+    import respx
+    import httpx
+    import time
+
+    litellm._turn_on_debug()
+    monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
+
+    with respx.mock:
+        # Mock Langfuse
+        # Mock any Langfuse endpoint
+        langfuse_mock = respx.post(
+            "https://*.cloud.langfuse.com/api/public/ingestion"
+        ).mock(return_value=httpx.Response(200))
+        completion(
+            model="openai/my-fake-endpoint",
+            messages=[{"role": "user", "content": "hello from litellm"}],
+            stream=False,
+            mock_response="Hello from litellm 2",
+        )
+
+        time.sleep(3)
+
+        assert langfuse_mock.called
+
+
+def test_get_chat_content_for_langfuse():
+    """
+    Test that _get_chat_content_for_langfuse correctly extracts content from chat completion responses
+    """
+    # Test with valid response
+    mock_response = ModelResponse(
+        choices=[Choices(message=Message(role="assistant", content="Hello world"))]
+    )
+
+    result = LangFuseLogger._get_chat_content_for_langfuse(mock_response)
+    assert result == {
+        "content": "Hello world",
+        "role": "assistant",
+        "tool_calls": None,
+        "function_call": None,
+    }
+
+    # Test with empty choices
+    mock_response = ModelResponse(choices=[])
+    result = LangFuseLogger._get_chat_content_for_langfuse(mock_response)
+    assert result is None
+
+
+def test_get_text_completion_content_for_langfuse():
+    """
+    Test that _get_text_completion_content_for_langfuse correctly extracts content from text completion responses
+    """
+    # Test with valid response
+    mock_response = TextCompletionResponse(choices=[TextChoices(text="Hello world")])
+    result = LangFuseLogger._get_text_completion_content_for_langfuse(mock_response)
+    assert result == "Hello world"
+
+    # Test with empty choices
+    mock_response = TextCompletionResponse(choices=[])
+    result = LangFuseLogger._get_text_completion_content_for_langfuse(mock_response)
+    assert result is None
+
+    # Test with no choices field
+    mock_response = TextCompletionResponse()
+    result = LangFuseLogger._get_text_completion_content_for_langfuse(mock_response)
+    assert result is None

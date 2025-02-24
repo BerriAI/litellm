@@ -1,12 +1,8 @@
-import uuid
-from typing import Any, Callable, Coroutine, Iterable, List, Literal, Optional, Union
+from typing import Coroutine, Iterable, Literal, Optional, Union
 
 import httpx
 from openai import AsyncAzureOpenAI, AzureOpenAI
 from typing_extensions import overload
-
-import litellm
-from litellm.types.utils import FileTypes  # type: ignore
 
 from ...types.llms.openai import (
     Assistant,

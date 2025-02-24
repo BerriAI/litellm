@@ -1,38 +1,15 @@
 # What is this?
 ## Handler file for calling claude-3 on vertex ai
-import copy
-import json
-import os
-import time
-import types
-import uuid
-from enum import Enum
-from typing import Any, Callable, List, Optional, Tuple, Union
+from typing import Any, List, Optional
 
-import httpx  # type: ignore
-import requests  # type: ignore
+import httpx
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.types.llms.openai import (
-    AllMessageValues,
-    ChatCompletionToolParam,
-    ChatCompletionToolParamFunctionChunk,
-)
-from litellm.types.utils import ResponseFormatChunk
-from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
+from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponse
 
 from ....anthropic.chat.transformation import AnthropicConfig
-from litellm.litellm_core_utils.prompt_templates.factory import (
-    construct_tool_use_system_prompt,
-    contains_tag,
-    custom_prompt,
-    extract_between_tags,
-    parse_xml_params,
-    prompt_factory,
-    response_schema_prompt,
-)
 
 
 class VertexAIError(Exception):
@@ -89,14 +66,48 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         data.pop("model", None)  # vertex anthropic doesn't accept 'model' parameter
         return data
 
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
+        response = super().transform_response(
+            model,
+            raw_response,
+            model_response,
+            logging_obj,
+            request_data,
+            messages,
+            optional_params,
+            litellm_params,
+            encoding,
+            api_key,
+            json_mode,
+        )
+        response.model = model
+
+        return response
+
     @classmethod
-    def is_supported_model(
-        cls, model: str, custom_llm_provider: Optional[str] = None
-    ) -> bool:
+    def is_supported_model(cls, model: str, custom_llm_provider: str) -> bool:
         """
         Check if the model is supported by the VertexAI Anthropic API.
         """
-        if custom_llm_provider == "vertex_ai" and "claude" in model.lower():
+        if (
+            custom_llm_provider != "vertex_ai"
+            and custom_llm_provider != "vertex_ai_beta"
+        ):
+            return False
+        if "claude" in model.lower():
             return True
         elif model in litellm.vertex_anthropic_models:
             return True

@@ -1,15 +1,12 @@
 import os
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-import httpx
 from pydantic import BaseModel, Field
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
     httpxSpecialProvider,
 )

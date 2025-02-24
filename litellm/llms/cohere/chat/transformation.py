@@ -5,8 +5,8 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, 
 import httpx
 
 import litellm
-from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
 from litellm.litellm_core_utils.prompt_templates.factory import cohere_messages_pt_v2
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
 
@@ -104,7 +104,7 @@ class CohereChatConfig(BaseConfig):
         tool_results: Optional[list] = None,
         seed: Optional[int] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -116,6 +116,7 @@ class CohereChatConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         return cohere_validate_environment(
             headers=headers,
@@ -365,8 +366,3 @@ class CohereChatConfig(BaseConfig):
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
         return CohereError(status_code=status_code, message=error_message)
-
-    def _transform_messages(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
-        raise NotImplementedError

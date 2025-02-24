@@ -9,9 +9,7 @@ get_deployment_failures_for_current_minute
 get_deployment_successes_for_current_minute
 """
 
-from typing import TYPE_CHECKING, Any, Callable, Optional
-
-from litellm.utils import get_utc_datetime
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router

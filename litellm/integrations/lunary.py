@@ -153,6 +153,7 @@ class LunaryLogger:
                 type,
                 "start",
                 run_id,
+                parent_run_id=metadata.get("parent_run_id", None),
                 user_id=user_id,
                 name=model,
                 input=parse_messages(input),

@@ -30,6 +30,7 @@ import os
 # Set OpenAI API key
 os.environ["OPENAI_API_KEY"] = "Your API Key"
 os.environ["ANTHROPIC_API_KEY"] = "Your API Key"
+os.environ["XAI_API_KEY"] = "Your API Key"
 os.environ["REPLICATE_API_KEY"] = "Your API Key"
 os.environ["TOGETHERAI_API_KEY"] = "Your API Key"
 ```
@@ -114,7 +115,7 @@ litellm.organization = "LiteLlmOrg"
 response = litellm.completion(messages=messages, model="gpt-3.5-turbo")
 ```
 
-## Passing Args to completion()
+## Passing Args to completion() (or any litellm endpoint - `transcription`, `embedding`, `text_completion`, etc)
 
 You can pass the API key within `completion()` call:
 
@@ -177,6 +178,22 @@ assert(valid_models == expected_models)
 
 # reset replicate env key
 os.environ = old_environ
+```
+
+### `get_valid_models(check_provider_endpoint: True)`
+
+This helper will check the provider's endpoint for valid models.
+
+Currently implemented for:
+- OpenAI (if OPENAI_API_KEY is set)
+- Fireworks AI (if FIREWORKS_AI_API_KEY is set)
+- LiteLLM Proxy (if LITELLM_PROXY_API_KEY is set)
+
+```python
+from litellm import get_valid_models
+
+valid_models = get_valid_models(check_provider_endpoint=True)
+print(valid_models)
 ```
 
 ### `validate_environment(model: str)`

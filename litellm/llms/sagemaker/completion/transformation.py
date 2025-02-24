@@ -6,17 +6,19 @@ In the Huggingface TGI format.
 
 import json
 import time
-import types
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from httpx._models import Headers, Response
 
 import litellm
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
-from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    custom_prompt,
+    prompt_factory,
+)
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import Usage
+from litellm.types.utils import ModelResponse, Usage
 
 from ..common_utils import SagemakerError
 
@@ -45,7 +47,7 @@ class SagemakerConfig(BaseConfig):
         temperature: Optional[float] = None,
         return_full_text: Optional[bool] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -53,12 +55,6 @@ class SagemakerConfig(BaseConfig):
     @classmethod
     def get_config(cls):
         return super().get_config()
-
-    def _transform_messages(
-        self,
-        messages: List[AllMessageValues],
-    ) -> List[AllMessageValues]:
-        return messages
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, Headers]
@@ -197,7 +193,7 @@ class SagemakerConfig(BaseConfig):
         self,
         model: str,
         raw_response: Response,
-        model_response: litellm.ModelResponse,
+        model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
         messages: List[AllMessageValues],
@@ -206,7 +202,7 @@ class SagemakerConfig(BaseConfig):
         encoding: str,
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
-    ) -> litellm.ModelResponse:
+    ) -> ModelResponse:
         completion_response = raw_response.json()
         ## LOGGING
         logging_obj.post_call(
@@ -264,6 +260,7 @@ class SagemakerConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         headers = {"Content-Type": "application/json"}
 

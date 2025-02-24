@@ -1,8 +1,7 @@
 # What is this?
 ## API Handler for calling Vertex AI Partner Models
-import types
 from enum import Enum
-from typing import Callable, Literal, Optional, Union
+from typing import Callable, Optional, Union
 
 import httpx  # type: ignore
 
@@ -88,21 +87,19 @@ class VertexAIPartnerModels(VertexBase):
     ):
         try:
             import vertexai
-            from google.cloud import aiplatform
 
             from litellm.llms.anthropic.chat import AnthropicChatCompletion
             from litellm.llms.codestral.completion.handler import (
                 CodestralTextCompletion,
             )
-            from litellm.llms.openai.openai import OpenAIChatCompletion
             from litellm.llms.openai_like.chat.handler import OpenAILikeChatHandler
             from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
                 VertexLLM,
             )
-        except Exception:
+        except Exception as e:
             raise VertexAIError(
                 status_code=400,
-                message="""vertexai import failed please run `pip install -U "google-cloud-aiplatform>=1.38"`""",
+                message=f"""vertexai import failed please run `pip install -U "google-cloud-aiplatform>=1.38"`. Got error: {e}""",
             )
 
         if not (
@@ -197,6 +194,7 @@ class VertexAIPartnerModels(VertexBase):
                         "is_vertex_request": True,
                     }
                 )
+
                 return anthropic_chat_completions.completion(
                     model=model,
                     messages=messages,

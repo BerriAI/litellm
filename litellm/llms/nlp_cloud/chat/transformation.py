@@ -4,8 +4,10 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
-from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
-from litellm.litellm_core_utils.prompt_templates.common_utils import convert_content_list_to_str
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    convert_content_list_to_str,
+)
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import ModelResponse, Usage
 
@@ -76,7 +78,7 @@ class NLPCloudConfig(BaseConfig):
         num_beams: Optional[int] = None,
         num_return_sequences: Optional[int] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -92,6 +94,7 @@ class NLPCloudConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         headers = {
             "accept": "application/json",

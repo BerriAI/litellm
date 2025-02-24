@@ -1,12 +1,9 @@
 import json
-import os
 import time
 import types
-from enum import Enum
 from typing import Callable, Optional
 
 import httpx  # type: ignore
-import requests  # type: ignore
 
 import litellm
 from litellm.utils import Choices, Message, ModelResponse, Usage
@@ -148,7 +145,7 @@ class AlephAlphaConfig:
         contextual_control_threshold: Optional[int] = None,
         control_log_additive: Optional[bool] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -240,7 +237,7 @@ def completion(
         additional_args={"complete_input_dict": data},
     )
     ## COMPLETION CALL
-    response = requests.post(
+    response = litellm.module_level_client.post(
         completion_url,
         headers=headers,
         data=json.dumps(data),

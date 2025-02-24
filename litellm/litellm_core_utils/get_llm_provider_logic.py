@@ -3,7 +3,6 @@ from typing import Optional, Tuple
 import httpx
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 from ..types.router import LiteLLM_Params
@@ -101,6 +100,7 @@ def get_llm_provider(  # noqa: PLR0915
 
     Return model, custom_llm_provider, dynamic_api_key, api_base
     """
+
     try:
         ## IF LITELLM PARAMS GIVEN ##
         if litellm_params is not None:
@@ -142,7 +142,7 @@ def get_llm_provider(  # noqa: PLR0915
         # check if llm provider part of model name
         if (
             model.split("/", 1)[0] in litellm.provider_list
-            and model.split("/", 1)[0] not in litellm.model_list
+            and model.split("/", 1)[0] not in litellm.model_list_set
             and len(model.split("/"))
             > 1  # handle edge case where user passes in `litellm --model mistral` https://github.com/BerriAI/litellm/issues/1351
         ):
@@ -209,7 +209,7 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "api.deepseek.com/v1":
                         custom_llm_provider = "deepseek"
                         dynamic_api_key = get_secret_str("DEEPSEEK_API_KEY")
-                    elif endpoint == "inference.friendli.ai/v1":
+                    elif endpoint == "https://api.friendli.ai/serverless/v1":
                         custom_llm_provider = "friendliai"
                         dynamic_api_key = get_secret_str(
                             "FRIENDLIAI_API_KEY"
@@ -307,7 +307,9 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "petals"
         ## bedrock
         elif (
-            model in litellm.bedrock_models or model in litellm.bedrock_embedding_models
+            model in litellm.bedrock_models
+            or model in litellm.bedrock_embedding_models
+            or model in litellm.bedrock_converse_models
         ):
             custom_llm_provider = "bedrock"
         elif model in litellm.watsonx_models:
@@ -382,6 +384,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             dynamic_api_key: Optional[str]
             api_base: Optional[str]
     """
+
     custom_llm_provider = model.split("/", 1)[0]
     model = model.split("/", 1)[1]
 
@@ -393,6 +396,8 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.PerplexityChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "aiohttp_openai":
+        return model, "aiohttp_openai", api_key, api_base
     elif custom_llm_provider == "anyscale":
         # anyscale is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
         api_base = api_base or get_secret_str("ANYSCALE_API_BASE") or "https://api.endpoints.anyscale.com/v1"  # type: ignore
@@ -485,15 +490,15 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or get_secret("DEEPSEEK_API_BASE")
             or "https://api.deepseek.com/beta"
         )  # type: ignore
+
         dynamic_api_key = api_key or get_secret_str("DEEPSEEK_API_KEY")
     elif custom_llm_provider == "fireworks_ai":
         # fireworks is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.fireworks.ai/inference/v1
         (
-            model,
             api_base,
             dynamic_api_key,
         ) = litellm.FireworksAIConfig()._get_openai_compatible_provider_info(
-            model=model, api_base=api_base, api_key=api_key
+            api_base=api_base, api_key=api_key
         )
     elif custom_llm_provider == "azure_ai":
         (
@@ -536,14 +541,6 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.XAIChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
-    elif custom_llm_provider == "voyage":
-        # voyage is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.voyageai.com/v1
-        api_base = (
-            api_base
-            or get_secret_str("VOYAGE_API_BASE")
-            or "https://api.voyageai.com/v1"
-        )  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("VOYAGE_API_KEY")
     elif custom_llm_provider == "together_ai":
         api_base = (
             api_base
@@ -560,7 +557,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         api_base = (
             api_base
             or get_secret("FRIENDLI_API_BASE")
-            or "https://inference.friendli.ai/v1"
+            or "https://api.friendli.ai/serverless/v1"
         )  # type: ignore
         dynamic_api_key = (
             api_key

@@ -14,21 +14,25 @@ Features:
 - **Security**
     - ✅ [SSO for Admin UI](./ui.md#✨-enterprise-features)
     - ✅ [Audit Logs with retention policy](#audit-logs)
-    - ✅ [JWT-Auth](../docs/proxy/token_auth.md)
+    - ✅ [JWT-Auth](./token_auth.md)
     - ✅ [Control available public, private routes (Restrict certain endpoints on proxy)](#control-available-public-private-routes)
     - ✅ [Control available public, private routes](#control-available-public-private-routes)
+    - ✅ [Secret Managers - AWS Key Manager, Google Secret Manager, Azure Key, Hashicorp Vault](../secret)
     - ✅ [[BETA] AWS Key Manager v2 - Key Decryption](#beta-aws-key-manager---key-decryption)
     - ✅ IP address‑based access control lists
     - ✅ Track Request IP Address
     - ✅ [Use LiteLLM keys/authentication on Pass Through Endpoints](pass_through#✨-enterprise---use-litellm-keysauthentication-on-pass-through-endpoints)
     - ✅ [Set Max Request Size / File Size on Requests](#set-max-request--response-size-on-litellm-proxy)
     - ✅ [Enforce Required Params for LLM Requests (ex. Reject requests missing ["metadata"]["generation_name"])](#enforce-required-params-for-llm-requests)
+    - ✅ [Key Rotations](./virtual_keys.md#-key-rotations)
 - **Customize Logging, Guardrails, Caching per project**
     - ✅ [Team Based Logging](./team_logging.md) - Allow each team to use their own Langfuse Project / custom callbacks
     - ✅ [Disable Logging for a Team](./team_logging.md#disable-logging-for-a-team) - Switch off all logging for a team/project (GDPR Compliance)
 - **Spend Tracking & Data Exports**
     - ✅ [Tracking Spend for Custom Tags](#tracking-spend-for-custom-tags)
-    - ✅ [Exporting LLM Logs to GCS Bucket](./proxy/bucket#🪣-logging-gcs-s3-buckets)
+    - ✅ [Set USD Budgets Spend for Custom Tags](./provider_budget_routing#-tag-budgets)
+    - ✅ [Set Model budgets for Virtual Keys](./users#-virtual-key-model-specific)
+    - ✅ [Exporting LLM Logs to GCS Bucket, Azure Blob Storage](./proxy/bucket#🪣-logging-gcs-s3-buckets)
     - ✅ [`/spend/report` API endpoint](cost_tracking.md#✨-enterprise-api-endpoints-to-get-spend)
 - **Prometheus Metrics**
     - ✅ [Prometheus Metrics - Num Requests, failures, LLM Provider Outages](prometheus)
@@ -36,8 +40,8 @@ Features:
 - **Control Guardrails per API Key**
 - **Custom Branding**
     - ✅ [Custom Branding + Routes on Swagger Docs](#swagger-docs---custom-routes--branding)
-    - ✅ [Public Model Hub](../docs/proxy/enterprise.md#public-model-hub)
-    - ✅ [Custom Email Branding](../docs/proxy/email.md#customizing-email-branding)
+    - ✅ [Public Model Hub](#public-model-hub)
+    - ✅ [Custom Email Branding](./email.md#customizing-email-branding)
 
 ## Audit Logs
 

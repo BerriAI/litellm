@@ -1,20 +1,17 @@
-import copy
 import json
-import os
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 import httpx
-from openai.types.image import Image
-from pydantic import BaseModel
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.types.llms.bedrock import BedrockPreparedRequest, BedrockRerankRequest
+from litellm.types.llms.bedrock import BedrockPreparedRequest
 from litellm.types.rerank import RerankRequest
 from litellm.types.utils import RerankResponse
 
@@ -32,8 +29,10 @@ class BedrockRerankHandler(BaseAWSLLM):
     async def arerank(
         self,
         prepared_request: BedrockPreparedRequest,
+        client: Optional[AsyncHTTPHandler] = None,
     ):
-        client = get_async_httpx_client(llm_provider=litellm.LlmProviders.BEDROCK)
+        if client is None:
+            client = get_async_httpx_client(llm_provider=litellm.LlmProviders.BEDROCK)
         try:
             response = await client.post(url=prepared_request["endpoint_url"], headers=prepared_request["prepped"].headers, data=prepared_request["body"])  # type: ignore
             response.raise_for_status()
@@ -59,7 +58,9 @@ class BedrockRerankHandler(BaseAWSLLM):
         _is_async: Optional[bool] = False,
         api_base: Optional[str] = None,
         extra_headers: Optional[dict] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ) -> RerankResponse:
+
         request_data = RerankRequest(
             model=model,
             query=query,
@@ -71,6 +72,7 @@ class BedrockRerankHandler(BaseAWSLLM):
         data = BedrockRerankConfig()._transform_request(request_data)
 
         prepared_request = self._prepare_request(
+            model=model,
             optional_params=optional_params,
             api_base=api_base,
             extra_headers=extra_headers,
@@ -88,9 +90,10 @@ class BedrockRerankHandler(BaseAWSLLM):
         )
 
         if _is_async:
-            return self.arerank(prepared_request)  # type: ignore
+            return self.arerank(prepared_request, client=client if client is not None and isinstance(client, AsyncHTTPHandler) else None)  # type: ignore
 
-        client = _get_httpx_client()
+        if client is None or not isinstance(client, HTTPHandler):
+            client = _get_httpx_client()
         try:
             response = client.post(url=prepared_request["endpoint_url"], headers=prepared_request["prepped"].headers, data=prepared_request["body"])  # type: ignore
             response.raise_for_status()
@@ -100,24 +103,30 @@ class BedrockRerankHandler(BaseAWSLLM):
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
-        return BedrockRerankConfig()._transform_response(response.json())
+        logging_obj.post_call(
+            original_response=response.text,
+            api_key="",
+        )
+
+        response_json = response.json()
+
+        return BedrockRerankConfig()._transform_response(response_json)
 
     def _prepare_request(
         self,
+        model: str,
         api_base: Optional[str],
         extra_headers: Optional[dict],
         data: dict,
         optional_params: dict,
     ) -> BedrockPreparedRequest:
         try:
-            import boto3
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
-            from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         boto3_credentials_info = self._get_boto_credentials_from_optional_params(
-            optional_params
+            optional_params, model
         )
 
         ### SET RUNTIME ENDPOINT ###

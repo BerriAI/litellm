@@ -1,5 +1,3 @@
-import asyncio
-import traceback
 from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_router_logger

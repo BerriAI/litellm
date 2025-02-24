@@ -3,7 +3,6 @@
 ## This reduces the number of REDIS GET requests made during high-traffic by the proxy.
 ### [BETA] this is in Beta. And might change.
 
-import json
 import traceback
 from typing import Literal, Optional
 

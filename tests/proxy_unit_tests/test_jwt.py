@@ -21,14 +21,21 @@ from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import Request
-
+from fastapi import Request, HTTPException
+from fastapi.routing import APIRoute
+from fastapi.responses import Response
 import litellm
 from litellm.caching.caching import DualCache
-from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_UserTable, LiteLLMRoutes
-from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy._types import (
+    LiteLLM_JWTAuth,
+    LiteLLM_UserTable,
+    LiteLLMRoutes,
+    JWTAuthBuilderResult,
+)
+from litellm.proxy.auth.handle_jwt import JWTHandler, JWTAuthManager
 from litellm.proxy.management_endpoints.team_endpoints import new_team
 from litellm.proxy.proxy_server import chat_completion
+from typing import Literal
 
 public_key = {
     "kty": "RSA",
@@ -985,7 +992,7 @@ async def test_allow_access_by_email(public_jwt_key, user_email, should_work):
     #     )
     # ),
     with patch.object(
-        litellm.proxy.auth.user_api_key_auth,
+        litellm.proxy.auth.handle_jwt,
         "get_user_object",
         side_effect=mock_user_object,
     ) as mock_client:
@@ -1035,8 +1042,10 @@ async def test_end_user_jwt_auth(monkeypatch):
     from litellm.caching import DualCache
     from litellm.proxy._types import LiteLLM_JWTAuth
     from litellm.proxy.proxy_server import user_api_key_auth
+    import json
 
     monkeypatch.delenv("JWT_AUDIENCE", None)
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://example.com/public-key")
     jwt_handler = JWTHandler()
 
     litellm_jwtauth = LiteLLM_JWTAuth(
@@ -1094,21 +1103,182 @@ async def test_end_user_jwt_auth(monkeypatch):
 
     bearer_token = "Bearer " + token
 
-    request = Request(scope={"type": "http"})
-    request._url = URL(url="/chat/completions")
+    api_route = APIRoute(path="/chat/completions", endpoint=chat_completion)
+    request = Request(
+        {
+            "type": "http",
+            "route": api_route,
+            "path": "/chat/completions",
+            "headers": [(b"authorization", f"Bearer {bearer_token}".encode("latin-1"))],
+            "method": "POST",
+        }
+    )
+
+    async def return_body():
+        body_dict = {
+            "model": "openai/gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "Hello, how are you?"}],
+        }
+        # Serialize the dictionary to JSON and encode it to bytes
+        return json.dumps(body_dict).encode("utf-8")
+
+    request.body = return_body
 
     ## 1. INITIAL TEAM CALL - should fail
     # use generated key to auth in
     setattr(
         litellm.proxy.proxy_server,
         "general_settings",
-        {
-            "enable_jwt_auth": True,
-        },
+        {"enable_jwt_auth": True, "pass_through_all_models": True},
+    )
+    setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        MagicMock(),
     )
     setattr(litellm.proxy.proxy_server, "prisma_client", {})
     setattr(litellm.proxy.proxy_server, "jwt_handler", jwt_handler)
+    from litellm.proxy.proxy_server import cost_tracking
+
+    cost_tracking()
     result = await user_api_key_auth(request=request, api_key=bearer_token)
     assert (
         result.end_user_id == "81b3e52a-67a6-4efb-9645-70527e101479"
     )  # jwt token decoded sub value
+
+    temp_response = Response()
+    from litellm.proxy.hooks.proxy_track_cost_callback import (
+        _should_track_cost_callback,
+    )
+
+    with patch.object(
+        litellm.proxy.hooks.proxy_track_cost_callback, "_should_track_cost_callback"
+    ) as mock_client:
+        resp = await chat_completion(
+            request=request,
+            fastapi_response=temp_response,
+            model="gpt-4o",
+            user_api_key_dict=result,
+        )
+
+        assert resp is not None
+
+        await asyncio.sleep(1)
+
+        mock_client.assert_called_once()
+
+        mock_client.call_args.kwargs[
+            "end_user_id"
+        ] == "81b3e52a-67a6-4efb-9645-70527e101479"
+
+
+def test_can_rbac_role_call_route():
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+    from litellm.proxy._types import RoleBasedPermissions
+    from litellm.proxy._types import LitellmUserRoles
+
+    with pytest.raises(HTTPException):
+        JWTAuthManager.can_rbac_role_call_route(
+            rbac_role=LitellmUserRoles.TEAM,
+            general_settings={
+                "role_permissions": [
+                    RoleBasedPermissions(
+                        role=LitellmUserRoles.TEAM, routes=["/v1/chat/completions"]
+                    )
+                ]
+            },
+            route="/v1/embeddings",
+        )
+
+
+@pytest.mark.parametrize(
+    "requested_model, should_work",
+    [
+        ("gpt-3.5-turbo-testing", True),
+        ("gpt-4o", False),
+    ],
+)
+def test_check_scope_based_access(requested_model, should_work):
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+    from litellm.proxy._types import ScopeMapping
+
+    args = {
+        "scope_mappings": [
+            ScopeMapping(
+                models=["anthropic-claude"],
+                routes=["/v1/chat/completions"],
+                scope="litellm.api.consumer",
+            ),
+            ScopeMapping(
+                models=["gpt-3.5-turbo-testing"],
+                routes=None,
+                scope="litellm.api.gpt_3_5_turbo",
+            ),
+        ],
+        "scopes": [
+            "profile",
+            "groups-scope",
+            "email",
+            "litellm.api.gpt_3_5_turbo",
+            "litellm.api.consumer",
+        ],
+        "request_data": {
+            "model": requested_model,
+            "messages": [{"role": "user", "content": "Hey, how's it going 1234?"}],
+        },
+        "general_settings": {
+            "enable_jwt_auth": True,
+            "litellm_jwtauth": {
+                "team_id_jwt_field": "client_id",
+                "team_id_upsert": True,
+                "scope_mappings": [
+                    {
+                        "scope": "litellm.api.consumer",
+                        "models": ["anthropic-claude"],
+                        "routes": ["/v1/chat/completions"],
+                    },
+                    {
+                        "scope": "litellm.api.gpt_3_5_turbo",
+                        "models": ["gpt-3.5-turbo-testing"],
+                    },
+                ],
+                "enforce_scope_based_access": True,
+                "enforce_rbac": True,
+            },
+        },
+    }
+
+    if should_work:
+        JWTAuthManager.check_scope_based_access(**args)
+    else:
+        with pytest.raises(HTTPException):
+            JWTAuthManager.check_scope_based_access(**args)
+
+
+@pytest.mark.asyncio
+async def test_custom_validate_called():
+    # Setup
+    mock_custom_validate = MagicMock(return_value=True)
+
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = MagicMock(
+        custom_validate=mock_custom_validate, allowed_routes=["/chat/completions"]
+    )
+    jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "test_user"})
+
+    try:
+        await JWTAuthManager.auth_builder(
+            api_key="test",
+            jwt_handler=jwt_handler,
+            request_data={},
+            general_settings={},
+            route="/chat/completions",
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+    except Exception:
+        pass
+    # Assert custom_validate was called with the jwt token
+    mock_custom_validate.assert_called_once_with({"sub": "test_user"})

@@ -2,11 +2,12 @@
 Handles the chat completion request for groq
 """
 
-from typing import Any, Callable, Optional, Union
+from typing import Callable, List, Optional, Union, cast
 
 from httpx._config import Timeout
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CustomStreamingDecoder
 from litellm.utils import ModelResponse
 
@@ -42,7 +43,9 @@ class GroqChatCompletion(OpenAILikeChatHandler):
         streaming_decoder: Optional[CustomStreamingDecoder] = None,
         fake_stream: bool = False,
     ):
-        messages = GroqChatConfig()._transform_messages(messages)  # type: ignore
+        messages = GroqChatConfig()._transform_messages(
+            messages=cast(List[AllMessageValues], messages), model=model
+        )
 
         if optional_params.get("stream") is True:
             fake_stream = GroqChatConfig()._should_fake_stream(optional_params)

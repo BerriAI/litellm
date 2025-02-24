@@ -4,8 +4,7 @@ Cerebras Chat Completions API
 this is OpenAI compatible - no translation needed / occurs
 """
 
-import types
-from typing import Optional, Union
+from typing import Optional
 
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 

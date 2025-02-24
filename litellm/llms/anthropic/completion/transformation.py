@@ -6,18 +6,21 @@ Litellm provider slug: `anthropic_text/<model_name>`
 
 import json
 import time
-from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Union
+from typing import AsyncIterator, Dict, Iterator, List, Optional, Union
 
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    custom_prompt,
+    prompt_factory,
+)
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
-from litellm.llms.base_llm.transformation import (
+from litellm.llms.base_llm.chat.transformation import (
     BaseConfig,
     BaseLLMException,
     LiteLLMLoggingObj,
 )
-from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     ChatCompletionToolCallChunk,
@@ -69,7 +72,7 @@ class AnthropicTextConfig(BaseConfig):
         top_k: Optional[int] = None,
         metadata: Optional[dict] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -82,6 +85,7 @@ class AnthropicTextConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         if api_key is None:
             raise ValueError(
@@ -256,12 +260,6 @@ class AnthropicTextConfig(BaseConfig):
             )
 
         return str(prompt)
-
-    def _transform_messages(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
-        "Not required"
-        raise NotImplementedError
 
     def get_model_response_iterator(
         self,

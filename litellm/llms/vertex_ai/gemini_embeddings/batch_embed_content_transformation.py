@@ -18,8 +18,6 @@ from litellm.types.llms.vertex_ai import (
 from litellm.types.utils import Embedding, Usage
 from litellm.utils import get_formatted_prompt, token_counter
 
-from ..common_utils import VertexAIError
-
 
 def transform_openai_input_gemini_content(
     input: EmbeddingInput, model: str, optional_params: dict

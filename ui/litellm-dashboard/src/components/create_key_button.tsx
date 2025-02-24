@@ -1,5 +1,4 @@
 "use client";
-
 import React, { useState, useEffect, useRef } from "react";
 import { Button, TextInput, Grid, Col } from "@tremor/react";
 import {
@@ -23,21 +22,30 @@ import {
   message,
   Radio,
 } from "antd";
+import { unfurlWildcardModelsInList, getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import SchemaFormFields from './common_components/check_openapi_schema';
 import {
   keyCreateCall,
   slackBudgetAlertsHealthCheck,
   modelAvailableCall,
+  getGuardrailsList,
+  proxyBaseUrl,
 } from "./networking";
+import { Team } from "./key_team_helpers/key_list";
+import TeamDropdown from "./common_components/team_dropdown";
+import { InfoCircleOutlined } from '@ant-design/icons';
+import { Tooltip } from 'antd';
 
 const { Option } = Select;
 
 interface CreateKeyProps {
   userID: string;
-  team: any | null;
+  team: Team | null;
   userRole: string | null;
   accessToken: string;
   data: any[] | null;
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
+  teams: Team[] | null;
 }
 
 const getPredefinedTags = (data: any[] | null) => {
@@ -64,10 +72,57 @@ const getPredefinedTags = (data: any[] | null) => {
   return uniqueTags;
 }
 
+export const getTeamModels = (team: Team | null, allAvailableModels: string[]): string[] => {
+  let tempModelsToPick = [];
+
+  if (team) {
+    if (team.models.length > 0) {
+      if (team.models.includes("all-proxy-models")) {
+        // if the team has all-proxy-models show all available models
+        tempModelsToPick = allAvailableModels;
+      } else {
+        // show team models
+        tempModelsToPick = team.models;
+      }
+    } else {
+      // show all available models if the team has no models set
+      tempModelsToPick = allAvailableModels;
+    }
+  } else {
+    // no team set, show all available models
+    tempModelsToPick = allAvailableModels;
+  }
+
+  return unfurlWildcardModelsInList(tempModelsToPick, allAvailableModels);
+};
+
+export const fetchUserModels = async (userID: string, userRole: string, accessToken: string, setUserModels: (models: string[]) => void) => {
+  try {
+    if (userID === null || userRole === null) {
+      return;
+    }
+
+    if (accessToken !== null) {
+      const model_available = await modelAvailableCall(
+        accessToken,
+        userID,
+        userRole
+      );
+      let available_model_names = model_available["data"].map(
+        (element: { id: string }) => element.id
+      );
+      console.log("available_model_names:", available_model_names);
+      setUserModels(available_model_names);
+    }
+  } catch (error) {
+    console.error("Error fetching user models:", error);
+  }
+};
 
 const CreateKey: React.FC<CreateKeyProps> = ({
   userID,
   team,
+  teams,
   userRole,
   accessToken,
   data,
@@ -77,11 +132,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [apiKey, setApiKey] = useState(null);
   const [softBudget, setSoftBudget] = useState(null);
-  const [userModels, setUserModels] = useState([]);
-  const [modelsToPick, setModelsToPick] = useState([]);
+  const [userModels, setUserModels] = useState<string[]>([]);
+  const [modelsToPick, setModelsToPick] = useState<string[]>([]);
   const [keyOwner, setKeyOwner] = useState("you");
   const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
-
+  const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
 
   const handleOk = () => {
     setIsModalVisible(false);
@@ -95,36 +151,32 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   };
 
   useEffect(() => {
-    const fetchUserModels = async () => {
-      try {
-        if (userID === null || userRole === null) {
-          return;
-        }
+    if (userID && userRole && accessToken) {
+      fetchUserModels(userID, userRole, accessToken, setUserModels);
+    }
+  }, [accessToken, userID, userRole]);
 
-        if (accessToken !== null) {
-          const model_available = await modelAvailableCall(
-            accessToken,
-            userID,
-            userRole
-          );
-          let available_model_names = model_available["data"].map(
-            (element: { id: string }) => element.id
-          );
-          console.log("available_model_names:", available_model_names);
-          setUserModels(available_model_names);
-        }
+  useEffect(() => {
+    const fetchGuardrails = async () => {
+      try {
+        const response = await getGuardrailsList(accessToken);
+        const guardrailNames = response.guardrails.map(
+          (g: { guardrail_name: string }) => g.guardrail_name
+        );
+        setGuardrailsList(guardrailNames);
       } catch (error) {
-        console.error("Error fetching user models:", error);
+        console.error("Failed to fetch guardrails:", error);
       }
     };
 
-    fetchUserModels();
-  }, [accessToken, userID, userRole]);
+    fetchGuardrails();
+  }, [accessToken]);
 
   const handleCreate = async (formValues: Record<string, any>) => {
     try {
       const newKeyAlias = formValues?.key_alias ?? "";
       const newKeyTeamId = formValues?.team_id ?? null;
+
       const existingKeyAliases =
         data
           ?.filter((k) => k.team_id === newKeyTeamId)
@@ -138,7 +190,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({
 
       message.info("Making API Call");
       setIsModalVisible(true);
-
+      
+      if(keyOwner === "you"){
+        formValues.user_id = userID 
+      }
       // If it's a service account, add the service_account_id to the metadata
       if (keyOwner === "service_account") {
         // Parse existing metadata or create an empty object
@@ -163,8 +218,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       form.resetFields();
       localStorage.removeItem("userData" + userID);
     } catch (error) {
-      console.error("Error creating the key:", error);
-      message.error(`Error creating the key: ${error}`, 20);
+      console.log("error in create key:", error);
+      message.error(`Error creating the key: ${error}`);
     }
   };
 
@@ -173,28 +228,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   };
 
   useEffect(() => {
-    let tempModelsToPick = [];
-
-    if (team) {
-      if (team.models.length > 0) {
-        if (team.models.includes("all-proxy-models")) {
-          // if the team has all-proxy-models show all available models
-          tempModelsToPick = userModels;
-        } else {
-          // show team models
-          tempModelsToPick = team.models;
-        }
-      } else {
-        // show all available models if the team has no models set
-        tempModelsToPick = userModels;
-      }
-    } else {
-      // no team set, show all available models
-      tempModelsToPick = userModels;
-    }
-
-    setModelsToPick(tempModelsToPick);
-  }, [team, userModels]);
+    const models = getTeamModels(selectedCreateKeyTeam, userModels);
+    setModelsToPick(models);
+    form.setFieldValue('models', []);
+  }, [selectedCreateKeyTeam, userModels]);
 
   return (
     <div>
@@ -224,11 +261,27 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               >
                 <Radio value="you">You</Radio>
                 <Radio value="service_account">Service Account</Radio>
+                {userRole === "Admin" && <Radio value="another_user">Another User</Radio>}
               </Radio.Group>
             </Form.Item>
 
             <Form.Item
-              label={keyOwner === "you" ? "Key Name" : "Service Account ID"}
+              label="User ID"
+              name="user_id"
+              hidden={keyOwner !== "another_user"}
+              valuePropName="user_id"
+              className="mt-8"
+              rules={[{ required: keyOwner === "another_user", message: `Please input the user ID of the user you are assigning the key to` }]}
+              help={"Get User ID - Click on the 'Users' tab in the sidebar."}
+            >
+              <TextInput 
+                placeholder="User ID" 
+                onChange={(e) => form.setFieldValue('user_id', e.target.value)}
+              />
+            </Form.Item>
+
+            <Form.Item
+              label={keyOwner === "you" || keyOwner === "another_user" ? "Key Name" : "Service Account ID"}
               name="key_alias"
               rules={[{ required: true, message: `Please input a ${keyOwner === "you" ? "key name" : "service account ID"}` }]}
               help={keyOwner === "you" ? "required" : "IDs can include letters, numbers, and hyphens"}
@@ -236,18 +289,29 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               <TextInput placeholder="" />
             </Form.Item>
             <Form.Item
-              label="Team ID"
+              label="Team"
               name="team_id"
-              hidden={true}
-              initialValue={team ? team["team_id"] : null}
-              valuePropName="team_id"
+              initialValue={team ? team.team_id : null}
               className="mt-8"
             >
-              <Input value={team ? team["team_alias"] : ""} disabled />
+              <TeamDropdown 
+                teams={teams} 
+                onChange={(teamId) => {
+                  const selectedTeam = teams?.find(t => t.team_id === teamId) || null;
+                  setSelectedCreateKeyTeam(selectedTeam);
+                }}
+              />
             </Form.Item>
 
             <Form.Item
-              label="Models"
+              label={
+                <span>
+                  Models{' '}
+                  <Tooltip title="These are the models that your selected team has access to">
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              }
               name="models"
               rules={[{ required: true, message: "Please select a model" }]}
               help="required"
@@ -257,15 +321,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 placeholder="Select models"
                 style={{ width: "100%" }}
                 onChange={(values) => {
-                  // Check if "All Team Models" is selected
-                  const isAllTeamModelsSelected =
-                    values.includes("all-team-models");
-
-                  // If "All Team Models" is selected, deselect all other models
-                  if (isAllTeamModelsSelected) {
-                    const newValues = ["all-team-models"];
-                    // You can call the form's setFieldsValue method to update the value
-                    form.setFieldsValue({ models: newValues });
+                  if (values.includes("all-team-models")) {
+                    form.setFieldsValue({ models: ["all-team-models"] });
                   }
                 }}
               >
@@ -274,7 +331,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 </Option>
                 {modelsToPick.map((model: string) => (
                   <Option key={model} value={model}>
-                    {model}
+                    {getModelDisplayName(model)}
                   </Option>
                 ))}
               </Select>
@@ -375,6 +432,33 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 >
                   <TextInput placeholder="" />
                 </Form.Item>
+                <Form.Item 
+                  label={
+                    <span>
+                      Guardrails{' '}
+                      <Tooltip title="Setup your first guardrail">
+                        <a 
+                          href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
+                        >
+                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                        </a>
+                      </Tooltip>
+                    </span>
+                  }
+                  name="guardrails" 
+                  className="mt-8"
+                  help="Select existing guardrails or enter new ones"
+                >
+                  <Select
+                    mode="tags"
+                    style={{ width: '100%' }}
+                    placeholder="Select or enter guardrails"
+                    options={guardrailsList.map(name => ({ value: name, label: name }))}
+                  />
+                </Form.Item>
 
                 <Form.Item label="Metadata" name="metadata" className="mt-8">
                   <Input.TextArea
@@ -391,6 +475,36 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     options={predefinedTags}
                   />
                 </Form.Item>
+                <Accordion className="mt-20 mb-8">
+                  <AccordionHeader>
+                  <div className="flex items-center gap-2">
+
+                    <b>Advanced Settings</b>
+                    <Tooltip title={ 
+                      <span>
+                        Learn more about advanced settings in our{' '}
+                        <a 
+                          href={proxyBaseUrl ? `${proxyBaseUrl}/#/key%20management/generate_key_fn_key_generate_post`: `/#/key%20management/generate_key_fn_key_generate_post`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-400 hover:text-blue-300"
+                        >
+                          documentation
+                        </a>
+                      </span>
+                    }>
+                      <InfoCircleOutlined className="text-gray-400 hover:text-gray-300 cursor-help" />
+                    </Tooltip>
+                    </div>
+                  </AccordionHeader>
+                  <AccordionBody>
+                    <SchemaFormFields 
+                      schemaComponent="GenerateKeyRequest"
+                      form={form}
+                      excludedFields={['key_alias', 'team_id', 'models', 'duration', 'metadata', 'tags', 'guardrails', "max_budget", "budget_duration", "tpm_limit", "rpm_limit"]}
+                    />
+                  </AccordionBody>
+                </Accordion>
               </AccordionBody>
             </Accordion>
           </>

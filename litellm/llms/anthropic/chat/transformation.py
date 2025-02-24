@@ -1,35 +1,20 @@
 import json
 import time
-import types
-from re import A
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    Union,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 import httpx
-import requests
 
 import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
-from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.base_utils import type_to_response_format_param
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthropicComputerTool,
     AnthropicHostedTools,
     AnthropicInputSchema,
-    AnthropicMessageRequestBase,
-    AnthropicMessagesRequest,
     AnthropicMessagesTool,
     AnthropicMessagesToolChoice,
     AnthropicSystemMessageContent,
@@ -41,18 +26,10 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
-    ChatCompletionToolParamFunctionChunk,
-    ChatCompletionUsageBlock,
 )
 from litellm.types.utils import Message as LitellmMessage
 from litellm.types.utils import PromptTokensDetailsWrapper
-from litellm.utils import (
-    CustomStreamWrapper,
-    ModelResponse,
-    Usage,
-    add_dummy_tool,
-    has_tool_call_blocks,
-)
+from litellm.utils import ModelResponse, Usage, add_dummy_tool, has_tool_call_blocks
 
 from ..common_utils import AnthropicError, process_anthropic_headers
 
@@ -93,7 +70,7 @@ class AnthropicConfig(BaseConfig):
         metadata: Optional[dict] = None,
         system: Optional[str] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -118,6 +95,14 @@ class AnthropicConfig(BaseConfig):
             "user",
         ]
 
+    def get_json_schema_from_pydantic_object(
+        self, response_format: Union[Any, Dict, None]
+    ) -> Optional[dict]:
+
+        return type_to_response_format_param(
+            response_format, ref_template="/$defs/{model}"
+        )  # Relevant issue: https://github.com/BerriAI/litellm/issues/7755
+
     def get_cache_control_headers(self) -> dict:
         return {
             "anthropic-version": "2023-06-01",
@@ -133,7 +118,6 @@ class AnthropicConfig(BaseConfig):
         pdf_used: bool = False,
         is_vertex_request: bool = False,
     ) -> dict:
-        import json
 
         betas = []
         if prompt_caching_set:
@@ -283,16 +267,16 @@ class AnthropicConfig(BaseConfig):
         new_stop: Optional[List[str]] = None
         if isinstance(stop, str):
             if (
-                stop == "\n"
-            ) and litellm.drop_params is True:  # anthropic doesn't allow whitespace characters as stop-sequences
+                stop.isspace() and litellm.drop_params is True
+            ):  # anthropic doesn't allow whitespace characters as stop-sequences
                 return new_stop
             new_stop = [stop]
         elif isinstance(stop, list):
             new_v = []
             for v in stop:
                 if (
-                    v == "\n"
-                ) and litellm.drop_params is True:  # anthropic doesn't allow whitespace characters as stop-sequences
+                    v.isspace() and litellm.drop_params is True
+                ):  # anthropic doesn't allow whitespace characters as stop-sequences
                     continue
                 new_v.append(v)
             if len(new_v) > 0:
@@ -644,6 +628,7 @@ class AnthropicConfig(BaseConfig):
             )
         else:
             text_content = ""
+            citations: List[Any] = []
             tool_calls: List[ChatCompletionToolCallChunk] = []
             for idx, content in enumerate(completion_response["content"]):
                 if content["type"] == "text":
@@ -661,10 +646,14 @@ class AnthropicConfig(BaseConfig):
                             index=idx,
                         )
                     )
+                ## CITATIONS
+                if content.get("citations", None) is not None:
+                    citations.append(content["citations"])
 
             _message = litellm.Message(
                 tool_calls=tool_calls,
                 content=text_content or None,
+                provider_specific_fields={"citations": citations},
             )
 
             ## HANDLE JSON MODE - anthropic returns single function call
@@ -693,7 +682,7 @@ class AnthropicConfig(BaseConfig):
         cache_read_input_tokens: int = 0
 
         model_response.created = int(time.time())
-        model_response.model = model
+        model_response.model = completion_response["model"]
         if "cache_creation_input_tokens" in _usage:
             cache_creation_input_tokens = _usage["cache_creation_input_tokens"]
             prompt_tokens += cache_creation_input_tokens
@@ -766,6 +755,7 @@ class AnthropicConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> Dict:
         if api_key is None:
             raise litellm.AuthenticationError(
@@ -783,7 +773,7 @@ class AnthropicConfig(BaseConfig):
             prompt_caching_set=prompt_caching_set,
             pdf_used=pdf_used,
             api_key=api_key,
-            is_vertex_request=False,
+            is_vertex_request=optional_params.get("is_vertex_request", False),
         )
 
         headers = {**headers, **anthropic_headers}

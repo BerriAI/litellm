@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import sys
-from typing import Any
+from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 
 logging.basicConfig(level=logging.DEBUG)
@@ -269,6 +269,9 @@ audio_file = open(file_path, "rb")
 
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=4, delay=2)
+@pytest.mark.skip(
+    reason="langfuse now takes 5-10 mins to get this trace. Need to figure out how to test this"
+)
 async def test_langfuse_logging_audio_transcriptions(langfuse_client):
     """
     Test that creates a trace with masked input and output
@@ -304,6 +307,9 @@ async def test_langfuse_logging_audio_transcriptions(langfuse_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(
+    reason="langfuse now takes 5-10 mins to get this trace. Need to figure out how to test this"
+)
 async def test_langfuse_masked_input_output(langfuse_client):
     """
     Test that creates a trace with masked input and output
@@ -348,6 +354,7 @@ async def test_langfuse_masked_input_output(langfuse_client):
 
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=12, delay=2)
+@pytest.mark.skip(reason="all e2e langfuse tests now run on test_langfuse_e2e_test.py")
 async def test_aaalangfuse_logging_metadata(langfuse_client):
     """
     Test that creates multiple traces, with a varying number of generations and sets various metadata fields
@@ -1108,6 +1115,7 @@ generation_params = {
 def test_langfuse_prompt_type(prompt):
 
     from litellm.integrations.langfuse.langfuse import _add_prompt_to_generation_params
+    from unittest.mock import patch, MagicMock, Mock
 
     clean_metadata = {
         "prompt": {
@@ -1209,7 +1217,10 @@ def test_langfuse_prompt_type(prompt):
         "cache_hit": False,
     }
     _add_prompt_to_generation_params(
-        generation_params=generation_params, clean_metadata=clean_metadata
+        generation_params=generation_params,
+        clean_metadata=clean_metadata,
+        prompt_management_metadata=None,
+        langfuse_client=Mock(),
     )
 
 

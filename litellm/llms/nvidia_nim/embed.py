@@ -9,7 +9,7 @@ API calling is done using the OpenAI SDK with an api_base
 """
 
 import types
-from typing import Optional, Union
+from typing import Optional
 
 
 class NvidiaNimEmbeddingConfig:
@@ -32,7 +32,7 @@ class NvidiaNimEmbeddingConfig:
         input_type: Optional[str] = None,
         truncate: Optional[str] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -58,7 +58,7 @@ class NvidiaNimEmbeddingConfig:
     def get_supported_openai_params(
         self,
     ):
-        return ["encoding_format", "user"]
+        return ["encoding_format", "user", "dimensions"]
 
     def map_openai_params(
         self,
@@ -73,6 +73,8 @@ class NvidiaNimEmbeddingConfig:
                 optional_params["extra_body"].update({"input_type": v})
             elif k == "truncate":
                 optional_params["extra_body"].update({"truncate": v})
+            else:
+                optional_params[k] = v
 
         if kwargs is not None:
             # pass kwargs in extra_body

@@ -1,9 +1,8 @@
-import types
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union
 
 from httpx import Headers, Response
 
-from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -60,7 +59,7 @@ class PredibaseConfig(BaseConfig):
         typical_p: Optional[float] = None,
         watermark: Optional[bool] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -139,11 +138,6 @@ class PredibaseConfig(BaseConfig):
             "Predibase transformation currently done in handler.py. Need to migrate to this file."
         )
 
-    def _transform_messages(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
-        return messages
-
     def transform_request(
         self,
         model: str,
@@ -170,6 +164,7 @@ class PredibaseConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         if api_key is None:
             raise ValueError(

@@ -7,11 +7,7 @@ Docs - https://lmstudio.ai/docs/basics/server
 """
 
 import types
-from typing import List, Optional, Tuple
-
-from litellm import LlmProviders
-from litellm.secret_managers.main import get_secret_str
-from litellm.types.utils import Embedding, EmbeddingResponse, Usage
+from typing import List
 
 
 class LmStudioEmbeddingConfig:
@@ -22,7 +18,7 @@ class LmStudioEmbeddingConfig:
     def __init__(
         self,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)

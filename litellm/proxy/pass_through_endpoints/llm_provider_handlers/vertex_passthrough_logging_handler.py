@@ -15,6 +15,12 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as VertexModelResponseIterator,
 )
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
+from litellm.types.utils import (
+    EmbeddingResponse,
+    ImageResponse,
+    ModelResponse,
+    TextCompletionResponse,
+)
 
 if TYPE_CHECKING:
     from ..success_handler import PassThroughEndpointLogging
@@ -40,7 +46,7 @@ class VertexPassthroughLoggingHandler:
             model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
 
             instance_of_vertex_llm = litellm.VertexGeminiConfig()
-            litellm_model_response: litellm.ModelResponse = (
+            litellm_model_response: ModelResponse = (
                 instance_of_vertex_llm.transform_response(
                     model=model,
                     messages=[
@@ -82,8 +88,8 @@ class VertexPassthroughLoggingHandler:
             _json_response = httpx_response.json()
 
             litellm_prediction_response: Union[
-                litellm.ModelResponse, litellm.EmbeddingResponse, litellm.ImageResponse
-            ] = litellm.ModelResponse()
+                ModelResponse, EmbeddingResponse, ImageResponse
+            ] = ModelResponse()
             if vertex_image_generation_class.is_image_generation_response(
                 _json_response
             ):
@@ -176,7 +182,7 @@ class VertexPassthroughLoggingHandler:
         all_chunks: List[str],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
-    ) -> Optional[Union[litellm.ModelResponse, litellm.TextCompletionResponse]]:
+    ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
         vertex_iterator = VertexModelResponseIterator(
             streaming_response=None,
             sync_stream=False,
@@ -212,9 +218,7 @@ class VertexPassthroughLoggingHandler:
 
     @staticmethod
     def _create_vertex_response_logging_payload_for_generate_content(
-        litellm_model_response: Union[
-            litellm.ModelResponse, litellm.TextCompletionResponse
-        ],
+        litellm_model_response: Union[ModelResponse, TextCompletionResponse],
         model: str,
         kwargs: dict,
         start_time: datetime,

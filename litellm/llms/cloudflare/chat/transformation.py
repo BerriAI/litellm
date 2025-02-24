@@ -6,7 +6,7 @@ import httpx
 
 import litellm
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
-from litellm.llms.base_llm.transformation import (
+from litellm.llms.base_llm.chat.transformation import (
     BaseConfig,
     BaseLLMException,
     LiteLLMLoggingObj,
@@ -44,7 +44,7 @@ class CloudflareChatConfig(BaseConfig):
         max_tokens: Optional[int] = None,
         stream: Optional[bool] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -60,6 +60,7 @@ class CloudflareChatConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         if api_key is None:
             raise ValueError(
@@ -72,7 +73,13 @@ class CloudflareChatConfig(BaseConfig):
         }
         return headers
 
-    def get_complete_url(self, api_base: str, model: str) -> str:
+    def get_complete_url(
+        self,
+        api_base: str,
+        model: str,
+        optional_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
         return api_base + model
 
     def get_supported_openai_params(self, model: str) -> List[str]:
@@ -157,11 +164,6 @@ class CloudflareChatConfig(BaseConfig):
             status_code=status_code,
             message=error_message,
         )
-
-    def _transform_messages(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
-        raise NotImplementedError
 
     def get_model_response_iterator(
         self,

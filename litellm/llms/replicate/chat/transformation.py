@@ -1,14 +1,18 @@
-import types
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
 import litellm
-from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
-from litellm.litellm_core_utils.prompt_templates.common_utils import convert_content_list_to_str
-from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    convert_content_list_to_str,
+)
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    custom_prompt,
+    prompt_factory,
+)
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import Choices, Message, ModelResponse, Usage
+from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import token_counter
 
 from ..common_utils import ReplicateError
@@ -69,7 +73,7 @@ class ReplicateConfig(BaseConfig):
         seed: Optional[int] = None,
         debug: Optional[bool] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -125,11 +129,6 @@ class ReplicateConfig(BaseConfig):
             return split_model[1]
         return model
 
-    def _transform_messages(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
-        return messages
-
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
@@ -137,7 +136,13 @@ class ReplicateConfig(BaseConfig):
             status_code=status_code, message=error_message, headers=headers
         )
 
-    def get_complete_url(self, api_base: str, model: str) -> str:
+    def get_complete_url(
+        self,
+        api_base: str,
+        model: str,
+        optional_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
         version_id = self.model_to_version_id(model)
         base_url = api_base
         if "deployments" in version_id:
@@ -304,6 +309,7 @@ class ReplicateConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         headers = {
             "Authorization": f"Token {api_key}",

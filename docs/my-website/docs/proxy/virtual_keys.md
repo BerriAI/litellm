@@ -224,272 +224,13 @@ Expected Response
 </TabItem>
 </Tabs>
 
-## **Model Access**
 
-### **Restrict models by Virtual Key**
-
-Set allowed models for a key using the `models` param
-
-
-```shell
-curl 'http://0.0.0.0:4000/key/generate' \
---header 'Authorization: Bearer <your-master-key>' \
---header 'Content-Type: application/json' \
---data-raw '{"models": ["gpt-3.5-turbo", "gpt-4"]}'
-```
-
-:::info
-
-This key can only make requests to `models` that are `gpt-3.5-turbo` or `gpt-4`
-
-:::
-
-Verify this is set correctly by 
-
-<Tabs>
-<TabItem label="Allowed Access" value = "allowed">
-
-```shell
-curl -i http://localhost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
-  -d '{
-    "model": "gpt-4",
-    "messages": [
-      {"role": "user", "content": "Hello"}
-    ]
-  }'
-```
-
-</TabItem>
-
-<TabItem label="Disallowed Access" value = "not-allowed">
-
-:::info
-
-Expect this to fail since gpt-4o is not in the `models` for the key generated
-
-:::
-
-```shell
-curl -i http://localhost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
-  -d '{
-    "model": "gpt-4o",
-    "messages": [
-      {"role": "user", "content": "Hello"}
-    ]
-  }'
-```
-
-</TabItem>
-
-</Tabs>
-
-### **Restrict models by `team_id`**
-`litellm-dev` can only access `azure-gpt-3.5`
-
-**1. Create a team via `/team/new`**
-```shell
-curl --location 'http://localhost:4000/team/new' \
---header 'Authorization: Bearer <your-master-key>' \
---header 'Content-Type: application/json' \
---data-raw '{
-  "team_alias": "litellm-dev",
-  "models": ["azure-gpt-3.5"]
-}' 
-
-# returns {...,"team_id": "my-unique-id"}
-```
-
-**2. Create a key for team**
-```shell
-curl --location 'http://localhost:4000/key/generate' \
---header 'Authorization: Bearer sk-1234' \
---header 'Content-Type: application/json' \
---data-raw '{"team_id": "my-unique-id"}'
-```
-
-**3. Test it**
-```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Content-Type: application/json' \
-    --header 'Authorization: Bearer sk-qo992IjKOC2CHKZGRoJIGA' \
-    --data '{
-        "model": "BEDROCK_GROUP",
-        "messages": [
-            {
-                "role": "user",
-                "content": "hi"
-            }
-        ]
-    }'
-```
-
-```shell
-{"error":{"message":"Invalid model for team litellm-dev: BEDROCK_GROUP.  Valid models for team are: ['azure-gpt-3.5']\n\n\nTraceback (most recent call last):\n  File \"/Users/ishaanjaffer/Github/litellm/litellm/proxy/proxy_server.py\", line 2298, in chat_completion\n    _is_valid_team_configs(\n  File \"/Users/ishaanjaffer/Github/litellm/litellm/proxy/utils.py\", line 1296, in _is_valid_team_configs\n    raise Exception(\nException: Invalid model for team litellm-dev: BEDROCK_GROUP.  Valid models for team are: ['azure-gpt-3.5']\n\n","type":"None","param":"None","code":500}}%            
-```         
-
-### **Grant Access to new model (Access Groups)**
-
-Use model access groups to give users access to select models, and add new ones to it over time (e.g. mistral, llama-2, etc.)
-
-**Step 1. Assign model, access group in config.yaml**
-
-```yaml
-model_list:
-  - model_name: gpt-4
-    litellm_params:
-      model: openai/fake
-      api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-    model_info:
-      access_groups: ["beta-models"] # 👈 Model Access Group
-  - model_name: fireworks-llama-v3-70b-instruct
-    litellm_params:
-      model: fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct
-      api_key: "os.environ/FIREWORKS"
-    model_info:
-      access_groups: ["beta-models"] # 👈 Model Access Group
-```
-
-<Tabs>
-
-<TabItem value="key" label="Key Access Groups">
-
-**Create key with access group**
-
-```bash
-curl --location 'http://localhost:4000/key/generate' \
--H 'Authorization: Bearer <your-master-key>' \
--H 'Content-Type: application/json' \
--d '{"models": ["beta-models"], # 👈 Model Access Group
-			"max_budget": 0,}'
-```
-
-Test Key 
-
-<Tabs>
-<TabItem label="Allowed Access" value = "allowed">
-
-```shell
-curl -i http://localhost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-<key-from-previous-step>" \
-  -d '{
-    "model": "gpt-4",
-    "messages": [
-      {"role": "user", "content": "Hello"}
-    ]
-  }'
-```
-
-</TabItem>
-
-<TabItem label="Disallowed Access" value = "not-allowed">
-
-:::info
-
-Expect this to fail since gpt-4o is not in the `beta-models` access group
-
-:::
-
-```shell
-curl -i http://localhost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-<key-from-previous-step>" \
-  -d '{
-    "model": "gpt-4o",
-    "messages": [
-      {"role": "user", "content": "Hello"}
-    ]
-  }'
-```
-
-</TabItem>
-
-</Tabs>
-
-</TabItem>
-
-<TabItem value="team" label="Team Access Groups">
-
-Create Team
-
-```shell
-curl --location 'http://localhost:4000/team/new' \
--H 'Authorization: Bearer sk-<key-from-previous-step>' \
--H 'Content-Type: application/json' \
--d '{"models": ["beta-models"]}'
-```
-
-Create Key for Team 
-
-```shell
-curl --location 'http://0.0.0.0:4000/key/generate' \
---header 'Authorization: Bearer sk-<key-from-previous-step>' \
---header 'Content-Type: application/json' \
---data '{"team_id": "0ac97648-c194-4c90-8cd6-40af7b0d2d2a"}
-```
-
-
-Test Key
-
-<Tabs>
-<TabItem label="Allowed Access" value = "allowed">
-
-```shell
-curl -i http://localhost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-<key-from-previous-step>" \
-  -d '{
-    "model": "gpt-4",
-    "messages": [
-      {"role": "user", "content": "Hello"}
-    ]
-  }'
-```
-
-</TabItem>
-
-<TabItem label="Disallowed Access" value = "not-allowed">
-
-:::info
-
-Expect this to fail since gpt-4o is not in the `beta-models` access group
-
-:::
-
-```shell
-curl -i http://localhost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-<key-from-previous-step>" \
-  -d '{
-    "model": "gpt-4o",
-    "messages": [
-      {"role": "user", "content": "Hello"}
-    ]
-  }'
-```
-
-</TabItem>
-
-</Tabs>
-
-</TabItem>
-
-</Tabs>
-
-
-### Model Aliases
+## Model Aliases
 
 If a user is expected to use a given model (i.e. gpt3-5), and you want to:
 
 - try to upgrade the request (i.e. GPT4)
 - or downgrade it (i.e. Mistral)
-- OR rotate the API KEY (i.e. open AI)
-- OR access the same model through different end points (i.e. openAI vs openrouter vs Azure)
 
 Here's how you can do that: 
 
@@ -509,13 +250,13 @@ model_list:
     litellm_params:
         model: huggingface/HuggingFaceH4/zephyr-7b-beta
         api_base: http://0.0.0.0:8003
-	- model_name: my-paid-tier
+  - model_name: my-paid-tier
     litellm_params:
         model: gpt-4
         api_key: my-api-key
 ```
 
-**Step 2: Generate a user key - enabling them access to specific models, custom model aliases, etc.**
+**Step 2: Generate a key**
 
 ```bash
 curl -X POST "https://0.0.0.0:4000/key/generate" \
@@ -523,13 +264,29 @@ curl -X POST "https://0.0.0.0:4000/key/generate" \
 -H "Content-Type: application/json" \
 -d '{
 	"models": ["my-free-tier"], 
-	"aliases": {"gpt-3.5-turbo": "my-free-tier"}, 
+	"aliases": {"gpt-3.5-turbo": "my-free-tier"}, # 👈 KEY CHANGE
 	"duration": "30min"
 }'
 ```
 
 - **How to upgrade / downgrade request?** Change the alias mapping
-- **How are routing between diff keys/api bases done?** litellm handles this by shuffling between different models in the model list with the same model_name. [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/router.py)
+
+**Step 3: Test the key**
+
+```bash
+curl -X POST "https://0.0.0.0:4000/key/generate" \
+-H "Authorization: Bearer <user-key>" \
+-H "Content-Type: application/json" \
+-d '{
+    "model": "gpt-3.5-turbo", 
+    "messages": [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ]
+}'
+```
 
 
 ## Advanced
@@ -635,55 +392,6 @@ curl -L -X POST 'http://0.0.0.0:4000/key/unblock' \
 }
 ```
 
-
-### Custom Auth 
-
-You can now override the default api key auth.
-
-Here's how: 
-
-#### 1. Create a custom auth file. 
-
-Make sure the response type follows the `UserAPIKeyAuth` pydantic object. This is used by for logging usage specific to that user key.
-
-```python
-from litellm.proxy._types import UserAPIKeyAuth
-
-async def user_api_key_auth(request: Request, api_key: str) -> UserAPIKeyAuth: 
-    try: 
-        modified_master_key = "sk-my-master-key"
-        if api_key == modified_master_key:
-            return UserAPIKeyAuth(api_key=api_key)
-        raise Exception
-    except: 
-        raise Exception
-```
-
-#### 2. Pass the filepath (relative to the config.yaml)
-
-Pass the filepath to the config.yaml 
-
-e.g. if they're both in the same dir - `./config.yaml` and `./custom_auth.py`, this is what it looks like:
-```yaml 
-model_list: 
-  - model_name: "openai-model"
-    litellm_params: 
-      model: "gpt-3.5-turbo"
-
-litellm_settings:
-  drop_params: True
-  set_verbose: True
-
-general_settings:
-  custom_auth: custom_auth.user_api_key_auth
-```
-
-[**Implementation Code**](https://github.com/BerriAI/litellm/blob/caf2a6b279ddbe89ebd1d8f4499f65715d684851/litellm/proxy/utils.py#L122)
-
-#### 3. Start the proxy
-```shell
-$ litellm --config /path/to/config.yaml 
-```
 
 ### Custom /key/generate
 
@@ -810,6 +518,61 @@ litellm_settings:
     metadata: {"setting":"default"}
     team_id: "core-infra"
 ```
+
+### ✨ Key Rotations 
+
+:::info
+
+This is an Enterprise feature.
+
+[Enterprise Pricing](https://www.litellm.ai/#pricing)
+
+[Get free 7-day trial key](https://www.litellm.ai/#trial)
+
+
+:::
+
+Rotate an existing API Key, while optionally updating its parameters.
+
+```bash
+
+curl 'http://localhost:4000/key/sk-1234/regenerate' \
+  -X POST \
+  -H 'Authorization: Bearer sk-1234' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "max_budget": 100,
+    "metadata": {
+      "team": "core-infra"
+    },
+    "models": [
+      "gpt-4",
+      "gpt-3.5-turbo"
+    ]
+  }'
+
+```
+
+**Read More**
+
+- [Write rotated keys to secrets manager](https://docs.litellm.ai/docs/secret#aws-secret-manager)
+
+[**👉 API REFERENCE DOCS**](https://litellm-api.up.railway.app/#/key%20management/regenerate_key_fn_key__key__regenerate_post)
+
+
+### Temporary Budget Increase
+
+Use the `/key/update` endpoint to increase the budget of an existing key. 
+
+```bash
+curl -L -X POST 'http://localhost:4000/key/update' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{"key": "sk-b3Z3Lqdb_detHXSUp4ol4Q", "temp_budget_increase": 100, "temp_budget_expiry": "10d"}'
+```
+
+[API Reference](https://litellm-api.up.railway.app/#/key%20management/update_key_fn_key_update_post)
+
 
 ### Restricting Key Generation
 

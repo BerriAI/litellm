@@ -3,7 +3,7 @@ from typing import Dict, List, Literal, Optional, Tuple, Union
 import httpx
 
 from litellm import supports_response_schema, supports_system_messages, verbose_logger
-from litellm.llms.base_llm.transformation import BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.vertex_ai import PartType
 
 

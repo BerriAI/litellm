@@ -1,17 +1,13 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
-import traceback
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Union
-
-from pydantic import BaseModel
 
 import litellm
 from litellm import ModelResponse, token_counter, verbose_logger
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.utils import LiteLLMPydanticObjectBase
 
 
 class LowestCostLoggingHandler(CustomLogger):

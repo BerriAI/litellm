@@ -11,9 +11,9 @@ import os
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-from typing import Optional, Literal, Union, Any
-import litellm, traceback, sys, uuid
-from litellm.caching.caching import DualCache
+from typing import Optional, Literal, Any
+import litellm
+import sys
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from fastapi import HTTPException
@@ -23,14 +23,10 @@ from litellm.litellm_core_utils.logging_utils import (
     convert_litellm_response_object_to_str,
 )
 from typing import List
-from datetime import datetime
-import aiohttp, asyncio
-from litellm._logging import verbose_proxy_logger
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-import httpx
 import json
 from litellm.types.guardrails import GuardrailEventHooks
 
@@ -147,7 +143,6 @@ class AporiaGuardrail(CustomGuardrail):
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
-        from litellm.types.guardrails import GuardrailEventHooks
 
         """
         Use this for the post call moderation with Guardrails
@@ -183,7 +178,6 @@ class AporiaGuardrail(CustomGuardrail):
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
-        from litellm.types.guardrails import GuardrailEventHooks
 
         event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:

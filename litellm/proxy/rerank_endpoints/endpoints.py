@@ -1,13 +1,9 @@
 #### Rerank Endpoints #####
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional
 
-import fastapi
 import orjson
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import ORJSONResponse
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -15,7 +11,12 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 router = APIRouter()
 import asyncio
 
-
+@router.post(
+    "/v2/rerank",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["rerank"],
+)
 @router.post(
     "/v1/rerank",
     dependencies=[Depends(user_api_key_auth)],

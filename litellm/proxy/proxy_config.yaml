@@ -1,14 +1,18 @@
 model_list:
-  - model_name: gpt-4o
+  - model_name: fake-openai-endpoint
     litellm_params:
-      model: openai/gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
-      max_budget: 0.000000000001 # (USD)
-      budget_duration: 1d # (Duration)
-  - model_name: gpt-4o-mini
-    litellm_params:
-      model: openai/gpt-4o-mini
-      api_key: os.environ/OPENAI_API_KEY
-      max_budget: 100 # (USD)
-      budget_duration: 1d # (Duration)
+      model: openai/my-fake-model
+      api_key: my-fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
+
+general_settings:
+  store_model_in_db: true
+
+
+litellm_settings:
+  cache: true
+  cache_params:
+    type: redis
+    ttl: 600
+    redis_startup_nodes: [{"host": "127.0.0.1", "port": "7100"}] 

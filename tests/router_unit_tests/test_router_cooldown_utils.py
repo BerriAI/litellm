@@ -7,7 +7,8 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 from litellm import Router
-from litellm.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.router import Deployment, LiteLLM_Params
+from litellm.types.router import ModelInfo
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from dotenv import load_dotenv
@@ -23,6 +24,11 @@ from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
     increment_deployment_successes_for_current_minute,
 )
+
+import pytest
+from unittest.mock import patch
+from litellm import Router
+from litellm.router_utils.cooldown_handlers import _should_cooldown_deployment
 
 load_dotenv()
 
@@ -181,6 +187,11 @@ def testing_litellm_router():
                 "model_name": "test_deployment",
                 "litellm_params": {"model": "openai/test_deployment"},
                 "model_id": "test_deployment_2",
+            },
+            {
+                "model_name": "test_deployment",
+                "litellm_params": {"model": "openai/test_deployment-2"},
+                "model_id": "test_deployment_3",
             },
         ]
     )
@@ -394,3 +405,114 @@ def test_cast_exception_status_to_int():
     assert cast_exception_status_to_int(200) == 200
     assert cast_exception_status_to_int("404") == 404
     assert cast_exception_status_to_int("invalid") == 500
+
+
+@pytest.fixture
+def router():
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {
+                    "id": "gpt-4--0",
+                },
+            }
+        ]
+    )
+
+
+@patch(
+    "litellm.router_utils.cooldown_handlers.get_deployment_successes_for_current_minute"
+)
+@patch(
+    "litellm.router_utils.cooldown_handlers.get_deployment_failures_for_current_minute"
+)
+def test_should_cooldown_high_traffic_all_fails(mock_failures, mock_successes, router):
+    # Simulate 10 failures, 0 successes
+    from litellm.constants import SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD
+
+    mock_failures.return_value = SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD + 1
+    mock_successes.return_value = 0
+
+    should_cooldown = _should_cooldown_deployment(
+        litellm_router_instance=router,
+        deployment="gpt-4--0",
+        exception_status=500,
+        original_exception=Exception("Test error"),
+    )
+
+    assert (
+        should_cooldown is True
+    ), "Should cooldown when all requests fail with sufficient traffic"
+
+
+@patch(
+    "litellm.router_utils.cooldown_handlers.get_deployment_successes_for_current_minute"
+)
+@patch(
+    "litellm.router_utils.cooldown_handlers.get_deployment_failures_for_current_minute"
+)
+def test_no_cooldown_low_traffic(mock_failures, mock_successes, router):
+    # Simulate 3 failures (below MIN_TRAFFIC_THRESHOLD)
+    mock_failures.return_value = 3
+    mock_successes.return_value = 0
+
+    should_cooldown = _should_cooldown_deployment(
+        litellm_router_instance=router,
+        deployment="gpt-4--0",
+        exception_status=500,
+        original_exception=Exception("Test error"),
+    )
+
+    assert (
+        should_cooldown is False
+    ), "Should not cooldown when traffic is below threshold"
+
+
+@patch(
+    "litellm.router_utils.cooldown_handlers.get_deployment_successes_for_current_minute"
+)
+@patch(
+    "litellm.router_utils.cooldown_handlers.get_deployment_failures_for_current_minute"
+)
+def test_cooldown_rate_limit(mock_failures, mock_successes, router):
+    """
+    Don't cooldown single deployment models, for anything besides traffic
+    """
+    mock_failures.return_value = 1
+    mock_successes.return_value = 0
+
+    should_cooldown = _should_cooldown_deployment(
+        litellm_router_instance=router,
+        deployment="gpt-4--0",
+        exception_status=429,  # Rate limit error
+        original_exception=Exception("Rate limit exceeded"),
+    )
+
+    assert (
+        should_cooldown is False
+    ), "Should not cooldown on rate limit error for single deployment models"
+
+
+@patch(
+    "litellm.router_utils.cooldown_handlers.get_deployment_successes_for_current_minute"
+)
+@patch(
+    "litellm.router_utils.cooldown_handlers.get_deployment_failures_for_current_minute"
+)
+def test_mixed_success_failure(mock_failures, mock_successes, router):
+    # Simulate 3 failures, 7 successes
+    mock_failures.return_value = 3
+    mock_successes.return_value = 7
+
+    should_cooldown = _should_cooldown_deployment(
+        litellm_router_instance=router,
+        deployment="gpt-4--0",
+        exception_status=500,
+        original_exception=Exception("Test error"),
+    )
+
+    assert (
+        should_cooldown is False
+    ), "Should not cooldown when failure rate is below threshold"

@@ -1,8 +1,6 @@
 import json
 from typing import TYPE_CHECKING, Any, Optional
 
-from litellm._logging import print_verbose
-
 from .base_cache import BaseCache
 
 if TYPE_CHECKING:

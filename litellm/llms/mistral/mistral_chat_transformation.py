@@ -6,15 +6,15 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-import types
 from typing import List, Literal, Optional, Tuple, Union
 
-from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
     strip_none_values_from_message,
 )
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.mistral import MistralToolCallMessage
 from litellm.types.llms.openai import AllMessageValues
 
 
@@ -148,7 +148,7 @@ class MistralConfig(OpenAIGPTConfig):
         return api_base, dynamic_api_key
 
     def _transform_messages(
-        self, messages: List[AllMessageValues]
+        self, messages: List[AllMessageValues], model: str
     ) -> List[AllMessageValues]:
         """
         - handles scenario where content is list and not string
@@ -173,6 +173,7 @@ class MistralConfig(OpenAIGPTConfig):
         new_messages: List[AllMessageValues] = []
         for m in messages:
             m = MistralConfig._handle_name_in_message(m)
+            m = MistralConfig._handle_tool_call_message(m)
             m = strip_none_values_from_message(m)  # prevents 'extra_forbidden' error
             new_messages.append(m)
 
@@ -190,4 +191,22 @@ class MistralConfig(OpenAIGPTConfig):
         if _name is not None and message["role"] != "tool":
             message.pop("name", None)  # type: ignore
 
+        return message
+
+    @classmethod
+    def _handle_tool_call_message(cls, message: AllMessageValues) -> AllMessageValues:
+        """
+        Mistral API only supports tool_calls in Messages in `MistralToolCallMessage` spec
+        """
+        _tool_calls = message.get("tool_calls")
+        mistral_tool_calls: List[MistralToolCallMessage] = []
+        if _tool_calls is not None and isinstance(_tool_calls, list):
+            for _tool in _tool_calls:
+                _tool_call_message = MistralToolCallMessage(
+                    id=_tool.get("id"),
+                    type="function",
+                    function=_tool.get("function"),  # type: ignore
+                )
+                mistral_tool_calls.append(_tool_call_message)
+            message["tool_calls"] = mistral_tool_calls  # type: ignore
         return message

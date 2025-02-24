@@ -1,9 +1,7 @@
-import traceback
-
 from fastapi import HTTPException
 
-import litellm
 from litellm import verbose_logger
+from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -14,10 +12,6 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
     def __init__(self):
         pass
 
-    def print_verbose(self, print_statement):
-        if litellm.set_verbose is True:
-            print(print_statement)  # noqa
-
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -26,7 +20,7 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
         call_type: str,
     ):
         try:
-            self.print_verbose("Inside Max Budget Limiter Pre-Call Hook")
+            verbose_proxy_logger.debug("Inside Max Budget Limiter Pre-Call Hook")
             cache_key = f"{user_api_key_dict.user_id}_user_api_key_user_id"
             user_row = await cache.async_get_cache(
                 cache_key, parent_otel_span=user_api_key_dict.parent_otel_span

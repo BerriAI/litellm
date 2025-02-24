@@ -3,8 +3,6 @@ import os
 import time
 from typing import Dict, Final, List, Optional
 
-from litellm.types.utils import ModelResponse
-
 CONFIG_FILE_PATH_DEFAULT: Final[str] = "~/.opik.config"
 
 

@@ -2,13 +2,10 @@
 
 #### What this does ####
 #    On success, logs events to Promptlayer
-import dotenv, os
-import requests
+import os
 
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.caching.caching import DualCache
 
-from typing import Literal, Union, Optional
+from typing import Optional
 
 import traceback
 
@@ -16,11 +13,8 @@ import traceback
 #### What this does ####
 #    On success + failure, log events to Supabase
 
-import dotenv, os
-import requests
-import traceback
-import datetime, subprocess, sys
-import litellm, uuid
+import litellm
+import uuid
 from litellm._logging import print_verbose, verbose_logger
 
 
@@ -116,7 +110,9 @@ class GenericAPILogger:
             print_verbose(f"\nGeneric Logger - Logging payload = {data}")
 
             # make request to endpoint with payload
-            response = requests.post(self.endpoint, json=data, headers=self.headers)
+            response = litellm.module_level_client.post(
+                self.endpoint, json=data, headers=self.headers
+            )
 
             response_status = response.status_code
             response_text = response.text

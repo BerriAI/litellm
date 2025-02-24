@@ -4,7 +4,7 @@ from typing import AsyncIterator, Iterator, List, Optional, Union
 import httpx
 
 from litellm import verbose_logger
-from litellm.llms.base_llm.transformation import BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import StreamingChatCompletionChunk
 

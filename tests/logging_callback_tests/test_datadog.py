@@ -498,3 +498,82 @@ def test_datadog_static_methods():
         expected_custom_tags = "env:production,service:custom-service,version:1.0.0,HOSTNAME:test-host,POD_NAME:pod-123"
         print("DataDogLogger._get_datadog_tags()", DataDogLogger._get_datadog_tags())
         assert DataDogLogger._get_datadog_tags() == expected_custom_tags
+
+
+@pytest.mark.asyncio
+async def test_datadog_non_serializable_messages():
+    """Test logging events with non-JSON-serializable messages"""
+    dd_logger = DataDogLogger()
+
+    # Create payload with non-serializable content
+    standard_payload = create_standard_logging_payload()
+    non_serializable_obj = datetime.now()  # datetime objects aren't JSON serializable
+    standard_payload["messages"] = [{"role": "user", "content": non_serializable_obj}]
+    standard_payload["response"] = {
+        "choices": [{"message": {"content": non_serializable_obj}}]
+    }
+
+    kwargs = {"standard_logging_object": standard_payload}
+
+    # Test payload creation
+    dd_payload = dd_logger.create_datadog_logging_payload(
+        kwargs=kwargs,
+        response_obj=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    # Verify payload can be serialized
+    assert dd_payload["status"] == DataDogStatus.INFO
+
+    # Verify the message can be parsed back to dict
+    dict_payload = json.loads(dd_payload["message"])
+
+    # Check that the non-serializable objects were converted to strings
+    assert isinstance(dict_payload["messages"][0]["content"], str)
+    assert isinstance(dict_payload["response"]["choices"][0]["message"]["content"], str)
+
+
+def test_get_datadog_tags():
+    """Test the _get_datadog_tags static method with various inputs"""
+    # Test with no standard_logging_object and default env vars
+    base_tags = DataDogLogger._get_datadog_tags()
+    assert "env:" in base_tags
+    assert "service:" in base_tags
+    assert "version:" in base_tags
+    assert "POD_NAME:" in base_tags
+    assert "HOSTNAME:" in base_tags
+
+    # Test with custom env vars
+    test_env = {
+        "DD_ENV": "production",
+        "DD_SERVICE": "custom-service",
+        "DD_VERSION": "1.0.0",
+        "HOSTNAME": "test-host",
+        "POD_NAME": "pod-123",
+    }
+    with patch.dict(os.environ, test_env):
+        custom_tags = DataDogLogger._get_datadog_tags()
+        assert "env:production" in custom_tags
+        assert "service:custom-service" in custom_tags
+        assert "version:1.0.0" in custom_tags
+        assert "HOSTNAME:test-host" in custom_tags
+        assert "POD_NAME:pod-123" in custom_tags
+
+    # Test with standard_logging_object containing request_tags
+    standard_logging_obj = create_standard_logging_payload()
+    standard_logging_obj["request_tags"] = ["tag1", "tag2"]
+
+    tags_with_request = DataDogLogger._get_datadog_tags(standard_logging_obj)
+    assert "request_tag:tag1" in tags_with_request
+    assert "request_tag:tag2" in tags_with_request
+
+    # Test with empty request_tags
+    standard_logging_obj["request_tags"] = []
+    tags_empty_request = DataDogLogger._get_datadog_tags(standard_logging_obj)
+    assert "request_tag:" not in tags_empty_request
+
+    # Test with None request_tags
+    standard_logging_obj["request_tags"] = None
+    tags_none_request = DataDogLogger._get_datadog_tags(standard_logging_obj)
+    assert "request_tag:" not in tags_none_request

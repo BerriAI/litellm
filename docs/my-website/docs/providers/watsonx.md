@@ -14,6 +14,7 @@ os.environ["WATSONX_TOKEN"] = "" # IAM auth token
 # optional - can also be passed as params to completion() or embedding()
 os.environ["WATSONX_PROJECT_ID"] = "" # Project ID of your WatsonX instance
 os.environ["WATSONX_DEPLOYMENT_SPACE_ID"] = "" # ID of your deployment space to use deployed models
+os.environ["WATSONX_ZENAPIKEY"] = "" # Zen API key (use for long-term api token)
 ```
 
 See [here](https://cloud.ibm.com/apidocs/watsonx-ai#api-authentication) for more information on how to get an access token to authenticate to watsonx.ai.

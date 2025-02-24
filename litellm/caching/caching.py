@@ -8,16 +8,12 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import ast
-import asyncio
 import hashlib
-import inspect
-import io
 import json
-import logging
 import time
 import traceback
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Union
 
 from openai.types.audio.transcription_create_params import TranscriptionCreateParams
 from openai.types.chat.completion_create_params import (
@@ -41,10 +37,11 @@ from litellm.types.utils import all_litellm_params
 
 from .base_cache import BaseCache
 from .disk_cache import DiskCache
-from .dual_cache import DualCache
+from .dual_cache import DualCache  # noqa
 from .in_memory_cache import InMemoryCache
 from .qdrant_semantic_cache import QdrantSemanticCache
 from .redis_cache import RedisCache
+from .redis_cluster_cache import RedisClusterCache
 from .redis_semantic_cache import RedisSemanticCache
 from .s3_cache import S3Cache
 
@@ -162,14 +159,23 @@ class Cache:
             None. Cache is set as a litellm param
         """
         if type == LiteLLMCacheType.REDIS:
-            self.cache: BaseCache = RedisCache(
-                host=host,
-                port=port,
-                password=password,
-                redis_flush_size=redis_flush_size,
-                startup_nodes=redis_startup_nodes,
-                **kwargs,
-            )
+            if redis_startup_nodes:
+                self.cache: BaseCache = RedisClusterCache(
+                    host=host,
+                    port=port,
+                    password=password,
+                    redis_flush_size=redis_flush_size,
+                    startup_nodes=redis_startup_nodes,
+                    **kwargs,
+                )
+            else:
+                self.cache = RedisCache(
+                    host=host,
+                    port=port,
+                    password=password,
+                    redis_flush_size=redis_flush_size,
+                    **kwargs,
+                )
         elif type == LiteLLMCacheType.REDIS_SEMANTIC:
             self.cache = RedisSemanticCache(
                 host=host,
@@ -211,9 +217,9 @@ class Cache:
         if "cache" not in litellm.input_callback:
             litellm.input_callback.append("cache")
         if "cache" not in litellm.success_callback:
-            litellm.success_callback.append("cache")
+            litellm.logging_callback_manager.add_litellm_success_callback("cache")
         if "cache" not in litellm._async_success_callback:
-            litellm._async_success_callback.append("cache")
+            litellm.logging_callback_manager.add_litellm_async_success_callback("cache")
         self.supported_call_types = supported_call_types  # default to ["completion", "acompletion", "embedding", "aembedding"]
         self.type = type
         self.namespace = namespace
@@ -271,9 +277,7 @@ class Cache:
 
         verbose_logger.debug("\nCreated cache key: %s", cache_key)
         hashed_cache_key = Cache._get_hashed_cache_key(cache_key)
-        hashed_cache_key = self._add_redis_namespace_to_cache_key(
-            hashed_cache_key, **kwargs
-        )
+        hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
         self._set_preset_cache_key_in_kwargs(
             preset_cache_key=hashed_cache_key, **kwargs
         )
@@ -449,7 +453,7 @@ class Cache:
         verbose_logger.debug("Hashed cache key (SHA-256): %s", hash_hex)
         return hash_hex
 
-    def _add_redis_namespace_to_cache_key(self, hash_hex: str, **kwargs) -> str:
+    def _add_namespace_to_cache_key(self, hash_hex: str, **kwargs) -> str:
         """
         If a redis namespace is provided, add it to the cache key
 
@@ -460,7 +464,12 @@ class Cache:
         Returns:
             str: The final hashed cache key with the redis namespace.
         """
-        namespace = kwargs.get("metadata", {}).get("redis_namespace") or self.namespace
+        dynamic_cache_control: DynamicCacheControl = kwargs.get("cache", {})
+        namespace = (
+            dynamic_cache_control.get("namespace")
+            or kwargs.get("metadata", {}).get("redis_namespace")
+            or self.namespace
+        )
         if namespace:
             hash_hex = f"{namespace}:{hash_hex}"
         verbose_logger.debug("Final hashed key: %s", hash_hex)
@@ -540,10 +549,13 @@ class Cache:
             else:
                 cache_key = self.get_cache_key(**kwargs)
             if cache_key is not None:
-                cache_control_args = kwargs.get("cache", {})
-                max_age = cache_control_args.get(
-                    "s-max-age", cache_control_args.get("s-maxage", float("inf"))
+                cache_control_args: DynamicCacheControl = kwargs.get("cache", {})
+                max_age = (
+                    cache_control_args.get("s-maxage")
+                    or cache_control_args.get("s-max-age")
+                    or float("inf")
                 )
+                cached_result = self.cache.get_cache(cache_key, messages=messages)
                 cached_result = self.cache.get_cache(cache_key, messages=messages)
                 return self._get_cache_logic(
                     cached_result=cached_result, max_age=max_age
@@ -778,9 +790,9 @@ def enable_cache(
     if "cache" not in litellm.input_callback:
         litellm.input_callback.append("cache")
     if "cache" not in litellm.success_callback:
-        litellm.success_callback.append("cache")
+        litellm.logging_callback_manager.add_litellm_success_callback("cache")
     if "cache" not in litellm._async_success_callback:
-        litellm._async_success_callback.append("cache")
+        litellm.logging_callback_manager.add_litellm_async_success_callback("cache")
 
     if litellm.cache is None:
         litellm.cache = Cache(
