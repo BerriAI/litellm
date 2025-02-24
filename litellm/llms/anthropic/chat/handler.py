@@ -19,6 +19,7 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     get_async_httpx_client,
+    _get_httpx_client
 )
 from litellm.types.llms.anthropic import (
     AnthropicChatCompletionUsageBlock,
@@ -404,7 +405,7 @@ class AnthropicChatCompletion(BaseLLM):
 
             else:
                 if client is None or not isinstance(client, HTTPHandler):
-                    client = client = litellm.module_level_client
+                    client = _get_httpx_client()
 
                 try:
                     response = client.post(
