@@ -669,111 +669,89 @@ class PromptTokensDetailsWrapper(
 
 
 class Usage(CompletionUsage):
-    _cache_creation_input_tokens: int = PrivateAttr(
-        0
-    )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
-    _cache_read_input_tokens: int = PrivateAttr(
-        0
-    )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
 
     def __init__(
         self,
-        prompt_tokens: Optional[int] = None,
-        completion_tokens: Optional[int] = None,
-        total_tokens: Optional[int] = None,
-        reasoning_tokens: Optional[int] = None,
+        prompt_tokens: Optional[int] = 0,
+        completion_tokens: Optional[int] = 0,
+        total_tokens: Optional[int] = 0,
+        reasoning_tokens: Optional[int] = 0,
         prompt_tokens_details: Optional[Union[PromptTokensDetailsWrapper, dict]] = None,
-        completion_tokens_details: Optional[
-            Union[CompletionTokensDetailsWrapper, dict]
-        ] = None,
+        completion_tokens_details: Optional[Union[CompletionTokensDetailsWrapper, dict]] = None,
+        cache_creation_input_tokens: Optional[int] = 0,
+        cache_read_input_tokens: Optional[int] = 0,
         **params,
     ):
-        # handle reasoning_tokens
-        _completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
+        # Initialize prompt_tokens_details if not provided
+        if prompt_tokens_details is None:
+            prompt_tokens_details = PromptTokensDetailsWrapper()
+
+        # Initialize completion_tokens_details if not provided
+        if completion_tokens_details is None:
+            completion_tokens_details = CompletionTokensDetailsWrapper()
+
+        # Handle reasoning tokens
         if reasoning_tokens:
-            completion_tokens_details = CompletionTokensDetailsWrapper(
-                reasoning_tokens=reasoning_tokens
-            )
+            completion_tokens_details.reasoning_tokens = reasoning_tokens
 
-        # Ensure completion_tokens_details is properly handled
-        if completion_tokens_details:
-            if isinstance(completion_tokens_details, dict):
-                _completion_tokens_details = CompletionTokensDetailsWrapper(
-                    **completion_tokens_details
-                )
-            elif isinstance(completion_tokens_details, CompletionTokensDetails):
-                _completion_tokens_details = completion_tokens_details
+        # Handle prompt cache hit tokens
+        if "prompt_cache_hit_tokens" in params and isinstance(params["prompt_cache_hit_tokens"], int):
+            prompt_tokens_details.cached_tokens = params["prompt_cache_hit_tokens"]
 
-        ## DEEPSEEK MAPPING ##
-        if "prompt_cache_hit_tokens" in params and isinstance(
-            params["prompt_cache_hit_tokens"], int
-        ):
-            if prompt_tokens_details is None:
-                prompt_tokens_details = PromptTokensDetailsWrapper(
-                    cached_tokens=params["prompt_cache_hit_tokens"]
-                )
-
-        ## ANTHROPIC MAPPING ##
-        if "cache_read_input_tokens" in params and isinstance(
-            params["cache_read_input_tokens"], int
-        ):
-            if prompt_tokens_details is None:
-                prompt_tokens_details = PromptTokensDetailsWrapper(
-                    cached_tokens=params["cache_read_input_tokens"]
-                )
-
-        # handle prompt_tokens_details
-        _prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
-        if prompt_tokens_details:
-            if isinstance(prompt_tokens_details, dict):
-                _prompt_tokens_details = PromptTokensDetailsWrapper(
-                    **prompt_tokens_details
-                )
-            elif isinstance(prompt_tokens_details, PromptTokensDetails):
-                _prompt_tokens_details = prompt_tokens_details
+        # Handle Anthropic cache reads
+        if "cache_read_input_tokens" in params and isinstance(params["cache_read_input_tokens"], int):
+            prompt_tokens_details.cached_tokens = params["cache_read_input_tokens"]
 
         super().__init__(
-            prompt_tokens=prompt_tokens or 0,
-            completion_tokens=completion_tokens or 0,
-            total_tokens=total_tokens or 0,
-            completion_tokens_details=_completion_tokens_details or None,
-            prompt_tokens_details=_prompt_tokens_details or None,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            prompt_tokens_details=prompt_tokens_details,
+            completion_tokens_details=completion_tokens_details,
         )
 
-        ## ANTHROPIC MAPPING ##
-        if "cache_creation_input_tokens" in params and isinstance(
-            params["cache_creation_input_tokens"], int
-        ):
-            self._cache_creation_input_tokens = params["cache_creation_input_tokens"]
+        # Set cache tokens
+        self.cache_creation_input_tokens = (
+            cache_creation_input_tokens if cache_creation_input_tokens is not None 
+            else getattr(prompt_tokens_details, "cached_tokens", 0)
+        )
 
-        if "cache_read_input_tokens" in params and isinstance(
-            params["cache_read_input_tokens"], int
-        ):
-            self._cache_read_input_tokens = params["cache_read_input_tokens"]
+        self.cache_read_input_tokens = (
+            cache_read_input_tokens if cache_read_input_tokens is not None 
+            else getattr(prompt_tokens_details, "cached_tokens", 0)
+        )
 
-        ## DEEPSEEK MAPPING ##
-        if "prompt_cache_hit_tokens" in params and isinstance(
-            params["prompt_cache_hit_tokens"], int
-        ):
-            self._cache_read_input_tokens = params["prompt_cache_hit_tokens"]
 
-        for k, v in params.items():
-            setattr(self, k, v)
+    def dict(self, **kwargs):
+        result = super().dict(**kwargs)
+        result["prompt_tokens_details"] = self._convert_details(self.prompt_tokens_details)
+        result["completion_tokens_details"] = self._convert_details(self.completion_tokens_details)
+        result["cache_creation_input_tokens"] = self.cache_creation_input_tokens
+        result["cache_read_input_tokens"] = self.cache_read_input_tokens
+        return result
+
+    def _convert_details(self, details_wrapper):
+        if details_wrapper:
+            return {
+                "cached_tokens": getattr(details_wrapper, "cached_tokens", 0),
+                "audio_tokens": getattr(details_wrapper, "audio_tokens", 0),
+                "text_tokens": getattr(details_wrapper, "text_tokens", 0),
+                "image_tokens": getattr(details_wrapper, "image_tokens", 0),
+            }
+        return {}
 
     def __contains__(self, key):
-        # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
     def get(self, key, default=None):
-        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
     def __getitem__(self, key):
-        # Allow dictionary-style access to attributes
         return getattr(self, key)
 
     def __setitem__(self, key, value):
-        # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
 
