@@ -149,12 +149,12 @@ const ModelHub: React.FC<ModelHubProps> = ({
             )}
           </div>
 
-          <div className="grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-4 pr-8">
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 pr-8">
             {modelHubData &&
               modelHubData.map((model: ModelInfo) => (
                 <Card key={model.model_group} className="mt-5 mx-8">
                   <pre className="flex justify-between">
-                    <Title>{model.model_group}</Title>
+                    <Title className="text-wrap">{model.model_group}</Title>
                     <Tooltip title={model.model_group}>
                       <CopyOutlined
                         onClick={() => copyToClipboard(model.model_group)}
