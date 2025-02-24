@@ -13,6 +13,13 @@ interface SSOModalsProps {
   form: any; // Replace with proper Form type if available
 }
 
+const ssoProviderLogoMap: Record<string, string> = {
+  google: "https://artificialanalysis.ai/img/logos/google_small.svg",
+  microsoft: "https://upload.wikimedia.org/wikipedia/commons/a/a8/Microsoft_Azure_Logo.svg",
+  okta: "https://www.okta.com/sites/default/files/Okta_Logo_BrightBlue_Medium.png",
+  generic: "",
+};
+
 const SSOModals: React.FC<SSOModalsProps> = ({
   isAddSSOModalVisible,
   isInstructionsModalVisible,
@@ -42,7 +49,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
         >
           <>
             <Form.Item
-              label="Admin Email"
+              label="Proxy Admin Email"
               name="user_email"
               rules={[
                 {
@@ -77,10 +84,14 @@ const SSOModals: React.FC<SSOModalsProps> = ({
               ]}
             >
               <Select>
-                <Select.Option value="google">Google SSO</Select.Option>
-                <Select.Option value="microsoft">Microsoft SSO</Select.Option>
-                <Select.Option value="okta">Okta SSO</Select.Option>
-                <Select.Option value="generic">Generic SSO Provider</Select.Option>
+                {Object.entries(ssoProviderLogoMap).map(([value, logo]) => (
+                  <Select.Option key={value} value={value}>
+                    <div style={{ display: 'flex', alignItems: 'center', padding: '4px 0' }}>
+                      {logo && <img src={logo} alt={value} style={{ height: 24, width: 24, marginRight: 12, objectFit: 'contain' }} />}
+                      <span>{value.charAt(0).toUpperCase() + value.slice(1)} SSO</span>
+                    </div>
+                  </Select.Option>
+                ))}
               </Select>
             </Form.Item>
 
