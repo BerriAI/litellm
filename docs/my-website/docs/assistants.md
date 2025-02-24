@@ -173,7 +173,10 @@ assistant_settings:
   litellm_params: 
     api_key: os.environ/AZURE_API_KEY
     api_base: os.environ/AZURE_API_BASE
-    api_version: os.environ/AZURE_API_VERSION
+    api_version: 2024-03-01-preview
+    metadata:
+      user_api_end_user_max_budget: 5
+
 ```
 
 ```bash
