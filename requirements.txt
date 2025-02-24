@@ -33,7 +33,7 @@ azure-storage-file-datalake==12.15.0 # for azure buck storage logging
 opentelemetry-api==1.25.0
 opentelemetry-sdk==1.25.0
 opentelemetry-exporter-otlp==1.25.0
-sentry_sdk==2.2.1 # for sentry error handling
+sentry_sdk==2.21.0 # for sentry error handling
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
 cryptography==43.0.1
 
