@@ -32,6 +32,7 @@ import {
   userInfoCall,
   userUpdateUserCall,
   getPossibleUserRoles,
+  teamMemberDeleteCall,
 } from "./networking";
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
@@ -116,6 +117,12 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         if (userData) {
           const updatedUserData = userData.filter(user => user.user_id !== userToDelete);
           setUserData(updatedUserData);
+          
+          const member = userData.find(user => user.user_id === userToDelete);
+
+          if(member.team_id) {
+            await teamMemberDeleteCall(accessToken, member.team_id, member);
+          }
         }
       } catch (error) {
         console.error("Error deleting user:", error);
