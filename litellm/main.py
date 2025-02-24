@@ -94,7 +94,7 @@ from litellm.utils import (
     read_config_args,
     supports_httpx_timeout,
     token_counter,
-    validate_chat_completion_messages,
+    validate_and_fix_openai_messages,
     validate_chat_completion_tool_choice,
 )
 
@@ -851,7 +851,7 @@ def completion(  # type: ignore # noqa: PLR0915
     if model is None:
         raise ValueError("model param not passed in.")
     # validate messages
-    messages = validate_chat_completion_messages(messages=messages)
+    messages = validate_and_fix_openai_messages(messages=messages)
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
     ######### unpacking kwargs #####################
