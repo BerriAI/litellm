@@ -1350,6 +1350,9 @@ class ImageResponse(OpenAIImageResponse):
         response_ms=None,
         usage: Optional[Usage] = None,
         hidden_params: Optional[dict] = None,
+        id: Optional[str] = None,
+        model: Optional[str] = None,
+        object: Optional[str] = None,
     ):
         if response_ms:
             _response_ms = response_ms
