@@ -120,24 +120,18 @@ class VertexBase(BaseLLM):
         """
         if custom_llm_provider == "gemini":
             return "", ""
-        if self.access_token is not None:
-            if project_id is not None:
-                return self.access_token, project_id
-            elif self.project_id is not None:
-                return self.access_token, self.project_id
 
-        if not self._credentials:
-            self._credentials, cred_project_id = self.load_auth(
-                credentials=credentials, project_id=project_id
-            )
-            if not self.project_id:
-                self.project_id = project_id or cred_project_id
-        else:
-            if self._credentials.expired or not self._credentials.token:
-                self.refresh_auth(self._credentials)
+        self._credentials, cred_project_id = self.load_auth(
+            credentials=credentials, project_id=project_id
+        )
+        if not self.project_id:
+            self.project_id = project_id or cred_project_id
 
-            if not self.project_id:
-                self.project_id = self._credentials.quota_project_id
+        if self._credentials.expired or not self._credentials.token:
+            self.refresh_auth(self._credentials)
+
+        if not self.project_id:
+            self.project_id = self._credentials.quota_project_id
 
         if not self.project_id:
             raise ValueError("Could not resolve project_id")
