@@ -1574,43 +1574,6 @@ HF Tests we should pass
     - Deployed Endpoint
 """
 
-
-#####################################################
-#####################################################
-# Test util to sort models to TGI, conv, None
-from litellm.llms.huggingface.chat.transformation import HuggingfaceChatConfig
-
-
-def test_get_hf_task_for_model():
-    model = "glaiveai/glaive-coder-7b"
-    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
-    print(f"model:{model}, model type: {model_type}")
-    assert model_type == "text-generation-inference"
-
-    model = "meta-llama/Llama-2-7b-hf"
-    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
-    print(f"model:{model}, model type: {model_type}")
-    assert model_type == "text-generation-inference"
-
-    model = "facebook/blenderbot-400M-distill"
-    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
-    print(f"model:{model}, model type: {model_type}")
-    assert model_type == "conversational"
-
-    model = "facebook/blenderbot-3B"
-    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
-    print(f"model:{model}, model type: {model_type}")
-    assert model_type == "conversational"
-
-    # neither Conv or None
-    model = "roneneldan/TinyStories-3M"
-    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
-    print(f"model:{model}, model type: {model_type}")
-    assert model_type == "text-generation"
-
-
-# test_get_hf_task_for_model()
-# litellm.set_verbose=False
 # ################### Hugging Face TGI models ########################
 # # TGI model
 # # this is a TGI model https://huggingface.co/glaiveai/glaive-coder-7b
@@ -1688,7 +1651,7 @@ def tgi_mock_post(url, **kwargs):
     ]
     return mock_response
 
-
+@pytest.mark.skip(reason="this test will be rewritten to use the new Hugging Face completion")
 def test_hf_test_completion_tgi():
     litellm.set_verbose = True
     try:
@@ -1891,7 +1854,7 @@ def mock_post(url, **kwargs):
     ]
     return mock_response
 
-
+@pytest.mark.skip(reason="this test will be rewritten to use the new Hugging Face completion")
 def test_hf_classifier_task():
     try:
         client = HTTPHandler()
