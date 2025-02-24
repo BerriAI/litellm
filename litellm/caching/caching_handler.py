@@ -267,7 +267,7 @@ class LLMCachingHandler:
                         dynamic_api_key,
                         api_base,
                     ) = litellm.get_llm_provider(
-                        model=model or "",
+                        model=litellm.model_alias_map.get(model, model) or "",
                         custom_llm_provider=kwargs.get("custom_llm_provider", None),
                         api_base=kwargs.get("api_base", None),
                         api_key=kwargs.get("api_key", None),
