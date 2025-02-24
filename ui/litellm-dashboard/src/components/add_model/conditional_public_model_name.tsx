@@ -8,7 +8,7 @@ const ConditionalPublicModelName: React.FC = () => {
   const form = Form.useFormInstance();
 
   // Watch the 'model' field for changes
-  const selectedModels = Form.useWatch('model', form) || [];
+  const selectedModels: string[] = [].concat(Form.useWatch('model', form) || []);
   const showPublicModelName = !selectedModels.includes('all-wildcard');
 
   // Auto-populate model mappings when selected models change
