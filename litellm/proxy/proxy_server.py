@@ -23,6 +23,11 @@ from typing import (
     get_origin,
     get_type_hints,
 )
+from litellm.types.utils import (
+    ModelResponse,
+    ModelResponseStream,
+    TextCompletionResponse,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -1442,6 +1447,10 @@ async def _run_background_health_check():
             health_check_interval, float
         ):
             await asyncio.sleep(health_check_interval)
+
+
+class StreamingCallbackError(Exception):
+    pass
 
 
 class ProxyConfig:
@@ -3014,8 +3023,7 @@ async def async_data_generator(
 ):
     verbose_proxy_logger.debug("inside generator")
     try:
-        time.time()
-        async for chunk in response:
+        async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(user_api_key_dict=user_api_key_dict, response=response, request_data=request_data):
             verbose_proxy_logger.debug(
                 "async_data_generator: received streaming chunk - {}".format(chunk)
             )
@@ -3052,6 +3060,8 @@ async def async_data_generator(
 
         if isinstance(e, HTTPException):
             raise e
+        elif isinstance(e, StreamingCallbackError):
+            error_msg = str(e)
         else:
             error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}\n\n{error_traceback}"
@@ -5820,11 +5830,11 @@ async def token_counter(request: TokenCountRequest):
 )
 async def supported_openai_params(model: str):
     """
-    Returns supported openai params for a given litellm model name 
+    Returns supported openai params for a given litellm model name
 
-    e.g. `gpt-4` vs `gpt-3.5-turbo` 
+    e.g. `gpt-4` vs `gpt-3.5-turbo`
 
-    Example curl: 
+    Example curl:
     ```
     curl -X GET --location 'http://localhost:4000/utils/supported_openai_params?model=gpt-3.5-turbo-16k' \
         --header 'Authorization: Bearer sk-1234'
@@ -6810,7 +6820,7 @@ async def model_group_info(
     - /model_group/info returns all model groups. End users of proxy should use /model_group/info since those models will be used for /chat/completions, /embeddings, etc.
     - /model_group/info?model_group=rerank-english-v3.0 returns all model groups for a specific model group (`model_name` in config.yaml)
 
-    
+
 
     Example Request (All Models):
     ```shell
@@ -6828,10 +6838,10 @@ async def model_group_info(
     -H 'Authorization: Bearer sk-1234'
     ```
 
-    Example Request (Specific Wildcard Model Group): (e.g. `model_name: openai/*` on config.yaml) 
+    Example Request (Specific Wildcard Model Group): (e.g. `model_name: openai/*` on config.yaml)
     ```shell
     curl -X 'GET' \
-    'http://localhost:4000/model_group/info?model_group=openai/tts-1' 
+    'http://localhost:4000/model_group/info?model_group=openai/tts-1'
     -H 'accept: application/json' \
     -H 'Authorization: Bearersk-1234'
     ```
@@ -7933,7 +7943,7 @@ async def invitation_update(
 ):
     """
     Update when invitation is accepted
-    
+
     ```
     curl -X POST 'http://localhost:4000/invitation/update' \
         -H 'Content-Type: application/json' \
@@ -7994,7 +8004,7 @@ async def invitation_delete(
 ):
     """
     Delete invitation link
-    
+
     ```
     curl -X POST 'http://localhost:4000/invitation/delete' \
         -H 'Content-Type: application/json' \
