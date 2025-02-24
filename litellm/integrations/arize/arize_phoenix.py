@@ -41,12 +41,12 @@ class ArizePhoenixLogger:
         endpoint = None
         protocol: Protocol = "otlp_http"
 
-        if grpc_endpoint:
-            endpoint = grpc_endpoint
-            protocol = "otlp_grpc"
-        elif http_endpoint:
+        if http_endpoint:
             endpoint = http_endpoint
             protocol = "otlp_http"
+        elif grpc_endpoint:
+            endpoint = grpc_endpoint
+            protocol = "otlp_grpc"
         else:
             endpoint = ARIZE_HOSTED_PHOENIX_ENDPOINT
             protocol = "otlp_http"       

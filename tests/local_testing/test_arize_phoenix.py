@@ -47,6 +47,13 @@ async def test_async_otel_callback():
             id="empty string/unset endpoint will default to http protocol and Arize hosted Phoenix endpoint",
         ),
         pytest.param(
+            {"PHOENIX_COLLECTOR_HTTP_ENDPOINT": "http://localhost:4318", "PHOENIX_COLLECTOR_ENDPOINT": "http://localhost:4317", "PHOENIX_API_KEY": "test_api_key"},
+            "Authorization=Bearer test_api_key",
+            "http://localhost:4318",
+            "otlp_http",
+            id="prioritize http if both endpoints are set",
+        ),
+        pytest.param(
             {"PHOENIX_COLLECTOR_ENDPOINT": "https://localhost:6006", "PHOENIX_API_KEY": "test_api_key"},
             "Authorization=Bearer test_api_key",
             "https://localhost:6006",
