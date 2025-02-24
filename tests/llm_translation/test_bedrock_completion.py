@@ -2559,12 +2559,15 @@ async def test_bedrock_document_understanding(image_url):
         },
     ]
 
-    response = await acompletion(
-        model=model,
-        messages=[{"role": "user", "content": image_content}],
-    )
-    assert response is not None
-    assert response.choices[0].message.content != ""
+    try:
+        response = await acompletion(
+            model=model,
+            messages=[{"role": "user", "content": image_content}],
+        )
+        assert response is not None
+        assert response.choices[0].message.content != ""
+    except litellm.ServiceUnavailableError as e:
+        pytest.skip("Skipping test due to ServiceUnavailableError")
 
 
 def test_bedrock_custom_proxy():

@@ -950,7 +950,7 @@ async def add_internal_user_to_organization(
     dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
     responses={
-        200: {"model": List[LiteLLM_UserTable]},
+        200: {"model": List[LiteLLM_UserTableFiltered]},
     },
 )
 async def ui_view_users(
@@ -1006,17 +1006,19 @@ async def ui_view_users(
             }
 
         # Query users with pagination and filters
-        users = await prisma_client.db.litellm_usertable.find_many(
-            where=where_conditions,
-            skip=skip,
-            take=page_size,
-            order={"created_at": "desc"},
+        users: Optional[List[BaseModel]] = (
+            await prisma_client.db.litellm_usertable.find_many(
+                where=where_conditions,
+                skip=skip,
+                take=page_size,
+                order={"created_at": "desc"},
+            )
         )
 
         if not users:
             return []
 
-        return users
+        return [LiteLLM_UserTableFiltered(**user.model_dump()) for user in users]
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error searching users: {str(e)}")
