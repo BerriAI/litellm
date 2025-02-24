@@ -42,8 +42,9 @@ interface ViewUserSpendProps {
     userSpend: number | null;  
     userMaxBudget: number | null;  
     selectedTeam: any | null;
+    label: string | null;
 }
-const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessToken, userSpend, userMaxBudget, selectedTeam }) => {
+const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessToken, userSpend, userMaxBudget, selectedTeam, label }) => {
     console.log(`userSpend: ${userSpend}`)
     let [spend, setSpend] = useState(userSpend !== null ? userSpend : 0.0);
     const [maxBudget, setMaxBudget] = useState(selectedTeam ? selectedTeam.max_budget : null);
@@ -147,7 +148,7 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessT
        <div className="flex justify-between gap-x-6">
         <div>
           <p className="text-tremor-default text-tremor-content dark:text-dark-tremor-content">
-            Total Spend
+          {label}
           </p>
           <p className="text-2xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">
             ${roundedSpend}
