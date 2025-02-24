@@ -96,6 +96,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [modelInfo, setModelInfo] = useState<any[]>([]);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const textInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!accessToken || !token || !userRole || !userID) {
@@ -231,10 +232,40 @@ const ChatUI: React.FC<ChatUIProps> = ({
     );
   }
 
+  const [filteredOptionsLength,setFilteredOptionLength] = useState<number>(1);
+  const [searchTerm,setSearchTerm] = useState<string>();
+  
   const onChange = (value: string) => {
     console.log(`selected ${value}`);
     setSelectedModel(value);
   };
+
+  // function to handle search in Select component
+  const handleSearch = (value: string) => {
+    const filteredOptions = modelInfo.filter(option =>
+      option.label.toLowerCase().includes(value.toLowerCase())
+    );
+
+    setFilteredOptionLength(filteredOptions.length);
+    setSearchTerm(value);
+  };
+
+  useEffect(()=>{
+   setSelectedModel(searchTerm)
+  },[searchTerm])
+
+  //function to handle input changes in TextInput
+  const handleSearchInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setSearchTerm(value);
+    setFilteredOptionLength(value.length === 0 ? 1 : 0); 
+  };
+
+  useEffect(() => {
+    if (filteredOptionsLength === 0 && textInputRef.current) {
+      textInputRef.current.focus();      
+    }
+  }, [filteredOptionsLength]);
 
   return (
     <div style={{ width: "100%", position: "relative" }}>
@@ -249,7 +280,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               <TabPanel>
                 <div className="sm:max-w-2xl">
                   <Grid numItems={2}>
-                    <Col>
+                    <Col className="mt-2">
                       <Text>API Key Source</Text>
                       <Select
                         disabled={disabledPersonalKeyCreation}
@@ -260,6 +291,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                           { value: 'session', label: 'Current UI Session' },
                           { value: 'custom', label: 'Virtual Key' },
                         ]}
+                        className="mt-2"
                       />
                       {apiKeySource === 'custom' && (
                         <TextInput
@@ -271,15 +303,28 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         />
                       )}
                     </Col>
-                    <Col className="mx-2">
+                    <Col className="mx-2 mt-2">
                       <Text>Select Model:</Text>
-                      <Select
-                        placeholder="Select a Model"
-                        onChange={onChange}
-                        options={modelInfo}
-                        style={{ width: "350px" }}
-                        showSearch={true}
-                      />
+                      {filteredOptionsLength > 0 ? (
+                        <Select
+                          placeholder="Select a Model"
+                          onChange={onChange}
+                          options={modelInfo}
+                          style={{ width: "350px" }}
+                          showSearch={true}
+                          onSearch={handleSearch}
+                          className="mt-2"
+                        />
+                      ) : (
+                        <TextInput
+                          ref={textInputRef}
+                          placeholder="model"
+                          value={searchTerm}
+                          className="mt-2 border border-gray-300 rounded-[6px] shadow-none "
+                          onChange={handleSearchInputChange}
+                          style={{ padding: '6px 12px' }} 
+                        />
+                      )}
                     </Col>
                   </Grid>
 
