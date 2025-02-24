@@ -227,6 +227,7 @@ const sidebars = {
         "providers/baseten",
         "providers/openrouter",
         "providers/sambanova",
+        "providers/nebius",
         "providers/custom_llm_server",
         "providers/petals",
       ],
