@@ -1263,8 +1263,9 @@ class CustomStreamWrapper:
                                         and "function" in tool
                                         and isinstance(tool["function"], dict)
                                         and ("type" not in tool or tool["type"] is None)
+                                        and tool.get('id')
                                     ):
-                                        # if function returned but type set to None - mistral's api returns type: None
+                                        # Refer to the test test_function_calling_tool_type
                                         tool["type"] = "function"
                             model_response.choices[0].delta = Delta(**_json_delta)
                         except Exception as e:
