@@ -12,6 +12,10 @@ on:
       commit_hash:
         description: "Commit hash"
         required: true
+      image_tag:
+        description: 'Custom image tag name'
+        required: false
+        default: ''  # Empty default means we'll use PR-based naming
 
 # Defines two custom environment variables for the workflow. Used for the Container registry domain, and a name for the Docker image that this workflow builds.
 env:
@@ -99,6 +103,8 @@ jobs:
         uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            ${{ inputs.image_tag != '' && format('type=raw,value={0}', inputs.image_tag) || 'type=ref,event=pr' }}
       # Configure multi platform Docker builds
       - name: Set up QEMU
         uses: docker/setup-qemu-action@e0e4588fad221d38ee467c0bffd91115366dc0c5
