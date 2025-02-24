@@ -307,3 +307,73 @@ async def test_aarun_thread_litellm(sync_mode, provider, is_streaming):
                     )
     except openai.APIError as e:
         pass
+
+
+@pytest.mark.parametrize("provider", ["openai"])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_modify_assistant(provider, sync_mode):
+    """
+    Test for modifying an assistant's configuration.
+    """
+    model = "gpt-4o"
+    assistant_name = "Test Assistant"
+    initial_instructions = "You are a coding assistant."
+    modified_instructions = "You are an advanced coding assistant specialized in Python."
+    
+    # 1. Assistant creation
+    if sync_mode:
+        assistant = litellm.create_assistants(
+            custom_llm_provider=provider,
+            model=model,
+            instructions=initial_instructions,
+            name=assistant_name,
+            tools=[{"type": "code_interpreter"}],
+        )
+    else:
+        assistant = await litellm.acreate_assistants(
+            custom_llm_provider=provider,
+            model=model,
+            instructions=initial_instructions,
+            name=assistant_name,
+            tools=[{"type": "code_interpreter"}],
+        )
+
+    assert isinstance(assistant, Assistant)
+    assert assistant.instructions == initial_instructions
+    assert assistant.id is not None
+
+    # 2. Assistant modification
+    if sync_mode:
+        modified_assistant = litellm.modify_assistants(
+            custom_llm_provider=provider,
+            model=model,
+            assistant_id=assistant.id,
+            instructions=modified_instructions,
+            name="Modified Test Assistant",
+        )
+    else:
+        modified_assistant = await litellm.amodify_assistants(
+            custom_llm_provider=provider,
+            model=model,
+            assistant_id=assistant.id,
+            instructions=modified_instructions,
+            name="Modified Test Assistant",
+        )
+
+    # 3. Assert modifications
+    assert modified_assistant.instructions == modified_instructions
+    assert modified_assistant.name == "Modified Test Assistant"
+    assert modified_assistant.id == assistant.id
+
+    # 4. Clean created assistant for test
+    if sync_mode:
+        response = litellm.delete_assistant(
+            custom_llm_provider=provider, assistant_id=assistant.id
+        )
+    else:
+        response = await litellm.adelete_assistant(
+            custom_llm_provider=provider, assistant_id=assistant.id
+        )
+
+    assert response.id == assistant.id
