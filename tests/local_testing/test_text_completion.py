@@ -4285,3 +4285,255 @@ def test_text_completion_with_echo(stream):
             print(chunk)
     else:
         assert isinstance(response, TextCompletionResponse)
+
+
+
+@pytest.fixture(scope="session")
+def event_loop():
+    loop = asyncio.new_event_loop()
+    yield loop
+    # Gather any pending tasks and wait for them to finish.
+    pending = asyncio.all_tasks(loop)
+    if pending:
+        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+    loop.close()
+def test_response_model_codestral_completion():
+    try:
+        print("INFO: Starting Codestral completion test")
+        response = litellm.completion(
+            model="text-completion-codestral/codestral-latest",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Repeat this back to me: 'Hello, world!'",
+                }
+            ],
+            max_tokens=20,
+        )
+        print("INFO: Codestral completion test successful")
+        
+        # Type assertion
+        assert isinstance(response, litellm.ModelResponse), (
+            f"Expected litellm.ModelResponse, got {type(response)}"
+        )
+        
+        # Content validation
+        response_content = response.choices[0].message.content.lower()
+        assert "hello, world" in response_content, (
+            f"Expected response to contain 'Hello, world', but got: {response_content}"
+        )
+        
+        return response
+    except Exception as e:
+        print(f"ERROR: Error in Codestral completion test: {str(e)}")
+        raise
+
+
+@pytest.mark.asyncio
+async def test_response_model_codestral_acompletion():
+    try:
+        print("INFO: Starting Codestral async completion test")
+        response = await litellm.acompletion(
+            model="text-completion-codestral/codestral-latest",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Repeat this back to me: 'Hello, world!'",
+                }
+            ],
+            max_tokens=20,
+        )
+        print("INFO: Codestral async completion test successful")
+        
+        # Type assertion
+        assert isinstance(response, litellm.ModelResponse), (
+            f"Expected litellm.ModelResponse, got {type(response)}"
+        )
+        
+        # Content validation
+        response_content = response.choices[0].message.content.lower()
+        assert "hello, world" in response_content, (
+            f"Expected response to contain 'Hello, world', but got: {response_content}"
+        )
+        
+        return response
+    except Exception as e:
+        print(f"ERROR: Error in Codestral async completion test: {str(e)}")
+        raise
+
+
+def test_response_model_openai_completion():
+    try:
+        print("INFO: Starting OpenAI completion test")
+        response = litellm.completion(
+            model="text-completion-openai/gpt-3.5-turbo-instruct",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Repeat this back to me: 'Hello, world!'",
+                }
+            ],
+            max_tokens=20,
+        )
+        print("INFO: OpenAI completion test successful")
+        
+        # Type assertion
+        assert isinstance(response, litellm.ModelResponse), (
+            f"Expected litellm.ModelResponse, got {type(response)}"
+        )
+        
+        # Content validation
+        response_content = response.choices[0].message.content.lower()
+        assert "hello, world" in response_content, (
+            f"Expected response to contain 'Hello, world', but got: {response_content}"
+        )
+        
+        return response
+    except Exception as e:
+        print(f"ERROR: Error in OpenAI completion test: {str(e)}")
+        raise
+
+
+@pytest.mark.asyncio
+async def test_response_model_openai_acompletion():
+    try:
+        print("INFO: Starting OpenAI async completion test")
+        response = await litellm.acompletion(
+            model="text-completion-openai/gpt-3.5-turbo-instruct",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Repeat this back to me: 'Hello, world!'",
+                }
+            ],
+            max_tokens=20,
+        )
+        print("INFO: OpenAI async completion test successful")
+        
+        # Type assertion
+        assert isinstance(response, litellm.ModelResponse), (
+            f"Expected litellm.ModelResponse, got {type(response)}"
+        )
+        
+        # Content validation
+        response_content = response.choices[0].message.content.lower()
+        assert "hello, world" in response_content, (
+            f"Expected response to contain 'Hello, world', but got: {response_content}"
+        )
+        
+        return response
+    except Exception as e:
+        print(f"ERROR: Error in OpenAI async completion test: {str(e)}")
+        raise
+
+
+def test_response_model_codestral_completion_text():
+    try:
+        print("INFO: Starting Codestral text completion test")
+        response = litellm.completion(
+            model="text-completion-codestral/codestral-latest",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Repeat this back to me: 'Hello, world!'",
+                }
+            ],
+            max_tokens=20,
+            text_completion=True
+        )
+        print("INFO: Codestral text completion test successful")
+        assert isinstance(response, TextCompletionResponse), (
+            f"Expected TextCompletionResponse, got {type(response)}"
+        )
+        assert "hello, world" in response.choices[0].text.lower(), (
+            f"Expected response to contain 'Hello, world', but got: {response.choices[0].text}"
+        )
+        return response
+    except Exception as e:
+        print(f"ERROR: Error in Codestral text completion test: {str(e)}")
+        raise
+
+
+@pytest.mark.asyncio
+async def test_response_model_codestral_acompletion_text(event_loop):
+    try:
+        print("INFO: Starting Codestral async text completion test")
+        asyncio.set_event_loop(event_loop)
+        response = await litellm.acompletion(
+            model="text-completion-codestral/codestral-latest",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Repeat this back to me: 'Hello, world!'",
+                }
+            ],
+            max_tokens=20,
+            text_completion=True
+        )
+        print("INFO: Codestral async text completion test successful")
+        assert isinstance(response, TextCompletionResponse), (
+            f"Expected TextCompletionResponse, got {type(response)}"
+        )
+        assert "hello, world" in response.choices[0].text.lower(), (
+            f"Expected response to contain 'Hello, world', but got: {response.choices[0].text}"
+        )
+        return response
+    except Exception as e:
+        print(f"ERROR: Error in Codestral async text completion test: {str(e)}")
+        raise
+
+
+def test_response_model_openai_completion_text():
+    try:
+        print("INFO: Starting OpenAI text completion test")
+        response = litellm.completion(
+            model="text-completion-openai/gpt-3.5-turbo-instruct",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Repeat this back to me: 'Hello, world!'",
+                }
+            ],
+            max_tokens=20,
+            text_completion=True
+        )
+        print("INFO: OpenAI text completion test successful")
+        assert isinstance(response, TextCompletionResponse), (
+            f"Expected TextCompletionResponse, got {type(response)}"
+        )
+        assert "hello, world" in response.choices[0].text.lower(), (
+            f"Expected response to contain 'Hello, world', but got: {response.choices[0].text}"
+        )
+        return response
+    except Exception as e:
+        print(f"ERROR: Error in OpenAI text completion test: {str(e)}")
+        raise
+
+
+@pytest.mark.asyncio
+async def test_response_model_openai_acompletion_text(event_loop):
+    try:
+        print("INFO: Starting OpenAI async text completion test")
+        asyncio.set_event_loop(event_loop)
+        response = await litellm.acompletion(
+            model="text-completion-openai/gpt-3.5-turbo-instruct",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Repeat this back to me: 'Hello, world!'",
+                }
+            ],
+            max_tokens=20,
+            text_completion=True
+        )
+        print("INFO: OpenAI async text completion test successful")
+        assert isinstance(response, TextCompletionResponse), (
+            f"Expected TextCompletionResponse, got {type(response)}"
+        )
+        assert "hello, world" in response.choices[0].text.lower(), (
+            f"Expected response to contain 'Hello, world', but got: {response.choices[0].text}"
+        )
+        return response
+    except Exception as e:
+        print(f"ERROR: Error in OpenAI async text completion test: {str(e)}")
+        raise
