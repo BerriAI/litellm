@@ -51,7 +51,7 @@ class Scheduler:
         # get the queue
         queue = await self.get_queue(model_name=request.model_name)
         # update the queue
-        heapq.heappush(queue, (request.priority, request.request_id))
+        heapq.heappush(queue, [request.priority, request.request_id])
 
         # save the queue
         await self.save_queue(queue=queue, model_name=request.model_name)
