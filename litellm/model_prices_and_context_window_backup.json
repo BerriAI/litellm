@@ -2803,6 +2803,25 @@
         "deprecation_date": "2025-06-01",
         "supports_tool_choice": true
     },
+    "claude-3-7-sonnet-20250219": {
+        "max_tokens": 8192,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000015,
+        "cache_creation_input_token_cost": 0.00000375,
+        "cache_read_input_token_cost": 0.0000003,
+        "litellm_provider": "anthropic",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "tool_use_system_prompt_tokens": 159,
+        "supports_assistant_prefill": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "deprecation_date": "2025-06-01",
+        "supports_tool_choice": true
+    },
     "claude-3-5-sonnet-20241022": {
         "max_tokens": 8192,
         "max_input_tokens": 200000,
