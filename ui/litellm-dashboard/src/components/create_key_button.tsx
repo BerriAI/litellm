@@ -46,6 +46,7 @@ interface CreateKeyProps {
   data: any[] | null;
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
   teams: Team[] | null;
+  refresh:any;
 }
 
 const getPredefinedTags = (data: any[] | null) => {
@@ -127,6 +128,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   accessToken,
   data,
   setData,
+  refresh
 }) => {
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -215,6 +217,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       setApiKey(response["key"]);
       setSoftBudget(response["soft_budget"]);
       message.success("API Key Created");
+      refresh();
       form.resetFields();
       localStorage.removeItem("userData" + userID);
     } catch (error) {
