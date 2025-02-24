@@ -34,24 +34,24 @@ class ArizePhoenixLogger:
         Returns:
             ArizePhoenixConfig: A Pydantic model containing Arize Phoenix configuration.
         """
-        api_key = os.environ.get("PHOENIX_API_KEY")
-        grpc_endpoint = os.environ.get("PHOENIX_COLLECTOR_ENDPOINT")
-        http_endpoint = os.environ.get("PHOENIX_COLLECTOR_HTTP_ENDPOINT")
+        api_key = os.environ.get("PHOENIX_API_KEY", None)
+        grpc_endpoint = os.environ.get("PHOENIX_COLLECTOR_ENDPOINT", None)
+        http_endpoint = os.environ.get("PHOENIX_COLLECTOR_HTTP_ENDPOINT", None)
 
         endpoint = None
-        protocol: Protocol = "otlp_grpc"
+        protocol: Protocol = "otlp_http"
 
-        if grpc_endpoint is not None:
-            endpoint = grpc_endpoint
-            protocol = "otlp_grpc"
-        elif http_endpoint is not None:
+        if http_endpoint:
             endpoint = http_endpoint
             protocol = "otlp_http"
+        elif grpc_endpoint:
+            endpoint = grpc_endpoint
+            protocol = "otlp_grpc"
         else:
             endpoint = ARIZE_HOSTED_PHOENIX_ENDPOINT
-            protocol = "otlp_grpc"       
+            protocol = "otlp_http"       
             verbose_logger.debug(
-                f"No PHOENIX_COLLECTOR_ENDPOINT or PHOENIX_COLLECTOR_HTTP_ENDPOINT found, using default endpoint: {ARIZE_HOSTED_PHOENIX_ENDPOINT}"
+                f"No PHOENIX_COLLECTOR_ENDPOINT or PHOENIX_COLLECTOR_HTTP_ENDPOINT found, using default endpoint with http: {ARIZE_HOSTED_PHOENIX_ENDPOINT}"
             )
 
         otlp_auth_headers = None
