@@ -1756,6 +1756,50 @@ async def test_openai_compatible_custom_api_base(provider):
         assert "hello" in mock_call.call_args.kwargs["extra_body"]
 
 
+
+@pytest.mark.parametrize(
+    "provider", ["openai", "hosted_vllm",]
+)  # "vertex_ai",
+@pytest.mark.asyncio
+async def test_openai_compatible_custom_api_video(provider):
+    litellm.set_verbose = True
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What do you see in this video?",
+                },
+                {
+                    "type": "video_url",
+                    "video_url": {"url": "https://www.youtube.com/watch?v=29_ipKNI8I0"},
+                }
+            ],
+        }
+    ]
+    from openai import OpenAI
+
+    openai_client = OpenAI(api_key="fake-key")
+
+    with patch.object(
+        openai_client.chat.completions, "create", new=MagicMock()
+    ) as mock_call:
+        try:
+            completion(
+                model="{provider}/my-vllm-model".format(provider=provider),
+                messages=messages,
+                response_format={"type": "json_object"},
+                client=openai_client,
+                api_base="my-custom-api-base",
+            )
+        except Exception as e:
+            print(e)
+
+        mock_call.assert_called_once()
+        
+
+
 def test_lm_studio_completion(monkeypatch):
     monkeypatch.delenv("LM_STUDIO_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
