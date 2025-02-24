@@ -6304,6 +6304,7 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_tool_choice": true
     },
     "anthropic.claude-3-5-sonnet-20240620-v1:0": {
@@ -6317,6 +6318,7 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_tool_choice": true
     },
     "anthropic.claude-3-5-sonnet-20241022-v2:0": {
@@ -6329,6 +6331,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_assistant_prefill": true,
         "supports_prompt_caching": true, 
         "supports_response_schema": true,
@@ -6345,6 +6348,7 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_tool_choice": true
     },
     "anthropic.claude-3-5-haiku-20241022-v1:0": {
@@ -6356,6 +6360,7 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_assistant_prefill": true,
+        "supports_pdf_input": true,
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_prompt_caching": true,
@@ -6385,6 +6390,7 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_tool_choice": true
     },
     "us.anthropic.claude-3-5-sonnet-20240620-v1:0": {
@@ -6398,6 +6404,7 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_tool_choice": true
     },
     "us.anthropic.claude-3-5-sonnet-20241022-v2:0": {
@@ -6410,6 +6417,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_assistant_prefill": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
@@ -6426,6 +6434,7 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_tool_choice": true
     },
     "us.anthropic.claude-3-5-haiku-20241022-v1:0": {
@@ -6437,6 +6446,7 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_assistant_prefill": true,
+        "supports_pdf_input": true,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
@@ -6466,6 +6476,7 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_tool_choice": true
     },
     "eu.anthropic.claude-3-5-sonnet-20240620-v1:0": {
@@ -6479,6 +6490,7 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_tool_choice": true
     },
     "eu.anthropic.claude-3-5-sonnet-20241022-v2:0": {
@@ -6491,6 +6503,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_assistant_prefill": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
@@ -6507,6 +6520,7 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_tool_choice": true
     },
     "eu.anthropic.claude-3-5-haiku-20241022-v1:0": {
@@ -6519,6 +6533,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
+        "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
