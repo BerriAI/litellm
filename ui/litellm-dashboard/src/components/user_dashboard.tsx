@@ -186,9 +186,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
               accessToken,
               userID,
               userRole,
-              false,
-              null,
-              null
             );
 
             setUserSpendData(response["user_info"]);

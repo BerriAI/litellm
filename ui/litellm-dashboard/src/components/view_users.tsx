@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, Fragment } from "react";
 import {
   Card,
   Title,
@@ -23,17 +23,20 @@ import {
   DialogPanel,
   Icon,
   TextInput,
+  Button,
 } from "@tremor/react";
 
-import { message } from "antd";
-import { Modal } from "antd";
+import { message, Modal } from "antd";
 
 import {
   userInfoCall,
+  userListCall,
   userUpdateUserCall,
   getPossibleUserRoles,
+  userDeleteCall,
 } from "./networking";
-import { Badge, BadgeDelta, Button } from "@tremor/react";
+
+import { Badge, BadgeDelta } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import CreateUser from "./create_user_button";
 import EditUserModal from "./edit_user";
@@ -43,8 +46,6 @@ import {
   InformationCircleIcon,
   TrashIcon,
 } from "@heroicons/react/outline";
-
-import { userDeleteCall } from "./networking";
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -66,8 +67,8 @@ interface UserListResponse {
 
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
-if (isLocal != true) {
-  console.log = function() {};
+if (isLocal !== true) {
+  console.log = function () {};
 }
 
 const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
@@ -81,7 +82,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
 }) => {
   const [userListResponse, setUserListResponse] = useState<UserListResponse | null>(null);
   const [userData, setUserData] = useState<null | any[]>(null);
-  const [endUsers, setEndUsers] = useState<null | any[]>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [openDialogId, setOpenDialogId] = React.useState<null | number>(null);
   const [selectedItem, setSelectedItem] = useState<null | any>(null);
@@ -93,14 +93,38 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     Record<string, Record<string, string>>
   >({});
   const defaultPageSize = 25;
+  const [searchTerm, setSearchTerm] = useState("");
+  const [showFilters, setShowFilters] = useState(false);
+  const [keyNameFilter, setKeyNameFilter] = useState("");
+  const [teamNameFilter, setTeamNameFilter] = useState("");
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [filterType, setFilterType] = useState<'user_id' | 'user_email' | ''>('');
+  const [filterValue, setFilterValue] = useState('');
 
-  // check if window is not undefined
-  if (typeof window !== "undefined") {
-    window.addEventListener("beforeunload", function () {
-      // Clear session storage
-      sessionStorage.clear();
-    });
-  }
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(event.target as Node)
+      ) {
+        setShowFilters(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () =>
+      document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Clear session storage on unload
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.addEventListener("beforeunload", function () {
+        sessionStorage.clear();
+      });
+    }
+  }, []);
 
   const handleDelete = (userId: string) => {
     setUserToDelete(userId);
@@ -131,7 +155,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     setUserToDelete(null);
   };
 
-  const handleEditCancel = async () => {
+  const handleEditCancel = () => {
     setSelectedUser(null);
     setEditModalVisible(false);
   };
@@ -148,6 +172,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       message.success(`User ${editedUser.user_id} updated successfully`);
     } catch (error) {
       console.error("There was an error updating the user", error);
+      message.error("Failed to update user");
     }
     if (userData) {
       const updatedUserData = userData.map((user) =>
@@ -157,61 +182,53 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     }
     setSelectedUser(null);
     setEditModalVisible(false);
-    // Close the modal
+  };
+
+  const getFilterParams = (filterType: string, searchValue: string) => {
+    return {
+      user_id: filterType === 'user_id' ? searchValue : null,
+      user_email: filterType === 'user_email' ? searchValue : null
+    };
+  };
+
+  const fetchData = async () => {
+    try {
+      if (!accessToken || !token || !userRole || !userID) {
+        return;
+      }
+      const { user_id, user_email } = getFilterParams(filterType, searchTerm);
+      const userDataResponse = await userListCall(
+        accessToken,
+        currentPage,
+        defaultPageSize,
+        user_id,
+        user_email
+      );
+
+      setUserListResponse(userDataResponse);
+      setUserData(userDataResponse.users || []);
+
+      // Fetch roles if not cached
+      const cachedRoles = sessionStorage.getItem('possibleUserRoles');
+      if (cachedRoles) {
+        setPossibleUIRoles(JSON.parse(cachedRoles));
+      } else {
+        const availableUserRoles = await getPossibleUserRoles(accessToken);
+        sessionStorage.setItem('possibleUserRoles', JSON.stringify(availableUserRoles));
+        setPossibleUIRoles(availableUserRoles);
+      }
+    } catch (error) {
+      console.error("There was an error fetching the model data", error);
+      message.error("Failed to fetch user data");
+    }
   };
 
   useEffect(() => {
     if (!accessToken || !token || !userRole || !userID) {
       return;
     }
-    const fetchData = async () => {
-      try {
-        // Check session storage first
-        const cachedUserData = sessionStorage.getItem(`userList_${currentPage}`);
-        if (cachedUserData) {
-          const parsedData = JSON.parse(cachedUserData);
-          setUserListResponse(parsedData);
-          setUserData(parsedData.users || []);
-        } else {
-          // Fetch from API if not in cache
-          const userDataResponse = await userInfoCall(
-            accessToken,
-            null,
-            userRole,
-            true,
-            currentPage,
-            defaultPageSize
-          );
-
-          // Store in session storage
-          sessionStorage.setItem(
-            `userList_${currentPage}`,
-            JSON.stringify(userDataResponse)
-          );
-
-          setUserListResponse(userDataResponse);
-          setUserData(userDataResponse.users || []);
-        }
-
-        // Fetch roles if not cached
-        const cachedRoles = sessionStorage.getItem('possibleUserRoles');
-        if (cachedRoles) {
-          setPossibleUIRoles(JSON.parse(cachedRoles));
-        } else {
-          const availableUserRoles = await getPossibleUserRoles(accessToken);
-          sessionStorage.setItem('possibleUserRoles', JSON.stringify(availableUserRoles));
-          setPossibleUIRoles(availableUserRoles);
-        }
-      } catch (error) {
-        console.error("There was an error fetching the model data", error);
-      }
-    };
-
-    if (accessToken && token && userRole && userID) {
-      fetchData();
-    }
-
-  }, [accessToken, token, userRole, userID, currentPage]);
+    fetchData();
+  }, [accessToken, token, userRole, userID, currentPage, searchTerm, keyNameFilter, teamNameFilter, filterType]);
 
   if (!userData) {
     return <div>Loading...</div>;
@@ -221,134 +238,197 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     return <div>Loading...</div>;
   }
 
-  function renderPagination() {
-    if (!userData) return null;
-
-    const totalPages = userListResponse?.total_pages || 0;
-
-    const handlePageChange = (newPage: number) => {
-      setUserData([]); // Clear current users
-      setCurrentPage(newPage);
-    };
-  
-
-    return (
-      <div className="flex justify-between items-center">
-        <div>
-          Showing Page {currentPage } of {totalPages}
-        </div>
-        <div className="flex">
-          <button
-            className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-l focus:outline-none"
-            disabled={currentPage === 1}
-            onClick={() => handlePageChange(currentPage - 1)}
-          >
-            &larr; Prev
-          </button>
-          <button
-            className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-r focus:outline-none"
-            disabled={currentPage === totalPages}
-            onClick={() => handlePageChange(currentPage + 1)}
-          >
-            Next &rarr;
-          </button>
-        </div>
-      </div>
-    );
-  }
+  const handleSearch = () => {
+    setCurrentPage(1);
+    fetchData();
+  };
 
   return (
-    <div style={{ width: "100%" }}>
-      <Grid className="gap-2 p-2 h-[90vh] w-full mt-8">
-        <CreateUser
-          userID={userID}
-          accessToken={accessToken}
-          teams={teams}
-          possibleUIRoles={possibleUIRoles}
-        />
-        <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[90vh] mb-4">
-          <div className="mb-4 mt-1"></div>
-          <TabGroup>
-            <TabPanels>
-              <TabPanel>
-                <Table className="mt-5">
-                  <TableHead>
-                    <TableRow>
-                      <TableHeaderCell>User ID</TableHeaderCell>
-                      <TableHeaderCell>User Email</TableHeaderCell>
-                      <TableHeaderCell>Role</TableHeaderCell>
-                      <TableHeaderCell>User Spend ($ USD)</TableHeaderCell>
-                      <TableHeaderCell>User Max Budget ($ USD)</TableHeaderCell>
-                      <TableHeaderCell>API Keys</TableHeaderCell>
-                      <TableHeaderCell></TableHeaderCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {userData.map((user: any) => (
-                      <TableRow key={user.user_id}>
-                        <TableCell>{user.user_id || "-"}</TableCell>
-                        <TableCell>{user.user_email || "-"}</TableCell>
-                        <TableCell>
-                          {possibleUIRoles?.[user?.user_role]?.ui_label || "-"}
-                        </TableCell>
-                        <TableCell>
-                          {user.spend ? user.spend?.toFixed(2) : "-"}
-                        </TableCell>
-                        <TableCell>
-                          {user.max_budget !== null ? user.max_budget : "Unlimited"}
-                        </TableCell>
-                        <TableCell>
-                          <Grid numItems={2}>
-                            {user.key_count > 0 ? (
-                              <Badge size={"xs"} color={"indigo"}>
-                                {user.key_count} Keys
-                              </Badge>
-                            ) : (
-                              <Badge size={"xs"} color={"gray"}>
-                                No Keys
-                              </Badge>
-                            )}
-                            {/* <Text>{user.key_aliases.filter(key => key !== null).length} Keys</Text> */}
-                          </Grid>
-                        </TableCell>
-                        <TableCell>
-                          <Icon
-                            icon={PencilAltIcon}
-                            onClick={() => {
-                              setSelectedUser(user);
-                              setEditModalVisible(true);
-                            }}
-                          >
-                            View Keys
-                          </Icon>
-                          <Icon
-                            icon={TrashIcon}
-                            onClick={() => handleDelete(user.user_id)}
-                          >
-                            Delete
-                          </Icon>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TabPanel>
-              <TabPanel>
-                <div className="flex items-center">
-                  <div className="flex-1"></div>
-                  <div className="flex-1 flex justify-between items-center"></div>
-                </div>
-              </TabPanel>
-            </TabPanels>
-          </TabGroup>
-          <EditUserModal
-            visible={editModalVisible}
+    <div className="p-4 w-full mx-auto px-8">
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={() => setShowFilters(!showFilters)}
+            className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+          >
+            <svg
+              className="-ml-0.5 mr-2 h-4 w-4"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
+              />
+            </svg>
+            Filters
+          </button>
+          <CreateUser
+            userID={userID}
+            accessToken={accessToken}
+            teams={teams}
             possibleUIRoles={possibleUIRoles}
-            onCancel={handleEditCancel}
-            user={selectedUser}
-            onSubmit={handleEditSubmit}
           />
-          {isDeleteModalOpen && (
+        </div>
+
+        <div className="flex items-center space-x-4 text-sm text-gray-600">
+          <span>
+            Showing {((currentPage - 1) * defaultPageSize) + 1} - {Math.min(currentPage * defaultPageSize, userListResponse?.total || 0)} of {userListResponse?.total || 0} results
+          </span>
+          <div className="flex items-center space-x-2">
+            <span>Page {currentPage} of {userListResponse?.total_pages || 1}</span>
+            <button
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            <button
+              onClick={() => setCurrentPage((p) => Math.min(userListResponse?.total_pages || 1, p + 1))}
+              disabled={currentPage === (userListResponse?.total_pages || 1)}
+              className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {showFilters && (
+        <div className="mb-6 bg-white rounded-lg shadow-sm p-4">
+          <div className="flex items-center space-x-4">
+            <div className="text-sm text-gray-500">Where</div>
+            
+            <Select 
+              value={filterType}
+              onValueChange={(value) => setFilterType(value as 'user_id' | 'user_email')}
+              className="min-w-[200px]"
+            >
+              <SelectItem value="">Select filter type...</SelectItem>
+              <SelectItem value="user_id">User ID</SelectItem>
+              <SelectItem value="user_email">User Email</SelectItem>
+            </Select>
+            
+            <div className="text-sm text-gray-500">Equals</div>
+            
+            <TextInput
+              placeholder="Enter value..."
+              value={filterValue}
+              onChange={(e) => setFilterValue(e.target.value)}
+              className="flex-1 max-w-md"
+            />
+
+            <Button
+              onClick={() => {
+                if (filterType && filterValue) {
+                  setSearchTerm(filterValue);
+                  setCurrentPage(1);
+                  fetchData();
+                }
+              }}
+              size="sm"
+              variant="primary"
+              disabled={!filterType || !filterValue}
+              className="bg-indigo-500 hover:bg-indigo-600"
+            >
+              Apply Filter
+            </Button>
+            
+            <Button
+              onClick={() => {
+                setFilterType('');
+                setFilterValue('');
+                setSearchTerm('');
+                setShowFilters(false);
+                setCurrentPage(1);
+                fetchData();
+              }}
+              size="sm"
+              variant="secondary"
+              color="gray"
+              className="border border-gray-300"
+            >
+              Clear
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white rounded-lg shadow overflow-hidden">
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHead>
+              <TableRow>
+                <TableHeaderCell className="min-w-[300px]">User ID</TableHeaderCell>
+                <TableHeaderCell>User Email</TableHeaderCell>
+                <TableHeaderCell>Role</TableHeaderCell>
+                <TableHeaderCell>User Spend ($ USD)</TableHeaderCell>
+                <TableHeaderCell>User Max Budget ($ USD)</TableHeaderCell>
+                <TableHeaderCell>API Keys</TableHeaderCell>
+                <TableHeaderCell>Actions</TableHeaderCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {userData.map((user: any) => (
+                <TableRow key={user.user_id}>
+                  <TableCell className="min-w-[300px] text-sm">
+                    {user.user_id || "-"}
+                  </TableCell>
+                  <TableCell>{user.user_email || "-"}</TableCell>
+                  <TableCell>
+                    {possibleUIRoles?.[user?.user_role]?.ui_label || "-"}
+                  </TableCell>
+                  <TableCell>
+                    {user.spend ? user.spend?.toFixed(2) : "-"}
+                  </TableCell>
+                  <TableCell>
+                    {user.max_budget !== null ? user.max_budget : "Unlimited"}
+                  </TableCell>
+                  <TableCell>
+                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${user.key_count > 0 ? 'bg-indigo-100 text-indigo-800' : 'bg-gray-100 text-gray-800'}`}>
+                      {user.key_count > 0 ? `${user.key_count} Keys` : "No Keys"}
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={() => {
+                          setSelectedUser(user);
+                          setEditModalVisible(true);
+                        }}
+                        className="text-gray-600 hover:text-gray-900"
+                      >
+                        <PencilAltIcon className="h-5 w-5" />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(user.user_id)}
+                        className="text-gray-600 hover:text-gray-900"
+                      >
+                        <TrashIcon className="h-5 w-5" />
+                      </button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </div>
+
+      <EditUserModal
+        visible={editModalVisible}
+        possibleUIRoles={possibleUIRoles}
+        onCancel={handleEditCancel}
+        user={selectedUser}
+        onSubmit={handleEditSubmit}
+      />
+      
+      {isDeleteModalOpen && (
         <div className="fixed z-10 inset-0 overflow-y-auto">
           <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
             <div
@@ -395,11 +475,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           </div>
         </div>
       )}
-        </Card>
-        {renderPagination()}
-      </Grid>
     </div>
   );
 };
 
 export default ViewUserDashboard;
+
