@@ -4584,6 +4584,17 @@ async def websocket_endpoint(
 
     ### ROUTE THE REQUEST ###
     try:
+        data["user_api_key_dict"] = dict(
+            user_api_key=user_api_key_dict.api_key,
+            user_api_key_hash=user_api_key_dict.api_key,
+            user_api_key_alias=user_api_key_dict.key_alias,
+            user_api_key_team_id=user_api_key_dict.team_id,
+            user_api_key_user_id=user_api_key_dict.user_id,
+            user_api_key_org_id=user_api_key_dict.org_id,
+            user_api_key_team_alias=user_api_key_dict.team_alias,
+            user_api_key_end_user_id=user_api_key_dict.end_user_id,
+            user_api_key_user_email=user_api_key_dict.user_email,
+        )
         llm_call = await route_request(
             data=data,
             route_type="_arealtime",

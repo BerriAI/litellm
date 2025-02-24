@@ -30,6 +30,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         api_key: Optional[str] = None,
         client: Optional[Any] = None,
         timeout: Optional[float] = None,
+        user_api_key_dict: Optional[dict] = None,
     ):
         import websockets
 
@@ -49,7 +50,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
                 },
             ) as backend_ws:
                 realtime_streaming = RealTimeStreaming(
-                    websocket, backend_ws, logging_obj
+                    websocket, backend_ws, logging_obj, user_api_key_dict
                 )
                 await realtime_streaming.bidirectional_forward()
 

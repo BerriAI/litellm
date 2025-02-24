@@ -654,6 +654,20 @@ class LangFuseLogger:
                         "completion_tokens": _usage_obj.completion_tokens,
                         "total_cost": cost if self._supports_costs() else None,
                     }
+            if isinstance(response_obj, dict):
+                if response_obj.get("id", None) is not None:
+                    generation_id = litellm.utils.get_logging_id(
+                        start_time, response_obj
+                    )
+                _usage_obj = response_obj.get("usage", None)
+
+                if _usage_obj:
+                    usage = {
+                        "prompt_tokens": _usage_obj.get("prompt_tokens"),
+                        "completion_tokens": _usage_obj.get("completion_tokens"),
+                        "total_cost": cost if self._supports_costs() else None,
+                    }
+
             generation_name = clean_metadata.pop("generation_name", None)
             if generation_name is None:
                 # if `generation_name` is None, use sensible default values

@@ -26,6 +26,7 @@ async def _arealtime(
     azure_ad_token: Optional[str] = None,
     client: Optional[Any] = None,
     timeout: Optional[float] = None,
+    user_api_key_dict: Optional[dict] = None,
     **kwargs,
 ):
     """
@@ -111,6 +112,7 @@ async def _arealtime(
             api_key=api_key,
             client=None,
             timeout=timeout,
+            user_api_key_dict=user_api_key_dict,
         )
     else:
         raise ValueError(f"Unsupported model: {model}")

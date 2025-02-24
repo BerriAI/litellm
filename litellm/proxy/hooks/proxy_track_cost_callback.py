@@ -8,6 +8,9 @@ from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
 )
+from litellm.litellm_core_utils.openai_realtime_tracking import (
+    OpenAIRealtimeCostTracking,
+)
 from litellm.proxy.auth.auth_checks import log_db_metrics
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_end_user_id_for_cost_tracking
@@ -20,6 +23,11 @@ async def _PROXY_track_cost_callback(
     start_time=None,
     end_time=None,  # start/end time for completion
 ):
+    if OpenAIRealtimeCostTracking.model_is_openai_realtime(kwargs.get("model")):
+        # Skipping cost tracking for OpenAI realtime models,
+        # Cost calculations for OpenAI realtime models done in OpenAIRealtimeCostTracking
+        return
+
     from litellm.proxy.proxy_server import (
         prisma_client,
         proxy_logging_obj,

@@ -2268,6 +2268,34 @@ class Logging(LiteLLMLoggingBaseClass):
             return complete_streaming_response
         return None
 
+    async def async_websocket_success_handler(self, realtime_cost_tracking: Any):
+        """
+        Asynchronous success handling of every message received for OpenAI realtime models
+        Updates records in db.
+
+        This method triggered everytime websocket receives message,
+        not when connection closes
+        """
+
+        await realtime_cost_tracking.update_database()
+
+    def websocket_success_handler(self, realtime_cost_tracking: Any):
+        """
+        Synchronous success handling of every message received for OpenAI realtime models
+        Updates records in langfuse.
+
+        This method triggered everytime websocket receives message,
+        not when connection closes
+        """
+
+        global langFuseLogger
+        realtime_cost_tracking.update_langfuse(
+            langFuseLogger=langFuseLogger,
+            in_memory_trace_id_cache=in_memory_trace_id_cache,
+            in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
+            logging_obj=self,
+        )
+
 
 def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
     """
