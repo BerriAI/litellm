@@ -20,6 +20,74 @@ const ssoProviderLogoMap: Record<string, string> = {
   generic: "",
 };
 
+// Define the SSO provider configuration type
+interface SSOProviderConfig {
+  envVarMap: Record<string, string>;
+  fields: Array<{
+    label: string;
+    name: string;
+    placeholder?: string;
+  }>;
+}
+
+// Define configurations for each SSO provider
+const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
+  google: {
+    envVarMap: {
+      google_client_id: 'GOOGLE_CLIENT_ID',
+      google_client_secret: 'GOOGLE_CLIENT_SECRET',
+    },
+    fields: [
+      { label: 'GOOGLE CLIENT ID', name: 'google_client_id' },
+      { label: 'GOOGLE CLIENT SECRET', name: 'google_client_secret' },
+    ],
+  },
+  microsoft: {
+    envVarMap: {
+      microsoft_client_id: 'MICROSOFT_CLIENT_ID',
+      microsoft_client_secret: 'MICROSOFT_CLIENT_SECRET',
+      microsoft_tenant: 'MICROSOFT_TENANT',
+    },
+    fields: [
+      { label: 'MICROSOFT CLIENT ID', name: 'microsoft_client_id' },
+      { label: 'MICROSOFT CLIENT SECRET', name: 'microsoft_client_secret' },
+      { label: 'MICROSOFT TENANT', name: 'microsoft_tenant' },
+    ],
+  },
+  okta: {
+    envVarMap: {
+      generic_client_id: 'GENERIC_CLIENT_ID',
+      generic_client_secret: 'GENERIC_CLIENT_SECRET',
+      generic_authorization_endpoint: 'GENERIC_AUTHORIZATION_ENDPOINT',
+      generic_token_endpoint: 'GENERIC_TOKEN_ENDPOINT',
+      generic_userinfo_endpoint: 'GENERIC_USERINFO_ENDPOINT',
+    },
+    fields: [
+      { label: 'GENERIC CLIENT ID', name: 'generic_client_id' },
+      { label: 'GENERIC CLIENT SECRET', name: 'generic_client_secret' },
+      { label: 'AUTHORIZATION ENDPOINT', name: 'generic_authorization_endpoint', placeholder: 'https://your-okta-domain/authorize' },
+      { label: 'TOKEN ENDPOINT', name: 'generic_token_endpoint', placeholder: 'https://your-okta-domain/token' },
+      { label: 'USERINFO ENDPOINT', name: 'generic_userinfo_endpoint', placeholder: 'https://your-okta-domain/userinfo' },
+    ],
+  },
+  generic: {
+    envVarMap: {
+      generic_client_id: 'GENERIC_CLIENT_ID',
+      generic_client_secret: 'GENERIC_CLIENT_SECRET',
+      generic_authorization_endpoint: 'GENERIC_AUTHORIZATION_ENDPOINT',
+      generic_token_endpoint: 'GENERIC_TOKEN_ENDPOINT',
+      generic_userinfo_endpoint: 'GENERIC_USERINFO_ENDPOINT',
+    },
+    fields: [
+      { label: 'GENERIC CLIENT ID', name: 'generic_client_id' },
+      { label: 'GENERIC CLIENT SECRET', name: 'generic_client_secret' },
+      { label: 'AUTHORIZATION ENDPOINT', name: 'generic_authorization_endpoint' },
+      { label: 'TOKEN ENDPOINT', name: 'generic_token_endpoint' },
+      { label: 'USERINFO ENDPOINT', name: 'generic_userinfo_endpoint' },
+    ],
+  },
+};
+
 const SSOModals: React.FC<SSOModalsProps> = ({
   isAddSSOModalVisible,
   isInstructionsModalVisible,
@@ -30,6 +98,27 @@ const SSOModals: React.FC<SSOModalsProps> = ({
   handleInstructionsCancel,
   form,
 }) => {
+  // Helper function to render provider fields
+  const renderProviderFields = (provider: string) => {
+    const config = ssoProviderConfigs[provider];
+    if (!config) return null;
+
+    return config.fields.map((field) => (
+      <Form.Item
+        key={field.name}
+        label={field.label}
+        name={field.name}
+        rules={[{ required: true, message: `Please enter the ${field.label.toLowerCase()}` }]}
+      >
+        {field.name.includes('client') ? (
+          <Input.Password />
+        ) : (
+          <TextInput placeholder={field.placeholder} />
+        )}
+      </Form.Item>
+    ));
+  };
+
   return (
     <>
       <Modal
@@ -49,39 +138,9 @@ const SSOModals: React.FC<SSOModalsProps> = ({
         >
           <>
             <Form.Item
-              label="Proxy Admin Email"
-              name="user_email"
-              rules={[
-                {
-                  required: true,
-                  message: "Please enter the email of the proxy admin",
-                },
-              ]}
-            >
-              <TextInput />
-            </Form.Item>
-            <Form.Item
-              label="PROXY BASE URL"
-              name="proxy_base_url"
-              rules={[
-                {
-                  required: true,
-                  message: "Please enter the proxy base url",
-                },
-              ]}
-            >
-              <TextInput />
-            </Form.Item>
-
-            <Form.Item
               label="SSO Provider"
               name="sso_provider"
-              rules={[
-                {
-                  required: true,
-                  message: "Please select an SSO provider",
-                },
-              ]}
+              rules={[{ required: true, message: "Please select an SSO provider" }]}
             >
               <Select>
                 {Object.entries(ssoProviderLogoMap).map(([value, logo]) => (
@@ -101,140 +160,23 @@ const SSOModals: React.FC<SSOModalsProps> = ({
             >
               {({ getFieldValue }) => {
                 const provider = getFieldValue('sso_provider');
-                
-                if (provider === 'google') {
-                  return (
-                    <>
-                      <Form.Item
-                        label="GOOGLE CLIENT ID"
-                        name="google_client_id"
-                        rules={[{ required: true, message: "Please enter the google client id" }]}
-                      >
-                        <Input.Password />
-                      </Form.Item>
-                      <Form.Item
-                        label="GOOGLE CLIENT SECRET"
-                        name="google_client_secret"
-                        rules={[{ required: true, message: "Please enter the google client secret" }]}
-                      >
-                        <Input.Password />
-                      </Form.Item>
-                    </>
-                  );
-                }
-                
-                if (provider === 'microsoft') {
-                  return (
-                    <>
-                      <Form.Item
-                        label="MICROSOFT CLIENT ID"
-                        name="microsoft_client_id"
-                        rules={[{ required: true }]}
-                      >
-                        <Input.Password />
-                      </Form.Item>
-                      <Form.Item
-                        label="MICROSOFT CLIENT SECRET"
-                        name="microsoft_client_secret"
-                        rules={[{ required: true }]}
-                      >
-                        <Input.Password />
-                      </Form.Item>
-                      <Form.Item
-                        label="MICROSOFT TENANT"
-                        name="microsoft_tenant"
-                        rules={[{ required: true }]}
-                      >
-                        <Input.Password />
-                      </Form.Item>
-                    </>
-                  );
-                }
-
-                if (provider === 'okta') {
-                  return (
-                    <>
-                      <Form.Item
-                        label="GENERIC CLIENT ID"
-                        name="generic_client_id"
-                        rules={[{ required: true }]}
-                      >
-                        <Input.Password />
-                      </Form.Item>
-                      <Form.Item
-                        label="GENERIC CLIENT SECRET"
-                        name="generic_client_secret"
-                        rules={[{ required: true }]}
-                      >
-                        <Input.Password />
-                      </Form.Item>
-                      <Form.Item
-                        label="AUTHORIZATION ENDPOINT"
-                        name="generic_authorization_endpoint"
-                        rules={[{ required: true }]}
-                      >
-                        <TextInput placeholder="https://your-okta-domain/authorize" />
-                      </Form.Item>
-                      <Form.Item
-                        label="TOKEN ENDPOINT"
-                        name="generic_token_endpoint"
-                        rules={[{ required: true }]}
-                      >
-                        <TextInput placeholder="https://your-okta-domain/token" />
-                      </Form.Item>
-                      <Form.Item
-                        label="USERINFO ENDPOINT"
-                        name="generic_userinfo_endpoint"
-                        rules={[{ required: true }]}
-                      >
-                        <TextInput placeholder="https://your-okta-domain/userinfo" />
-                      </Form.Item>
-                    </>
-                  );
-                }
-
-                if (provider === 'generic') {
-                  return (
-                    <>
-                      <Form.Item
-                        label="GENERIC CLIENT ID"
-                        name="generic_client_id"
-                        rules={[{ required: true }]}
-                      >
-                        <Input.Password />
-                      </Form.Item>
-                      <Form.Item
-                        label="GENERIC CLIENT SECRET"
-                        name="generic_client_secret"
-                        rules={[{ required: true }]}
-                      >
-                        <Input.Password />
-                      </Form.Item>
-                      <Form.Item
-                        label="AUTHORIZATION ENDPOINT"
-                        name="generic_authorization_endpoint"
-                        rules={[{ required: true }]}
-                      >
-                        <TextInput />
-                      </Form.Item>
-                      <Form.Item
-                        label="TOKEN ENDPOINT"
-                        name="generic_token_endpoint"
-                        rules={[{ required: true }]}
-                      >
-                        <TextInput />
-                      </Form.Item>
-                      <Form.Item
-                        label="USERINFO ENDPOINT"
-                        name="generic_userinfo_endpoint"
-                        rules={[{ required: true }]}
-                      >
-                        <TextInput />
-                      </Form.Item>
-                    </>
-                  );
-                }
+                return provider ? renderProviderFields(provider) : null;
               }}
+            </Form.Item>
+
+            <Form.Item
+              label="Proxy Admin Email"
+              name="user_email"
+              rules={[{ required: true, message: "Please enter the email of the proxy admin" }]}
+            >
+              <TextInput />
+            </Form.Item>
+            <Form.Item
+              label="PROXY BASE URL"
+              name="proxy_base_url"
+              rules={[{ required: true, message: "Please enter the proxy base url" }]}
+            >
+              <TextInput />
             </Form.Item>
           </>
           <div style={{ textAlign: "right", marginTop: "10px" }}>
@@ -269,4 +211,5 @@ const SSOModals: React.FC<SSOModalsProps> = ({
   );
 };
 
+export { ssoProviderConfigs };  // Export for use in other components
 export default SSOModals; 

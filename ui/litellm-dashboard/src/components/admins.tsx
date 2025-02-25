@@ -37,6 +37,8 @@ import { PencilAltIcon } from "@heroicons/react/outline";
 import OnboardingModal from "./onboarding_link";
 import { InvitationLink } from "./onboarding_link";
 import SSOModals from "./SSOModals";
+import { ssoProviderConfigs } from './SSOModals';
+
 interface AdminPanelProps {
   searchParams: any;
   accessToken: string | null;
@@ -485,13 +487,27 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     if (accessToken == null) {
       return;
     }
-    let payload = {
-      environment_variables: {
-        PROXY_BASE_URL: formValues.proxy_base_url,
-        GOOGLE_CLIENT_ID: formValues.google_client_id,
-        GOOGLE_CLIENT_SECRET: formValues.google_client_secret,
-      },
+
+    const provider = formValues.sso_provider;
+    const config = ssoProviderConfigs[provider];
+    
+    const envVars: Record<string, string> = {
+      PROXY_BASE_URL: formValues.proxy_base_url,
     };
+
+    // Add provider-specific environment variables using the configuration
+    if (config) {
+      Object.entries(config.envVarMap).forEach(([formKey, envKey]) => {
+        if (formValues[formKey]) {
+          envVars[envKey] = formValues[formKey];
+        }
+      });
+    }
+
+    const payload = {
+      environment_variables: envVars,
+    };
+    
     setCallbacksCall(accessToken, payload);
   };
   console.log(`admins: ${admins?.length}`);
