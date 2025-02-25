@@ -457,6 +457,11 @@ Reference:
 ChatCompletionMessage(content='This is a test', role='assistant', function_call=None, tool_calls=None))
 """
 
+REASONING_CONTENT_COMPATIBLE_PARAMS = [
+    "thinking",
+    "reasoning_content",
+]
+
 
 class Message(OpenAIObject):
     content: Optional[str]
@@ -514,7 +519,13 @@ class Message(OpenAIObject):
         if provider_specific_fields:  # set if provider_specific_fields is not empty
             self.provider_specific_fields = provider_specific_fields
             for k, v in provider_specific_fields.items():
-                setattr(self, k, v)
+                if v is not None:
+                    setattr(self, k, v)
+                    if (
+                        k in REASONING_CONTENT_COMPATIBLE_PARAMS
+                        and k != "reasoning_content"
+                    ):
+                        setattr(self, "reasoning_content", v)
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist

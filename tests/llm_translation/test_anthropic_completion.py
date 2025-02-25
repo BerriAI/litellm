@@ -1161,3 +1161,15 @@ def test_anthropic_citations_api_streaming():
             has_citations = True
 
     assert has_citations
+
+
+def test_anthropic_thinking_output():
+    from litellm import completion
+
+    resp = completion(
+        model="anthropic/claude-3-7-sonnet-20250219",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        thinking={"type": "enabled", "budget_tokens": 1024},
+    )
+
+    print(resp.choices[0].message)

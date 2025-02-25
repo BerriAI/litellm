@@ -628,7 +628,8 @@ class AnthropicConfig(BaseConfig):
             )
         else:
             text_content = ""
-            citations: List[Any] = []
+            citations: Optional[List[Any]] = None
+            thinking: Optional[str] = None
             tool_calls: List[ChatCompletionToolCallChunk] = []
             for idx, content in enumerate(completion_response["content"]):
                 if content["type"] == "text":
@@ -648,12 +649,18 @@ class AnthropicConfig(BaseConfig):
                     )
                 ## CITATIONS
                 if content.get("citations", None) is not None:
+                    if citations is None:
+                        citations = []
                     citations.append(content["citations"])
+                if content.get("thinking", None) is not None:
+                    if thinking is None:
+                        thinking = ""
+                    thinking += content["thinking"]
 
             _message = litellm.Message(
                 tool_calls=tool_calls,
                 content=text_content or None,
-                provider_specific_fields={"citations": citations},
+                provider_specific_fields={"citations": citations, "thinking": thinking},
             )
 
             ## HANDLE JSON MODE - anthropic returns single function call
