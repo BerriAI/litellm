@@ -105,7 +105,7 @@ export default function UserInfoView({
   }
 
   return (
-    <div className="p-4">
+    <div className="p-4 w-full">
       <div className="flex justify-between items-center mb-6">
         <div>
           <Button 
