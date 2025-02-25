@@ -22,6 +22,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.llms.anthropic import (
     AnthropicChatCompletionUsageBlock,
+    AnthropicMessagesThinkingBlock,
     ContentBlockDelta,
     ContentBlockStart,
     ContentBlockStop,
@@ -507,6 +508,10 @@ class ModelResponseIterator:
         return usage_block
 
     def _content_block_delta_helper(self, chunk: dict):
+        """
+        Helper function to handle the content block delta
+        """
+
         text = ""
         tool_use: Optional[ChatCompletionToolCallChunk] = None
         provider_specific_fields = {}
@@ -526,9 +531,17 @@ class ModelResponseIterator:
             }
         elif "citation" in content_block["delta"]:
             provider_specific_fields["citation"] = content_block["delta"]["citation"]
-        elif "thinking" in content_block["delta"]:
-            provider_specific_fields["thinking"] = content_block["delta"]["thinking"]
-
+        elif (
+            "thinking" in content_block["delta"]
+            or "signature_delta" == content_block["delta"]
+        ):
+            provider_specific_fields["thinking_blocks"] = [
+                AnthropicMessagesThinkingBlock(
+                    type="thinking",
+                    thinking=content_block["delta"].get("thinking"),
+                    signature_delta=content_block["delta"].get("signature"),
+                )
+            ]
         return text, tool_use, provider_specific_fields
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:

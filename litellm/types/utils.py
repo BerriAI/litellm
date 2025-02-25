@@ -464,6 +464,10 @@ REASONING_CONTENT_COMPATIBLE_PARAMS = [
 
 
 def map_reasoning_content(provider_specific_fields: Dict[str, Any]) -> str:
+    """
+    Extract reasoning_content from provider_specific_fields
+    """
+
     reasoning_content: str = ""
     for k, v in provider_specific_fields.items():
         if k == "thinking_blocks" and isinstance(v, list):
@@ -581,7 +585,6 @@ class Delta(OpenAIObject):
         **params,
     ):
         super(Delta, self).__init__(**params)
-        provider_specific_fields: Dict[str, Any] = {}
         add_provider_specific_fields(self, params.get("provider_specific_fields", {}))
         self.content = content
         self.role = role
@@ -589,9 +592,6 @@ class Delta(OpenAIObject):
         self.function_call: Optional[Union[FunctionCall, Any]] = None
         self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None
         self.audio: Optional[ChatCompletionAudioResponse] = None
-
-        if provider_specific_fields:  # set if provider_specific_fields is not empty
-            self.provider_specific_fields = provider_specific_fields
 
         if function_call is not None and isinstance(function_call, dict):
             self.function_call = FunctionCall(**function_call)
