@@ -394,7 +394,7 @@ async def test_virtual_key_max_budget_check(
 
 
 @pytest.mark.parametrize(
-    "model, team_models, expect_to_work",
+    "model, team_models, expected_result",
     [
         ("gpt-4", ["gpt-4"], True),  # exact match
         ("gpt-4", ["all-proxy-models"], True),  # all-proxy-models access
