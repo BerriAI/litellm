@@ -1,10 +1,12 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Button as Button2, Text } from "@tremor/react";
 import { Modal, Table, Upload, message } from "antd";
 import { UploadOutlined, DownloadOutlined } from "@ant-design/icons";
-import { userCreateCall } from "./networking";
+import { userCreateCall, invitationCreateCall, getProxyUISettings } from "./networking";
 import Papa from "papaparse";
 import { CheckCircleIcon, XCircleIcon } from "@heroicons/react/outline";
+import { CopyToClipboard } from "react-copy-to-clipboard";
+import { InvitationLink } from "./onboarding_link";
 
 interface BulkCreateUsersProps {
   accessToken: string;
@@ -25,6 +27,15 @@ interface UserData {
   rowNumber?: number;
   isValid?: boolean;
   key?: string;
+  invitation_link?: string;
+}
+
+// Define an interface for the UI settings
+interface UISettings {
+  PROXY_BASE_URL: string | null;
+  PROXY_LOGOUT_URL: string | null;
+  DEFAULT_TEAM_DISABLED: boolean;
+  SSO_ENABLED: boolean;
 }
 
 const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
@@ -36,6 +47,26 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
   const [parsedData, setParsedData] = useState<UserData[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
+  const [uiSettings, setUISettings] = useState<UISettings | null>(null);
+  const [baseUrl, setBaseUrl] = useState("http://localhost:4000");
+
+  useEffect(() => {
+    // Get UI settings
+    const fetchUISettings = async () => {
+      try {
+        const uiSettingsResponse = await getProxyUISettings(accessToken);
+        setUISettings(uiSettingsResponse);
+      } catch (error) {
+        console.error("Error fetching UI settings:", error);
+      }
+    };
+
+    fetchUISettings();
+
+    // Set base URL
+    const base = new URL("/", window.location.href);
+    setBaseUrl(base.toString());
+  }, [accessToken]);
 
   const downloadTemplate = () => {
     const template = [
@@ -163,15 +194,53 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
         // Check if response has key or user_id, indicating success
         if (response && (response.key || response.user_id)) {
           console.log('Success case triggered');
-          setParsedData(current => 
-            current.map((u, i) => 
-              i === index ? { 
-                ...u, 
-                status: 'success', 
-                key: response.key || response.user_id
-              } : u
-            )
-          );
+          const user_id = response.data?.user_id || response.user_id;
+          
+          // Create invitation link for the user
+          try {
+            if (!uiSettings?.SSO_ENABLED) {
+              // Regular invitation flow
+              const invitationData = await invitationCreateCall(accessToken, user_id);
+              const invitationUrl = new URL(`/ui?invitation_id=${invitationData.id}`, baseUrl).toString();
+              
+              setParsedData(current => 
+                current.map((u, i) => 
+                  i === index ? { 
+                    ...u, 
+                    status: 'success', 
+                    key: response.key || response.user_id,
+                    invitation_link: invitationUrl
+                  } : u
+                )
+              );
+            } else {
+              // SSO flow - just use the base URL
+              const invitationUrl = new URL("/ui", baseUrl).toString();
+              
+              setParsedData(current => 
+                current.map((u, i) => 
+                  i === index ? { 
+                    ...u, 
+                    status: 'success', 
+                    key: response.key || response.user_id,
+                    invitation_link: invitationUrl
+                  } : u
+                )
+              );
+            }
+          } catch (inviteError) {
+            console.error('Error creating invitation:', inviteError);
+            setParsedData(current => 
+              current.map((u, i) => 
+                i === index ? { 
+                  ...u, 
+                  status: 'success', 
+                  key: response.key || response.user_id,
+                  error: 'User created but failed to generate invitation link'
+                } : u
+              )
+            );
+          }
         } else {
           console.log('Error case triggered');
           const errorMessage = response?.error || 'Failed to create user';
@@ -204,6 +273,7 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
       user_role: user.user_role,
       status: user.status,
       key: user.key || '',
+      invitation_link: user.invitation_link || '',
       error: user.error || ''
     }));
     
@@ -268,9 +338,28 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
         }
         if (record.status === 'success') {
           return (
-            <div className="flex items-center">
-              <CheckCircleIcon className="h-5 w-5 text-green-500 mr-2" />
-              <span className="text-green-500">Success</span>
+            <div>
+              <div className="flex items-center">
+                <CheckCircleIcon className="h-5 w-5 text-green-500 mr-2" />
+                <span className="text-green-500">Success</span>
+              </div>
+              {record.invitation_link && (
+                <div className="mt-1">
+                  <div className="flex items-center">
+                    <span className="text-xs text-gray-500 truncate max-w-[150px]">
+                      {record.invitation_link}
+                    </span>
+                    <CopyToClipboard
+                      text={record.invitation_link}
+                      onCopy={() => message.success("Invitation link copied!")}
+                    >
+                      <button className="ml-1 text-blue-500 text-xs hover:text-blue-700">
+                        Copy
+                      </button>
+                    </CopyToClipboard>
+                  </div>
+                </div>
+              )}
             </div>
           );
         }
