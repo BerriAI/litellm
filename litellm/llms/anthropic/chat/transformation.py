@@ -783,7 +783,6 @@ class AnthropicConfig(BaseConfig):
         prompt_caching_set = self.is_cache_control_set(messages=messages)
         computer_tool_used = self.is_computer_tool_used(tools=tools)
         pdf_used = self.is_pdf_used(messages=messages)
-        token_efficient_tools_beta = optional_params.get("token_efficient_tools_beta", False)
         anthropic_headers = self.get_anthropic_headers(
             computer_tool_used=computer_tool_used,
             prompt_caching_set=prompt_caching_set,
@@ -792,5 +791,4 @@ class AnthropicConfig(BaseConfig):
             is_vertex_request=optional_params.get("is_vertex_request", False),
         )
         headers = {**headers, **anthropic_headers}
-        print(headers)
         return headers
