@@ -419,7 +419,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                 <p className="mb-4">Add multiple users at once by following these steps:</p>
                 <ol className="list-decimal list-inside space-y-2 ml-2 mb-4">
                   <li>Download our CSV template</li>
-                  <li>Add your users' information to the spreadsheet</li>
+                  <li>Add your users&apos; information to the spreadsheet</li>
                   <li>Save the file and upload it here</li>
                   <li>After creation, download the results file containing the API keys for each user</li>
                 </ol>
@@ -431,42 +431,42 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                       <div className="w-3 h-3 rounded-full bg-red-500 mt-1.5 mr-2 flex-shrink-0"></div>
                       <div>
                         <p className="font-medium">user_email</p>
-                        <p className="text-sm text-gray-600">User's email address (required)</p>
+                        <p className="text-sm text-gray-600">User&apos;s email address (required)</p>
                       </div>
                     </div>
                     <div className="flex items-start">
                       <div className="w-3 h-3 rounded-full bg-red-500 mt-1.5 mr-2 flex-shrink-0"></div>
                       <div>
                         <p className="font-medium">user_role</p>
-                        <p className="text-sm text-gray-600">User's role (one of: "proxy_admin", "proxy_admin_view_only", "internal_user", "internal_user_view_only")</p>
+                        <p className="text-sm text-gray-600">User&apos;s role (one of: &quot;proxy_admin&quot;, &quot;proxy_admin_view_only&quot;, &quot;internal_user&quot;, &quot;internal_user_view_only&quot;)</p>
                       </div>
                     </div>
                     <div className="flex items-start">
                       <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 flex-shrink-0"></div>
                       <div>
                         <p className="font-medium">teams</p>
-                        <p className="text-sm text-gray-600">Comma-separated team IDs (e.g., "team-1,team-2")</p>
+                        <p className="text-sm text-gray-600">Comma-separated team IDs (e.g., &quot;team-1,team-2&quot;)</p>
                       </div>
                     </div>
                     <div className="flex items-start">
                       <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 flex-shrink-0"></div>
                       <div>
                         <p className="font-medium">max_budget</p>
-                        <p className="text-sm text-gray-600">Maximum budget as a number (e.g., "100")</p>
+                        <p className="text-sm text-gray-600">Maximum budget as a number (e.g., &quot;100&quot;)</p>
                       </div>
                     </div>
                     <div className="flex items-start">
                       <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 flex-shrink-0"></div>
                       <div>
                         <p className="font-medium">budget_duration</p>
-                        <p className="text-sm text-gray-600">Budget reset period (e.g., "30d", "1mo")</p>
+                        <p className="text-sm text-gray-600">Budget reset period (e.g., &quot;30d&quot;, &quot;1mo&quot;)</p>
                       </div>
                     </div>
                     <div className="flex items-start">
                       <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 flex-shrink-0"></div>
                       <div>
                         <p className="font-medium">models</p>
-                        <p className="text-sm text-gray-600">Comma-separated allowed models (e.g., "gpt-3.5-turbo,gpt-4")</p>
+                        <p className="text-sm text-gray-600">Comma-separated allowed models (e.g., &quot;gpt-3.5-turbo,gpt-4&quot;)</p>
                       </div>
                     </div>
                   </div>
