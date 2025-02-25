@@ -5939,7 +5939,8 @@ def validate_and_fix_openai_messages(messages: List):
     Handles missing role for assistant messages.
     """
     for message in messages:
-        if "role" not in message:
+        if not message.get("role"):
+            verbose_logger.debug(f"Adding role=assistant to message={message}")
             message["role"] = "assistant"
     return validate_chat_completion_messages(messages=messages)
 

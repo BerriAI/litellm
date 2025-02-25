@@ -156,7 +156,7 @@ class BaseLLMChatTest(ABC):
         # assert resp.usage.total_tokens > 0
 
     def test_pydantic_model_input(self):
-        litellm.set_verbose = True
+        litellm._turn_on_debug()
 
         from litellm import completion, Message
 
