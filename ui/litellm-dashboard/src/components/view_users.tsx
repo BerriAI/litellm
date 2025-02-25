@@ -48,6 +48,7 @@ import { userDeleteCall } from "./networking";
 import { columns } from "./view_users/columns";
 import { UserDataTable } from "./view_users/table";
 import { UserInfo } from "./view_users/types";
+import BulkCreateUsers from "./bulk_create_users_button";
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -164,6 +165,34 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     // Close the modal
   };
 
+  const refreshUserData = async () => {
+    if (!accessToken || !token || !userRole || !userID) {
+      return;
+    }
+    
+    try {
+      const userDataResponse = await userInfoCall(
+        accessToken,
+        null,
+        userRole,
+        true,
+        currentPage,
+        defaultPageSize
+      );
+      
+      // Update session storage with new data
+      sessionStorage.setItem(
+        `userList_${currentPage}`,
+        JSON.stringify(userDataResponse)
+      );
+      
+      setUserListResponse(userDataResponse);
+      setUserData(userDataResponse.users || []);
+    } catch (error) {
+      console.error("Error refreshing user data:", error);
+    }
+  };
+
   useEffect(() => {
     if (!accessToken || !token || !userRole || !userID) {
       return;
@@ -238,12 +267,21 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     <div className="w-full p-6">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-semibold">Users</h1>
-        <CreateUser
-          userID={userID}
-          accessToken={accessToken}
-          teams={teams}
-          possibleUIRoles={possibleUIRoles}
-        />
+        <div className="flex space-x-3">
+          <BulkCreateUsers
+            accessToken={accessToken}
+            teams={teams}
+            possibleUIRoles={possibleUIRoles}
+            onUsersCreated={refreshUserData}
+          />
+          <CreateUser
+            userID={userID}
+            accessToken={accessToken}
+            teams={teams}
+            possibleUIRoles={possibleUIRoles}
+            onUserCreated={refreshUserData}
+          />
+        </div>
       </div>
       
       <div className="bg-white rounded-lg shadow">

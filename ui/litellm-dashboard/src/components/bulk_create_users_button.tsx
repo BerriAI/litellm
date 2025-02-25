@@ -12,6 +12,7 @@ interface BulkCreateUsersProps {
   accessToken: string;
   teams: any[] | null;
   possibleUIRoles: null | Record<string, Record<string, string>>;
+  onUsersCreated?: () => void;
 }
 
 interface UserData {
@@ -42,6 +43,7 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
   accessToken,
   teams,
   possibleUIRoles,
+  onUsersCreated,
 }) => {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [parsedData, setParsedData] = useState<UserData[]>([]);
@@ -168,6 +170,8 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
     setIsProcessing(true);
     const updatedData = parsedData.map(user => ({ ...user, status: 'pending' }));
     setParsedData(updatedData);
+    
+    let anySuccessful = false;
 
     for (const [index, user] of updatedData.entries()) {
       try {
@@ -193,6 +197,7 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
         
         // Check if response has key or user_id, indicating success
         if (response && (response.key || response.user_id)) {
+          anySuccessful = true;
           console.log('Success case triggered');
           const user_id = response.data?.user_id || response.user_id;
           
@@ -265,6 +270,11 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
     }
 
     setIsProcessing(false);
+    
+    // Call the callback if any users were successfully created
+    if (anySuccessful && onUsersCreated) {
+      onUsersCreated();
+    }
   };
 
   const downloadResults = () => {
