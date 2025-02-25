@@ -3,13 +3,15 @@ import TabItem from '@theme/TabItem';
 
 # LiteLLM Proxy (LLM Gateway)
 
-:::tip
 
-[LiteLLM Providers a **self hosted** proxy server (AI Gateway)](../simple_proxy) to call all the LLMs in the OpenAI format
+| Property | Details |
+|-------|-------|
+| Description | LiteLLM Proxy is an OpenAI-compatible gateway that allows you to interact with multiple LLM providers through a unified API. Simply use the `litellm_proxy/` prefix before the model name to route your requests through the proxy. |
+| Provider Route on LiteLLM | `litellm_proxy/` (add this prefix to the model name, to route any requests to litellm_proxy - e.g. `litellm_proxy/your-model-name`) |
+| Setup LiteLLM Gateway | [LiteLLM Gateway ↗](../simple_proxy) |
+| Supported Endpoints |`/chat/completions`, `/completions`, `/embeddings`, `/audio/speech`, `/audio/transcriptions`, `/images`, `/rerank` |
 
-:::
 
-**[LiteLLM Proxy](../simple_proxy) is OpenAI compatible**, you just need the `litellm_proxy/` prefix before the model
 
 ## Required Variables
 
