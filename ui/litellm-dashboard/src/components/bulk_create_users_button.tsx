@@ -226,56 +226,166 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
       </Button2>
       
       <Modal
-        title={`Bulk Create Users (${parsedData.filter(d => d.isValid).length} valid users)`}
+        title="Bulk Invite Users"
         visible={isModalVisible}
         width={800}
         onCancel={() => setIsModalVisible(false)}
         bodyStyle={{ maxHeight: '70vh', overflow: 'auto' }}
-        footer={[
-          <Button2 key="download" onClick={downloadTemplate}>
-            <DownloadOutlined /> Download Template
-          </Button2>,
-          <Button2
-            key="submit"
-            onClick={handleBulkCreate}
-            disabled={parsedData.length === 0 || parsedData.filter(d => d.isValid).length === 0 || isProcessing}
-          >
-            Create {parsedData.filter(d => d.isValid).length} Users
-          </Button2>,
-        ]}
+        footer={null}
       >
-        <Text>Upload a CSV file with user information</Text>
-        
-        <Upload
-          beforeUpload={handleFileUpload}
-          accept=".csv"
-          maxCount={1}
-          showUploadList={false}
-        >
-          <Button2>
-            <UploadOutlined className="mr-2" /> Upload CSV
-          </Button2>
-        </Upload>
-
-        {parseError && (
-          <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-md">
-            <Text className="text-red-600">{parseError}</Text>
-          </div>
-        )}
-
-        {parsedData.length > 0 && (
-          <div className="mt-4">
-            <Text>Preview of users to be created:</Text>
-            <Table
-              dataSource={parsedData}
-              columns={columns}
-              size="small"
-              pagination={{ pageSize: 5 }}
-              scroll={{ y: 300 }}
-              rowClassName={(record) => !record.isValid ? 'bg-red-50' : ''}
-            />
-          </div>
-        )}
+        <div className="flex flex-col">
+          {/* Step indicator */}
+          {parsedData.length === 0 ? (
+            <div className="mb-6">
+              <div className="flex items-center mb-4">
+                <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center mr-3">1</div>
+                <h3 className="text-lg font-medium">Download and fill the template</h3>
+              </div>
+              
+              <div className="ml-11 mb-6">
+                <p className="mb-4">Add multiple users at once by following these steps:</p>
+                <ol className="list-decimal list-inside space-y-2 ml-2 mb-4">
+                  <li>Download our CSV template</li>
+                  <li>Add your users' information to the spreadsheet</li>
+                  <li>Save the file and upload it here</li>
+                </ol>
+                
+                <div className="bg-gray-50 p-4 rounded-md border border-gray-200 mb-4">
+                  <h4 className="font-medium mb-2">Template fields:</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="flex items-start">
+                      <div className="w-3 h-3 rounded-full bg-red-500 mt-1.5 mr-2 flex-shrink-0"></div>
+                      <div>
+                        <p className="font-medium">user_email</p>
+                        <p className="text-sm text-gray-600">User's email address (required)</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start">
+                      <div className="w-3 h-3 rounded-full bg-red-500 mt-1.5 mr-2 flex-shrink-0"></div>
+                      <div>
+                        <p className="font-medium">user_role</p>
+                        <p className="text-sm text-gray-600">User's role (e.g., "internal_user")</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start">
+                      <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 flex-shrink-0"></div>
+                      <div>
+                        <p className="font-medium">team_id</p>
+                        <p className="text-sm text-gray-600">Optional team assignment</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start">
+                      <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 flex-shrink-0"></div>
+                      <div>
+                        <p className="font-medium">metadata</p>
+                        <p className="text-sm text-gray-600">Optional JSON metadata (use {} for empty)</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                
+                <Button2 
+                  onClick={downloadTemplate} 
+                  size="lg" 
+                  className="w-full md:w-auto"
+                >
+                  <DownloadOutlined className="mr-2" /> Download CSV Template
+                </Button2>
+              </div>
+              
+              <div className="flex items-center mb-4">
+                <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center mr-3">2</div>
+                <h3 className="text-lg font-medium">Upload your completed CSV</h3>
+              </div>
+              
+              <div className="ml-11">
+                <Upload
+                  beforeUpload={handleFileUpload}
+                  accept=".csv"
+                  maxCount={1}
+                  showUploadList={false}
+                >
+                  <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-500 transition-colors cursor-pointer">
+                    <UploadOutlined className="text-3xl text-gray-400 mb-2" />
+                    <p className="mb-1">Drag and drop your CSV file here</p>
+                    <p className="text-sm text-gray-500 mb-3">or</p>
+                    <Button2 size="sm">Browse files</Button2>
+                  </div>
+                </Upload>
+              </div>
+            </div>
+          ) : (
+            <div className="mb-6">
+              <div className="flex items-center mb-4">
+                <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center mr-3">3</div>
+                <h3 className="text-lg font-medium">Review and create users</h3>
+              </div>
+              
+              {parseError && (
+                <div className="ml-11 mb-4 p-4 bg-red-50 border border-red-200 rounded-md">
+                  <Text className="text-red-600 font-medium">{parseError}</Text>
+                </div>
+              )}
+              
+              <div className="ml-11">
+                <div className="flex justify-between items-center mb-3">
+                  <div className="flex items-center">
+                    <Text className="text-lg font-medium mr-3">User Preview</Text>
+                    <Text className="text-sm bg-blue-100 text-blue-800 px-2 py-1 rounded">
+                      {parsedData.filter(d => d.isValid).length} of {parsedData.length} users valid
+                    </Text>
+                  </div>
+                  
+                  <div className="flex space-x-3">
+                    <Button2 
+                      onClick={() => {
+                        setParsedData([]);
+                        setParseError(null);
+                      }} 
+                      variant="secondary"
+                    >
+                      Back
+                    </Button2>
+                    <Button2
+                      onClick={handleBulkCreate}
+                      disabled={parsedData.filter(d => d.isValid).length === 0 || isProcessing}
+                    >
+                      {isProcessing ? 'Creating...' : `Create ${parsedData.filter(d => d.isValid).length} Users`}
+                    </Button2>
+                  </div>
+                </div>
+                
+                <Table
+                  dataSource={parsedData}
+                  columns={columns}
+                  size="small"
+                  pagination={{ pageSize: 5 }}
+                  scroll={{ y: 300 }}
+                  rowClassName={(record) => !record.isValid ? 'bg-red-50' : ''}
+                />
+                
+                <div className="flex justify-end mt-4">
+                  <Button2 
+                    onClick={() => {
+                      setParsedData([]);
+                      setParseError(null);
+                    }} 
+                    variant="secondary"
+                    className="mr-3"
+                  >
+                    Back
+                  </Button2>
+                  <Button2
+                    onClick={handleBulkCreate}
+                    disabled={parsedData.filter(d => d.isValid).length === 0 || isProcessing}
+                  >
+                    {isProcessing ? 'Creating...' : `Create ${parsedData.filter(d => d.isValid).length} Users`}
+                  </Button2>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </Modal>
     </>
   );
