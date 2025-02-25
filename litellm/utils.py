@@ -1836,7 +1836,9 @@ def token_counter(
         tokenizer_json = custom_tokenizer or _select_tokenizer(model=model)
         if tokenizer_json["type"] == "huggingface_tokenizer":
             enc = tokenizer_json["tokenizer"].encode(text)
-            num_tokens = len(enc.ids)
+            num_tokens = 0
+            if hasattr(enc, "ids"):
+                num_tokens = len(enc.ids)
         elif tokenizer_json["type"] == "openai_tokenizer":
             if (
                 model in litellm.open_ai_chat_completion_models
