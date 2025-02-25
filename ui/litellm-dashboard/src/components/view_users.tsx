@@ -314,6 +314,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         accessToken={accessToken}
         userRole={userRole}
         onUserUpdated={refreshUserData}
+        possibleUIRoles={possibleUIRoles}
       />
     );
   }

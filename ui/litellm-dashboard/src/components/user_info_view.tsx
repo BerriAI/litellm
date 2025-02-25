@@ -12,10 +12,12 @@ import {
   Badge,
   Button as TremorButton,
   TextInput,
+  Select as Select2,
+  SelectItem,
 } from "@tremor/react";
 import { ArrowLeftIcon, TrashIcon } from "@heroicons/react/outline";
 import { userUpdateUserCall, userDeleteCall } from "./networking";
-import { Button, Form, Input, message, Select } from "antd";
+import { Button, Form, Input, message, InputNumber } from "antd";
 
 interface UserInfoViewProps {
   userId: string;
@@ -24,6 +26,7 @@ interface UserInfoViewProps {
   accessToken: string | null;
   userRole: string | null;
   onUserUpdated: () => Promise<void>;
+  possibleUIRoles: null | Record<string, Record<string, string>>;
 }
 
 export default function UserInfoView({ 
@@ -32,7 +35,8 @@ export default function UserInfoView({
   userData, 
   accessToken,
   userRole,
-  onUserUpdated
+  onUserUpdated,
+  possibleUIRoles
 }: UserInfoViewProps) {
   const [form] = Form.useForm();
   const [localUserData, setLocalUserData] = useState(userData);
@@ -241,10 +245,16 @@ export default function UserInfoView({
                       <Text className="font-medium">Role</Text>
                       {isEditing ? (
                         <Form.Item name="user_role" className="mb-0">
-                          <Select>
-                            <Select.Option value="admin">Admin</Select.Option>
-                            <Select.Option value="user">User</Select.Option>
-                          </Select>
+                          <Select2>
+                            {possibleUIRoles &&
+                              Object.entries(possibleUIRoles).map(([role, { ui_label, description }]) => (
+                                <SelectItem key={role} value={role} title={ui_label}>
+                                  <div className='flex'>
+                                    {ui_label} <p className="ml-2" style={{ color: "gray", fontSize: "12px" }}>{description}</p>
+                                  </div>
+                                </SelectItem>
+                              ))}
+                          </Select2>
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">{localUserData.user_role || "Not Set"}</div>
@@ -254,8 +264,13 @@ export default function UserInfoView({
                     <div>
                       <Text className="font-medium">Max Budget</Text>
                       {isEditing ? (
-                        <Form.Item name="max_budget" className="mb-0">
-                          <TextInput placeholder="Enter max budget" />
+                        <Form.Item 
+                          name="max_budget" 
+                          className="mb-0"
+                          tooltip="(float) - Maximum budget of this user"
+                          help="Ignored if the key has a team_id; team budget applies there."
+                        >
+                          <InputNumber min={0} step={1} />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">${localUserData.max_budget || "0"}</div>
@@ -265,8 +280,13 @@ export default function UserInfoView({
                     <div>
                       <Text className="font-medium">Current Spend</Text>
                       {isEditing ? (
-                        <Form.Item name="spend" className="mb-0">
-                          <TextInput placeholder="Enter current spend" />
+                        <Form.Item 
+                          name="spend" 
+                          className="mb-0"
+                          tooltip="(float) - Spend of all LLM calls completed by this user"
+                          help="Across all keys (including keys with team_id)."
+                        >
+                          <InputNumber min={0} step={1} />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">${localUserData.spend || "0"}</div>
