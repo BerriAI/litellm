@@ -15,8 +15,11 @@ interface BulkCreateUsersProps {
 interface UserData {
   user_email: string;
   user_role: string;
-  team_id?: string;
+  teams?: string;
   metadata?: string;
+  max_budget?: string;
+  budget_duration?: string;
+  models?: string;
   status?: string;
   error?: string;
   rowNumber?: number;
@@ -35,8 +38,8 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
 
   const downloadTemplate = () => {
     const template = [
-      ["user_email", "user_role", "team_id", "metadata"],
-      ["user@example.com", "internal_user", "", "{}"],
+      ["user_email", "user_role", "teams", "metadata", "max_budget", "budget_duration", "models"],
+      ["user@example.com", "internal_user", "team-id-1,team-id-2", "{}", "100", "30d", "gpt-3.5-turbo,gpt-4"],
     ];
     
     const csv = Papa.unparse(template);
@@ -71,8 +74,11 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
             const user: UserData = {
               user_email: row[headers.indexOf("user_email")]?.trim() || '',
               user_role: row[headers.indexOf("user_role")]?.trim() || '',
-              team_id: row[headers.indexOf("team_id")]?.trim(),
+              teams: row[headers.indexOf("teams")]?.trim(),
               metadata: row[headers.indexOf("metadata")]?.trim(),
+              max_budget: row[headers.indexOf("max_budget")]?.trim(),
+              budget_duration: row[headers.indexOf("budget_duration")]?.trim(),
+              models: row[headers.indexOf("models")]?.trim(),
               rowNumber: index + 2,
               isValid: true,
               error: '',
@@ -83,6 +89,17 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
             if (!user.user_email) errors.push('Email is required');
             if (!user.user_role) errors.push('Role is required');
             if (user.user_email && !user.user_email.includes('@')) errors.push('Invalid email format');
+            
+            // Validate user role
+            const validRoles = ['proxy_admin', 'proxy_admin_view_only', 'internal_user', 'internal_user_view_only'];
+            if (user.user_role && !validRoles.includes(user.user_role)) {
+              errors.push(`Invalid role. Must be one of: ${validRoles.join(', ')}`);
+            }
+            
+            // Validate max_budget if provided
+            if (user.max_budget && isNaN(parseFloat(user.max_budget))) {
+              errors.push('Max budget must be a number');
+            }
 
             if (errors.length > 0) {
               user.isValid = false;
@@ -123,7 +140,32 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
 
     for (const [index, user] of updatedData.entries()) {
       try {
-        const response = await userCreateCall(accessToken, null, user);
+        // Convert teams from comma-separated string to array if provided
+        const processedUser = { ...user };
+        if (processedUser.teams && processedUser.teams.trim() !== '') {
+          processedUser.teams = processedUser.teams.split(',').map(team => team.trim());
+        }
+        
+        // Convert models from comma-separated string to array if provided
+        if (processedUser.models && processedUser.models.trim() !== '') {
+          processedUser.models = processedUser.models.split(',').map(model => model.trim());
+        }
+        
+        // Convert max_budget to number if provided
+        if (processedUser.max_budget && processedUser.max_budget.trim() !== '') {
+          processedUser.max_budget = parseFloat(processedUser.max_budget);
+        }
+        
+        // Parse metadata if provided
+        if (processedUser.metadata && processedUser.metadata.trim() !== '') {
+          try {
+            processedUser.metadata = JSON.parse(processedUser.metadata);
+          } catch (e) {
+            // If metadata parsing fails, keep it as string
+          }
+        }
+        
+        const response = await userCreateCall(accessToken, null, processedUser);
         
         if (response?.status === 200) {
           setParsedData(current => 
@@ -170,9 +212,14 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
       key: "user_role",
     },
     {
-      title: "Team",
-      dataIndex: "team_id",
-      key: "team_id",
+      title: "Teams",
+      dataIndex: "teams",
+      key: "teams",
+    },
+    {
+      title: "Budget",
+      dataIndex: "max_budget",
+      key: "max_budget",
     },
     {
       title: 'Status',
@@ -251,7 +298,7 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
                 </ol>
                 
                 <div className="bg-gray-50 p-4 rounded-md border border-gray-200 mb-4">
-                  <h4 className="font-medium mb-2">Template fields:</h4>
+                  <h4 className="font-medium mb-2">Template Column Names</h4>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div className="flex items-start">
                       <div className="w-3 h-3 rounded-full bg-red-500 mt-1.5 mr-2 flex-shrink-0"></div>
@@ -264,21 +311,42 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
                       <div className="w-3 h-3 rounded-full bg-red-500 mt-1.5 mr-2 flex-shrink-0"></div>
                       <div>
                         <p className="font-medium">user_role</p>
-                        <p className="text-sm text-gray-600">User's role (e.g., "internal_user")</p>
+                        <p className="text-sm text-gray-600">User's role (one of: "proxy_admin", "proxy_admin_view_only", "internal_user", "internal_user_view_only")</p>
                       </div>
                     </div>
                     <div className="flex items-start">
                       <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 flex-shrink-0"></div>
                       <div>
-                        <p className="font-medium">team_id</p>
-                        <p className="text-sm text-gray-600">Optional team assignment</p>
+                        <p className="font-medium">teams</p>
+                        <p className="text-sm text-gray-600">Comma-separated team IDs (e.g., "team-1,team-2")</p>
                       </div>
                     </div>
                     <div className="flex items-start">
                       <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 flex-shrink-0"></div>
                       <div>
                         <p className="font-medium">metadata</p>
-                        <p className="text-sm text-gray-600">Optional JSON metadata (use {} for empty)</p>
+                        <p className="text-sm text-gray-600">JSON metadata (use {} for empty)</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start">
+                      <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 flex-shrink-0"></div>
+                      <div>
+                        <p className="font-medium">max_budget</p>
+                        <p className="text-sm text-gray-600">Maximum budget as a number (e.g., "100")</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start">
+                      <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 flex-shrink-0"></div>
+                      <div>
+                        <p className="font-medium">budget_duration</p>
+                        <p className="text-sm text-gray-600">Budget reset period (e.g., "30d", "1mo")</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start">
+                      <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 flex-shrink-0"></div>
+                      <div>
+                        <p className="font-medium">models</p>
+                        <p className="text-sm text-gray-600">Comma-separated allowed models (e.g., "gpt-3.5-turbo,gpt-4")</p>
                       </div>
                     </div>
                   </div>
