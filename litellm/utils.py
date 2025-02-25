@@ -6191,9 +6191,14 @@ class ProviderConfigManager:
     def get_provider_rerank_config(
         model: str,
         provider: LlmProviders,
+        api_base: Optional[str],
+        present_version_params: List[str],
     ) -> BaseRerankConfig:
         if litellm.LlmProviders.COHERE == provider:
-            return litellm.CohereRerankConfig()
+            if should_use_cohere_v1_client(api_base, present_version_params):
+                return litellm.CohereRerankConfig()
+            else:
+                return litellm.CohereRerankV2Config()
         elif litellm.LlmProviders.AZURE_AI == provider:
             return litellm.AzureAIRerankConfig()
         elif litellm.LlmProviders.INFINITY == provider:
@@ -6276,6 +6281,12 @@ def get_end_user_id_for_cost_tracking(
     ):
         return None
     return end_user_id
+
+def should_use_cohere_v1_client(api_base: Optional[str], present_version_params: List[str]):
+    if not api_base:
+        return False
+    uses_v1_params = ("max_chunks_per_doc" in present_version_params) and ('max_tokens_per_doc' not in present_version_params) 
+    return api_base.endswith("/v1/rerank") or (uses_v1_params and not api_base.endswith("/v2/rerank"))
 
 
 def is_prompt_caching_valid_prompt(
