@@ -19,6 +19,7 @@ import {
   invitationCreateCall,
   getProxyUISettings,
 } from "./networking";
+import BulkCreateUsers from "./bulk_create_users_button";
 const { Option } = Select;
 
 interface CreateuserProps {
@@ -148,16 +149,23 @@ const Createuser: React.FC<CreateuserProps> = ({
       message.success("API user Created");
       form.resetFields();
       localStorage.removeItem("userData" + userID);
-    } catch (error) {
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.detail || error?.message || "Error creating the user";
+      message.error(errorMessage);
       console.error("Error creating the user:", error);
     }
   };
 
   return (
-    <div>
+    <div className="flex gap-2">
       <Button2 className="mx-auto mb-0" onClick={() => setIsModalVisible(true)}>
         + Invite User
       </Button2>
+      <BulkCreateUsers 
+        accessToken={accessToken}
+        teams={teams}
+        possibleUIRoles={possibleUIRoles}
+      />
       <Modal
         title="Invite User"
         visible={isModalVisible}

@@ -15,7 +15,7 @@ import asyncio
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Any, List, Optional, Union
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -69,6 +69,35 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
             data_json["budget_duration"] = litellm.internal_user_budget_duration
 
     return data_json
+
+
+async def _check_duplicate_user_email(
+    user_email: Optional[str], prisma_client: Any
+) -> None:
+    """
+    Helper function to check if a user email already exists in the database.
+
+    Args:
+        user_email (Optional[str]): Email to check
+        prisma_client (Any): Database client instance
+
+    Raises:
+        Exception: If database is not connected
+        HTTPException: If user with email already exists
+    """
+    if user_email:
+        if prisma_client is None:
+            raise Exception("Database not connected")
+
+        existing_user = await prisma_client.db.litellm_usertable.find_first(
+            where={"user_email": user_email}
+        )
+
+        if existing_user is not None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"User with email {user_email} already exists"},
+            )
 
 
 @router.post(
@@ -137,101 +166,116 @@ async def new_user(
      }'
     ```
     """
-    from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
+    try:
+        from litellm.proxy.proxy_server import (
+            general_settings,
+            prisma_client,
+            proxy_logging_obj,
+        )
 
-    data_json = data.json()  # type: ignore
-    data_json = _update_internal_new_user_params(data_json, data)
-    response = await generate_key_helper_fn(request_type="user", **data_json)
-    # Admin UI Logic
-    # Add User to Team and Organization
-    # if team_id passed add this user to the team
-    if data_json.get("team_id", None) is not None:
-        from litellm.proxy.management_endpoints.team_endpoints import team_member_add
+        # Check for duplicate email
+        await _check_duplicate_user_email(data.user_email, prisma_client)
 
-        try:
-            await team_member_add(
-                data=TeamMemberAddRequest(
-                    team_id=data_json.get("team_id", None),
-                    member=Member(
-                        user_id=data_json.get("user_id", None),
-                        role="user",
-                        user_email=data_json.get("user_email", None),
+        data_json = data.json()  # type: ignore
+        data_json = _update_internal_new_user_params(data_json, data)
+        response = await generate_key_helper_fn(request_type="user", **data_json)
+        # Admin UI Logic
+        # Add User to Team and Organization
+        # if team_id passed add this user to the team
+        if data_json.get("team_id", None) is not None:
+            from litellm.proxy.management_endpoints.team_endpoints import (
+                team_member_add,
+            )
+
+            try:
+                await team_member_add(
+                    data=TeamMemberAddRequest(
+                        team_id=data_json.get("team_id", None),
+                        member=Member(
+                            user_id=data_json.get("user_id", None),
+                            role="user",
+                            user_email=data_json.get("user_email", None),
+                        ),
                     ),
-                ),
-                http_request=Request(
-                    scope={"type": "http", "path": "/user/new"},
-                ),
-                user_api_key_dict=user_api_key_dict,
-            )
-        except HTTPException as e:
-            if e.status_code == 400 and (
-                "already exists" in str(e) or "doesn't exist" in str(e)
-            ):
-                verbose_proxy_logger.debug(
-                    "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
-                        str(e)
-                    )
+                    http_request=Request(
+                        scope={"type": "http", "path": "/user/new"},
+                    ),
+                    user_api_key_dict=user_api_key_dict,
                 )
-            else:
-                verbose_proxy_logger.debug(
-                    "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): Exception occured - {}".format(
-                        str(e)
+            except HTTPException as e:
+                if e.status_code == 400 and (
+                    "already exists" in str(e) or "doesn't exist" in str(e)
+                ):
+                    verbose_proxy_logger.debug(
+                        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
+                            str(e)
+                        )
                     )
-                )
-        except Exception as e:
-            if "already exists" in str(e) or "doesn't exist" in str(e):
-                verbose_proxy_logger.debug(
-                    "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
-                        str(e)
+                else:
+                    verbose_proxy_logger.debug(
+                        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): Exception occured - {}".format(
+                            str(e)
+                        )
                     )
-                )
-            else:
-                raise e
+            except Exception as e:
+                if "already exists" in str(e) or "doesn't exist" in str(e):
+                    verbose_proxy_logger.debug(
+                        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
+                            str(e)
+                        )
+                    )
+                else:
+                    raise e
 
-    if data.send_invite_email is True:
-        # check if user has setup email alerting
-        if "email" not in general_settings.get("alerting", []):
-            raise ValueError(
-                "Email alerting not setup on config.yaml. Please set `alerting=['email']. \nDocs: https://docs.litellm.ai/docs/proxy/email`"
+        if data.send_invite_email is True:
+            # check if user has setup email alerting
+            if "email" not in general_settings.get("alerting", []):
+                raise ValueError(
+                    "Email alerting not setup on config.yaml. Please set `alerting=['email']. \nDocs: https://docs.litellm.ai/docs/proxy/email`"
+                )
+
+            event = WebhookEvent(
+                event="internal_user_created",
+                event_group="internal_user",
+                event_message="Welcome to LiteLLM Proxy",
+                token=response.get("token", ""),
+                spend=response.get("spend", 0.0),
+                max_budget=response.get("max_budget", 0.0),
+                user_id=response.get("user_id", None),
+                user_email=response.get("user_email", None),
+                team_id=response.get("team_id", "Default Team"),
+                key_alias=response.get("key_alias", None),
             )
 
-        event = WebhookEvent(
-            event="internal_user_created",
-            event_group="internal_user",
-            event_message="Welcome to LiteLLM Proxy",
-            token=response.get("token", ""),
-            spend=response.get("spend", 0.0),
-            max_budget=response.get("max_budget", 0.0),
-            user_id=response.get("user_id", None),
+            # If user configured email alerting - send an Email letting their end-user know the key was created
+            asyncio.create_task(
+                proxy_logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email(
+                    webhook_event=event,
+                )
+            )
+
+        return NewUserResponse(
+            key=response.get("token", ""),
+            expires=response.get("expires", None),
+            max_budget=response["max_budget"],
+            user_id=response["user_id"],
+            user_role=response.get("user_role", None),
             user_email=response.get("user_email", None),
-            team_id=response.get("team_id", "Default Team"),
-            key_alias=response.get("key_alias", None),
+            user_alias=response.get("user_alias", None),
+            teams=response.get("teams", None),
+            team_id=response.get("team_id", None),
+            metadata=response.get("metadata", None),
+            models=response.get("models", None),
+            tpm_limit=response.get("tpm_limit", None),
+            rpm_limit=response.get("rpm_limit", None),
+            budget_duration=response.get("budget_duration", None),
+            model_max_budget=response.get("model_max_budget", None),
         )
-
-        # If user configured email alerting - send an Email letting their end-user know the key was created
-        asyncio.create_task(
-            proxy_logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email(
-                webhook_event=event,
-            )
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "/user/new: Exception occured - {}".format(str(e))
         )
-
-    return NewUserResponse(
-        key=response.get("token", ""),
-        expires=response.get("expires", None),
-        max_budget=response["max_budget"],
-        user_id=response["user_id"],
-        user_role=response.get("user_role", None),
-        user_email=response.get("user_email", None),
-        user_alias=response.get("user_alias", None),
-        teams=response.get("teams", None),
-        team_id=response.get("team_id", None),
-        metadata=response.get("metadata", None),
-        models=response.get("models", None),
-        tpm_limit=response.get("tpm_limit", None),
-        rpm_limit=response.get("rpm_limit", None),
-        budget_duration=response.get("budget_duration", None),
-        model_max_budget=response.get("model_max_budget", None),
-    )
+        raise handle_exception_on_proxy(e)
 
 
 @router.get(
