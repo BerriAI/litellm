@@ -356,6 +356,30 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
       key: "max_budget",
     },
     {
+      title: "Invitation Link",
+      key: "invitation_link",
+      render: (_: any, record: UserData) => {
+        if (record.status === 'success' && record.invitation_link) {
+          return (
+            <div className="flex items-center">
+              <span className="text-xs text-gray-500 truncate max-w-[150px]">
+                {record.invitation_link}
+              </span>
+              <CopyToClipboard
+                text={record.invitation_link}
+                onCopy={() => message.success("Invitation link copied!")}
+              >
+                <button className="ml-1 text-blue-500 text-xs hover:text-blue-700">
+                  Copy
+                </button>
+              </CopyToClipboard>
+            </div>
+          );
+        }
+        return <span className="text-gray-400">-</span>;
+      },
+    },
+    {
       title: 'Status',
       key: 'status',
       render: (_: any, record: UserData) => {
@@ -377,28 +401,9 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
         }
         if (record.status === 'success') {
           return (
-            <div>
-              <div className="flex items-center">
-                <CheckCircleIcon className="h-5 w-5 text-green-500 mr-2" />
-                <span className="text-green-500">Success</span>
-              </div>
-              {record.invitation_link && (
-                <div className="mt-1">
-                  <div className="flex items-center">
-                    <span className="text-xs text-gray-500 truncate max-w-[150px]">
-                      {record.invitation_link}
-                    </span>
-                    <CopyToClipboard
-                      text={record.invitation_link}
-                      onCopy={() => message.success("Invitation link copied!")}
-                    >
-                      <button className="ml-1 text-blue-500 text-xs hover:text-blue-700">
-                        Copy
-                      </button>
-                    </CopyToClipboard>
-                  </div>
-                </div>
-              )}
+            <div className="flex items-center">
+              <CheckCircleIcon className="h-5 w-5 text-green-500 mr-2" />
+              <span className="text-green-500">Success</span>
             </div>
           );
         }
@@ -601,8 +606,8 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                       <div>
                         <Text className="font-medium text-blue-800">User creation complete</Text>
                         <Text className="block text-sm text-blue-700 mt-1">
-                          <span className="font-medium">Next step:</span> Download the credentials file containing API keys and invitation links.
-                          Users will need these API keys to make LLM requests through LiteLLM.
+                          <span className="font-medium">Next step:</span> Download the results file containing invitation links for your new users.
+                          Share these links with your team members to get them started.
                         </Text>
                       </div>
                     </div>
@@ -656,7 +661,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                       variant="primary"
                       className="flex items-center"
                     >
-                      <DownloadOutlined className="mr-2" /> Download User Credentials
+                      <DownloadOutlined className="mr-2" /> Export User Invitation Links
                     </TremorButton>
                   </div>
                 )}
