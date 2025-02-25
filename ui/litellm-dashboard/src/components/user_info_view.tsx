@@ -58,7 +58,7 @@ export default function UserInfoView({
         user_role: values.user_role,
         max_budget: values.max_budget,
         spend: values.spend,
-        team_id: values.team_id,
+        teams: values.teams,
       };
 
       await userUpdateUserCall(accessToken, updateData, null);
@@ -153,9 +153,13 @@ export default function UserInfoView({
                 </div>
               </Card>
               <Card>
-                <Text>Team ID</Text>
+                <Text>Teams</Text>
                 <div className="mt-2">
-                  <Title>{userData.team_id || "Not Set"}</Title>
+                  <Title>
+                    {userData.teams && userData.teams !== "[]" 
+                      ? userData.teams.replace(/[\[\]']/g, '').split(', ').join(', ') 
+                      : "Not Set"}
+                  </Title>
                 </div>
               </Card>
               <Card>
@@ -218,7 +222,7 @@ export default function UserInfoView({
                   user_role: localUserData.user_role,
                   max_budget: localUserData.max_budget,
                   spend: localUserData.spend,
-                  team_id: localUserData.team_id,
+                  teams: localUserData.teams ? localUserData.teams.replace(/[\[\]']/g, '').split(', ').join(', ') : "",
                 }}
                 layout="vertical"
                 onValuesChange={() => setIsDirty(true)}
@@ -294,13 +298,21 @@ export default function UserInfoView({
                     </div>
 
                     <div>
-                      <Text className="font-medium">Team ID</Text>
+                      <Text className="font-medium">Teams</Text>
                       {isEditing ? (
-                        <Form.Item name="team_id" className="mb-0">
-                          <TextInput placeholder="Enter team ID" />
+                        <Form.Item 
+                          name="teams" 
+                          className="mb-0"
+                          tooltip="Comma-separated list of team IDs this user belongs to"
+                        >
+                          <TextInput placeholder="Enter team IDs (comma-separated)" />
                         </Form.Item>
                       ) : (
-                        <div className="mt-1 p-2 bg-gray-50 rounded">{localUserData.team_id || "Not Set"}</div>
+                        <div className="mt-1 p-2 bg-gray-50 rounded">
+                          {localUserData.teams && localUserData.teams !== "[]" 
+                            ? localUserData.teams.replace(/[\[\]']/g, '').split(', ').join(', ') 
+                            : "Not Set"}
+                        </div>
                       )}
                     </div>
                   </div>
