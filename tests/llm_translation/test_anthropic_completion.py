@@ -1178,3 +1178,6 @@ def test_anthropic_thinking_output():
     )
     assert resp.choices[0].message.reasoning_content is not None
     assert isinstance(resp.choices[0].message.reasoning_content, str)
+    assert resp.choices[0].message.thinking_blocks is not None
+    assert isinstance(resp.choices[0].message.thinking_blocks, list)
+    assert len(resp.choices[0].message.thinking_blocks) > 0
