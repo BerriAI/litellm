@@ -636,6 +636,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   userSpend={totalMonthlySpend}
                   selectedTeam={null}
                   userMaxBudget={null}
+                  label="Monthly Usage"
                 />
               </Col>
               <Col numColSpan={2}>
