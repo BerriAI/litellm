@@ -504,7 +504,11 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
             <div className="mb-6">
               <div className="flex items-center mb-4">
                 <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center mr-3">3</div>
-                <h3 className="text-lg font-medium">Review and create users</h3>
+                <h3 className="text-lg font-medium">
+                  {parsedData.some(user => user.status === 'success' || user.status === 'failed') 
+                    ? "User Creation Results" 
+                    : "Review and create users"}
+                </h3>
               </div>
               
               {parseError && (
@@ -516,39 +520,65 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
               <div className="ml-11">
                 <div className="flex justify-between items-center mb-3">
                   <div className="flex items-center">
-                    <Text className="text-lg font-medium mr-3">User Preview</Text>
-                    <Text className="text-sm bg-blue-100 text-blue-800 px-2 py-1 rounded">
-                      {parsedData.filter(d => d.isValid).length} of {parsedData.length} users valid
-                    </Text>
+                    {parsedData.some(user => user.status === 'success' || user.status === 'failed') ? (
+                      <div className="flex items-center">
+                        <Text className="text-lg font-medium mr-3">Creation Summary</Text>
+                        <Text className="text-sm bg-green-100 text-green-800 px-2 py-1 rounded mr-2">
+                          {parsedData.filter(d => d.status === 'success').length} Successful
+                        </Text>
+                        {parsedData.some(d => d.status === 'failed') && (
+                          <Text className="text-sm bg-red-100 text-red-800 px-2 py-1 rounded">
+                            {parsedData.filter(d => d.status === 'failed').length} Failed
+                          </Text>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex items-center">
+                        <Text className="text-lg font-medium mr-3">User Preview</Text>
+                        <Text className="text-sm bg-blue-100 text-blue-800 px-2 py-1 rounded">
+                          {parsedData.filter(d => d.isValid).length} of {parsedData.length} users valid
+                        </Text>
+                      </div>
+                    )}
                   </div>
                   
-                  <div className="flex space-x-3">
-                    <Button2 
-                      onClick={() => {
-                        setParsedData([]);
-                        setParseError(null);
-                      }} 
-                      variant="secondary"
-                    >
-                      Back
-                    </Button2>
-                    {parsedData.some(user => user.status === 'success') && (
-                      <Button2
-                        onClick={downloadResults}
+                  {!parsedData.some(user => user.status === 'success' || user.status === 'failed') && (
+                    <div className="flex space-x-3">
+                      <Button2 
+                        onClick={() => {
+                          setParsedData([]);
+                          setParseError(null);
+                        }} 
                         variant="secondary"
-                        className="mr-3"
                       >
-                        Download Results
+                        Back
                       </Button2>
-                    )}
-                    <Button2
-                      onClick={handleBulkCreate}
-                      disabled={parsedData.filter(d => d.isValid).length === 0 || isProcessing}
-                    >
-                      {isProcessing ? 'Creating...' : `Create ${parsedData.filter(d => d.isValid).length} Users`}
-                    </Button2>
-                  </div>
+                      <Button2
+                        onClick={handleBulkCreate}
+                        disabled={parsedData.filter(d => d.isValid).length === 0 || isProcessing}
+                      >
+                        {isProcessing ? 'Creating...' : `Create ${parsedData.filter(d => d.isValid).length} Users`}
+                      </Button2>
+                    </div>
+                  )}
                 </div>
+                
+                {parsedData.some(user => user.status === 'success') && (
+                  <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-md">
+                    <div className="flex items-start">
+                      <div className="mr-3 mt-1">
+                        <CheckCircleIcon className="h-5 w-5 text-blue-500" />
+                      </div>
+                      <div>
+                        <Text className="font-medium text-blue-800">User creation complete</Text>
+                        <Text className="block text-sm text-blue-700 mt-1">
+                          <span className="font-medium">Next step:</span> Download the credentials file containing API keys and invitation links.
+                          Users will need these API keys to make LLM requests through LiteLLM.
+                        </Text>
+                      </div>
+                    </div>
+                  </div>
+                )}
                 
                 <Table
                   dataSource={parsedData}
@@ -559,33 +589,48 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
                   rowClassName={(record) => !record.isValid ? 'bg-red-50' : ''}
                 />
                 
-                <div className="flex justify-end mt-4">
-                  <Button2 
-                    onClick={() => {
-                      setParsedData([]);
-                      setParseError(null);
-                    }} 
-                    variant="secondary"
-                    className="mr-3"
-                  >
-                    Back
-                  </Button2>
-                  {parsedData.some(user => user.status === 'success') && (
-                    <Button2
-                      onClick={downloadResults}
+                {!parsedData.some(user => user.status === 'success' || user.status === 'failed') && (
+                  <div className="flex justify-end mt-4">
+                    <Button2 
+                      onClick={() => {
+                        setParsedData([]);
+                        setParseError(null);
+                      }} 
                       variant="secondary"
                       className="mr-3"
                     >
-                      Download Results
+                      Back
                     </Button2>
-                  )}
-                  <Button2
-                    onClick={handleBulkCreate}
-                    disabled={parsedData.filter(d => d.isValid).length === 0 || isProcessing}
-                  >
-                    {isProcessing ? 'Creating...' : `Create ${parsedData.filter(d => d.isValid).length} Users`}
-                  </Button2>
-                </div>
+                    <Button2
+                      onClick={handleBulkCreate}
+                      disabled={parsedData.filter(d => d.isValid).length === 0 || isProcessing}
+                    >
+                      {isProcessing ? 'Creating...' : `Create ${parsedData.filter(d => d.isValid).length} Users`}
+                    </Button2>
+                  </div>
+                )}
+                
+                {parsedData.some(user => user.status === 'success' || user.status === 'failed') && (
+                  <div className="flex justify-end mt-4">
+                    <Button2 
+                      onClick={() => {
+                        setParsedData([]);
+                        setParseError(null);
+                      }} 
+                      variant="secondary"
+                      className="mr-3"
+                    >
+                      Start New Bulk Import
+                    </Button2>
+                    <Button2
+                      onClick={downloadResults}
+                      variant="primary"
+                      className="flex items-center"
+                    >
+                      <DownloadOutlined className="mr-2" /> Download User Credentials
+                    </Button2>
+                  </div>
+                )}
               </div>
             </div>
           )}
