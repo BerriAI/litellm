@@ -4595,7 +4595,10 @@ def image_generation(  # noqa: PLR0915
                 client=client,
                 headers=headers,
             )
-        elif custom_llm_provider == "openai":
+        elif (
+            custom_llm_provider == "openai"
+            or custom_llm_provider in litellm.openai_compatible_providers
+        ):
             model_response = openai_chat_completions.image_generation(
                 model=model,
                 prompt=prompt,
