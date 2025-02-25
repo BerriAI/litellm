@@ -38,6 +38,19 @@ interface ChatUIProps {
   disabledPersonalKeyCreation: boolean;
 }
 
+function getImageFormatFromBase64(base64String: string): string {
+  const raw = atob(base64String.substring(0, 12));
+  const hex = Array.from(raw).map(c => c.charCodeAt(0).toString(16).padStart(2, "0")).join(" ");
+
+  if (hex.startsWith("89 50 4e 47")) return "image/png";
+  if (hex.startsWith("ff d8 ff")) return "image/jpeg";
+  if (hex.startsWith("47 49 46 38")) return "image/gif";
+  if (hex.startsWith("42 4d")) return "image/bmp";
+  if (hex.startsWith("52 49 46 46")) return "image/webp";
+
+  return "unknown";
+}
+
 async function generateModelResponse(
   chatHistory: { role: string; content: string }[],
   updateUI: (chunk: string, model: string) => void,
@@ -60,16 +73,33 @@ async function generateModelResponse(
   });
 
   try {
-    const response = await client.chat.completions.create({
-      model: selectedModel,
-      stream: true,
-      messages: chatHistory as ChatCompletionMessageParam[],
-    });
+    const image_models = ["flux", "stable-diffusion"];
+    if (image_models.some(model => selectedModel.toLowerCase().includes(model))) {
+      const response = await client.images.generate({
+        model: selectedModel,
+        prompt: chatHistory.map(msg => msg.content).filter(content => !content.startsWith("!")).join("\n"),
+        size: "512x512",
+        response_format: "b64_json",
+        n: 1
+      }); 
+      if (response.data[0]) {
+        const base64Image = response.data[0].b64_json;
+        const mime = getImageFormatFromBase64(base64Image!);
+        updateUI(`![Generated with ${selectedModel}](data:${mime};base64,${base64Image})`, selectedModel);
+      } else {
+        updateUI("It wasn't possible to generate the image!", selectedModel);
+      }
+    } else {
+      const response = await client.chat.completions.create({
+        model: selectedModel,
+        stream: true,
+        messages: chatHistory as ChatCompletionMessageParam[],
+      });
 
-    for await (const chunk of response) {
-      console.log(chunk);
-      if (chunk.choices[0].delta.content) {
-        updateUI(chunk.choices[0].delta.content, chunk.model);
+      for await (const chunk of response) {
+        if (chunk.choices[0].delta.content) {
+          updateUI(chunk.choices[0].delta.content, chunk.model);
+        }
       }
     }
   } catch (error) {
@@ -90,6 +120,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [apiKey, setApiKey] = useState("");
   const [inputMessage, setInputMessage] = useState("");
   const [chatHistory, setChatHistory] = useState<{ role: string; content: string; model?: string }[]>([]);
+  const [isSpinnerVisible, setSpinnerVisible] = useState(false);
   const [selectedModel, setSelectedModel] = useState<string | undefined>(
     undefined
   );
@@ -97,6 +128,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  const toggleSpinner = () => {
+    setSpinnerVisible(isSpinnerVisible => !isSpinnerVisible);
+  };
+  
   useEffect(() => {
     if (!accessToken || !token || !userRole || !userID) {
       return;
@@ -189,6 +224,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
       message.error("Please provide an API key or select Current UI Session");
       return;
     }
+    toggleSpinner();
+    setInputMessage("");
 
     // Create message object without model field for API call
     const newUserMessage = { role: "user", content: inputMessage };
@@ -207,10 +244,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
           selectedModel,
           effectiveApiKey
         );
+        toggleSpinner();
       }
     } catch (error) {
       console.error("Error fetching model response", error);
       updateUI("assistant", "Error fetching model response");
+      toggleSpinner();
     }
 
     setInputMessage("");
@@ -247,8 +286,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             </TabList>
             <TabPanels>
               <TabPanel>
-                <div className="sm:max-w-2xl">
-                  <Grid numItems={2}>
+                <div className="sm:max-w-4xl">
+                  <Grid numItems={3}>
                     <Col>
                       <Text>API Key Source</Text>
                       <Select
@@ -281,8 +320,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         showSearch={true}
                       />
                     </Col>
-                  </Grid>
-
+                    <Col>
                   {/* Clear Chat Button */}
                   <Button
                     onClick={clearChatHistory}
@@ -290,6 +328,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   >
                     Clear Chat
                   </Button>
+                    </Col>
+                  </Grid>
                 </div>
                 <Table
                   className="mt-5"
@@ -336,6 +376,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                             maxWidth: "100%"
                           }}>
                             <ReactMarkdown
+                              urlTransform={(value: string) => value}
                               components={{
                                 code({node, inline, className, children, ...props}: React.ComponentPropsWithoutRef<'code'> & {
                                   inline?: boolean;
@@ -356,7 +397,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
                                       {children}
                                     </code>
                                   );
-                                }
+                                },
+                                img({ node, ...props }) {
+                                  const { alt, src } = props;
+                                  return <img {...props} style={{ maxWidth: '100%' }} alt={alt || "Generated Image"} />;
                               }}
                             >
                               {message.content}
@@ -377,16 +421,25 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   style={{ position: "absolute", bottom: 5, width: "95%" }}
                 >
                   <div className="flex" style={{ marginTop: "16px" }}>
+                    <div className={isSpinnerVisible ? 'spinner' : 'spinner hidden'} role="status">
+                        <svg aria-hidden="true" className="w-8 h-8 text-gray-200 animate-spin dark:text-gray-600 fill-blue-600 mr-4" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/>
+                            <path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/>
+                        </svg>
+                        <span className="sr-only">Loading...</span>
+                    </div>
                     <TextInput
                       type="text"
                       value={inputMessage}
                       onChange={(e) => setInputMessage(e.target.value)}
                       onKeyDown={handleKeyDown}
                       placeholder="Type your message..."
+                      readOnly={isSpinnerVisible === true}
                     />
                     <Button
                       onClick={handleSendMessage}
                       className="ml-2"
+                      disabled={isSpinnerVisible === true}
                     >
                       Send
                     </Button>
