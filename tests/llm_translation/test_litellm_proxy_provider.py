@@ -96,43 +96,71 @@ async def test_litellm_gateway_from_sdk_embedding(is_async):
     litellm._turn_on_debug()
 
     if is_async:
-        from openai import AsyncOpenAI
-
-        openai_client = AsyncOpenAI(api_key="fake-key")
+        client = AsyncHTTPHandler()
         mock_method = AsyncMock()
-        patch_target = openai_client.embeddings.create
+        patch_target = client.post
     else:
-        from openai import OpenAI
-
-        openai_client = OpenAI(api_key="fake-key")
+        client = HTTPHandler()
         mock_method = MagicMock()
-        patch_target = openai_client.embeddings.create
+        patch_target = client.post
 
-    with patch.object(patch_target.__self__, patch_target.__name__, new=mock_method):
+    with patch.object(client, "post", new=mock_method):
+        mock_response = MagicMock()
+
+        # Create a mock response similar to OpenAI's embedding response
+        mock_response.text = json.dumps(
+            {
+                "object": "list",
+                "data": [
+                    {
+                        "object": "embedding",
+                        "embedding": [0.1, 0.2, 0.3],  # Simplified embedding vector
+                        "index": 0,
+                    }
+                ],
+                "model": "my-vllm-model",
+                "usage": {"prompt_tokens": 3, "total_tokens": 3},
+            }
+        )
+
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "application/json"}
+        mock_response.json = lambda: json.loads(mock_response.text)
+
+        mock_method.return_value = mock_response
+
         try:
             if is_async:
-                await litellm.aembedding(
+                response = await litellm.aembedding(
                     model="litellm_proxy/my-vllm-model",
                     input="Hello world",
-                    client=openai_client,
+                    client=client,
                     api_base="my-custom-api-base",
+                    api_key="my-test-api-key",
                 )
             else:
-                litellm.embedding(
+                response = litellm.embedding(
                     model="litellm_proxy/my-vllm-model",
                     input="Hello world",
-                    client=openai_client,
+                    client=client,
                     api_base="my-custom-api-base",
+                    api_key="my-test-api-key",
                 )
         except Exception as e:
             print(e)
 
+        # Verify the request
         mock_method.assert_called_once()
+        call_args = mock_method.call_args
+        print("call_args=", json.dumps(call_args, indent=4))
 
-        print("Call KWARGS - {}".format(mock_method.call_args.kwargs))
+        # Check that the URL is correct
+        assert "my-custom-api-base/embeddings" == call_args[0][0]
 
-        assert "Hello world" == mock_method.call_args.kwargs["input"]
-        assert "my-vllm-model" == mock_method.call_args.kwargs["model"]
+        # Check that the request body contains the expected data
+        request_body = json.loads(call_args[1]["data"])
+        assert request_body["input"] == "Hello world"
+        assert request_body["model"] == "my-vllm-model"
 
 
 @pytest.mark.parametrize("is_async", [False, True])
