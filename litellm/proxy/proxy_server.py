@@ -3388,9 +3388,9 @@ class ProxyStartupEvent:
         DD tracer is used to trace Python applications.
         Doc: https://docs.datadoghq.com/tracing/trace_collection/automatic_instrumentation/dd_libraries/python/
         """
-        from litellm_core_utils.dd_tracing import has_ddtrace
+        from litellm_core_utils.dd_tracing import _should_use_dd_tracer
 
-        if has_ddtrace:
+        if _should_use_dd_tracer:
             import ddtrace
 
             ddtrace.patch_all(logging=True, openai=False)
