@@ -215,6 +215,7 @@ class BaseLLMHTTPHandler:
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
         )
+
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
             api_key=api_key,
@@ -709,6 +710,7 @@ class BaseLLMHTTPHandler:
         model: str,
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
+        provider_config: BaseRerankConfig,
         optional_rerank_params: OptionalRerankParams,
         timeout: Optional[Union[float, httpx.Timeout]],
         model_response: RerankResponse,
@@ -718,10 +720,7 @@ class BaseLLMHTTPHandler:
         api_base: Optional[str] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ) -> RerankResponse:
-
-        provider_config = ProviderConfigManager.get_provider_rerank_config(
-            model=model, provider=litellm.LlmProviders(custom_llm_provider)
-        )
+        
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
             api_key=api_key,

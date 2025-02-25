@@ -691,14 +691,14 @@ class PrometheusLogger(CustomLogger):
         start_time: Optional[datetime] = kwargs.get("start_time")
         api_call_start_time = kwargs.get("api_call_start_time", None)
         completion_start_time = kwargs.get("completion_start_time", None)
+        time_to_first_token_seconds = self._safe_duration_seconds(
+            start_time=api_call_start_time,
+            end_time=completion_start_time,
+        )
         if (
-            completion_start_time is not None
-            and isinstance(completion_start_time, datetime)
+            time_to_first_token_seconds is not None
             and kwargs.get("stream", False) is True  # only emit for streaming requests
         ):
-            time_to_first_token_seconds = (
-                completion_start_time - api_call_start_time
-            ).total_seconds()
             self.litellm_llm_api_time_to_first_token_metric.labels(
                 model,
                 user_api_key,
@@ -710,11 +710,12 @@ class PrometheusLogger(CustomLogger):
             verbose_logger.debug(
                 "Time to first token metric not emitted, stream option in model_parameters is not True"
             )
-        if api_call_start_time is not None and isinstance(
-            api_call_start_time, datetime
-        ):
-            api_call_total_time: timedelta = end_time - api_call_start_time
-            api_call_total_time_seconds = api_call_total_time.total_seconds()
+
+        api_call_total_time_seconds = self._safe_duration_seconds(
+            start_time=api_call_start_time,
+            end_time=end_time,
+        )
+        if api_call_total_time_seconds is not None:
             _labels = prometheus_label_factory(
                 supported_enum_labels=PrometheusMetricLabels.get_labels(
                     label_name="litellm_llm_api_latency_metric"
@@ -726,9 +727,11 @@ class PrometheusLogger(CustomLogger):
             )
 
         # total request latency
-        if start_time is not None and isinstance(start_time, datetime):
-            total_time: timedelta = end_time - start_time
-            total_time_seconds = total_time.total_seconds()
+        total_time_seconds = self._safe_duration_seconds(
+            start_time=start_time,
+            end_time=end_time,
+        )
+        if total_time_seconds is not None:
             _labels = prometheus_label_factory(
                 supported_enum_labels=PrometheusMetricLabels.get_labels(
                     label_name="litellm_request_total_latency_metric"
@@ -1688,6 +1691,21 @@ class PrometheusLogger(CustomLogger):
         return (
             budget_reset_at - datetime.now(budget_reset_at.tzinfo)
         ).total_seconds() / 3600
+
+    def _safe_duration_seconds(
+        self,
+        start_time: Any,
+        end_time: Any,
+    ) -> Optional[float]:
+        """
+        Compute the duration in seconds between two objects.
+
+        Returns the duration as a float if both start and end are instances of datetime,
+        otherwise returns None.
+        """
+        if isinstance(start_time, datetime) and isinstance(end_time, datetime):
+            return (end_time - start_time).total_seconds()
+        return None
 
 
 def prometheus_label_factory(

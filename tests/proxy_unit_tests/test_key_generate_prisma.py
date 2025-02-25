@@ -2830,7 +2830,7 @@ async def test_update_user_unit_test(prisma_client):
     await litellm.proxy.proxy_server.prisma_client.connect()
     key = await new_user(
         data=NewUserRequest(
-            user_email="test@test.com",
+            user_email=f"test-{uuid.uuid4()}@test.com",
         )
     )
 

@@ -1962,6 +1962,10 @@ async def _list_key_helper(
         where=where,  # type: ignore
         skip=skip,  # type: ignore
         take=size,  # type: ignore
+        order=[
+            {"created_at": "desc"},
+            {"token": "desc"},  # fallback sort
+        ],
     )
 
     verbose_proxy_logger.debug(f"Fetched {len(keys)} keys")
