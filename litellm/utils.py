@@ -2830,6 +2830,7 @@ def get_optional_params(  # noqa: PLR0915
     }
 
     # filter out those parameters that were passed with non-default values
+
     non_default_params = {
         k: v
         for k, v in passed_params.items()

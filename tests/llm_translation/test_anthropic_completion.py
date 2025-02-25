@@ -1166,6 +1166,8 @@ def test_anthropic_citations_api_streaming():
 def test_anthropic_thinking_output():
     from litellm import completion
 
+    litellm._turn_on_debug()
+
     resp = completion(
         model="anthropic/claude-3-7-sonnet-20250219",
         messages=[{"role": "user", "content": "What is the capital of France?"}],
