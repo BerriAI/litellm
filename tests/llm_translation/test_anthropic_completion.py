@@ -586,22 +586,23 @@ def test_anthropic_beta_header(
     else:
         assert "anthropic-beta" not in headers
 
-
 @pytest.mark.parametrize(
-    "tool_type,expected_computer_tool_used",
+    "tool_type,expected_computer_tool_header",
     [
-        ("computer_20241022", True),
-        ("text_editor_20241022", True),
-        ("bash_20241022", True),
-        ("function", False)
+        ("computer_20241022", "computer-use-2024-10-22"),
+        ("text_editor_20241022", "computer-use-2024-10-22"),
+        ("bash_20241022", "computer-use-2024-10-22"),
+        ("computer_20250124", "computer-use-2025-01-24"),
+        ("text_editor_20250124", "computer-use-2025-01-24"),
+        ("bash_20250124", "computer-use-2025-01-24"),
+        ("function", None)
     ],
 )
-def test_anthropic_is_computer_tool_used(tool_type, expected_computer_tool_used):
+def test_anthropic_is_computer_tool_used(tool_type, expected_computer_tool_header):
     tools = [
         { "type": tool_type }
     ]
-    assert litellm.AnthropicConfig().is_computer_tool_used(tools) == expected_computer_tool_used
-
+    assert litellm.AnthropicConfig().is_computer_tool_used(tools) == expected_computer_tool_header
 
 @pytest.mark.parametrize(
     "cache_control_location",

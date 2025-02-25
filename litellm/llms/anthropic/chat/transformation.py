@@ -113,19 +113,21 @@ class AnthropicConfig(BaseConfig):
         self,
         api_key: str,
         anthropic_version: Optional[str] = None,
-        computer_tool_used: bool = False,
+        computer_tool_used: Optional[str] = None,
         prompt_caching_set: bool = False,
         pdf_used: bool = False,
         is_vertex_request: bool = False,
+        token_efficient_tools_beta: bool = False
     ) -> dict:
-
         betas = []
         if prompt_caching_set:
             betas.append("prompt-caching-2024-07-31")
-        if computer_tool_used:
-            betas.append("computer-use-2024-10-22")
+        if computer_tool_used is not None:
+            betas.append(computer_tool_used)
         if pdf_used:
             betas.append("pdfs-2024-09-25")
+        if token_efficient_tools_beta:
+            betas.append("token-efficient-tools-2025-02-19")
         headers = {
             "anthropic-version": anthropic_version or "2023-06-01",
             "x-api-key": api_key,
@@ -344,7 +346,7 @@ class AnthropicConfig(BaseConfig):
                 When using tools in this way: - https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
                 - You usually want to provide a single tool
                 - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
-                - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
+                - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model's perspective.
                 """
 
                 _tool_choice = {"name": RESPONSE_FORMAT_TOOL_NAME, "type": "tool"}
@@ -410,13 +412,29 @@ class AnthropicConfig(BaseConfig):
 
     def is_computer_tool_used(
         self, tools: Optional[List[AllAnthropicToolsValues]]
-    ) -> bool:
+    ) -> Optional[str]:
+        """
+        Check if computer tools are used and return the appropriate header version.
+        
+        Returns:
+            Optional[str]: The appropriate computer-use header version or None if no computer tools are used.
+        """
         if tools is None:
-            return False
+            return None
+            
         for tool in tools:
-            if "type" in tool and (tool["type"].startswith("computer_") or tool["type"] in ["bash_20241022", "text_editor_20241022"]):
-                return True
-        return False
+            if "type" in tool and (
+                tool["type"] in ["bash_20250124", "computer_20250124", "text_editor_20250124"]
+            ):
+                return "computer-use-2025-01-24"
+                
+        for tool in tools:
+            if "type" in tool and (
+                tool["type"] in ["bash_20241022", "computer_20241022", "text_editor_20241022"]
+            ):
+                return "computer-use-2024-10-22"
+    
+        return None
 
     def is_pdf_used(self, messages: List[AllMessageValues]) -> bool:
         """
@@ -768,12 +786,14 @@ class AnthropicConfig(BaseConfig):
         prompt_caching_set = self.is_cache_control_set(messages=messages)
         computer_tool_used = self.is_computer_tool_used(tools=tools)
         pdf_used = self.is_pdf_used(messages=messages)
+        token_efficient_tools_beta = optional_params.get("token_efficient_tools_beta", False)
         anthropic_headers = self.get_anthropic_headers(
             computer_tool_used=computer_tool_used,
             prompt_caching_set=prompt_caching_set,
             pdf_used=pdf_used,
             api_key=api_key,
             is_vertex_request=optional_params.get("is_vertex_request", False),
+            token_efficient_tools_beta=token_efficient_tools_beta,
         )
 
         headers = {**headers, **anthropic_headers}
