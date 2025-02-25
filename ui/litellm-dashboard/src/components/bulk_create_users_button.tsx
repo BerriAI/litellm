@@ -124,7 +124,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
             if (user.user_email && !user.user_email.includes('@')) errors.push('Invalid email format');
             
             // Validate user role
-            const validRoles = ['proxy_admin', 'proxy_admin_view_only', 'internal_user', 'internal_user_view_only'];
+            const validRoles = ['proxy_admin', 'proxy_admin_view_only', 'internal_user', 'internal_user_viewer'];
             if (user.user_role && !validRoles.includes(user.user_role)) {
               errors.push(`Invalid role. Must be one of: ${validRoles.join(', ')}`);
             }
@@ -177,22 +177,49 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
     for (let index = 0; index < updatedData.length; index++) {
       const user = updatedData[index];
       try {
-        // Convert teams from comma-separated string to array if provided
-        const processedUser = { ...user };
-        if (processedUser.teams && typeof processedUser.teams === 'string') {
-          processedUser.teams = processedUser.teams.split(',').map(team => team.trim());
+        // Create a clean user object with only non-empty fields
+        const processedUser: any = {};
+        
+        // Only add fields that have values
+        if (user.user_email && user.user_email.trim() !== '') {
+          processedUser.user_email = user.user_email.trim();
         }
         
-        // Convert models from comma-separated string to array if provided
-        if (processedUser.models && typeof processedUser.models === 'string') {
-          processedUser.models = processedUser.models.split(',').map(model => model.trim());
+        if (user.user_role && user.user_role.trim() !== '') {
+          processedUser.user_role = user.user_role.trim();
         }
         
-        // Convert max_budget to number if provided
-        if (processedUser.max_budget && processedUser.max_budget.toString().trim() !== '') {
-          processedUser.max_budget = parseFloat(processedUser.max_budget.toString());
+        // Convert teams from comma-separated string to array if provided and not empty
+        if (user.teams && typeof user.teams === 'string' && user.teams.trim() !== '') {
+          processedUser.teams = user.teams.split(',').map(team => team.trim()).filter(Boolean);
+          if (processedUser.teams.length === 0) delete processedUser.teams;
         }
-
+        
+        // Convert models from comma-separated string to array if provided and not empty
+        if (user.models && typeof user.models === 'string' && user.models.trim() !== '') {
+          processedUser.models = user.models.split(',').map(model => model.trim()).filter(Boolean);
+          if (processedUser.models.length === 0) delete processedUser.models;
+        }
+        
+        // Convert max_budget to number if provided and not empty
+        if (user.max_budget && user.max_budget.toString().trim() !== '') {
+          processedUser.max_budget = parseFloat(user.max_budget.toString());
+        }
+        
+        // Only add budget_duration if it's not empty
+        if (user.budget_duration && user.budget_duration.trim() !== '') {
+          processedUser.budget_duration = user.budget_duration.trim();
+        }
+        
+        // Add metadata if provided
+        if (user.metadata && typeof user.metadata === 'string' && user.metadata.trim() !== '') {
+          try {
+            processedUser.metadata = JSON.parse(user.metadata);
+          } catch (e) {
+            // If not valid JSON, use as string
+            processedUser.metadata = user.metadata;
+          }
+        }
         
         const response = await userCreateCall(accessToken, null, processedUser);
         console.log('Full response:', response);
@@ -438,7 +465,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                       <div className="w-3 h-3 rounded-full bg-red-500 mt-1.5 mr-2 flex-shrink-0"></div>
                       <div>
                         <p className="font-medium">user_role</p>
-                        <p className="text-sm text-gray-600">User&apos;s role (one of: &quot;proxy_admin&quot;, &quot;proxy_admin_view_only&quot;, &quot;internal_user&quot;, &quot;internal_user_view_only&quot;)</p>
+                        <p className="text-sm text-gray-600">User&apos;s role (one of: &quot;proxy_admin&quot;, &quot;proxy_admin_view_only&quot;, &quot;internal_user&quot;, &quot;internal_user_viewer&quot;)</p>
                       </div>
                     </div>
                     <div className="flex items-start">
