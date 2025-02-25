@@ -87,7 +87,8 @@ class AnthropicExperimentalPassThroughConfig:
                             new_user_content_list.append(text_obj)
                         elif content["type"] == "image":
                             image_url = ChatCompletionImageUrlObject(
-                                url=f"data:{content['type']};base64,{content['source']}"
+                                url=f"data:{content['type']};base64,{content['source']}",
+                                mime_type=content['type']
                             )
                             image_obj = ChatCompletionImageObject(
                                 type="image_url", image_url=image_url

@@ -1133,83 +1133,84 @@ def test_process_gemini_image():
     )
     from litellm.types.llms.vertex_ai import PartType, FileDataType, BlobType
 
-    # Test GCS URI
-    gcs_result = _process_gemini_image("gs://bucket/image.png")
+    mock_image_bytes = b'\x89PNG\r\n\x1a\n'
+    mock_image_bytes_as_base64 = "iVBORw0KGgo="
+    mock_response = MagicMock()
+    mock_mime_type = "image/png"
+    mock_response.headers = {'Content-Type': mock_mime_type}
+    mock_response.content = mock_image_bytes
+    mock_response.status_code = 200
+
+    # GS URLS
+    # Test GCS URI with given mime_type
+    gcs_result = _process_gemini_image("gs://bucket/image.png", mime_type="image/png")
     assert gcs_result["file_data"] == FileDataType(
         mime_type="image/png", file_uri="gs://bucket/image.png"
     )
 
-    # Test HTTPS JPG URL
-    https_result = _process_gemini_image("https://example.com/image.jpg")
-    print("https_result JPG", https_result)
+    # Test GCS URI with no given mime_type and mime_type is derived from extension
+    gcs_result = _process_gemini_image("gs://bucket/image.png", mime_type=None)
+    assert gcs_result["file_data"] == FileDataType(
+        mime_type="image/png", file_uri="gs://bucket/image.png"
+    )
+
+    # Test GCS URI with no given mime_type and no extension
+    with pytest.raises(ValueError):
+        _process_gemini_image("gs://bucket/image", mime_type=None)
+
+
+    # HTTPS URLS
+    # Test HTTPS JPG URL with given mime_type
+    https_result = _process_gemini_image("https://example.com/image.jpg", mime_type="image/jpeg")
     assert https_result["file_data"] == FileDataType(
         mime_type="image/jpeg", file_uri="https://example.com/image.jpg"
     )
 
-    # Test HTTPS PNG URL
-    https_result = _process_gemini_image("https://example.com/image.png")
-    print("https_result PNG", https_result)
+    # Test HTTPS JPG URL with no given mime_type and mime_type is derived from extension
+    https_result = _process_gemini_image("https://example.com/image.jpg", mime_type=None)
     assert https_result["file_data"] == FileDataType(
-        mime_type="image/png", file_uri="https://example.com/image.png"
+        mime_type="image/jpeg", file_uri="https://example.com/image.jpg"
     )
 
-    # Test HTTPS VIDEO URL
-    https_result = _process_gemini_image("https://cloud-samples-data/video/animals.mp4")
-    print("https_result PNG", https_result)
-    assert https_result["file_data"] == FileDataType(
-        mime_type="video/mp4", file_uri="https://cloud-samples-data/video/animals.mp4"
+    # Test HTTPS JPG URL with no given mime_type, mime_type is not derived from extension but derived from response headers
+    with patch.object(
+        litellm.module_level_client, "get", return_value=mock_response
+    ):
+        # Test HTTPS JPG URL with no given mime_type
+        https_result = _process_gemini_image("https://example.com/image", mime_type=None)
+        assert https_result["inline_data"] == BlobType(
+            mime_type=mock_mime_type, data=mock_image_bytes_as_base64
+        )
+
+    # HTTP URLS
+    # Test HTTP URL with given mime_type
+    http_result = _process_gemini_image("http://example.com/image.jpg", mime_type="image/jpeg")
+    assert http_result["file_data"] == FileDataType(
+        mime_type="image/jpeg", file_uri="http://example.com/image.jpg"
     )
 
-    # Test HTTPS PDF URL
-    https_result = _process_gemini_image("https://cloud-samples-data/pdf/animals.pdf")
-    print("https_result PDF", https_result)
-    assert https_result["file_data"] == FileDataType(
-        mime_type="application/pdf",
-        file_uri="https://cloud-samples-data/pdf/animals.pdf",
+    # Test HTTP URL with no given mime_type and mime_type is derived from extension
+    http_result = _process_gemini_image("http://example.com/image.jpg", mime_type=None)
+    assert http_result["file_data"] == FileDataType(
+        mime_type="image/jpeg", file_uri="http://example.com/image.jpg"
     )
+
+    # Test HTTP URL with no given mime_type, mime_type is not derived from extension but derived from response headers
+    with patch.object(
+        litellm.module_level_client, "get", return_value=mock_response
+    ):
+        # Test HTTPS JPG URL with no given mime_type
+        http_result = _process_gemini_image("http://example.com/image", mime_type=None)
+        assert http_result["inline_data"] == BlobType(
+            mime_type=mock_mime_type, data=mock_image_bytes_as_base64
+        )
 
     # Test base64 image
-    base64_image = "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
-    base64_result = _process_gemini_image(base64_image)
-    print("base64_result", base64_result)
-    assert base64_result["inline_data"]["mime_type"] == "image/jpeg"
-    assert base64_result["inline_data"]["data"] == "/9j/4AAQSkZJRg..."
-
-
-def test_get_image_mime_type_from_url():
-    """Test the _get_image_mime_type_from_url function for different image URLs"""
-    from litellm.llms.vertex_ai.gemini.transformation import (
-        _get_image_mime_type_from_url,
-    )
-
-    # Test JPEG images
-    assert (
-        _get_image_mime_type_from_url("https://example.com/image.jpg") == "image/jpeg"
-    )
-    assert (
-        _get_image_mime_type_from_url("https://example.com/image.jpeg") == "image/jpeg"
-    )
-    assert (
-        _get_image_mime_type_from_url("https://example.com/IMAGE.JPG") == "image/jpeg"
-    )
-
-    # Test PNG images
-    assert _get_image_mime_type_from_url("https://example.com/image.png") == "image/png"
-    assert _get_image_mime_type_from_url("https://example.com/IMAGE.PNG") == "image/png"
-
-    # Test WebP images
-    assert (
-        _get_image_mime_type_from_url("https://example.com/image.webp") == "image/webp"
-    )
-    assert (
-        _get_image_mime_type_from_url("https://example.com/IMAGE.WEBP") == "image/webp"
-    )
-
-    # Test unsupported formats
-    assert _get_image_mime_type_from_url("https://example.com/image.gif") is None
-    assert _get_image_mime_type_from_url("https://example.com/image.bmp") is None
-    assert _get_image_mime_type_from_url("https://example.com/image") is None
-    assert _get_image_mime_type_from_url("invalid_url") is None
+    base64_image = f"data:{mock_mime_type};base64,{mock_image_bytes_as_base64}"
+    base64_result = _process_gemini_image(image_url=base64_image, mime_type=None)
+    assert base64_result["inline_data"] == BlobType(
+            mime_type=mock_mime_type, data=mock_image_bytes_as_base64
+        )
 
 
 @pytest.mark.parametrize(
@@ -1295,5 +1296,5 @@ def test_process_gemini_image_http_url(
     expected_image_data = "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
     mock_convert_url_to_base64.return_value = expected_image_data
     # Act
-    result = _process_gemini_image(http_url)
+    result = _process_gemini_image(image_url=http_url, mime_type=None)
     # assert result["file_data"]["file_uri"] == http_url

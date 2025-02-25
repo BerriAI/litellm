@@ -370,6 +370,7 @@ class ChatCompletionTextObject(
 
 class ChatCompletionImageUrlObject(TypedDict, total=False):
     url: Required[str]
+    mime_type: str
     detail: str
 
 

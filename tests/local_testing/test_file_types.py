@@ -7,6 +7,7 @@ from litellm.types.files import (
     get_file_extension_for_file_type,
     get_file_mime_type_for_file_type,
     get_file_mime_type_from_extension,
+    get_mime_type_from_url,
 )
 import pytest
 
@@ -52,3 +53,28 @@ class TestFileConsts:
         # Test that uppercase extensions return the correct MIME type
         assert get_file_mime_type_from_extension("AAC") == "audio/aac"
         assert get_file_mime_type_from_extension("PDF") == "application/pdf"
+
+    def test_get_mime_type_from_url(self):
+        """Test get_mime_type_from_url function for all supported file types"""
+        # Test each file type and its extensions
+        for file_type, extensions in FILE_EXTENSIONS.items():
+            mime_type = FILE_MIME_TYPES[file_type]
+            for ext in extensions:
+                # Test regular URL
+                assert get_mime_type_from_url(f"https://example.com/file.{ext}") == mime_type
+                # Test uppercase extension
+                assert get_mime_type_from_url(f"https://example.com/file.{ext.upper()}") == mime_type
+                # Test with query parameters
+                assert get_mime_type_from_url(f"https://example.com/file.{ext}?param=value") == mime_type
+                # Test with gs:// URL
+                assert get_mime_type_from_url(f"gs://example.com/file.{ext}?param=value") == mime_type
+
+        # Test error cases
+        with pytest.raises(ValueError):
+            get_mime_type_from_url("https://example.com/file.unknown")
+        with pytest.raises(ValueError):
+            get_mime_type_from_url("https://example.com/file")
+        with pytest.raises(ValueError):
+            get_mime_type_from_url("invalid_url")
+
+
