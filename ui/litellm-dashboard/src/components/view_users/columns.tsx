@@ -13,7 +13,9 @@ export const columns = (
     header: "User ID",
     accessorKey: "user_id",
     cell: ({ row }) => (
-      <span className="text-xs">{row.original.user_id || "-"}</span>
+      <Tooltip title={row.original.user_id}>
+        <span className="text-xs">{row.original.user_id ? `${row.original.user_id.slice(0, 4)}...` : "-"}</span>
+      </Tooltip>
     ),
   },
   {
