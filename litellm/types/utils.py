@@ -457,6 +457,43 @@ Reference:
 ChatCompletionMessage(content='This is a test', role='assistant', function_call=None, tool_calls=None))
 """
 
+REASONING_CONTENT_COMPATIBLE_PARAMS = [
+    "thinking_blocks",
+    "reasoning_content",
+]
+
+
+def map_reasoning_content(provider_specific_fields: Dict[str, Any]) -> str:
+    """
+    Extract reasoning_content from provider_specific_fields
+    """
+
+    reasoning_content: str = ""
+    for k, v in provider_specific_fields.items():
+        if k == "thinking_blocks" and isinstance(v, list):
+            _reasoning_content = ""
+            for block in v:
+                if block.get("type") == "thinking":
+                    _reasoning_content += block.get("thinking", "")
+            reasoning_content = _reasoning_content
+        elif k == "reasoning_content":
+            reasoning_content = v
+    return reasoning_content
+
+
+def add_provider_specific_fields(
+    object: BaseModel, provider_specific_fields: Optional[Dict[str, Any]]
+):
+    if not provider_specific_fields:  # set if provider_specific_fields is not empty
+        return
+    setattr(object, "provider_specific_fields", provider_specific_fields)
+    for k, v in provider_specific_fields.items():
+        if v is not None:
+            setattr(object, k, v)
+            if k in REASONING_CONTENT_COMPATIBLE_PARAMS and k != "reasoning_content":
+                reasoning_content = map_reasoning_content({k: v})
+                setattr(object, "reasoning_content", reasoning_content)
+
 
 class Message(OpenAIObject):
     content: Optional[str]
@@ -511,10 +548,7 @@ class Message(OpenAIObject):
             # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
             del self.audio
 
-        if provider_specific_fields:  # set if provider_specific_fields is not empty
-            self.provider_specific_fields = provider_specific_fields
-            for k, v in provider_specific_fields.items():
-                setattr(self, k, v)
+        add_provider_specific_fields(self, provider_specific_fields)
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -551,20 +585,13 @@ class Delta(OpenAIObject):
         **params,
     ):
         super(Delta, self).__init__(**params)
-        provider_specific_fields: Dict[str, Any] = {}
-
-        if "reasoning_content" in params:
-            provider_specific_fields["reasoning_content"] = params["reasoning_content"]
-            setattr(self, "reasoning_content", params["reasoning_content"])
+        add_provider_specific_fields(self, params.get("provider_specific_fields", {}))
         self.content = content
         self.role = role
         # Set default values and correct types
         self.function_call: Optional[Union[FunctionCall, Any]] = None
         self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None
         self.audio: Optional[ChatCompletionAudioResponse] = None
-
-        if provider_specific_fields:  # set if provider_specific_fields is not empty
-            self.provider_specific_fields = provider_specific_fields
 
         if function_call is not None and isinstance(function_call, dict):
             self.function_call = FunctionCall(**function_call)
