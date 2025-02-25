@@ -839,6 +839,21 @@ def test_bedrock_claude_3_tool_calling():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+        
+
+def test_bedrock_claude_3_7_thinking_output():
+    from litellm import completion
+
+    resp = completion(
+        model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        thinking={"type": "enabled", "budget_tokens": 1024},
+    )
+
+    print(resp.choices[0].message)
+    assert resp.choices[0].message.thinking is not None
+    assert isinstance(resp.choices[0].message.thinking, list)
+    assert len(resp.choices[0].message.thinking) > 0
 
 
 def encode_image(image_path):

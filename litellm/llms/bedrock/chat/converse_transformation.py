@@ -21,6 +21,7 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionThinkingBlock,
     ChatCompletionResponseMessage,
     ChatCompletionSystemMessage,
     ChatCompletionToolCallChunk,
@@ -618,6 +619,7 @@ class AmazonConverseConfig(BaseConfig):
         chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
+        thinking_blocks: List[ChatCompletionThinkingBlock] = []
         if message is not None:
             for idx, content in enumerate(message["content"]):
                 """
@@ -644,8 +646,15 @@ class AmazonConverseConfig(BaseConfig):
                         index=idx,
                     )
                     tools.append(_tool_response_chunk)
+                if "reasoningContent" in content:
+                    _thinking_block = ChatCompletionThinkingBlock(
+                        type="thinking",
+                        thinking=content["reasoningContent"]["reasoningText"].get("text"),
+                        signature_delta=content["reasoningContent"]["reasoningText"].get("signature"))
+                    thinking_blocks.append(_thinking_block)
         chat_completion_message["content"] = content_str
-
+        chat_completion_message["thinking"] = thinking_blocks
+        
         if json_mode is True and tools is not None and len(tools) == 1:
             # to support 'json_schema' logic on bedrock models
             json_mode_content_str: Optional[str] = tools[0]["function"].get("arguments")
