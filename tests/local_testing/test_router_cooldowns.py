@@ -138,7 +138,7 @@ def test_single_deployment_no_cooldowns(num_deployments):
         )
         model_list.append(model)
 
-    router = Router(model_list=model_list, allowed_fails=0, num_retries=0)
+    router = Router(model_list=model_list, num_retries=0)
 
     with patch.object(
         router.cooldown_cache, "add_deployment_to_cooldown", new=MagicMock()
