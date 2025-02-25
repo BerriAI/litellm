@@ -27,6 +27,8 @@ import {
 
 import { message } from "antd";
 import { Modal } from "antd";
+import { Tooltip } from "antd";
+import { Button as TremorButton } from "@tremor/react";
 
 import {
   userInfoCall,
@@ -49,6 +51,7 @@ import { columns } from "./view_users/columns";
 import { UserDataTable } from "./view_users/table";
 import { UserInfo } from "./view_users/types";
 import BulkCreateUsers from "./bulk_create_users_button";
+import UserInfoView from "./user_info_view";
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -106,6 +109,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   >({});
   const defaultPageSize = 25;
   const [searchTerm, setSearchTerm] = useState("");
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
 
   // check if window is not undefined
   if (typeof window !== "undefined") {
@@ -262,14 +266,57 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     return <div>Loading...</div>;
   }
 
-  const tableColumns = columns(
-    possibleUIRoles,
-    (user) => {
-      setSelectedUser(user);
-      setEditModalVisible(true);
+  const tableColumns = [
+    {
+      id: "user_id",
+      header: "User ID",
+      cell: ({ row }) => {
+        const user = row.original;
+        return (
+          <div className="overflow-hidden">
+            <Tooltip title={user.user_id}>
+              <TremorButton 
+                size="xs"
+                variant="light"
+                className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+                onClick={() => {
+                  setSelectedUserId(user.user_id);
+                }}
+              >
+                {user.user_id.length > 14 ? `${user.user_id.slice(0, 7)}...` : user.user_id}
+              </TremorButton>
+            </Tooltip>
+          </div>
+        );
+      },
     },
-    handleDelete
-  );
+    ...columns(
+      possibleUIRoles,
+      (user) => {
+        setSelectedUser(user);
+        setEditModalVisible(true);
+      },
+      handleDelete,
+      (user) => {
+        setSelectedUserId(user.user_id);
+      }
+    ),
+  ];
+
+  // If a user is selected, render UserInfoView
+  if (selectedUserId) {
+    const selectedUser = userData?.find(user => user.user_id === selectedUserId);
+    return (
+      <UserInfoView
+        userId={selectedUserId}
+        onClose={() => setSelectedUserId(null)}
+        userData={selectedUser}
+        accessToken={accessToken}
+        userRole={userRole}
+        onUserUpdated={refreshUserData}
+      />
+    );
+  }
 
   return (
     <div className="w-full p-6">
