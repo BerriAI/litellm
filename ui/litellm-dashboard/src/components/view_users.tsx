@@ -68,6 +68,14 @@ interface UserListResponse {
   total_pages: number;
 }
 
+interface CreateuserProps {
+  userID: string;
+  accessToken: string;
+  teams: any[];
+  possibleUIRoles: Record<string, Record<string, string>>;
+  onUserCreated: () => Promise<void>;
+}
+
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 if (isLocal != true) {
@@ -90,7 +98,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const [openDialogId, setOpenDialogId] = React.useState<null | number>(null);
   const [selectedItem, setSelectedItem] = useState<null | any>(null);
   const [editModalVisible, setEditModalVisible] = useState(false);
-  const [selectedUser, setSelectedUser] = useState(null);
+  const [selectedUser, setSelectedUser] = useState<UserInfo | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [userToDelete, setUserToDelete] = useState<string | null>(null);
   const [possibleUIRoles, setPossibleUIRoles] = useState<
