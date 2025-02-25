@@ -24,6 +24,7 @@ interface UserData {
   error?: string;
   rowNumber?: number;
   isValid?: boolean;
+  key?: string;
 }
 
 const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
@@ -38,8 +39,8 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
 
   const downloadTemplate = () => {
     const template = [
-      ["user_email", "user_role", "teams", "metadata", "max_budget", "budget_duration", "models"],
-      ["user@example.com", "internal_user", "team-id-1,team-id-2", "{}", "100", "30d", "gpt-3.5-turbo,gpt-4"],
+      ["user_email", "user_role", "teams", "max_budget", "budget_duration", "models"],
+      ["user@example.com", "internal_user", "team-id-1,team-id-2", "100", "30d", "gpt-3.5-turbo,gpt-4"],
     ];
     
     const csv = Papa.unparse(template);
@@ -75,7 +76,6 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
               user_email: row[headers.indexOf("user_email")]?.trim() || '',
               user_role: row[headers.indexOf("user_role")]?.trim() || '',
               teams: row[headers.indexOf("teams")]?.trim(),
-              metadata: row[headers.indexOf("metadata")]?.trim(),
               max_budget: row[headers.indexOf("max_budget")]?.trim(),
               budget_duration: row[headers.indexOf("budget_duration")]?.trim(),
               models: row[headers.indexOf("models")]?.trim(),
@@ -155,34 +155,38 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
         if (processedUser.max_budget && processedUser.max_budget.trim() !== '') {
           processedUser.max_budget = parseFloat(processedUser.max_budget);
         }
-        
-        // Parse metadata if provided
-        if (processedUser.metadata && processedUser.metadata.trim() !== '') {
-          try {
-            processedUser.metadata = JSON.parse(processedUser.metadata);
-          } catch (e) {
-            // If metadata parsing fails, keep it as string
-          }
-        }
+
         
         const response = await userCreateCall(accessToken, null, processedUser);
+        console.log('Full response:', response);
         
-        if (response?.status === 200) {
+        // Check if response has key or user_id, indicating success
+        if (response && (response.key || response.user_id)) {
+          console.log('Success case triggered');
           setParsedData(current => 
             current.map((u, i) => 
-              i === index ? { ...u, status: 'success' } : u
+              i === index ? { 
+                ...u, 
+                status: 'success', 
+                key: response.key || response.user_id
+              } : u
             )
           );
         } else {
-          const errorMessage = response?.error?.message?.error;
+          console.log('Error case triggered');
+          const errorMessage = response?.error || 'Failed to create user';
+          console.log('Error message:', errorMessage);
           setParsedData(current => 
             current.map((u, i) => 
               i === index ? { ...u, status: 'failed', error: errorMessage } : u
-            )
-          );
+          )
+        );
         }
       } catch (error) {
-        const errorMessage = error?.response?.data?.error?.message?.error || 'Failed to create user';
+        console.error('Caught error:', error);
+        const errorMessage = error?.response?.data?.error || 
+                           error?.message || 
+                           String(error);
         setParsedData(current => 
           current.map((u, i) => 
             i === index ? { ...u, status: 'failed', error: errorMessage } : u
@@ -192,6 +196,27 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
     }
 
     setIsProcessing(false);
+  };
+
+  const downloadResults = () => {
+    const results = parsedData.map(user => ({
+      user_email: user.user_email,
+      user_role: user.user_role,
+      status: user.status,
+      key: user.key || '',
+      error: user.error || ''
+    }));
+    
+    const csv = Papa.unparse(results);
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "bulk_users_results.csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
   };
 
   const columns = [
@@ -295,6 +320,7 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
                   <li>Download our CSV template</li>
                   <li>Add your users' information to the spreadsheet</li>
                   <li>Save the file and upload it here</li>
+                  <li>After creation, download the results file containing the API keys for each user</li>
                 </ol>
                 
                 <div className="bg-gray-50 p-4 rounded-md border border-gray-200 mb-4">
@@ -319,13 +345,6 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
                       <div>
                         <p className="font-medium">teams</p>
                         <p className="text-sm text-gray-600">Comma-separated team IDs (e.g., "team-1,team-2")</p>
-                      </div>
-                    </div>
-                    <div className="flex items-start">
-                      <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 flex-shrink-0"></div>
-                      <div>
-                        <p className="font-medium">metadata</p>
-                        <p className="text-sm text-gray-600">JSON metadata (use {} for empty)</p>
                       </div>
                     </div>
                     <div className="flex items-start">
@@ -414,6 +433,15 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
                     >
                       Back
                     </Button2>
+                    {parsedData.some(user => user.status === 'success') && (
+                      <Button2
+                        onClick={downloadResults}
+                        variant="secondary"
+                        className="mr-3"
+                      >
+                        Download Results
+                      </Button2>
+                    )}
                     <Button2
                       onClick={handleBulkCreate}
                       disabled={parsedData.filter(d => d.isValid).length === 0 || isProcessing}
@@ -443,6 +471,15 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
                   >
                     Back
                   </Button2>
+                  {parsedData.some(user => user.status === 'success') && (
+                    <Button2
+                      onClick={downloadResults}
+                      variant="secondary"
+                      className="mr-3"
+                    >
+                      Download Results
+                    </Button2>
+                  )}
                   <Button2
                     onClick={handleBulkCreate}
                     disabled={parsedData.filter(d => d.isValid).length === 0 || isProcessing}
