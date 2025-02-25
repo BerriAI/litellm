@@ -1022,10 +1022,26 @@ def test_anthropic_json_mode_and_tool_call_response(
     [
         ("stop", ["stop"], True),  # basic string
         (["stop1", "stop2"], ["stop1", "stop2"], True),  # list of strings
-        ("   ", None, True),  # whitespace string should be dropped when drop_params is True
-        ("   ", ["   "], False),  # whitespace string should be kept when drop_params is False
-        (["stop1", "  ", "stop2"], ["stop1", "stop2"], True),  # list with whitespace that should be filtered
-        (["stop1", "  ", "stop2"], ["stop1", "  ", "stop2"], False),  # list with whitespace that should be kept
+        (
+            "   ",
+            None,
+            True,
+        ),  # whitespace string should be dropped when drop_params is True
+        (
+            "   ",
+            ["   "],
+            False,
+        ),  # whitespace string should be kept when drop_params is False
+        (
+            ["stop1", "  ", "stop2"],
+            ["stop1", "stop2"],
+            True,
+        ),  # list with whitespace that should be filtered
+        (
+            ["stop1", "  ", "stop2"],
+            ["stop1", "  ", "stop2"],
+            False,
+        ),  # list with whitespace that should be kept
         (None, None, True),  # None input
     ],
 )
@@ -1035,3 +1051,163 @@ def test_map_stop_sequences(stop_input, expected_output, drop_params):
     config = AnthropicConfig()
     result = config._map_stop_sequences(stop_input)
     assert result == expected_output
+
+
+@pytest.mark.asyncio
+async def test_anthropic_structured_output():
+    """
+    Test the _transform_response_for_structured_output
+
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/8291
+    """
+    from litellm import acompletion
+
+    args = {
+        "model": "claude-3-5-sonnet-20240620",
+        "seed": 3015206306868917280,
+        "stop": None,
+        "messages": [
+            {
+                "role": "system",
+                "content": 'You are a hello world agent.\nAlways respond in the following valid JSON format: {\n  "response": "response",\n}\n',
+            },
+            {"role": "user", "content": "Respond with hello world"},
+        ],
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+        "drop_params": True,
+    }
+
+    response = await acompletion(**args)
+    assert response is not None
+
+    print(response)
+
+
+def test_anthropic_citations_api():
+    """
+    Test the citations API
+    """
+    from litellm import completion
+
+    resp = completion(
+        model="claude-3-5-sonnet-20241022",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "text",
+                            "media_type": "text/plain",
+                            "data": "The grass is green. The sky is blue.",
+                        },
+                        "title": "My Document",
+                        "context": "This is a trustworthy document.",
+                        "citations": {"enabled": True},
+                    },
+                    {
+                        "type": "text",
+                        "text": "What color is the grass and sky?",
+                    },
+                ],
+            }
+        ],
+    )
+
+    citations = resp.choices[0].message.provider_specific_fields["citations"]
+
+    assert citations is not None
+
+
+def test_anthropic_citations_api_streaming():
+    from litellm import completion
+
+    resp = completion(
+        model="claude-3-5-sonnet-20241022",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "text",
+                            "media_type": "text/plain",
+                            "data": "The grass is green. The sky is blue.",
+                        },
+                        "title": "My Document",
+                        "context": "This is a trustworthy document.",
+                        "citations": {"enabled": True},
+                    },
+                    {
+                        "type": "text",
+                        "text": "What color is the grass and sky?",
+                    },
+                ],
+            }
+        ],
+        stream=True,
+    )
+
+    has_citations = False
+    for chunk in resp:
+        print(f"returned chunk: {chunk}")
+        if (
+            chunk.choices[0].delta.provider_specific_fields
+            and "citation" in chunk.choices[0].delta.provider_specific_fields
+        ):
+            has_citations = True
+
+    assert has_citations
+
+
+def test_anthropic_thinking_output():
+    from litellm import completion
+
+    resp = completion(
+        model="anthropic/claude-3-7-sonnet-20250219",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        thinking={"type": "enabled", "budget_tokens": 1024},
+    )
+
+    print(resp)
+    assert (
+        resp.choices[0].message.provider_specific_fields["thinking_blocks"] is not None
+    )
+    assert resp.choices[0].message.reasoning_content is not None
+    assert isinstance(resp.choices[0].message.reasoning_content, str)
+    assert resp.choices[0].message.thinking_blocks is not None
+    assert isinstance(resp.choices[0].message.thinking_blocks, list)
+    assert len(resp.choices[0].message.thinking_blocks) > 0
+
+
+def test_anthropic_thinking_output_stream():
+    # litellm.set_verbose = True
+    try:
+        # litellm._turn_on_debug()
+        resp = litellm.completion(
+            model="anthropic/claude-3-7-sonnet-20250219",
+            messages=[{"role": "user", "content": "Tell me a joke."}],
+            stream=True,
+            thinking={"type": "enabled", "budget_tokens": 1024},
+            timeout=5,
+        )
+
+        reasoning_content_exists = False
+        for chunk in resp:
+            print(f"chunk 2: {chunk}")
+            if (
+                hasattr(chunk.choices[0].delta, "thinking_blocks")
+                and chunk.choices[0].delta.thinking_blocks is not None
+                and chunk.choices[0].delta.reasoning_content is not None
+                and isinstance(chunk.choices[0].delta.thinking_blocks, list)
+                and len(chunk.choices[0].delta.thinking_blocks) > 0
+                and isinstance(chunk.choices[0].delta.reasoning_content, str)
+            ):
+                reasoning_content_exists = True
+                break
+        assert reasoning_content_exists
+    except litellm.Timeout:
+        pytest.skip("Model is timing out")

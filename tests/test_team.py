@@ -72,7 +72,9 @@ async def new_user(
         print()
 
         if status != 200:
-            raise Exception(f"Request {i} did not return a 200 status code: {status}")
+            raise Exception(
+                f"Request {i} did not return a 200 status code: {status}, response: {response_text}"
+            )
 
         return await response.json()
 
@@ -104,6 +106,42 @@ async def add_member(
 
         if status != 200:
             raise Exception(f"Request {i} did not return a 200 status code: {status}")
+
+        return await response.json()
+
+
+async def update_member(
+    session,
+    i,
+    team_id,
+    user_id=None,
+    user_email=None,
+    max_budget=None,
+):
+    url = "http://0.0.0.0:4000/team/member_update"
+    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    data = {"team_id": team_id}
+    if user_id is not None:
+        data["user_id"] = user_id
+    elif user_email is not None:
+        data["user_email"] = user_email
+
+    if max_budget is not None:
+        data["max_budget_in_team"] = max_budget
+
+    print("sent data: {}".format(data))
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+
+        print(f"ADD MEMBER Response {i} (Status code: {status}):")
+        print(response_text)
+        print()
+
+        if status != 200:
+            raise Exception(
+                f"Request {i} did not return a 200 status code: {status}, response: {response_text}"
+            )
 
         return await response.json()
 
@@ -500,6 +538,13 @@ async def test_team_delete():
             {"role": "user", "user_id": normal_user},
         ]
         team_data = await new_team(session=session, i=0, member_list=member_list)
+
+        ## ASSERT USER MEMBERSHIP IS CREATED
+        user_info = await get_user_info(
+            session=session, get_user=normal_user, call_user="sk-1234"
+        )
+        assert len(user_info["teams"]) == 1
+
         ## Create key
         key_gen = await generate_key(session=session, i=0, team_id=team_data["team_id"])
         key = key_gen["key"]
@@ -507,6 +552,12 @@ async def test_team_delete():
         response = await chat_completion(session=session, key=key)
         ## Delete team
         await delete_team(session=session, i=0, team_id=team_data["team_id"])
+
+        ## ASSERT USER MEMBERSHIP IS DELETED
+        user_info = await get_user_info(
+            session=session, get_user=normal_user, call_user="sk-1234"
+        )
+        assert len(user_info["teams"]) == 0
 
 
 @pytest.mark.parametrize("dimension", ["user_id", "user_email"])
@@ -638,8 +689,8 @@ async def test_users_in_team_budget():
         )
         key = key_gen["key"]
 
-        # Add user to team
-        await add_member(
+        # update user to have budget = 0.0000001
+        await update_member(
             session, 0, team_id=team["team_id"], user_id=get_user, max_budget=0.0000001
         )
 

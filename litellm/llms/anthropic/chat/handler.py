@@ -4,7 +4,7 @@ Calling + translation logic for anthropic's `/v1/messages` endpoint
 
 import copy
 import json
-from typing import Any, Callable, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import httpx  # type: ignore
 
@@ -30,6 +30,7 @@ from litellm.types.llms.anthropic import (
     UsageDelta,
 )
 from litellm.types.llms.openai import (
+    ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
 )
@@ -506,6 +507,43 @@ class ModelResponseIterator:
 
         return usage_block
 
+    def _content_block_delta_helper(self, chunk: dict):
+        """
+        Helper function to handle the content block delta
+        """
+
+        text = ""
+        tool_use: Optional[ChatCompletionToolCallChunk] = None
+        provider_specific_fields = {}
+        content_block = ContentBlockDelta(**chunk)  # type: ignore
+        self.content_blocks.append(content_block)
+        if "text" in content_block["delta"]:
+            text = content_block["delta"]["text"]
+        elif "partial_json" in content_block["delta"]:
+            tool_use = {
+                "id": None,
+                "type": "function",
+                "function": {
+                    "name": None,
+                    "arguments": content_block["delta"]["partial_json"],
+                },
+                "index": self.tool_index,
+            }
+        elif "citation" in content_block["delta"]:
+            provider_specific_fields["citation"] = content_block["delta"]["citation"]
+        elif (
+            "thinking" in content_block["delta"]
+            or "signature_delta" == content_block["delta"]
+        ):
+            provider_specific_fields["thinking_blocks"] = [
+                ChatCompletionThinkingBlock(
+                    type="thinking",
+                    thinking=content_block["delta"].get("thinking"),
+                    signature_delta=content_block["delta"].get("signature"),
+                )
+            ]
+        return text, tool_use, provider_specific_fields
+
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
             type_chunk = chunk.get("type", "") or ""
@@ -515,6 +553,7 @@ class ModelResponseIterator:
             is_finished = False
             finish_reason = ""
             usage: Optional[ChatCompletionUsageBlock] = None
+            provider_specific_fields: Dict[str, Any] = {}
 
             index = int(chunk.get("index", 0))
             if type_chunk == "content_block_delta":
@@ -522,20 +561,9 @@ class ModelResponseIterator:
                 Anthropic content chunk
                 chunk = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': 'Hello'}}
                 """
-                content_block = ContentBlockDelta(**chunk)  # type: ignore
-                self.content_blocks.append(content_block)
-                if "text" in content_block["delta"]:
-                    text = content_block["delta"]["text"]
-                elif "partial_json" in content_block["delta"]:
-                    tool_use = {
-                        "id": None,
-                        "type": "function",
-                        "function": {
-                            "name": None,
-                            "arguments": content_block["delta"]["partial_json"],
-                        },
-                        "index": self.tool_index,
-                    }
+                text, tool_use, provider_specific_fields = (
+                    self._content_block_delta_helper(chunk=chunk)
+                )
             elif type_chunk == "content_block_start":
                 """
                 event: content_block_start
@@ -628,6 +656,9 @@ class ModelResponseIterator:
                 finish_reason=finish_reason,
                 usage=usage,
                 index=index,
+                provider_specific_fields=(
+                    provider_specific_fields if provider_specific_fields else None
+                ),
             )
 
             return returned_chunk

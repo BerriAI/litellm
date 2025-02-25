@@ -45,6 +45,10 @@ import {
 } from "@heroicons/react/outline";
 
 import { userDeleteCall } from "./networking";
+import { columns } from "./view_users/columns";
+import { UserDataTable } from "./view_users/table";
+import { UserInfo } from "./view_users/types";
+import BulkCreateUsers from "./bulk_create_users_button";
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -62,6 +66,14 @@ interface UserListResponse {
   page: number;
   page_size: number;
   total_pages: number;
+}
+
+interface CreateuserProps {
+  userID: string;
+  accessToken: string;
+  teams: any[];
+  possibleUIRoles: Record<string, Record<string, string>>;
+  onUserCreated: () => Promise<void>;
 }
 
 const isLocal = process.env.NODE_ENV === "development";
@@ -86,13 +98,14 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const [openDialogId, setOpenDialogId] = React.useState<null | number>(null);
   const [selectedItem, setSelectedItem] = useState<null | any>(null);
   const [editModalVisible, setEditModalVisible] = useState(false);
-  const [selectedUser, setSelectedUser] = useState(null);
+  const [selectedUser, setSelectedUser] = useState<UserInfo | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [userToDelete, setUserToDelete] = useState<string | null>(null);
   const [possibleUIRoles, setPossibleUIRoles] = useState<
     Record<string, Record<string, string>>
   >({});
   const defaultPageSize = 25;
+  const [searchTerm, setSearchTerm] = useState("");
 
   // check if window is not undefined
   if (typeof window !== "undefined") {
@@ -160,6 +173,34 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     // Close the modal
   };
 
+  const refreshUserData = async () => {
+    if (!accessToken || !token || !userRole || !userID) {
+      return;
+    }
+    
+    try {
+      const userDataResponse = await userInfoCall(
+        accessToken,
+        null,
+        userRole,
+        true,
+        currentPage,
+        defaultPageSize
+      );
+      
+      // Update session storage with new data
+      sessionStorage.setItem(
+        `userList_${currentPage}`,
+        JSON.stringify(userDataResponse)
+      );
+      
+      setUserListResponse(userDataResponse);
+      setUserData(userDataResponse.users || []);
+    } catch (error) {
+      console.error("Error refreshing user data:", error);
+    }
+  };
+
   useEffect(() => {
     if (!accessToken || !token || !userRole || !userID) {
       return;
@@ -221,134 +262,48 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     return <div>Loading...</div>;
   }
 
-  function renderPagination() {
-    if (!userData) return null;
-
-    const totalPages = userListResponse?.total_pages || 0;
-
-    const handlePageChange = (newPage: number) => {
-      setUserData([]); // Clear current users
-      setCurrentPage(newPage);
-    };
-  
-
-    return (
-      <div className="flex justify-between items-center">
-        <div>
-          Showing Page {currentPage } of {totalPages}
-        </div>
-        <div className="flex">
-          <button
-            className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-l focus:outline-none"
-            disabled={currentPage === 1}
-            onClick={() => handlePageChange(currentPage - 1)}
-          >
-            &larr; Prev
-          </button>
-          <button
-            className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-r focus:outline-none"
-            disabled={currentPage === totalPages}
-            onClick={() => handlePageChange(currentPage + 1)}
-          >
-            Next &rarr;
-          </button>
-        </div>
-      </div>
-    );
-  }
+  const tableColumns = columns(
+    possibleUIRoles,
+    (user) => {
+      setSelectedUser(user);
+      setEditModalVisible(true);
+    },
+    handleDelete
+  );
 
   return (
-    <div style={{ width: "100%" }}>
-      <Grid className="gap-2 p-2 h-[90vh] w-full mt-8">
-        <CreateUser
-          userID={userID}
-          accessToken={accessToken}
-          teams={teams}
-          possibleUIRoles={possibleUIRoles}
-        />
-        <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[90vh] mb-4">
-          <div className="mb-4 mt-1"></div>
-          <TabGroup>
-            <TabPanels>
-              <TabPanel>
-                <Table className="mt-5">
-                  <TableHead>
-                    <TableRow>
-                      <TableHeaderCell>User ID</TableHeaderCell>
-                      <TableHeaderCell>User Email</TableHeaderCell>
-                      <TableHeaderCell>Role</TableHeaderCell>
-                      <TableHeaderCell>User Spend ($ USD)</TableHeaderCell>
-                      <TableHeaderCell>User Max Budget ($ USD)</TableHeaderCell>
-                      <TableHeaderCell>API Keys</TableHeaderCell>
-                      <TableHeaderCell></TableHeaderCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {userData.map((user: any) => (
-                      <TableRow key={user.user_id}>
-                        <TableCell>{user.user_id || "-"}</TableCell>
-                        <TableCell>{user.user_email || "-"}</TableCell>
-                        <TableCell>
-                          {possibleUIRoles?.[user?.user_role]?.ui_label || "-"}
-                        </TableCell>
-                        <TableCell>
-                          {user.spend ? user.spend?.toFixed(2) : "-"}
-                        </TableCell>
-                        <TableCell>
-                          {user.max_budget !== null ? user.max_budget : "Unlimited"}
-                        </TableCell>
-                        <TableCell>
-                          <Grid numItems={2}>
-                            {user.key_count > 0 ? (
-                              <Badge size={"xs"} color={"indigo"}>
-                                {user.key_count} Keys
-                              </Badge>
-                            ) : (
-                              <Badge size={"xs"} color={"gray"}>
-                                No Keys
-                              </Badge>
-                            )}
-                            {/* <Text>{user.key_aliases.filter(key => key !== null).length} Keys</Text> */}
-                          </Grid>
-                        </TableCell>
-                        <TableCell>
-                          <Icon
-                            icon={PencilAltIcon}
-                            onClick={() => {
-                              setSelectedUser(user);
-                              setEditModalVisible(true);
-                            }}
-                          >
-                            View Keys
-                          </Icon>
-                          <Icon
-                            icon={TrashIcon}
-                            onClick={() => handleDelete(user.user_id)}
-                          >
-                            Delete
-                          </Icon>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TabPanel>
-              <TabPanel>
-                <div className="flex items-center">
-                  <div className="flex-1"></div>
-                  <div className="flex-1 flex justify-between items-center"></div>
-                </div>
-              </TabPanel>
-            </TabPanels>
-          </TabGroup>
-          <EditUserModal
-            visible={editModalVisible}
+    <div className="w-full p-6">
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-xl font-semibold">Users</h1>
+        <div className="flex space-x-3">
+          <CreateUser
+            userID={userID}
+            accessToken={accessToken}
+            teams={teams}
             possibleUIRoles={possibleUIRoles}
-            onCancel={handleEditCancel}
-            user={selectedUser}
-            onSubmit={handleEditSubmit}
           />
-          {isDeleteModalOpen && (
+        </div>
+      </div>
+      
+      <div className="bg-white rounded-lg shadow">
+        <UserDataTable
+          data={userData || []}
+          columns={tableColumns}
+          isLoading={!userData}
+        />
+      </div>
+
+      {/* Existing Modals */}
+      <EditUserModal
+        visible={editModalVisible}
+        possibleUIRoles={possibleUIRoles}
+        onCancel={handleEditCancel}
+        user={selectedUser}
+        onSubmit={handleEditSubmit}
+      />
+
+      {/* Delete Confirmation Modal */}
+      {isDeleteModalOpen && (
         <div className="fixed z-10 inset-0 overflow-y-auto">
           <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
             <div
@@ -395,9 +350,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           </div>
         </div>
       )}
-        </Card>
-        {renderPagination()}
-      </Grid>
     </div>
   );
 };

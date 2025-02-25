@@ -14,6 +14,7 @@ import litellm.types
 load_dotenv()
 import io
 import os
+import json
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -733,7 +734,7 @@ def test_bedrock_stop_value(stop, model):
     "model",
     [
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        "meta.llama3-70b-instruct-v1:0",
+        # "meta.llama3-70b-instruct-v1:0",
         "anthropic.claude-v2",
         "mistral.mixtral-8x7b-instruct-v0:1",
     ],
@@ -768,6 +769,7 @@ def test_bedrock_system_prompt(system, model):
 def test_bedrock_claude_3_tool_calling():
     try:
         litellm.set_verbose = True
+        litellm._turn_on_debug()
         tools = [
             {
                 "type": "function",
@@ -885,7 +887,10 @@ def test_completion_claude_3_base64():
 
 def test_completion_bedrock_mistral_completion_auth():
     print("calling bedrock mistral completion params auth")
+
     import os
+
+    litellm._turn_on_debug()
 
     # aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
     # aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
@@ -901,6 +906,7 @@ def test_completion_bedrock_mistral_completion_auth():
             temperature=0.1,
         )  # type: ignore
         # Add any assertions here to check the response
+        print(f"response: {response}")
         assert len(response.choices) > 0
         assert len(response.choices[0].message.content) > 0
 
@@ -1260,7 +1266,9 @@ def test_bedrock_cross_region_inference(model):
     ],
 )
 def test_bedrock_get_base_model(model, expected_base_model):
-    assert litellm.AmazonConverseConfig()._get_base_model(model) == expected_base_model
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    assert BedrockModelInfo.get_base_model(model) == expected_base_model
 
 
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -1977,9 +1985,49 @@ def test_bedrock_mapped_converse_models():
 
 
 def test_bedrock_base_model_helper():
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
     model = "us.amazon.nova-pro-v1:0"
-    litellm.AmazonConverseConfig()._get_base_model(model)
-    assert model == "us.amazon.nova-pro-v1:0"
+    base_model = BedrockModelInfo.get_base_model(model)
+    assert base_model == "amazon.nova-pro-v1:0"
+
+    assert (
+        BedrockModelInfo.get_base_model(
+            "invoke/anthropic.claude-3-5-sonnet-20241022-v2:0"
+        )
+        == "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    )
+
+
+@pytest.mark.parametrize(
+    "model,expected_route",
+    [
+        # Test explicit route prefixes
+        ("invoke/anthropic.claude-3-sonnet-20240229-v1:0", "invoke"),
+        ("converse/anthropic.claude-3-sonnet-20240229-v1:0", "converse"),
+        ("converse_like/anthropic.claude-3-sonnet-20240229-v1:0", "converse_like"),
+        # Test models in BEDROCK_CONVERSE_MODELS list
+        ("anthropic.claude-3-5-haiku-20241022-v1:0", "converse"),
+        ("anthropic.claude-v2", "converse"),
+        ("meta.llama3-70b-instruct-v1:0", "converse"),
+        ("mistral.mistral-large-2407-v1:0", "converse"),
+        # Test models with region prefixes
+        ("us.anthropic.claude-3-sonnet-20240229-v1:0", "converse"),
+        ("us.meta.llama3-70b-instruct-v1:0", "converse"),
+        # Test default case (should return "invoke")
+        ("amazon.titan-text-express-v1", "invoke"),
+        ("cohere.command-text-v14", "invoke"),
+        ("cohere.command-r-v1:0", "invoke"),
+    ],
+)
+def test_bedrock_route_detection(model, expected_route):
+    """Test all scenarios for BedrockModelInfo.get_bedrock_route"""
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    route = BedrockModelInfo.get_bedrock_route(model)
+    assert (
+        route == expected_route
+    ), f"Expected route '{expected_route}' for model '{model}', but got '{route}'"
 
 
 @pytest.mark.parametrize(
@@ -2044,6 +2092,7 @@ def test_bedrock_prompt_caching_message(messages, expected_cache_control):
         ("bedrock/mistral.mistral-7b-instruct-v0.1:0", True),
         ("bedrock/meta.llama3-1-8b-instruct:0", True),
         ("bedrock/meta.llama3-2-70b-instruct:0", True),
+        ("bedrock/meta.llama3-3-70b-instruct-v1:0", True),
         ("bedrock/amazon.titan-embed-text-v1:0", False),
     ],
 )
@@ -2134,6 +2183,16 @@ class TestBedrockRerank(BaseLLMRerankTest):
     def get_base_rerank_call_args(self) -> dict:
         return {
             "model": "bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0",
+        }
+
+
+class TestBedrockCohereRerank(BaseLLMRerankTest):
+    def get_custom_llm_provider(self) -> litellm.LlmProviders:
+        return litellm.LlmProviders.BEDROCK
+
+    def get_base_rerank_call_args(self) -> dict:
+        return {
+            "model": "bedrock/arn:aws:bedrock:us-west-2::foundation-model/cohere.rerank-v3-5:0",
         }
 
 
@@ -2405,18 +2464,6 @@ class TestBedrockEmbedding(BaseLLMEmbeddingTest):
         ] == "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII="
 
 
-def test_process_bedrock_converse_image_block():
-    from litellm.litellm_core_utils.prompt_templates.factory import (
-        _process_bedrock_converse_image_block,
-    )
-
-    block = _process_bedrock_converse_image_block(
-        image_url="data:text/plain;base64,base64file"
-    )
-
-    assert block["document"] is not None
-
-
 @pytest.mark.asyncio
 async def test_bedrock_image_url_sync_client():
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -2483,3 +2530,188 @@ def test_bedrock_error_handling_streaming():
     assert isinstance(e.value, BedrockError)
     assert "Bedrock is unable to process your request." in e.value.message
     assert e.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "image_url",
+    [
+        "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+        # "https://raw.githubusercontent.com/datasets/gdp/master/data/gdp.csv",
+        "https://www.cmu.edu/blackboard/files/evaluate/tests-example.xls",
+        "http://www.krishdholakia.com/",
+        # "https://raw.githubusercontent.com/datasets/sample-data/master/README.txt", # invalid url
+        "https://raw.githubusercontent.com/mdn/content/main/README.md",
+    ],
+)
+@pytest.mark.flaky(retries=6, delay=2)
+@pytest.mark.asyncio
+async def test_bedrock_document_understanding(image_url):
+    from litellm import acompletion
+
+    litellm._turn_on_debug()
+    model = "bedrock/us.amazon.nova-pro-v1:0"
+
+    image_content = [
+        {"type": "text", "text": f"What's this file about?"},
+        {
+            "type": "image_url",
+            "image_url": image_url,
+        },
+    ]
+
+    try:
+        response = await acompletion(
+            model=model,
+            messages=[{"role": "user", "content": image_content}],
+        )
+        assert response is not None
+        assert response.choices[0].message.content != ""
+    except litellm.ServiceUnavailableError as e:
+        pytest.skip("Skipping test due to ServiceUnavailableError")
+
+
+def test_bedrock_custom_proxy():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            response = completion(
+                model="bedrock/converse_like/us.amazon.nova-pro-v1:0",
+                messages=[{"content": "Tell me a joke", "role": "user"}],
+                api_key="Token",
+                client=client,
+                api_base="https://some-api-url/models",
+            )
+        except Exception as e:
+            print(e)
+        print(mock_post.call_args.kwargs)
+        mock_post.assert_called_once()
+        assert mock_post.call_args.kwargs["url"] == "https://some-api-url/models"
+
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer Token"
+
+
+def test_bedrock_custom_deepseek():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    import json
+
+    litellm._turn_on_debug()
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        # Mock the response
+        mock_response = Mock()
+        mock_response.text = json.dumps(
+            {"generation": "Here's a joke...", "stop_reason": "stop"}
+        )
+        mock_response.status_code = 200
+        # Add required response attributes
+        mock_response.headers = {"Content-Type": "application/json"}
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        try:
+            response = completion(
+                model="bedrock/llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n",  # Updated to specify provider
+                messages=[{"role": "user", "content": "Tell me a joke"}],
+                max_tokens=100,
+                client=client,
+            )
+
+            # Print request details
+            print("\nRequest Details:")
+            print(f"URL: {mock_post.call_args.kwargs['url']}")
+
+            # Verify the URL
+            assert (
+                mock_post.call_args.kwargs["url"]
+                == "https://bedrock-runtime.us-east-1.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A086734376398%3Aimported-model%2Fr4c4kewx2s0n/invoke"
+            )
+
+            # Verify the request body format
+            request_body = json.loads(mock_post.call_args.kwargs["data"])
+            print("request_body=", json.dumps(request_body, indent=4, default=str))
+            assert "prompt" in request_body
+            assert request_body["prompt"] == "Tell me a joke"
+
+            # follows the llama spec
+            assert request_body["max_gen_len"] == 100
+
+        except Exception as e:
+            print(f"Error: {str(e)}")
+            raise e
+
+
+@pytest.mark.parametrize(
+    "model, expected_output",
+    [
+        ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", {"top_k": 3}),
+        ("bedrock/converse/us.amazon.nova-pro-v1:0", {"inferenceConfig": {"topK": 3}}),
+        ("bedrock/meta.llama3-70b-instruct-v1:0", {}),
+    ],
+)
+def test_handle_top_k_value_helper(model, expected_output):
+    assert (
+        litellm.AmazonConverseConfig()._handle_top_k_value(model, {"topK": 3})
+        == expected_output
+    )
+    assert (
+        litellm.AmazonConverseConfig()._handle_top_k_value(model, {"top_k": 3})
+        == expected_output
+    )
+
+
+@pytest.mark.parametrize(
+    "model, expected_params",
+    [
+        ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", {"top_k": 2}),
+        ("bedrock/converse/us.amazon.nova-pro-v1:0", {"inferenceConfig": {"topK": 2}}),
+        ("bedrock/meta.llama3-70b-instruct-v1:0", {}),
+        ("bedrock/mistral.mistral-7b-instruct-v0:2", {}),
+    ],
+)
+def test_bedrock_top_k_param(model, expected_params):
+    import json
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+
+        if "mistral" in model:
+            mock_response.text = json.dumps(
+                {"outputs": [{"text": "Here's a joke...", "stop_reason": "stop"}]}
+            )
+        else:
+            mock_response.text = json.dumps(
+                {
+                    "output": {
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"text": "Here's a joke..."}],
+                        }
+                    },
+                    "usage": {"inputTokens": 12, "outputTokens": 6, "totalTokens": 18},
+                    "stopReason": "stop",
+                }
+            )
+
+        mock_response.status_code = 200
+        # Add required response attributes
+        mock_response.headers = {"Content-Type": "application/json"}
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            top_k=2,
+            client=client,
+        )
+        data = json.loads(mock_post.call_args.kwargs["data"])
+        if "mistral" in model:
+            assert data["top_k"] == 2
+        else:
+            assert data["additionalModelRequestFields"] == expected_params

@@ -18,10 +18,22 @@ from typing import (
 import httpx
 from pydantic import BaseModel
 
-from litellm.types.llms.openai import AllMessageValues
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionToolChoiceFunctionParam,
+    ChatCompletionToolChoiceObjectParam,
+    ChatCompletionToolParam,
+    ChatCompletionToolParamFunctionChunk,
+)
 from litellm.types.utils import ModelResponse
+from litellm.utils import CustomStreamWrapper
 
-from ..base_utils import type_to_response_format_param
+from ..base_utils import (
+    map_developer_role_to_system_role,
+    type_to_response_format_param,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -99,6 +111,17 @@ class BaseConfig(ABC):
         """
         return False
 
+    def translate_developer_role_to_system_role(
+        self,
+        messages: List[AllMessageValues],
+    ) -> List[AllMessageValues]:
+        """
+        Translate `developer` role to `system` role for non-OpenAI providers.
+
+        Overriden by OpenAI/Azure
+        """
+        return map_developer_role_to_system_role(messages=messages)
+
     def should_retry_llm_api_inside_llm_translation_on_http_error(
         self, e: httpx.HTTPStatusError, litellm_params: dict
     ) -> bool:
@@ -130,6 +153,54 @@ class BaseConfig(ABC):
     def get_supported_openai_params(self, model: str) -> list:
         pass
 
+    def _add_response_format_to_tools(
+        self,
+        optional_params: dict,
+        value: dict,
+        is_response_format_supported: bool,
+    ) -> dict:
+        """
+        Follow similar approach to anthropic - translate to a single tool call.
+
+        When using tools in this way: - https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
+        - You usually want to provide a single tool
+        - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
+        - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
+
+        Add response format to tools
+
+        This is used to translate response_format to a tool call, for models/APIs that don't support response_format directly.
+        """
+        json_schema: Optional[dict] = None
+        if "response_schema" in value:
+            json_schema = value["response_schema"]
+        elif "json_schema" in value:
+            json_schema = value["json_schema"]["schema"]
+
+        if json_schema and not is_response_format_supported:
+
+            _tool_choice = ChatCompletionToolChoiceObjectParam(
+                type="function",
+                function=ChatCompletionToolChoiceFunctionParam(
+                    name=RESPONSE_FORMAT_TOOL_NAME
+                ),
+            )
+
+            _tool = ChatCompletionToolParam(
+                type="function",
+                function=ChatCompletionToolParamFunctionChunk(
+                    name=RESPONSE_FORMAT_TOOL_NAME, parameters=json_schema
+                ),
+            )
+
+            optional_params.setdefault("tools", [])
+            optional_params["tools"].append(_tool)
+            optional_params["tool_choice"] = _tool_choice
+            optional_params["json_mode"] = True
+        else:
+            optional_params["response_format"] = value
+        return optional_params
+
     @abstractmethod
     def map_openai_params(
         self,
@@ -151,6 +222,30 @@ class BaseConfig(ABC):
         api_base: Optional[str] = None,
     ) -> dict:
         pass
+
+    def sign_request(
+        self,
+        headers: dict,
+        optional_params: dict,
+        request_data: dict,
+        api_base: str,
+        model: Optional[str] = None,
+        stream: Optional[bool] = None,
+        fake_stream: Optional[bool] = None,
+    ) -> dict:
+        """
+        Some providers like Bedrock require signing the request. The sign request funtion needs access to `request_data` and `complete_url`
+        Args:
+            headers: dict
+            optional_params: dict
+            request_data: dict - the request body being sent in http request
+            api_base: str - the complete url being sent in http request
+        Returns:
+            dict - the signed headers
+
+        Update the headers with the signed headers in this function. The return values will be sent as headers in the http request.
+        """
+        return headers
 
     def get_complete_url(
         self,
@@ -209,3 +304,46 @@ class BaseConfig(ABC):
         json_mode: Optional[bool] = False,
     ) -> Any:
         pass
+
+    def get_async_custom_stream_wrapper(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj,
+        api_base: str,
+        headers: dict,
+        data: dict,
+        messages: list,
+        client: Optional[AsyncHTTPHandler] = None,
+    ) -> CustomStreamWrapper:
+        raise NotImplementedError
+
+    def get_sync_custom_stream_wrapper(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj,
+        api_base: str,
+        headers: dict,
+        data: dict,
+        messages: list,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    ) -> CustomStreamWrapper:
+        raise NotImplementedError
+
+    @property
+    def custom_llm_provider(self) -> Optional[str]:
+        return None
+
+    @property
+    def has_custom_stream_wrapper(self) -> bool:
+        return False
+
+    @property
+    def supports_stream_param_in_request_body(self) -> bool:
+        """
+        Some providers like Bedrock invoke do not support the stream parameter in the request body.
+
+        By default, this is true for almost all providers.
+        """
+        return True

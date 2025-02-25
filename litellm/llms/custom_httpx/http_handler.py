@@ -1,5 +1,6 @@
 import asyncio
 import os
+import time
 from typing import TYPE_CHECKING, Any, Callable, List, Mapping, Optional, Union
 
 import httpx
@@ -179,6 +180,7 @@ class AsyncHTTPHandler:
         stream: bool = False,
         logging_obj: Optional[LiteLLMLoggingObject] = None,
     ):
+        start_time = time.time()
         try:
             if timeout is None:
                 timeout = self.timeout
@@ -207,6 +209,8 @@ class AsyncHTTPHandler:
             finally:
                 await new_client.aclose()
         except httpx.TimeoutException as e:
+            end_time = time.time()
+            time_delta = round(end_time - start_time, 3)
             headers = {}
             error_response = getattr(e, "response", None)
             if error_response is not None:
@@ -214,7 +218,7 @@ class AsyncHTTPHandler:
                     headers["response_headers-{}".format(key)] = value
 
             raise litellm.Timeout(
-                message=f"Connection timed out after {timeout} seconds.",
+                message=f"Connection timed out. Timeout passed={timeout}, time taken={time_delta} seconds",
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
                 headers=headers,

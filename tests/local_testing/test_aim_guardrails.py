@@ -55,15 +55,15 @@ def test_aim_guard_config_no_api_key():
 
 
 @pytest.mark.asyncio
-async def test_callback():
+@pytest.mark.parametrize("mode", ["pre_call", "during_call"])
+async def test_callback(mode: str):
     init_guardrails_v2(
         all_guardrails=[
             {
                 "guardrail_name": "gibberish-guard",
                 "litellm_params": {
                     "guardrail": "aim",
-                    "guard_name": "gibberish_guard",
-                    "mode": "pre_call",
+                    "mode": mode,
                     "api_key": "hs-aim-key",
                 },
             }
@@ -89,6 +89,11 @@ async def test_callback():
                 request=Request(method="POST", url="http://aim"),
             ),
         ):
-            await aim_guardrail.async_pre_call_hook(
-                data=data, cache=DualCache(), user_api_key_dict=UserAPIKeyAuth(), call_type="completion"
-            )
+            if mode == "pre_call":
+                await aim_guardrail.async_pre_call_hook(
+                    data=data, cache=DualCache(), user_api_key_dict=UserAPIKeyAuth(), call_type="completion"
+                )
+            else:
+                await aim_guardrail.async_moderation_hook(
+                    data=data, user_api_key_dict=UserAPIKeyAuth(), call_type="completion"
+                )

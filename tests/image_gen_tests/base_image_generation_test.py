@@ -48,6 +48,7 @@ class BaseImageGenTest(ABC):
         """Test basic image generation"""
         try:
             custom_logger = TestCustomLogger()
+            litellm.logging_callback_manager._reset_all_callbacks()
             litellm.callbacks = [custom_logger]
             base_image_generation_call_args = self.get_base_image_generation_call_args()
             litellm.set_verbose = True

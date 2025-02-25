@@ -125,6 +125,8 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 Set `default_on: true` in your guardrail config to run the guardrail on every request. This is useful if you want to run a guardrail on every request without the user having to specify it.
 
+**Note:** These will run even if user specifies a different guardrail or empty guardrails array.
+
 ```yaml
 guardrails:
   - guardrail_name: "aporia-pre-guard"
@@ -522,7 +524,7 @@ guardrails:
   - guardrail_name: string     # Required: Name of the guardrail
     litellm_params:            # Required: Configuration parameters
       guardrail: string        # Required: One of "aporia", "bedrock", "guardrails_ai", "lakera", "presidio", "hide-secrets"
-      mode: string             # Required: One of "pre_call", "post_call", "during_call", "logging_only"
+      mode: Union[string, List[string]]             # Required: One or more of "pre_call", "post_call", "during_call", "logging_only"
       api_key: string          # Required: API key for the guardrail service
       api_base: string         # Optional: Base URL for the guardrail service
       default_on: boolean      # Optional: Default False. When set to True, will run on every request, does not need client to specify guardrail in request
