@@ -18,11 +18,11 @@ interface BulkCreateUsersProps {
 interface UserData {
   user_email: string;
   user_role: string;
-  teams?: string;
+  teams?: string | string[];
   metadata?: string;
-  max_budget?: string;
+  max_budget?: string | number;
   budget_duration?: string;
-  models?: string;
+  models?: string | string[];
   status?: string;
   error?: string;
   rowNumber?: number;
@@ -130,7 +130,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
             }
             
             // Validate max_budget if provided
-            if (user.max_budget && isNaN(parseFloat(user.max_budget))) {
+            if (user.max_budget && isNaN(parseFloat(user.max_budget.toString()))) {
               errors.push('Max budget must be a number');
             }
 
@@ -152,8 +152,9 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
           } else {
             message.success(`Successfully parsed ${validData.length} users`);
           }
-        } catch (error) {
-          setParseError(`Error parsing CSV: ${error.message}`);
+        } catch (error: unknown) {
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+          setParseError(`Error parsing CSV: ${errorMessage}`);
           setParsedData([]);
         }
       },
@@ -173,22 +174,23 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
     
     let anySuccessful = false;
 
-    for (const [index, user] of updatedData.entries()) {
+    for (let index = 0; index < updatedData.length; index++) {
+      const user = updatedData[index];
       try {
         // Convert teams from comma-separated string to array if provided
         const processedUser = { ...user };
-        if (processedUser.teams && processedUser.teams.trim() !== '') {
+        if (processedUser.teams && typeof processedUser.teams === 'string') {
           processedUser.teams = processedUser.teams.split(',').map(team => team.trim());
         }
         
         // Convert models from comma-separated string to array if provided
-        if (processedUser.models && processedUser.models.trim() !== '') {
+        if (processedUser.models && typeof processedUser.models === 'string') {
           processedUser.models = processedUser.models.split(',').map(model => model.trim());
         }
         
         // Convert max_budget to number if provided
-        if (processedUser.max_budget && processedUser.max_budget.trim() !== '') {
-          processedUser.max_budget = parseFloat(processedUser.max_budget);
+        if (processedUser.max_budget && processedUser.max_budget.toString().trim() !== '') {
+          processedUser.max_budget = parseFloat(processedUser.max_budget.toString());
         }
 
         
@@ -258,8 +260,8 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
         }
       } catch (error) {
         console.error('Caught error:', error);
-        const errorMessage = error?.response?.data?.error || 
-                           error?.message || 
+        const errorMessage = (error as any)?.response?.data?.error || 
+                           (error as Error)?.message || 
                            String(error);
         setParsedData(current => 
           current.map((u, i) => 
@@ -329,7 +331,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
     {
       title: 'Status',
       key: 'status',
-      render: (_, record: UserData) => {
+      render: (_: any, record: UserData) => {
         if (!record.isValid) {
           return (
             <div>
