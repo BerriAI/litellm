@@ -22,7 +22,6 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.llms.anthropic import (
     AnthropicChatCompletionUsageBlock,
-    AnthropicMessagesThinkingBlock,
     ContentBlockDelta,
     ContentBlockStart,
     ContentBlockStop,
@@ -31,6 +30,7 @@ from litellm.types.llms.anthropic import (
     UsageDelta,
 )
 from litellm.types.llms.openai import (
+    ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
 )
@@ -536,7 +536,7 @@ class ModelResponseIterator:
             or "signature_delta" == content_block["delta"]
         ):
             provider_specific_fields["thinking_blocks"] = [
-                AnthropicMessagesThinkingBlock(
+                ChatCompletionThinkingBlock(
                     type="thinking",
                     thinking=content_block["delta"].get("thinking"),
                     signature_delta=content_block["delta"].get("signature"),
