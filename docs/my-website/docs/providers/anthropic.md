@@ -819,6 +819,114 @@ resp = litellm.completion(
 print(f"\nResponse: {resp}")
 ```
 
+## Usage - Thinking / `reasoning_content`
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+resp = completion(
+    model="anthropic/claude-3-7-sonnet-20250219",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    thinking={"type": "enabled", "budget_tokens": 1024},
+)
+
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+- model_name: claude-3-7-sonnet-20250219
+  litellm_params:
+    model: anthropic/claude-3-7-sonnet-20250219
+    api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "claude-3-7-sonnet-20250219",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "thinking": {"type": "enabled", "budget_tokens": 1024}
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+
+**Expected Response**
+
+```python
+ModelResponse(
+    id='chatcmpl-c542d76d-f675-4e87-8e5f-05855f5d0f5e',
+    created=1740470510,
+    model='claude-3-7-sonnet-20250219',
+    object='chat.completion',
+    system_fingerprint=None,
+    choices=[
+        Choices(
+            finish_reason='stop',
+            index=0,
+            message=Message(
+                content="The capital of France is Paris.",
+                role='assistant',
+                tool_calls=None,
+                function_call=None,
+                provider_specific_fields={
+                    'citations': None,
+                    'thinking_blocks': [
+                        {
+                            'type': 'thinking',
+                            'thinking': 'The capital of France is Paris. This is a very straightforward factual question.',
+                            'signature': 'EuYBCkQYAiJAy6...'
+                        }
+                    ]
+                }
+            ),
+            thinking_blocks=[
+                {
+                    'type': 'thinking',
+                    'thinking': 'The capital of France is Paris. This is a very straightforward factual question.',
+                    'signature': 'EuYBCkQYAiJAy6AGB...'
+                }
+            ],
+            reasoning_content='The capital of France is Paris. This is a very straightforward factual question.'
+        )
+    ],
+    usage=Usage(
+        completion_tokens=68,
+        prompt_tokens=42,
+        total_tokens=110,
+        completion_tokens_details=None,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=None,
+            cached_tokens=0,
+            text_tokens=None,
+            image_tokens=None
+        ),
+        cache_creation_input_tokens=0,
+        cache_read_input_tokens=0
+    )
+)
+```
+
 ## **Passing Extra Headers to Anthropic API**
 
 Pass `extra_headers: dict` to `litellm.completion`
@@ -1135,3 +1243,4 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 </TabItem>
 </Tabs>
+
