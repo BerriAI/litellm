@@ -281,7 +281,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
             accessToken={accessToken}
             teams={teams}
             possibleUIRoles={possibleUIRoles}
-            onUserCreated={refreshUserData}
           />
         </div>
       </div>
@@ -291,7 +290,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           data={userData || []}
           columns={tableColumns}
           isLoading={!userData}
-          disableBulkCreateButton={true}
         />
       </div>
 
