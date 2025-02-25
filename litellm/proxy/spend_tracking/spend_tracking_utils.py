@@ -48,7 +48,7 @@ def _get_spend_logs_metadata(
             additional_usage_values=None,
             applied_guardrails=None,
         )
-    verbose_proxy_logger.info(
+    verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
         + str(list(metadata.keys()))
     )

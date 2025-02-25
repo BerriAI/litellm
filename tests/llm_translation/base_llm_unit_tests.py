@@ -196,15 +196,18 @@ class BaseLLMChatTest(ABC):
         assert response is not None
 
     def test_message_with_name(self):
-        litellm.set_verbose = True
-        base_completion_call_args = self.get_base_completion_call_args()
-        messages = [
-            {"role": "user", "content": "Hello", "name": "test_name"},
-        ]
-        response = self.completion_function(
-            **base_completion_call_args, messages=messages
-        )
-        assert response is not None
+        try:
+            litellm.set_verbose = True
+            base_completion_call_args = self.get_base_completion_call_args()
+            messages = [
+                {"role": "user", "content": "Hello", "name": "test_name"},
+            ]
+            response = self.completion_function(
+                **base_completion_call_args, messages=messages
+            )
+            assert response is not None
+        except litellm.RateLimitError:
+            pass
 
     @pytest.mark.parametrize(
         "response_format",
@@ -633,6 +636,109 @@ class BaseLLMChatTest(ABC):
         url = f"data:application/pdf;base64,{encoded_file}"
 
         return url
+
+    def test_basic_tool_calling(self):
+        try:
+            from litellm import completion, ModelResponse
+
+            litellm.set_verbose = True
+            litellm._turn_on_debug()
+            from litellm.utils import supports_function_calling
+
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+            litellm.model_cost = litellm.get_model_cost_map(url="")
+
+            base_completion_call_args = self.get_base_completion_call_args()
+            if not supports_function_calling(base_completion_call_args["model"], None):
+                print("Model does not support function calling")
+                pytest.skip("Model does not support function calling")
+
+            tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_current_weather",
+                        "description": "Get the current weather in a given location",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "location": {
+                                    "type": "string",
+                                    "description": "The city and state, e.g. San Francisco, CA",
+                                },
+                                "unit": {
+                                    "type": "string",
+                                    "enum": ["celsius", "fahrenheit"],
+                                },
+                            },
+                            "required": ["location"],
+                        },
+                    },
+                }
+            ]
+            messages = [
+                {
+                    "role": "user",
+                    "content": "What's the weather like in Boston today in fahrenheit?",
+                }
+            ]
+            request_args = {
+                "messages": messages,
+                "tools": tools,
+            }
+            request_args.update(self.get_base_completion_call_args())
+            response: ModelResponse = completion(**request_args)  # type: ignore
+            print(f"response: {response}")
+
+            assert response is not None
+
+            # if the provider did not return any tool calls do not make a subsequent llm api call
+            if response.choices[0].message.tool_calls is None:
+                return
+            # Add any assertions here to check the response
+
+            assert isinstance(
+                response.choices[0].message.tool_calls[0].function.name, str
+            )
+            assert isinstance(
+                response.choices[0].message.tool_calls[0].function.arguments, str
+            )
+            messages.append(
+                response.choices[0].message.model_dump()
+            )  # Add assistant tool invokes
+            tool_result = (
+                '{"location": "Boston", "temperature": "72", "unit": "fahrenheit"}'
+            )
+            # Add user submitted tool results in the OpenAI format
+            messages.append(
+                {
+                    "tool_call_id": response.choices[0].message.tool_calls[0].id,
+                    "role": "tool",
+                    "name": response.choices[0].message.tool_calls[0].function.name,
+                    "content": tool_result,
+                }
+            )
+            # In the second response, Claude should deduce answer from tool results
+            request_2_args = {
+                "messages": messages,
+                "tools": tools,
+            }
+            request_2_args.update(self.get_base_completion_call_args())
+            second_response: ModelResponse = completion(**request_2_args)  # type: ignore
+            print(f"second response: {second_response}")
+            assert second_response is not None
+
+            # either content or tool calls should be present
+            assert (
+                second_response.choices[0].message.content is not None
+                or second_response.choices[0].message.tool_calls is not None
+            )
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
+        except litellm.RateLimitError:
+            pass
+        except Exception as e:
+            pytest.fail(f"Error occurred: {e}")
 
     @pytest.mark.asyncio
     async def test_completion_cost(self):

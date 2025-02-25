@@ -11,21 +11,30 @@ model/{model_id}/update - PATCH endpoint for model update.
 #### MODEL MANAGEMENT ####
 
 import json
+import uuid
 from typing import Optional, cast
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._types import (
     CommonProxyErrors,
+    LitellmUserRoles,
     PrismaCompatibleUpdateDBModel,
     ProxyErrorTypes,
     ProxyException,
+    TeamModelAddRequest,
+    UpdateTeamRequest,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.management_endpoints.team_endpoints import (
+    team_model_add,
+    update_team,
+)
 from litellm.proxy.utils import PrismaClient
 from litellm.types.router import (
     Deployment,
@@ -206,3 +215,109 @@ async def patch_model(
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             param=None,
         )
+
+
+################################# Helper Functions #################################
+####################################################################################
+####################################################################################
+####################################################################################
+
+
+async def _add_model_to_db(
+    model_params: Deployment,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+):
+    # encrypt litellm params #
+    _litellm_params_dict = model_params.litellm_params.dict(exclude_none=True)
+    _orignal_litellm_model_name = model_params.litellm_params.model
+    for k, v in _litellm_params_dict.items():
+        encrypted_value = encrypt_value_helper(value=v)
+        model_params.litellm_params[k] = encrypted_value
+    _data: dict = {
+        "model_id": model_params.model_info.id,
+        "model_name": model_params.model_name,
+        "litellm_params": model_params.litellm_params.model_dump_json(exclude_none=True),  # type: ignore
+        "model_info": model_params.model_info.model_dump_json(  # type: ignore
+            exclude_none=True
+        ),
+        "created_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+        "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+    }
+    if model_params.model_info.id is not None:
+        _data["model_id"] = model_params.model_info.id
+    model_response = await prisma_client.db.litellm_proxymodeltable.create(
+        data=_data  # type: ignore
+    )
+    return model_response
+
+
+async def _add_team_model_to_db(
+    model_params: Deployment,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+):
+    """
+    If 'team_id' is provided,
+
+    - generate a unique 'model_name' for the model (e.g. 'model_name_{team_id}_{uuid})
+    - store the model in the db with the unique 'model_name'
+    - store a team model alias mapping {"model_name": "model_name_{team_id}_{uuid}"}
+    """
+    _team_id = model_params.model_info.team_id
+    if _team_id is None:
+        return None
+    original_model_name = model_params.model_name
+    if original_model_name:
+        model_params.model_info.team_public_model_name = original_model_name
+
+    unique_model_name = f"model_name_{_team_id}_{uuid.uuid4()}"
+
+    model_params.model_name = unique_model_name
+
+    ## CREATE MODEL IN DB ##
+    model_response = await _add_model_to_db(
+        model_params=model_params,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
+
+    ## CREATE MODEL ALIAS IN DB ##
+    await update_team(
+        data=UpdateTeamRequest(
+            team_id=_team_id,
+            model_aliases={original_model_name: unique_model_name},
+        ),
+        user_api_key_dict=user_api_key_dict,
+        http_request=Request(scope={"type": "http"}),
+    )
+
+    # add model to team object
+    await team_model_add(
+        data=TeamModelAddRequest(
+            team_id=_team_id,
+            models=[original_model_name],
+        ),
+        http_request=Request(scope={"type": "http"}),
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    return model_response
+
+
+def check_if_team_id_matches_key(
+    team_id: Optional[str], user_api_key_dict: UserAPIKeyAuth
+) -> bool:
+    can_make_call = True
+    if (
+        user_api_key_dict.user_role
+        and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    ):
+        return True
+    if team_id is None:
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            can_make_call = False
+    else:
+        if user_api_key_dict.team_id != team_id:
+            can_make_call = False
+    return can_make_call

@@ -65,8 +65,8 @@ const sidebars = {
           items: [
             "proxy/user_keys",
             "proxy/clientside_auth",
-            "proxy/response_headers",
             "proxy/request_headers",
+            "proxy/response_headers",
           ],
         },
         {
@@ -444,6 +444,7 @@ const sidebars = {
             "projects/smolagents",
             "projects/Docq.AI",
             "projects/OpenInterpreter",
+            "projects/Elroy",
             "projects/dbally",
             "projects/FastREPL",
             "projects/PROMPTMETHEUS",

@@ -5,7 +5,7 @@ Translating between OpenAI's `/chat/completion` format and Amazon's `/converse` 
 import copy
 import time
 import types
-from typing import Callable, List, Literal, Optional, Tuple, Union, cast, overload
+from typing import List, Literal, Optional, Tuple, Union, cast, overload
 
 import httpx
 
@@ -105,6 +105,7 @@ class AmazonConverseConfig(BaseConfig):
             or base_model.startswith("cohere")
             or base_model.startswith("meta.llama3-1")
             or base_model.startswith("meta.llama3-2")
+            or base_model.startswith("meta.llama3-3")
             or base_model.startswith("amazon.nova")
         ):
             supported_params.append("tools")
@@ -541,7 +542,6 @@ class AmazonConverseConfig(BaseConfig):
             api_key=api_key,
             data=request_data,
             messages=messages,
-            print_verbose=None,
             encoding=encoding,
         )
 
@@ -556,7 +556,6 @@ class AmazonConverseConfig(BaseConfig):
         api_key: Optional[str],
         data: Union[dict, str],
         messages: List,
-        print_verbose: Optional[Callable],
         encoding,
     ) -> ModelResponse:
         ## LOGGING

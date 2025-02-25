@@ -47,6 +47,8 @@ from litellm.proxy._types import (
     TeamMemberDeleteRequest,
     TeamMemberUpdateRequest,
     TeamMemberUpdateResponse,
+    TeamModelAddRequest,
+    TeamModelDeleteRequest,
     UpdateTeamRequest,
     UserAPIKeyAuth,
 )
@@ -55,6 +57,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
@@ -66,17 +69,6 @@ from litellm.proxy.utils import (
 )
 
 router = APIRouter()
-
-
-def _is_user_team_admin(
-    user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable
-) -> bool:
-
-    for member in team_obj.members_with_roles:
-        if member.user_id is not None and member.user_id == user_api_key_dict.user_id:
-            return True
-
-    return False
 
 
 def _is_available_team(team_id: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
@@ -824,7 +816,6 @@ async def team_member_add(
 @management_endpoint_wrapper
 async def team_member_delete(
     data: TeamMemberDeleteRequest,
-    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -1138,15 +1129,21 @@ async def delete_team(
         raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
 
     # check that all teams passed exist
+    team_rows: List[LiteLLM_TeamTable] = []
     for team_id in data.team_ids:
-        team_row = await prisma_client.get_data(  # type: ignore
-            team_id=team_id, table_name="team", query_type="find_unique"
-        )
-        if team_row is None:
+        try:
+            team_row_base: BaseModel = (
+                await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id}
+                )
+            )
+        except Exception:
             raise HTTPException(
-                status_code=404,
+                status_code=400,
                 detail={"error": f"Team not found, passed team_id={team_id}"},
             )
+        team_row_pydantic = LiteLLM_TeamTable(**team_row_base.model_dump())
+        team_rows.append(team_row_pydantic)
 
     # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
     # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
@@ -1184,11 +1181,58 @@ async def delete_team(
 
     ## DELETE ASSOCIATED KEYS
     await prisma_client.delete_data(team_id_list=data.team_ids, table_name="key")
+
+    # ## DELETE TEAM MEMBERSHIPS
+    for team_row in team_rows:
+        ### get all team members
+        team_members = team_row.members_with_roles
+        ### call team_member_delete for each team member
+        tasks = []
+        for team_member in team_members:
+            tasks.append(
+                team_member_delete(
+                    data=TeamMemberDeleteRequest(
+                        team_id=team_row.team_id,
+                        user_id=team_member.user_id,
+                        user_email=team_member.user_email,
+                    ),
+                    user_api_key_dict=user_api_key_dict,
+                )
+            )
+        await asyncio.gather(*tasks)
+
     ## DELETE TEAMS
     deleted_teams = await prisma_client.delete_data(
         team_id_list=data.team_ids, table_name="team"
     )
     return deleted_teams
+
+
+def validate_membership(
+    user_api_key_dict: UserAPIKeyAuth, team_table: LiteLLM_TeamTable
+):
+    if (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+    ):
+        return
+
+    if (
+        user_api_key_dict.team_id == team_table.team_id
+    ):  # allow team keys to check their info
+        return
+
+    if user_api_key_dict.user_id not in [
+        m.user_id for m in team_table.members_with_roles
+    ]:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "User={} not authorized to access this team={}".format(
+                    user_api_key_dict.user_id, team_table.team_id
+                )
+            },
+        )
 
 
 @router.get(
@@ -1229,32 +1273,19 @@ async def team_info(
                 detail={"message": "Malformed request. No team id passed in."},
             )
 
-        if (
-            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
-            or user_api_key_dict.user_role
-            == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
-        ):
-            pass
-        elif user_api_key_dict.team_id is None or (
-            team_id != user_api_key_dict.team_id
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="key not allowed to access this team's info. Key team_id={}, Requested team_id={}".format(
-                    user_api_key_dict.team_id, team_id
-                ),
+        try:
+            team_info: BaseModel = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id}
             )
-
-        team_info: Optional[Union[LiteLLM_TeamTable, dict]] = (
-            await prisma_client.get_data(
-                team_id=team_id, table_name="team", query_type="find_unique"
-            )
-        )
-        if team_info is None:
+        except Exception:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"message": f"Team not found, passed team id: {team_id}."},
             )
+        validate_membership(
+            user_api_key_dict=user_api_key_dict,
+            team_table=LiteLLM_TeamTable(**team_info.model_dump()),
+        )
 
         ## GET ALL KEYS ##
         keys = await prisma_client.get_data(
@@ -1516,7 +1547,11 @@ async def list_team(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    response = await prisma_client.db.litellm_teamtable.find_many()
+    response = await prisma_client.db.litellm_teamtable.find_many(
+        include={
+            "litellm_model_table": True,
+        }
+    )
 
     filtered_response = []
     if user_id:
@@ -1731,3 +1766,149 @@ async def ui_view_teams(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error searching teams: {str(e)}")
+
+
+@router.post(
+    "/team/model/add",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def team_model_add(
+    data: TeamModelAddRequest,
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Add models to a team's allowed model list. Only proxy admin or team admin can add models.
+
+    Parameters:
+    - team_id: str - Required. The team to add models to
+    - models: List[str] - Required. List of models to add to the team
+
+    Example Request:
+    ```
+    curl --location 'http://0.0.0.0:4000/team/model/add' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "team_id": "team-1234",
+        "models": ["gpt-4", "claude-2"]
+    }'
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    # Get existing team
+    team_row = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": data.team_id}
+    )
+
+    if team_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found, passed team_id={data.team_id}"},
+        )
+
+    team_obj = LiteLLM_TeamTable(**team_row.model_dump())
+
+    # Authorization check - only proxy admin or team admin can add models
+    if (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and not _is_user_team_admin(
+            user_api_key_dict=user_api_key_dict, team_obj=team_obj
+        )
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admin or team admin can modify team models"},
+        )
+
+    # Get current models list
+    current_models = team_obj.models or []
+
+    # Add new models (avoid duplicates)
+    updated_models = list(set(current_models + data.models))
+
+    # Update team
+    updated_team = await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": data.team_id}, data={"models": updated_models}
+    )
+
+    return updated_team
+
+
+@router.post(
+    "/team/model/delete",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def team_model_delete(
+    data: TeamModelDeleteRequest,
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Remove models from a team's allowed model list. Only proxy admin or team admin can remove models.
+
+    Parameters:
+    - team_id: str - Required. The team to remove models from
+    - models: List[str] - Required. List of models to remove from the team
+
+    Example Request:
+    ```
+    curl --location 'http://0.0.0.0:4000/team/model/delete' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "team_id": "team-1234",
+        "models": ["gpt-4"]
+    }'
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    # Get existing team
+    team_row = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": data.team_id}
+    )
+
+    if team_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found, passed team_id={data.team_id}"},
+        )
+
+    team_obj = LiteLLM_TeamTable(**team_row.model_dump())
+
+    # Authorization check - only proxy admin or team admin can remove models
+    if (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and not _is_user_team_admin(
+            user_api_key_dict=user_api_key_dict, team_obj=team_obj
+        )
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admin or team admin can modify team models"},
+        )
+
+    # Get current models list
+    current_models = team_obj.models or []
+
+    # Remove specified models
+    updated_models = [m for m in current_models if m not in data.models]
+
+    # Update team
+    updated_team = await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": data.team_id}, data={"models": updated_models}
+    )
+
+    return updated_team
