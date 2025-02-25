@@ -1172,7 +1172,7 @@ def test_anthropic_thinking_output():
         thinking={"type": "enabled", "budget_tokens": 1024},
     )
 
-    print(resp.choices[0].message)
+    print(resp)
     assert (
         resp.choices[0].message.provider_specific_fields["thinking_blocks"] is not None
     )
