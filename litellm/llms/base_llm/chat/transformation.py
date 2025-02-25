@@ -18,7 +18,6 @@ from typing import (
 import httpx
 from pydantic import BaseModel
 
-from litellm._logging import verbose_logger
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
