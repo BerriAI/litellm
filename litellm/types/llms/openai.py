@@ -357,6 +357,12 @@ class ChatCompletionCachedContent(TypedDict):
     type: Literal["ephemeral"]
 
 
+class ChatCompletionThinkingBlock(TypedDict, total=False):
+    type: Required[Literal["thinking"]]
+    thinking: str
+    signature_delta: str
+
+
 class OpenAIChatCompletionTextObject(TypedDict):
     type: Literal["text"]
     text: str
@@ -450,6 +456,7 @@ class OpenAIChatCompletionAssistantMessage(TypedDict, total=False):
 
 class ChatCompletionAssistantMessage(OpenAIChatCompletionAssistantMessage, total=False):
     cache_control: ChatCompletionCachedContent
+    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]]
 
 
 class ChatCompletionToolMessage(TypedDict):
