@@ -27,7 +27,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.proxy.auth.auth_checks import (
-    _team_model_access_check,
+    can_team_access_model,
     _virtual_key_soft_budget_check,
 )
 from litellm.proxy.utils import ProxyLogging
@@ -427,9 +427,9 @@ async def test_virtual_key_max_budget_check(
     ],
 )
 @pytest.mark.asyncio
-async def test_team_model_access_check(model, team_models, expect_to_work):
+async def test_can_team_access_model(model, team_models, expected_result):
     """
-    Test cases for _team_model_access_check:
+    Test cases for can_team_access_model:
     1. Exact model match
     2. all-proxy-models access
     3. Wildcard (*) access
@@ -443,21 +443,13 @@ async def test_team_model_access_check(model, team_models, expect_to_work):
         models=team_models,
     )
 
-    try:
-        _team_model_access_check(
-            model=model,
-            team_object=team_object,
-            llm_router=None,
-        )
-        if not expect_to_work:
-            pytest.fail(
-                f"Expected model access check to fail for model={model}, team_models={team_models}"
-            )
-    except Exception as e:
-        if expect_to_work:
-            pytest.fail(
-                f"Expected model access check to work for model={model}, team_models={team_models}. Got error: {str(e)}"
-            )
+    result = await can_team_access_model(
+        model=model,
+        team_object=team_object,
+        llm_router=None,
+        team_model_aliases=None,
+    )
+    assert result == expected_result
 
 
 @pytest.mark.parametrize(
