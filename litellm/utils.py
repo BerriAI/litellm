@@ -1969,6 +1969,19 @@ def supports_response_schema(
     )
 
 
+def supports_parallel_function_calling(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> bool:
+    """
+    Check if the given model supports parallel tool calls and return a boolean value.
+    """
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_parallel_function_calling",
+    )
+
+
 def supports_function_calling(
     model: str, custom_llm_provider: Optional[str] = None
 ) -> bool:
@@ -2116,30 +2129,6 @@ def supports_embedding_image_input(
         custom_llm_provider=custom_llm_provider,
         key="supports_embedding_image_input",
     )
-
-
-def supports_parallel_function_calling(model: str):
-    """
-    Check if the given model supports parallel function calling and return True if it does, False otherwise.
-
-    Parameters:
-        model (str): The model to check for support of parallel function calling.
-
-    Returns:
-        bool: True if the model supports parallel function calling, False otherwise.
-
-    Raises:
-        Exception: If the model is not found in the model_cost dictionary.
-    """
-    if model in litellm.model_cost:
-        model_info = litellm.model_cost[model]
-        if model_info.get("supports_parallel_function_calling", False) is True:
-            return True
-        return False
-    else:
-        raise Exception(
-            f"Model not supports parallel function calling. You passed model={model}."
-        )
 
 
 ####### HELPER FUNCTIONS ################
