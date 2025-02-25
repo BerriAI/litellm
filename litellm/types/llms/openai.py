@@ -34,6 +34,8 @@ from openai.types.fine_tuning.fine_tuning_job import FineTuningJob
 from pydantic import BaseModel, Field
 from typing_extensions import Dict, Required, TypedDict, override
 
+from litellm.types.llms.anthropic import AnthropicMessagesThinkingBlock
+
 FileContent = Union[IO[bytes], bytes, PathLike]
 
 FileTypes = Union[
@@ -440,6 +442,7 @@ class OpenAIChatCompletionAssistantMessage(TypedDict, total=False):
 
 class ChatCompletionAssistantMessage(OpenAIChatCompletionAssistantMessage, total=False):
     cache_control: ChatCompletionCachedContent
+    thinking_blocks: Optional[List[AnthropicMessagesThinkingBlock]]
 
 
 class ChatCompletionToolMessage(TypedDict):
