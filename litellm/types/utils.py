@@ -463,13 +463,17 @@ REASONING_CONTENT_COMPATIBLE_PARAMS = [
 ]
 
 
-def map_reasoning_content(provider_specific_fields: Dict[str, Any]) -> Dict[str, str]:
-    reasoning_content: Dict[str, str] = {}
+def map_reasoning_content(provider_specific_fields: Dict[str, Any]) -> str:
+    reasoning_content: str = ""
     for k, v in provider_specific_fields.items():
-        if k == "thinking_blocks":
-            reasoning_content["thinking"] = v.get("thinking", "")
+        if k == "thinking_blocks" and isinstance(v, list):
+            _reasoning_content = ""
+            for block in v:
+                if block.get("type") == "thinking":
+                    _reasoning_content += block.get("thinking", "")
+            reasoning_content = _reasoning_content
         elif k == "reasoning_content":
-            reasoning_content["reasoning_content"] = v
+            reasoning_content = v
     return reasoning_content
 
 
@@ -483,7 +487,8 @@ def add_provider_specific_fields(
         if v is not None:
             setattr(object, k, v)
             if k in REASONING_CONTENT_COMPATIBLE_PARAMS and k != "reasoning_content":
-                setattr(object, "reasoning_content", v)
+                reasoning_content = map_reasoning_content({k: v})
+                setattr(object, "reasoning_content", reasoning_content)
 
 
 class Message(OpenAIObject):
