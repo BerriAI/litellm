@@ -86,7 +86,7 @@ class CohereTextConfig(BaseConfig):
         return_likelihoods: Optional[str] = None,
         logit_bias: Optional[dict] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -102,6 +102,7 @@ class CohereTextConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         return cohere_validate_environment(
             headers=headers,

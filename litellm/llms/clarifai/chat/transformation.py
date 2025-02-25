@@ -45,7 +45,7 @@ class ClarifaiConfig(BaseConfig):
         temperature: Optional[int] = None,
         top_k: Optional[int] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -119,6 +119,7 @@ class ClarifaiConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         headers = {
             "accept": "application/json",

@@ -9,7 +9,6 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.bedrock.rerank.handler import BedrockRerankHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.llms.jina_ai.rerank.handler import JinaAIRerank
 from litellm.llms.together_ai.rerank.handler import TogetherAIRerank
 from litellm.rerank_api.rerank_utils import get_optional_rerank_params
 from litellm.secret_managers.main import get_secret, get_secret_str
@@ -20,7 +19,6 @@ from litellm.utils import ProviderConfigManager, client, exception_type
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
 together_rerank = TogetherAIRerank()
-jina_ai_rerank = JinaAIRerank()
 bedrock_rerank = BedrockRerankHandler()
 base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
@@ -83,6 +81,7 @@ def rerank(  # noqa: PLR0915
     rank_fields: Optional[List[str]] = None,
     return_documents: Optional[bool] = True,
     max_chunks_per_doc: Optional[int] = None,
+    max_tokens_per_doc: Optional[int] = None,
     **kwargs,
 ) -> Union[RerankResponse, Coroutine[Any, Any, RerankResponse]]:
     """
@@ -99,6 +98,14 @@ def rerank(  # noqa: PLR0915
     try:
         _is_async = kwargs.pop("arerank", False) is True
         optional_params = GenericLiteLLMParams(**kwargs)
+        # Params that are unique to specific versions of the client for the rerank call
+        unique_version_params = {
+            "max_chunks_per_doc": max_chunks_per_doc,
+            "max_tokens_per_doc": max_tokens_per_doc,
+        }
+        present_version_params = [
+            k for k, v in unique_version_params.items() if v is not None
+        ]
 
         model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = (
             litellm.get_llm_provider(
@@ -113,6 +120,8 @@ def rerank(  # noqa: PLR0915
             ProviderConfigManager.get_provider_rerank_config(
                 model=model,
                 provider=litellm.LlmProviders(_custom_llm_provider),
+                api_base=optional_params.api_base,
+                present_version_params=present_version_params,
             )
         )
 
@@ -127,6 +136,7 @@ def rerank(  # noqa: PLR0915
             rank_fields=rank_fields,
             return_documents=return_documents,
             max_chunks_per_doc=max_chunks_per_doc,
+            max_tokens_per_doc=max_tokens_per_doc,
             non_default_params=kwargs,
         )
 
@@ -173,6 +183,7 @@ def rerank(  # noqa: PLR0915
             response = base_llm_http_handler.rerank(
                 model=model,
                 custom_llm_provider=_custom_llm_provider,
+                provider_config=rerank_provider_config,
                 optional_rerank_params=optional_rerank_params,
                 logging_obj=litellm_logging_obj,
                 timeout=optional_params.timeout,
@@ -194,6 +205,7 @@ def rerank(  # noqa: PLR0915
                 model=model,
                 custom_llm_provider=_custom_llm_provider,
                 optional_rerank_params=optional_rerank_params,
+                provider_config=rerank_provider_config,
                 logging_obj=litellm_logging_obj,
                 timeout=optional_params.timeout,
                 api_key=dynamic_api_key or optional_params.api_key,
@@ -222,6 +234,7 @@ def rerank(  # noqa: PLR0915
             response = base_llm_http_handler.rerank(
                 model=model,
                 custom_llm_provider=_custom_llm_provider,
+                provider_config=rerank_provider_config,
                 optional_rerank_params=optional_rerank_params,
                 logging_obj=litellm_logging_obj,
                 timeout=optional_params.timeout,
@@ -264,16 +277,27 @@ def rerank(  # noqa: PLR0915
                 raise ValueError(
                     "Jina AI API key is required, please set 'JINA_AI_API_KEY' in your environment"
                 )
-            response = jina_ai_rerank.rerank(
+
+            api_base = (
+                dynamic_api_base
+                or optional_params.api_base
+                or litellm.api_base
+                or get_secret("BEDROCK_API_BASE")  # type: ignore
+            )
+
+            response = base_llm_http_handler.rerank(
                 model=model,
-                api_key=dynamic_api_key,
-                query=query,
-                documents=documents,
-                top_n=top_n,
-                rank_fields=rank_fields,
-                return_documents=return_documents,
-                max_chunks_per_doc=max_chunks_per_doc,
+                custom_llm_provider=_custom_llm_provider,
+                optional_rerank_params=optional_rerank_params,
+                logging_obj=litellm_logging_obj,
+                provider_config=rerank_provider_config,
+                timeout=optional_params.timeout,
+                api_key=dynamic_api_key or optional_params.api_key,
+                api_base=api_base,
                 _is_async=_is_async,
+                headers=headers or litellm.headers or {},
+                client=client,
+                model_response=model_response,
             )
         elif _custom_llm_provider == "bedrock":
             api_base = (
@@ -295,6 +319,7 @@ def rerank(  # noqa: PLR0915
                 optional_params=optional_params.model_dump(exclude_unset=True),
                 api_base=api_base,
                 logging_obj=litellm_logging_obj,
+                client=client,
             )
         else:
             raise ValueError(f"Unsupported provider: {_custom_llm_provider}")

@@ -14,7 +14,7 @@ from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.llms.watsonx import WatsonXAIEndpoint
 from litellm.types.utils import EmbeddingResponse, Usage
 
-from ..common_utils import IBMWatsonXMixin, WatsonXAIError, _get_api_params
+from ..common_utils import IBMWatsonXMixin, _get_api_params
 
 
 class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
@@ -38,14 +38,15 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
         headers: dict,
     ) -> dict:
         watsonx_api_params = _get_api_params(params=optional_params)
-        project_id = watsonx_api_params["project_id"]
-        if not project_id:
-            raise ValueError("project_id is required")
+        watsonx_auth_payload = self._prepare_payload(
+            model=model,
+            api_params=watsonx_api_params,
+        )
+
         return {
             "inputs": input,
-            "model_id": model,
-            "project_id": project_id,
             "parameters": optional_params,
+            **watsonx_auth_payload,
         }
 
     def get_complete_url(
@@ -58,12 +59,6 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
         url = self._get_base_url(api_base=api_base)
         endpoint = WatsonXAIEndpoint.EMBEDDINGS.value
         if model.startswith("deployment/"):
-            # deployment models are passed in as 'deployment/<deployment_id>'
-            if optional_params.get("space_id") is None:
-                raise WatsonXAIError(
-                    status_code=401,
-                    message="Error: space_id is required for models called using the 'deployment/' endpoint. Pass in the space_id as a parameter or set it in the WX_SPACE_ID environment variable.",
-                )
             deployment_id = "/".join(model.split("/")[1:])
             endpoint = endpoint.format(deployment_id=deployment_id)
         url = url.rstrip("/") + endpoint

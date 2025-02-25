@@ -42,6 +42,7 @@ class FireworksAIMixin:
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         api_key = self._get_api_key(api_key)
         if api_key is None:

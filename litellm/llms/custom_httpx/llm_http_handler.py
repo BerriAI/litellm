@@ -8,7 +8,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
-from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.custom_httpx.http_handler import (
@@ -30,6 +30,118 @@ else:
 
 
 class BaseLLMHTTPHandler:
+
+    async def _make_common_async_call(
+        self,
+        async_httpx_client: AsyncHTTPHandler,
+        provider_config: BaseConfig,
+        api_base: str,
+        headers: dict,
+        data: dict,
+        timeout: Union[float, httpx.Timeout],
+        litellm_params: dict,
+        logging_obj: LiteLLMLoggingObj,
+        stream: bool = False,
+    ) -> httpx.Response:
+        """Common implementation across stream + non-stream calls. Meant to ensure consistent error-handling."""
+        max_retry_on_unprocessable_entity_error = (
+            provider_config.max_retry_on_unprocessable_entity_error
+        )
+
+        response: Optional[httpx.Response] = None
+        for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
+            try:
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=json.dumps(data),
+                    timeout=timeout,
+                    stream=stream,
+                    logging_obj=logging_obj,
+                )
+            except httpx.HTTPStatusError as e:
+                hit_max_retry = i + 1 == max_retry_on_unprocessable_entity_error
+                should_retry = provider_config.should_retry_llm_api_inside_llm_translation_on_http_error(
+                    e=e, litellm_params=litellm_params
+                )
+                if should_retry and not hit_max_retry:
+                    data = (
+                        provider_config.transform_request_on_unprocessable_entity_error(
+                            e=e, request_data=data
+                        )
+                    )
+                    continue
+                else:
+                    raise self._handle_error(e=e, provider_config=provider_config)
+            except Exception as e:
+                raise self._handle_error(e=e, provider_config=provider_config)
+            break
+
+        if response is None:
+            raise provider_config.get_error_class(
+                error_message="No response from the API",
+                status_code=422,  # don't retry on this error
+                headers={},
+            )
+
+        return response
+
+    def _make_common_sync_call(
+        self,
+        sync_httpx_client: HTTPHandler,
+        provider_config: BaseConfig,
+        api_base: str,
+        headers: dict,
+        data: dict,
+        timeout: Union[float, httpx.Timeout],
+        litellm_params: dict,
+        logging_obj: LiteLLMLoggingObj,
+        stream: bool = False,
+    ) -> httpx.Response:
+
+        max_retry_on_unprocessable_entity_error = (
+            provider_config.max_retry_on_unprocessable_entity_error
+        )
+
+        response: Optional[httpx.Response] = None
+
+        for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
+            try:
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=json.dumps(data),
+                    timeout=timeout,
+                    stream=stream,
+                    logging_obj=logging_obj,
+                )
+            except httpx.HTTPStatusError as e:
+                hit_max_retry = i + 1 == max_retry_on_unprocessable_entity_error
+                should_retry = provider_config.should_retry_llm_api_inside_llm_translation_on_http_error(
+                    e=e, litellm_params=litellm_params
+                )
+                if should_retry and not hit_max_retry:
+                    data = (
+                        provider_config.transform_request_on_unprocessable_entity_error(
+                            e=e, request_data=data
+                        )
+                    )
+                    continue
+                else:
+                    raise self._handle_error(e=e, provider_config=provider_config)
+            except Exception as e:
+                raise self._handle_error(e=e, provider_config=provider_config)
+            break
+
+        if response is None:
+            raise provider_config.get_error_class(
+                error_message="No response from the API",
+                status_code=422,  # don't retry on this error
+                headers={},
+            )
+
+        return response
+
     async def async_completion(
         self,
         custom_llm_provider: str,
@@ -50,20 +162,23 @@ class BaseLLMHTTPHandler:
     ):
         if client is None:
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider)
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
             async_httpx_client = client
 
-        try:
-            response = await async_httpx_client.post(
-                url=api_base,
-                headers=headers,
-                data=json.dumps(data),
-                timeout=timeout,
-            )
-        except Exception as e:
-            raise self._handle_error(e=e, provider_config=provider_config)
+        response = await self._make_common_async_call(
+            async_httpx_client=async_httpx_client,
+            provider_config=provider_config,
+            api_base=api_base,
+            headers=headers,
+            data=data,
+            timeout=timeout,
+            litellm_params=litellm_params,
+            stream=False,
+            logging_obj=logging_obj,
+        )
         return provider_config.transform_response(
             model=model,
             raw_response=response,
@@ -93,19 +208,22 @@ class BaseLLMHTTPHandler:
         stream: Optional[bool] = False,
         fake_stream: bool = False,
         api_key: Optional[str] = None,
-        headers={},
+        headers: Optional[dict] = {},
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ):
+
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
         )
+
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
             api_key=api_key,
-            headers=headers,
+            headers=headers or {},
             model=model,
             messages=messages,
             optional_params=optional_params,
+            api_base=api_base,
         )
 
         api_base = provider_config.get_complete_url(
@@ -123,6 +241,16 @@ class BaseLLMHTTPHandler:
             headers=headers,
         )
 
+        headers = provider_config.sign_request(
+            headers=headers,
+            optional_params=optional_params,
+            request_data=data,
+            api_base=api_base,
+            stream=stream,
+            fake_stream=fake_stream,
+            model=model,
+        )
+
         ## LOGGING
         logging_obj.pre_call(
             input=messages,
@@ -136,8 +264,11 @@ class BaseLLMHTTPHandler:
 
         if acompletion is True:
             if stream is True:
-                if fake_stream is not True:
-                    data["stream"] = stream
+                data = self._add_stream_param_to_request_body(
+                    data=data,
+                    provider_config=provider_config,
+                    fake_stream=fake_stream,
+                )
                 return self.acompletion_stream_function(
                     model=model,
                     messages=messages,
@@ -154,6 +285,7 @@ class BaseLLMHTTPHandler:
                         if client is not None and isinstance(client, AsyncHTTPHandler)
                         else None
                     ),
+                    litellm_params=litellm_params,
                 )
 
             else:
@@ -180,13 +312,27 @@ class BaseLLMHTTPHandler:
                 )
 
         if stream is True:
-            if fake_stream is not True:
-                data["stream"] = stream
+            data = self._add_stream_param_to_request_body(
+                data=data,
+                provider_config=provider_config,
+                fake_stream=fake_stream,
+            )
+            if provider_config.has_custom_stream_wrapper is True:
+                return provider_config.get_sync_custom_stream_wrapper(
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    logging_obj=logging_obj,
+                    api_base=api_base,
+                    headers=headers,
+                    data=data,
+                    messages=messages,
+                    client=client,
+                )
             completion_stream, headers = self.make_sync_call(
                 provider_config=provider_config,
                 api_base=api_base,
                 headers=headers,  # type: ignore
-                data=json.dumps(data),
+                data=data,
                 model=model,
                 messages=messages,
                 logging_obj=logging_obj,
@@ -197,6 +343,7 @@ class BaseLLMHTTPHandler:
                     if client is not None and isinstance(client, HTTPHandler)
                     else None
                 ),
+                litellm_params=litellm_params,
             )
             return CustomStreamWrapper(
                 completion_stream=completion_stream,
@@ -206,23 +353,22 @@ class BaseLLMHTTPHandler:
             )
 
         if client is None or not isinstance(client, HTTPHandler):
-            sync_httpx_client = _get_httpx_client()
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
         else:
             sync_httpx_client = client
 
-        try:
-            response = sync_httpx_client.post(
-                url=api_base,
-                headers=headers,
-                data=json.dumps(data),
-                timeout=timeout,
-            )
-        except Exception as e:
-            raise self._handle_error(
-                e=e,
-                provider_config=provider_config,
-            )
-
+        response = self._make_common_sync_call(
+            sync_httpx_client=sync_httpx_client,
+            provider_config=provider_config,
+            api_base=api_base,
+            headers=headers,
+            data=data,
+            timeout=timeout,
+            litellm_params=litellm_params,
+            logging_obj=logging_obj,
+        )
         return provider_config.transform_response(
             model=model,
             raw_response=response,
@@ -241,44 +387,38 @@ class BaseLLMHTTPHandler:
         provider_config: BaseConfig,
         api_base: str,
         headers: dict,
-        data: str,
+        data: dict,
         model: str,
         messages: list,
         logging_obj,
-        timeout: Optional[Union[float, httpx.Timeout]],
+        litellm_params: dict,
+        timeout: Union[float, httpx.Timeout],
         fake_stream: bool = False,
         client: Optional[HTTPHandler] = None,
-    ) -> Tuple[Any, httpx.Headers]:
+    ) -> Tuple[Any, dict]:
         if client is None or not isinstance(client, HTTPHandler):
-            sync_httpx_client = _get_httpx_client()
+            sync_httpx_client = _get_httpx_client(
+                {
+                    "ssl_verify": litellm_params.get("ssl_verify", None),
+                }
+            )
         else:
             sync_httpx_client = client
-        try:
-            stream = True
-            if fake_stream is True:
-                stream = False
-            response = sync_httpx_client.post(
-                api_base, headers=headers, data=data, timeout=timeout, stream=stream
-            )
-        except httpx.HTTPStatusError as e:
-            raise self._handle_error(
-                e=e,
-                provider_config=provider_config,
-            )
-        except Exception as e:
-            for exception in litellm.LITELLM_EXCEPTION_TYPES:
-                if isinstance(e, exception):
-                    raise e
-            raise self._handle_error(
-                e=e,
-                provider_config=provider_config,
-            )
+        stream = True
+        if fake_stream is True:
+            stream = False
 
-        if response.status_code != 200:
-            raise BaseLLMException(
-                status_code=response.status_code,
-                message=str(response.read()),
-            )
+        response = self._make_common_sync_call(
+            sync_httpx_client=sync_httpx_client,
+            provider_config=provider_config,
+            api_base=api_base,
+            headers=headers,
+            data=data,
+            timeout=timeout,
+            litellm_params=litellm_params,
+            stream=stream,
+            logging_obj=logging_obj,
+        )
 
         if fake_stream is True:
             completion_stream = provider_config.get_model_response_iterator(
@@ -297,7 +437,7 @@ class BaseLLMHTTPHandler:
             additional_args={"complete_input_dict": data},
         )
 
-        return completion_stream, response.headers
+        return completion_stream, dict(response.headers)
 
     async def acompletion_stream_function(
         self,
@@ -310,20 +450,34 @@ class BaseLLMHTTPHandler:
         timeout: Union[float, httpx.Timeout],
         logging_obj: LiteLLMLoggingObj,
         data: dict,
+        litellm_params: dict,
         fake_stream: bool = False,
         client: Optional[AsyncHTTPHandler] = None,
     ):
-        completion_stream, _response_headers = await self.make_async_call(
+        if provider_config.has_custom_stream_wrapper is True:
+            return provider_config.get_async_custom_stream_wrapper(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging_obj,
+                api_base=api_base,
+                headers=headers,
+                data=data,
+                messages=messages,
+                client=client,
+            )
+
+        completion_stream, _response_headers = await self.make_async_call_stream_helper(
             custom_llm_provider=custom_llm_provider,
             provider_config=provider_config,
             api_base=api_base,
             headers=headers,
-            data=json.dumps(data),
+            data=data,
             messages=messages,
             logging_obj=logging_obj,
             timeout=timeout,
             fake_stream=fake_stream,
             client=client,
+            litellm_params=litellm_params,
         )
         streamwrapper = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -333,51 +487,48 @@ class BaseLLMHTTPHandler:
         )
         return streamwrapper
 
-    async def make_async_call(
+    async def make_async_call_stream_helper(
         self,
         custom_llm_provider: str,
         provider_config: BaseConfig,
         api_base: str,
         headers: dict,
-        data: str,
+        data: dict,
         messages: list,
         logging_obj: LiteLLMLoggingObj,
-        timeout: Optional[Union[float, httpx.Timeout]],
+        timeout: Union[float, httpx.Timeout],
+        litellm_params: dict,
         fake_stream: bool = False,
         client: Optional[AsyncHTTPHandler] = None,
     ) -> Tuple[Any, httpx.Headers]:
+        """
+        Helper function for making an async call with stream.
+
+        Handles fake stream as well.
+        """
         if client is None:
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider)
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
             async_httpx_client = client
         stream = True
         if fake_stream is True:
             stream = False
-        try:
-            response = await async_httpx_client.post(
-                api_base, headers=headers, data=data, stream=stream, timeout=timeout
-            )
-        except httpx.HTTPStatusError as e:
-            raise self._handle_error(
-                e=e,
-                provider_config=provider_config,
-            )
-        except Exception as e:
-            for exception in litellm.LITELLM_EXCEPTION_TYPES:
-                if isinstance(e, exception):
-                    raise e
-            raise self._handle_error(
-                e=e,
-                provider_config=provider_config,
-            )
 
-        if response.status_code != 200:
-            raise BaseLLMException(
-                status_code=response.status_code,
-                message=str(response.read()),
-            )
+        response = await self._make_common_async_call(
+            async_httpx_client=async_httpx_client,
+            provider_config=provider_config,
+            api_base=api_base,
+            headers=headers,
+            data=data,
+            timeout=timeout,
+            litellm_params=litellm_params,
+            stream=stream,
+            logging_obj=logging_obj,
+        )
+
         if fake_stream is True:
             completion_stream = provider_config.get_model_response_iterator(
                 streaming_response=response.json(), sync_stream=False
@@ -395,6 +546,21 @@ class BaseLLMHTTPHandler:
         )
 
         return completion_stream, response.headers
+
+    def _add_stream_param_to_request_body(
+        self,
+        data: dict,
+        provider_config: BaseConfig,
+        fake_stream: bool,
+    ) -> dict:
+        """
+        Some providers like Bedrock invoke do not support the stream parameter in the request body, we only pass `stream` in the request body the provider supports it.
+        """
+        if fake_stream is True:
+            return data
+        if provider_config.supports_stream_param_in_request_body is True:
+            data["stream"] = True
+        return data
 
     def embedding(
         self,
@@ -544,6 +710,7 @@ class BaseLLMHTTPHandler:
         model: str,
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
+        provider_config: BaseRerankConfig,
         optional_rerank_params: OptionalRerankParams,
         timeout: Optional[Union[float, httpx.Timeout]],
         model_response: RerankResponse,
@@ -553,10 +720,7 @@ class BaseLLMHTTPHandler:
         api_base: Optional[str] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ) -> RerankResponse:
-
-        provider_config = ProviderConfigManager.get_provider_rerank_config(
-            model=model, provider=litellm.LlmProviders(custom_llm_provider)
-        )
+        
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
             api_key=api_key,

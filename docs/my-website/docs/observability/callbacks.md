@@ -7,11 +7,11 @@ liteLLM provides `input_callbacks`, `success_callbacks` and `failure_callbacks`,
 liteLLM supports:
 
 - [Custom Callback Functions](https://docs.litellm.ai/docs/observability/custom_callback)
+- [Lunary](https://lunary.ai/docs)
 - [Langfuse](https://langfuse.com/docs)
 - [LangSmith](https://www.langchain.com/langsmith)
 - [Helicone](https://docs.helicone.ai/introduction)
 - [Traceloop](https://traceloop.com/docs)
-- [Lunary](https://lunary.ai/docs)
 - [Athina](https://docs.athina.ai/)
 - [Sentry](https://docs.sentry.io/platforms/python/)
 - [PostHog](https://posthog.com/docs/libraries/python)
@@ -30,6 +30,7 @@ litellm.success_callback=["posthog", "helicone", "langfuse", "lunary", "athina"]
 litellm.failure_callback=["sentry", "lunary", "langfuse"]
 
 ## set env variables
+os.environ['LUNARY_PUBLIC_KEY'] = ""
 os.environ['SENTRY_DSN'], os.environ['SENTRY_API_TRACE_RATE']= ""
 os.environ['POSTHOG_API_KEY'], os.environ['POSTHOG_API_URL'] = "api-key", "api-url"
 os.environ["HELICONE_API_KEY"] = ""

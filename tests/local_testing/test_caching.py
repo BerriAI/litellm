@@ -21,7 +21,8 @@ import pytest
 import litellm
 from litellm import aembedding, completion, embedding
 from litellm.caching.caching import Cache
-
+from redis.asyncio import RedisCluster
+from litellm.caching.redis_cluster_cache import RedisClusterCache
 from unittest.mock import AsyncMock, patch, MagicMock, call
 import datetime
 from datetime import timedelta
@@ -91,6 +92,45 @@ def test_dual_cache_batch_get_cache():
 
     assert result[0] == "hello world"
     assert result[1] == None
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_batch_get_cache_with_none_keys(sync_mode):
+    """
+    Unit testing for RedisCache batch_get_cache() and async_batch_get_cache()
+    - test with None keys. Ensure it can safely handle when keys are None.
+    - expect result = {key: None}
+    """
+    from litellm.caching.caching import RedisCache
+
+    litellm._turn_on_debug()
+
+    redis_cache = RedisCache(
+        host=os.environ.get("REDIS_HOST"),
+        port=os.environ.get("REDIS_PORT"),
+        password=os.environ.get("REDIS_PASSWORD"),
+    )
+    keys_to_lookup = [
+        None,
+        f"test_value_{uuid.uuid4()}",
+        None,
+        f"test_value_2_{uuid.uuid4()}",
+        None,
+        f"test_value_3_{uuid.uuid4()}",
+    ]
+    if sync_mode:
+        result = redis_cache.batch_get_cache(key_list=keys_to_lookup)
+        print("result from batch_get_cache=", result)
+    else:
+        result = await redis_cache.async_batch_get_cache(key_list=keys_to_lookup)
+        print("result from async_batch_get_cache=", result)
+    expected_result = {}
+    for key in keys_to_lookup:
+        if key is None:
+            continue
+        expected_result[key] = None
+    assert result == expected_result
 
 
 # @pytest.mark.skip(reason="")
@@ -2328,8 +2368,12 @@ async def test_redis_caching_ttl_pipeline():
         # Verify that the set method was called on the mock Redis instance
         mock_set.assert_has_calls(
             [
-                call.set("test_key1", '"test_value1"', ex=expected_timedelta),
-                call.set("test_key2", '"test_value2"', ex=expected_timedelta),
+                call.set(
+                    name="test_key1", value='"test_value1"', ex=expected_timedelta
+                ),
+                call.set(
+                    name="test_key2", value='"test_value2"', ex=expected_timedelta
+                ),
             ]
         )
 
@@ -2388,6 +2432,7 @@ async def test_redis_increment_pipeline():
         from litellm.caching.redis_cache import RedisCache
 
         litellm.set_verbose = True
+        litellm._turn_on_debug()
         redis_cache = RedisCache(
             host=os.environ["REDIS_HOST"],
             port=os.environ["REDIS_PORT"],
@@ -2472,3 +2517,47 @@ async def test_redis_get_ttl():
     except Exception as e:
         print(f"Error occurred: {str(e)}")
         raise e
+
+
+def test_redis_caching_multiple_namespaces():
+    """
+    Test that redis caching works with multiple namespaces
+
+    If client side request specifies a namespace, it should be used for caching
+
+    The same request with different namespaces should not be cached under the same key
+    """
+    import uuid
+
+    messages = [{"role": "user", "content": f"what is litellm? {uuid.uuid4()}"}]
+    litellm.cache = Cache(type="redis")
+    namespace_1 = "org-id1"
+    namespace_2 = "org-id2"
+
+    response_1 = completion(
+        model="gpt-3.5-turbo", messages=messages, cache={"namespace": namespace_1}
+    )
+
+    response_2 = completion(
+        model="gpt-3.5-turbo", messages=messages, cache={"namespace": namespace_2}
+    )
+
+    response_3 = completion(
+        model="gpt-3.5-turbo", messages=messages, cache={"namespace": namespace_1}
+    )
+
+    response_4 = completion(model="gpt-3.5-turbo", messages=messages)
+
+    print("response 1: ", response_1.model_dump_json(indent=4))
+    print("response 2: ", response_2.model_dump_json(indent=4))
+    print("response 3: ", response_3.model_dump_json(indent=4))
+    print("response 4: ", response_4.model_dump_json(indent=4))
+
+    # request 1 & 3 used under the same namespace
+    assert response_1.id == response_3.id
+
+    # request 2 used under a different namespace
+    assert response_2.id != response_1.id
+
+    # request 4 without a namespace should not be cached under the same key as request 3
+    assert response_4.id != response_3.id

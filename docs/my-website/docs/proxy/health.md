@@ -182,6 +182,28 @@ model_list:
       mode: realtime
 ```
 
+### Wildcard Routes
+
+For wildcard routes, you can specify a `health_check_model` in your config.yaml. This model will be used for health checks for that wildcard route.
+
+In this example, when running a health check for `openai/*`, the health check will make a `/chat/completions` request to `openai/gpt-4o-mini`.
+
+```yaml
+model_list:
+  - model_name: openai/*
+    litellm_params:
+      model:  openai/*
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      health_check_model: openai/gpt-4o-mini
+  - model_name: anthropic/*
+    litellm_params:
+      model: anthropic/*
+      api_key: os.environ/ANTHROPIC_API_KEY
+    model_info:
+      health_check_model: anthropic/claude-3-5-sonnet-20240620
+```
+
 ## Background Health Checks 
 
 You can enable model health checks being run in the background, to prevent each model from being queried too frequently via `/health`. 
@@ -221,6 +243,22 @@ You can hide these details by setting the `health_check_details` setting to `Fal
 ```yaml
 general_settings: 
   health_check_details: False
+```
+
+## Health Check Timeout
+
+The health check timeout is set in `litellm/constants.py` and defaults to 60 seconds.
+
+This can be overridden in the config.yaml by setting `health_check_timeout` in the model_info section.
+
+```yaml
+model_list:
+  - model_name: openai/gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      health_check_timeout: 10 # 👈 OVERRIDE HEALTH CHECK TIMEOUT
 ```
 
 ## `/health/readiness`
@@ -275,6 +313,17 @@ Example Response:
 ```json
 "I'm alive!"
 ```
+
+## `/health/services`
+
+Use this admin-only endpoint to check if a connected service (datadog/slack/langfuse/etc.) is healthy.
+
+```bash
+curl -L -X GET 'http://0.0.0.0:4000/health/services?service=datadog'     -H 'Authorization: Bearer sk-1234'
+```
+
+[**API Reference**](https://litellm-api.up.railway.app/#/health/health_services_endpoint_health_services_get)
+
 
 ## Advanced - Call specific models 
 

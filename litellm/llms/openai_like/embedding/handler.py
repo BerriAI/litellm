@@ -36,16 +36,15 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
     ) -> EmbeddingResponse:
         response = None
         try:
-            if client is None or isinstance(client, AsyncHTTPHandler):
-                self.async_client = get_async_httpx_client(
+            if client is None or not isinstance(client, AsyncHTTPHandler):
+                async_client = get_async_httpx_client(
                     llm_provider=litellm.LlmProviders.OPENAI,
                     params={"timeout": timeout},
                 )
             else:
-                self.async_client = client
-
+                async_client = client
             try:
-                response = await self.async_client.post(
+                response = await async_client.post(
                     api_base,
                     headers=headers,
                     data=json.dumps(data),

@@ -1,6 +1,7 @@
 from typing import Literal, Optional
 
 import litellm
+from litellm import LlmProviders
 from litellm.exceptions import BadRequestError
 
 
@@ -80,7 +81,7 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "openai":
         return litellm.OpenAIConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "azure":
-        if litellm.AzureOpenAIO1Config().is_o1_model(model=model):
+        if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
             return litellm.AzureOpenAIO1Config().get_supported_openai_params(
                 model=model
             )
@@ -120,21 +121,26 @@ def get_supported_openai_params(  # noqa: PLR0915
         )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         if request_type == "chat_completion":
-            if model.startswith("meta/"):
-                return litellm.VertexAILlama3Config().get_supported_openai_params()
             if model.startswith("mistral"):
                 return litellm.MistralConfig().get_supported_openai_params(model=model)
-            if model.startswith("codestral"):
+            elif model.startswith("codestral"):
                 return (
                     litellm.CodestralTextCompletionConfig().get_supported_openai_params(
                         model=model
                     )
                 )
-            if model.startswith("claude"):
+            elif model.startswith("claude"):
                 return litellm.VertexAIAnthropicConfig().get_supported_openai_params(
                     model=model
                 )
-            return litellm.VertexGeminiConfig().get_supported_openai_params(model=model)
+            elif model.startswith("gemini"):
+                return litellm.VertexGeminiConfig().get_supported_openai_params(
+                    model=model
+                )
+            else:
+                return litellm.VertexAILlama3Config().get_supported_openai_params(
+                    model=model
+                )
         elif request_type == "embeddings":
             return litellm.VertexAITextEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "sagemaker":
@@ -199,5 +205,15 @@ def get_supported_openai_params(  # noqa: PLR0915
                     model=model
                 )
             )
+    elif custom_llm_provider in litellm._custom_providers:
+        if request_type == "chat_completion":
+            provider_config = litellm.ProviderConfigManager.get_provider_chat_config(
+                model=model, provider=LlmProviders.CUSTOM
+            )
+            return provider_config.get_supported_openai_params(model=model)
+        elif request_type == "embeddings":
+            return None
+        elif request_type == "transcription":
+            return None
 
     return None

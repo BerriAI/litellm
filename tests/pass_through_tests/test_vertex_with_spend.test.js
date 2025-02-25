@@ -69,7 +69,7 @@ beforeAll(() => {
 describe('Vertex AI Tests', () => {
     test('should successfully generate non-streaming content with tags', async () => {
         const vertexAI = new VertexAI({
-            project: 'adroit-crow-413218',
+            project: 'pathrise-convert-1606954137718',
             location: 'us-central1',
             apiEndpoint: "127.0.0.1:4000/vertex_ai"
         });
@@ -125,7 +125,7 @@ describe('Vertex AI Tests', () => {
 
     test('should successfully generate streaming content with tags', async () => {
         const vertexAI = new VertexAI({
-            project: 'adroit-crow-413218',
+            project: 'pathrise-convert-1606954137718',
             location: 'us-central1',
             apiEndpoint: "127.0.0.1:4000/vertex_ai"
         });

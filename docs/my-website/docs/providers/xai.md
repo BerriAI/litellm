@@ -1,13 +1,13 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# XAI
+# xAI
 
 https://docs.x.ai/docs
 
 :::tip
 
-**We support ALL XAI models, just set `model=xai/<any-model-on-xai>` as a prefix when sending litellm requests**
+**We support ALL xAI models, just set `model=xai/<any-model-on-xai>` as a prefix when sending litellm requests**
 
 :::
 
@@ -24,7 +24,7 @@ import os
 
 os.environ['XAI_API_KEY'] = ""
 response = completion(
-    model="xai/grok-beta",
+    model="xai/grok-2-latest",
     messages=[
         {
             "role": "user",
@@ -51,7 +51,7 @@ import os
 
 os.environ['XAI_API_KEY'] = ""
 response = completion(
-    model="xai/grok-beta",
+    model="xai/grok-2-latest",
     messages=[
         {
             "role": "user",
@@ -74,6 +74,35 @@ for chunk in response:
     print(chunk)
 ```
 
+## Sample Usage - Vision
+```python
+import os 
+from litellm import completion
+
+os.environ["XAI_API_KEY"] = "your-api-key"
+
+response = completion(
+    model="xai/grok-2-latest",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://science.nasa.gov/wp-content/uploads/2023/09/web-first-images-release.png",
+                        "detail": "high",
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": "What's in this image?",
+                },
+            ],
+        },
+    ],
+)
+```
 
 ## Usage with LiteLLM Proxy Server
 

@@ -102,7 +102,7 @@ async def test_huggingface_text_completion_logprobs():
     client = AsyncHTTPHandler()
     with patch.object(client, "post", return_value=return_val) as mock_post:
         response = await litellm.atext_completion(
-            model="huggingface/mistralai/Mistral-7B-v0.1",
+            model="huggingface/mistralai/Mistral-7B-Instruct-v0.3",
             prompt="good morning",
             client=client,
         )

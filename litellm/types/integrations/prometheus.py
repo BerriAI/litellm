@@ -1,7 +1,10 @@
 from enum import Enum
-from typing import List, Optional, Union
+from typing import Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
+from typing_extensions import Annotated
+
+import litellm
 
 REQUESTED_MODEL = "requested_model"
 EXCEPTION_STATUS = "exception_status"
@@ -51,6 +54,7 @@ LATENCY_BUCKETS = (
 class UserAPIKeyLabelNames(Enum):
     END_USER = "end_user"
     USER = "user"
+    USER_EMAIL = "user_email"
     API_KEY_HASH = "hashed_api_key"
     API_KEY_ALIAS = "api_key_alias"
     TEAM = "team"
@@ -68,7 +72,27 @@ class UserAPIKeyLabelNames(Enum):
     FALLBACK_MODEL = "fallback_model"
 
 
-class PrometheusMetricLabels(Enum):
+DEFINED_PROMETHEUS_METRICS = Literal[
+    "litellm_llm_api_latency_metric",
+    "litellm_request_total_latency_metric",
+    "litellm_proxy_total_requests_metric",
+    "litellm_proxy_failed_requests_metric",
+    "litellm_deployment_latency_per_output_token",
+    "litellm_requests_metric",
+    "litellm_input_tokens_metric",
+    "litellm_output_tokens_metric",
+    "litellm_deployment_successful_fallbacks",
+    "litellm_deployment_failed_fallbacks",
+    "litellm_remaining_team_budget_metric",
+    "litellm_team_max_budget_metric",
+    "litellm_team_budget_remaining_hours_metric",
+    "litellm_remaining_api_key_budget_metric",
+    "litellm_api_key_max_budget_metric",
+    "litellm_api_key_budget_remaining_hours_metric",
+]
+
+
+class PrometheusMetricLabels:
     litellm_llm_api_latency_metric = [
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
@@ -100,6 +124,7 @@ class PrometheusMetricLabels(Enum):
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.STATUS_CODE.value,
+        UserAPIKeyLabelNames.USER_EMAIL.value,
     ]
 
     litellm_proxy_failed_requests_metric = [
@@ -114,24 +139,6 @@ class PrometheusMetricLabels(Enum):
         UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
     ]
 
-    litellm_proxy_failed_requests_by_tag_metric = (
-        litellm_proxy_failed_requests_metric
-        + [
-            UserAPIKeyLabelNames.TAG.value,
-        ]
-    )
-
-    litellm_request_total_latency_by_tag_metric = (
-        litellm_request_total_latency_metric
-        + [
-            UserAPIKeyLabelNames.TAG.value,
-        ]
-    )
-
-    litellm_llm_api_latency_by_tag_metric = litellm_llm_api_latency_metric + [
-        UserAPIKeyLabelNames.TAG.value,
-    ]
-
     litellm_deployment_latency_per_output_token = [
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
@@ -143,13 +150,6 @@ class PrometheusMetricLabels(Enum):
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
     ]
 
-    litellm_deployment_latency_per_output_token_by_tag = (
-        litellm_deployment_latency_per_output_token
-        + [
-            UserAPIKeyLabelNames.TAG.value,
-        ]
-    )
-
     litellm_requests_metric = [
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
@@ -158,10 +158,29 @@ class PrometheusMetricLabels(Enum):
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.USER_EMAIL.value,
     ]
 
-    litellm_proxy_total_requests_by_tag_metric = litellm_proxy_total_requests_metric + [
-        UserAPIKeyLabelNames.TAG.value,
+    litellm_input_tokens_metric = [
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+    ]
+
+    litellm_output_tokens_metric = [
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
     ]
 
     litellm_deployment_successful_fallbacks = [
@@ -175,18 +194,41 @@ class PrometheusMetricLabels(Enum):
         UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
     ]
 
-    litellm_deployment_successful_fallbacks_by_tag = (
-        litellm_deployment_successful_fallbacks
-        + [
-            UserAPIKeyLabelNames.TAG.value,
-        ]
-    )
-
     litellm_deployment_failed_fallbacks = litellm_deployment_successful_fallbacks
 
-    litellm_deployment_failed_fallbacks_by_tag = (
-        litellm_deployment_successful_fallbacks_by_tag
+    litellm_remaining_team_budget_metric = [
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+    ]
+
+    litellm_team_max_budget_metric = [
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+    ]
+
+    litellm_team_budget_remaining_hours_metric = [
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+    ]
+
+    litellm_remaining_api_key_budget_metric = [
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+    ]
+
+    litellm_api_key_max_budget_metric = litellm_remaining_api_key_budget_metric
+
+    litellm_api_key_budget_remaining_hours_metric = (
+        litellm_remaining_api_key_budget_metric
     )
+
+    @staticmethod
+    def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> List[str]:
+        default_labels = getattr(PrometheusMetricLabels, label_name)
+        return default_labels + [
+            metric.replace(".", "_")
+            for metric in litellm.custom_prometheus_metadata_labels
+        ]
 
 
 from typing import List, Optional
@@ -195,40 +237,58 @@ from pydantic import BaseModel, Field
 
 
 class UserAPIKeyLabelValues(BaseModel):
-    end_user: Optional[str] = None
-    user: Optional[str] = None
-    hashed_api_key: Optional[str] = None
-    api_key_alias: Optional[str] = None
-    team: Optional[str] = None
-    team_alias: Optional[str] = None
-    requested_model: Optional[str] = None
-    model: Optional[str] = None
-    litellm_model_name: Optional[str] = None
+    end_user: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.END_USER.value)
+    ] = None
+    user: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.USER.value)
+    ] = None
+    user_email: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.USER_EMAIL.value)
+    ] = None
+    hashed_api_key: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.API_KEY_HASH.value)
+    ] = None
+    api_key_alias: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.API_KEY_ALIAS.value)
+    ] = None
+    team: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.TEAM.value)
+    ] = None
+    team_alias: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.TEAM_ALIAS.value)
+    ] = None
+    requested_model: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.REQUESTED_MODEL.value)
+    ] = None
+    model: Annotated[
+        Optional[str],
+        Field(..., alias=UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value),
+    ] = None
+    litellm_model_name: Annotated[
+        Optional[str],
+        Field(..., alias=UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value),
+    ] = None
     tags: List[str] = []
-    model_id: Optional[str] = None
-    api_base: Optional[str] = None
-    api_provider: Optional[str] = None
-    exception_status: Optional[str] = None
-    exception_class: Optional[str] = None
-    status_code: Optional[str] = None
-    fallback_model: Optional[str] = None
-
-    class Config:
-        fields = {
-            "end_user": {"alias": UserAPIKeyLabelNames.END_USER},
-            "user": {"alias": UserAPIKeyLabelNames.USER},
-            "hashed_api_key": {"alias": UserAPIKeyLabelNames.API_KEY_HASH},
-            "api_key_alias": {"alias": UserAPIKeyLabelNames.API_KEY_ALIAS},
-            "team": {"alias": UserAPIKeyLabelNames.TEAM},
-            "team_alias": {"alias": UserAPIKeyLabelNames.TEAM_ALIAS},
-            "requested_model": {"alias": UserAPIKeyLabelNames.REQUESTED_MODEL},
-            "model": {"alias": UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME},
-            "litellm_model_name": {"alias": UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME},
-            "model_id": {"alias": UserAPIKeyLabelNames.MODEL_ID},
-            "api_base": {"alias": UserAPIKeyLabelNames.API_BASE},
-            "api_provider": {"alias": UserAPIKeyLabelNames.API_PROVIDER},
-            "exception_status": {"alias": UserAPIKeyLabelNames.EXCEPTION_STATUS},
-            "exception_class": {"alias": UserAPIKeyLabelNames.EXCEPTION_CLASS},
-            "status_code": {"alias": UserAPIKeyLabelNames.STATUS_CODE},
-            "fallback_model": {"alias": UserAPIKeyLabelNames.FALLBACK_MODEL},
-        }
+    custom_metadata_labels: Dict[str, str] = {}
+    model_id: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.MODEL_ID.value)
+    ] = None
+    api_base: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.API_BASE.value)
+    ] = None
+    api_provider: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.API_PROVIDER.value)
+    ] = None
+    exception_status: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.EXCEPTION_STATUS.value)
+    ] = None
+    exception_class: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.EXCEPTION_CLASS.value)
+    ] = None
+    status_code: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.STATUS_CODE.value)
+    ] = None
+    fallback_model: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.FALLBACK_MODEL.value)
+    ] = None

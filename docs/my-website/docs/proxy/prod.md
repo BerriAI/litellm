@@ -133,7 +133,7 @@ To ensure only one service manages database migrations, use our [Helm PreSync ho
   ```yaml
   db:
     useExisting: true # use existing Postgres DB
-    url: postgresql://ishaanjaffer0324:3rnwpOBau6hT@ep-withered-mud-a5dkdpke.us-east-2.aws.neon.tech/test-argo-cd?sslmode=require # url of existing Postgres DB
+    url: postgresql://ishaanjaffer0324:... # url of existing Postgres DB
   ```
 
 2. **LiteLLM Pods**:

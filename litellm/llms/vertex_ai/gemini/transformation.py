@@ -82,7 +82,7 @@ def _process_gemini_image(image_url: str) -> PartType:
         ):
             file_data = FileDataType(file_uri=image_url, mime_type=image_type)
             return PartType(file_data=file_data)
-        elif "https://" in image_url or "base64" in image_url:
+        elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
             # https links for unsupported mime types and base64 images
             image = convert_to_anthropic_image_obj(image_url)
             _blob = BlobType(data=image["data"], mime_type=image["media_type"])
