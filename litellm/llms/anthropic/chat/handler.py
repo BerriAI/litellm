@@ -533,12 +533,12 @@ class ModelResponseIterator:
             provider_specific_fields["citation"] = content_block["delta"]["citation"]
         elif (
             "thinking" in content_block["delta"]
-            or "signature_delta" == content_block["delta"]
+            or "signature" in content_block["delta"]
         ):
             provider_specific_fields["thinking_blocks"] = [
                 ChatCompletionThinkingBlock(
                     type="thinking",
-                    thinking=content_block["delta"].get("thinking"),
+                    thinking=content_block["delta"].get("thinking") or "",
                     signature_delta=content_block["delta"].get("signature"),
                 )
             ]
