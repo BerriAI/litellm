@@ -209,7 +209,8 @@
         "litellm_provider": "openai",
         "mode": "chat",
         "supports_vision": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "o3-mini": {
         "max_tokens": 100000,
@@ -253,7 +254,8 @@
         "litellm_provider": "openai",
         "mode": "chat",
         "supports_vision": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "o1-preview": {
         "max_tokens": 32768,
@@ -1038,7 +1040,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": false,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "azure/o1-mini-2024-09-12": {
         "max_tokens": 65536,
@@ -1052,7 +1055,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": false,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "azure/o1": {
         "max_tokens": 100000,
@@ -5676,7 +5680,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": false,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "openrouter/openai/o1-mini-2024-09-12": {
         "max_tokens": 65536,
@@ -5689,7 +5694,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": false,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true
     },
     "openrouter/openai/o1-preview": {
         "max_tokens": 32768,
