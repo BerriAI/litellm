@@ -67,6 +67,9 @@ async def test_audio_output_from_model(stream):
     except litellm.Timeout as e:
         print(e)
         pytest.skip("Skipping test due to timeout")
+    except Exception as e:
+        if "openai-internal" in str(e):
+            pytest.skip("Skipping test due to openai-internal error")
 
     if stream is True:
         await check_streaming_response(completion)
