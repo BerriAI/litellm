@@ -1756,9 +1756,12 @@ async def test_openai_compatible_custom_api_base(provider):
         assert "hello" in mock_call.call_args.kwargs["extra_body"]
 
 
-
 @pytest.mark.parametrize(
-    "provider", ["openai", "hosted_vllm",]
+    "provider",
+    [
+        "openai",
+        "hosted_vllm",
+    ],
 )  # "vertex_ai",
 @pytest.mark.asyncio
 async def test_openai_compatible_custom_api_video(provider):
@@ -1774,7 +1777,7 @@ async def test_openai_compatible_custom_api_video(provider):
                 {
                     "type": "video_url",
                     "video_url": {"url": "https://www.youtube.com/watch?v=29_ipKNI8I0"},
-                }
+                },
             ],
         }
     ]
@@ -1797,7 +1800,6 @@ async def test_openai_compatible_custom_api_video(provider):
             print(e)
 
         mock_call.assert_called_once()
-        
 
 
 def test_lm_studio_completion(monkeypatch):
@@ -4136,7 +4138,7 @@ def test_completion_gemini(model):
 @pytest.mark.asyncio
 async def test_acompletion_gemini():
     litellm.set_verbose = True
-    model_name = "gemini/gemini-pro"
+    model_name = "gemini/gemini-1.5-flash"
     messages = [{"role": "user", "content": "Hey, how's it going?"}]
     try:
         response = await litellm.acompletion(model=model_name, messages=messages)
