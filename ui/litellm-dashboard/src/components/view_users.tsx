@@ -268,12 +268,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-semibold">Users</h1>
         <div className="flex space-x-3">
-          <BulkCreateUsers
-            accessToken={accessToken}
-            teams={teams}
-            possibleUIRoles={possibleUIRoles}
-            onUsersCreated={refreshUserData}
-          />
           <CreateUser
             userID={userID}
             accessToken={accessToken}
@@ -289,6 +283,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           data={userData || []}
           columns={tableColumns}
           isLoading={!userData}
+          disableBulkCreateButton={true}
         />
       </div>
 
