@@ -59,9 +59,16 @@ class AnthropicMessagesToolUseParam(TypedDict):
     input: dict
 
 
+class AnthropicMessagesThinkingBlock(TypedDict, total=False):
+    type: Required[Literal["thinking"]]
+    thinking: str
+    signature_delta: str
+
+
 AnthropicMessagesAssistantMessageValues = Union[
     AnthropicMessagesTextParam,
     AnthropicMessagesToolUseParam,
+    AnthropicMessagesThinkingBlock,
 ]
 
 
@@ -358,9 +365,3 @@ ANTHROPIC_API_HEADERS = {
 ANTHROPIC_API_ONLY_HEADERS = {  # fails if calling anthropic on vertex ai / bedrock
     "anthropic-beta",
 }
-
-
-class AnthropicMessagesThinkingBlock(TypedDict, total=False):
-    type: Required[Literal["thinking"]]
-    thinking: str
-    signature_delta: str
