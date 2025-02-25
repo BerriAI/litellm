@@ -73,14 +73,26 @@ async def add_new_member(
     returned_team_membership: Optional[LiteLLM_TeamMembership] = None
     ## ADD TEAM ID, to USER TABLE IF NEW ##
     if new_member.user_id is not None:
-        new_user_defaults = get_new_internal_user_defaults(user_id=new_member.user_id)
-        _returned_user = await prisma_client.db.litellm_usertable.upsert(
-            where={"user_id": new_member.user_id},
-            data={
-                "update": {"teams": {"push": [team_id]}},
-                "create": {"teams": [team_id], **new_user_defaults},  # type: ignore
-            },
+        # First check if user exists and if team_id is already in their teams list
+        existing_user = await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": new_member.user_id}
         )
+
+        new_user_defaults = get_new_internal_user_defaults(user_id=new_member.user_id)
+
+        if existing_user and team_id in existing_user.teams:
+            # Team already exists in user's teams, just return the user
+            _returned_user = existing_user
+        else:
+            # Team doesn't exist in user's teams or user doesn't exist
+            _returned_user = await prisma_client.db.litellm_usertable.upsert(
+                where={"user_id": new_member.user_id},
+                data={
+                    "update": {"teams": {"push": [team_id]}},
+                    "create": {"teams": [team_id], **new_user_defaults},  # type: ignore
+                },
+            )
+
         if _returned_user is not None:
             returned_user = LiteLLM_UserTable(**_returned_user.model_dump())
     elif new_member.user_email is not None:
@@ -104,10 +116,18 @@ async def add_new_member(
                 returned_user = LiteLLM_UserTable(**_returned_user.model_dump())
         elif len(existing_user_row) == 1:
             user_info = existing_user_row[0]
-            _returned_user = await prisma_client.db.litellm_usertable.update(
-                where={"user_id": user_info.user_id},  # type: ignore
-                data={"teams": {"push": [team_id]}},
-            )
+
+            # Check if team_id already exists in user's teams
+            if hasattr(user_info, "teams") and team_id in user_info.teams:
+                # Team already exists, just return the user
+                _returned_user = user_info
+            else:
+                # Team doesn't exist, add it
+                _returned_user = await prisma_client.db.litellm_usertable.update(
+                    where={"user_id": user_info.user_id},  # type: ignore
+                    data={"teams": {"push": [team_id]}},
+                )
+
             if _returned_user is not None:
                 returned_user = LiteLLM_UserTable(**_returned_user.model_dump())
         elif len(existing_user_row) > 1:
@@ -180,8 +200,9 @@ def _delete_api_key_from_cache(kwargs):
 
         # delete key request
         if isinstance(update_request, KeyRequest):
-            for key in update_request.keys:
-                user_api_key_cache.delete_cache(key=key)
+            if update_request.keys is not None:
+                for key in update_request.keys:
+                    user_api_key_cache.delete_cache(key=key)
     pass
 
 
