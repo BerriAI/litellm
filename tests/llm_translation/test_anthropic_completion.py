@@ -1173,3 +1173,7 @@ def test_anthropic_thinking_output():
     )
 
     print(resp.choices[0].message)
+    assert (
+        resp.choices[0].message.provider_specific_fields["thinking_blocks"] is not None
+    )
+    assert resp.choices[0].message.reasoning_content is not None

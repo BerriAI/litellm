@@ -458,9 +458,19 @@ ChatCompletionMessage(content='This is a test', role='assistant', function_call=
 """
 
 REASONING_CONTENT_COMPATIBLE_PARAMS = [
-    "thinking",
+    "thinking_blocks",
     "reasoning_content",
 ]
+
+
+def map_reasoning_content(provider_specific_fields: Dict[str, Any]) -> Dict[str, str]:
+    reasoning_content: Dict[str, str] = {}
+    for k, v in provider_specific_fields.items():
+        if k == "thinking_blocks":
+            reasoning_content["thinking"] = v.get("thinking", "")
+        elif k == "reasoning_content":
+            reasoning_content["reasoning_content"] = v
+    return reasoning_content
 
 
 def add_provider_specific_fields(
