@@ -4065,20 +4065,32 @@ def test_mock_response_iterator_tool_use():
     assert response_chunk["tool_use"] is not None
 
 
-def test_deepseek_reasoning_content_completion():
+@pytest.mark.parametrize(
+    "model",
+    [
+        # "deepseek/deepseek-reasoner",
+        "anthropic/claude-3-7-sonnet-20250219",
+    ],
+)
+def test_deepseek_reasoning_content_completion(model):
     # litellm.set_verbose = True
     try:
+        # litellm._turn_on_debug()
         resp = litellm.completion(
-            model="deepseek/deepseek-reasoner",
+            model=model,
             messages=[{"role": "user", "content": "Tell me a joke."}],
             stream=True,
+            thinking={"type": "enabled", "budget_tokens": 1024},
             timeout=5,
         )
 
         reasoning_content_exists = False
         for chunk in resp:
-            print(f"chunk: {chunk}")
-            if chunk.choices[0].delta.reasoning_content is not None:
+            print(f"chunk 2: {chunk}")
+            if (
+                hasattr(chunk.choices[0].delta, "reasoning_content")
+                and chunk.choices[0].delta.reasoning_content is not None
+            ):
                 reasoning_content_exists = True
                 break
         assert reasoning_content_exists
