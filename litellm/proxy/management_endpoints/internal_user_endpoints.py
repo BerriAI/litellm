@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -32,6 +33,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy
 
+masker = SensitiveDataMasker()
 router = APIRouter()
 
 
@@ -827,6 +829,9 @@ async def get_users(
 
     # Calculate total pages
     total_pages = -(-total_count // page_size)  # Ceiling division
+
+    # mask sensitive data
+    results = [masker.mask_dict(user) for user in results]
 
     return {
         "users": results,

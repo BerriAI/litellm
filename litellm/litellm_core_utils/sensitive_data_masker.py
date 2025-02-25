@@ -41,6 +41,13 @@ class SensitiveDataMasker:
     def mask_dict(
         self, data: Dict[str, Any], depth: int = 0, max_depth: int = 10
     ) -> Dict[str, Any]:
+        """
+        Recursively mask sensitive data in a dictionary.
+
+        Args:
+            data (Dict[str, Any]): The dictionary to mask.
+            depth (int): The current depth of recursion.
+        """
         if depth >= max_depth:
             return data
 
