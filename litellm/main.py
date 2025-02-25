@@ -3404,7 +3404,13 @@ def embedding(  # noqa: PLR0915
                 max_retries=max_retries,
                 headers=headers or extra_headers,
             )
-        elif custom_llm_provider == "openai":
+        elif (
+            model in litellm.open_ai_embedding_models
+            or custom_llm_provider == "openai"
+            or custom_llm_provider == "together_ai"
+            or custom_llm_provider == "nvidia_nim"
+            or custom_llm_provider == "litellm_proxy"
+        ):
             api_base = (
                 api_base
                 or litellm.api_base
@@ -3472,7 +3478,6 @@ def embedding(  # noqa: PLR0915
             or custom_llm_provider == "jina_ai"
             or custom_llm_provider == "hosted_vllm"
             or custom_llm_provider == "lm_studio"
-            or custom_llm_provider == "litellm_proxy"
         ):
             api_base = (
                 api_base or litellm.api_base or get_secret_str("OPENAI_LIKE_API_BASE")
