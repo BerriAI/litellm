@@ -121,9 +121,6 @@ class BaseConfig(ABC):
 
         Overriden by OpenAI/Azure
         """
-        verbose_logger.debug(
-            "Translating developer role to system role for non-OpenAI providers."
-        )  # ensure user knows what's happening with their input.
         return map_developer_role_to_system_role(messages=messages)
 
     def should_retry_llm_api_inside_llm_translation_on_http_error(

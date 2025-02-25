@@ -463,6 +463,19 @@ REASONING_CONTENT_COMPATIBLE_PARAMS = [
 ]
 
 
+def add_provider_specific_fields(
+    object: BaseModel, provider_specific_fields: Optional[Dict[str, Any]]
+):
+    if not provider_specific_fields:  # set if provider_specific_fields is not empty
+        return
+    setattr(object, "provider_specific_fields", provider_specific_fields)
+    for k, v in provider_specific_fields.items():
+        if v is not None:
+            setattr(object, k, v)
+            if k in REASONING_CONTENT_COMPATIBLE_PARAMS and k != "reasoning_content":
+                setattr(object, "reasoning_content", v)
+
+
 class Message(OpenAIObject):
     content: Optional[str]
     role: Literal["assistant", "user", "system", "tool", "function"]
@@ -516,16 +529,7 @@ class Message(OpenAIObject):
             # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
             del self.audio
 
-        if provider_specific_fields:  # set if provider_specific_fields is not empty
-            self.provider_specific_fields = provider_specific_fields
-            for k, v in provider_specific_fields.items():
-                if v is not None:
-                    setattr(self, k, v)
-                    if (
-                        k in REASONING_CONTENT_COMPATIBLE_PARAMS
-                        and k != "reasoning_content"
-                    ):
-                        setattr(self, "reasoning_content", v)
+        add_provider_specific_fields(self, provider_specific_fields)
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -563,10 +567,7 @@ class Delta(OpenAIObject):
     ):
         super(Delta, self).__init__(**params)
         provider_specific_fields: Dict[str, Any] = {}
-
-        if "reasoning_content" in params:
-            provider_specific_fields["reasoning_content"] = params["reasoning_content"]
-            setattr(self, "reasoning_content", params["reasoning_content"])
+        add_provider_specific_fields(self, params.get("provider_specific_fields", {}))
         self.content = content
         self.role = role
         # Set default values and correct types

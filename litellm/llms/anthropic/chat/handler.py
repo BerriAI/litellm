@@ -526,6 +526,8 @@ class ModelResponseIterator:
             }
         elif "citation" in content_block["delta"]:
             provider_specific_fields["citation"] = content_block["delta"]["citation"]
+        elif "thinking" in content_block["delta"]:
+            provider_specific_fields["thinking"] = content_block["delta"]["thinking"]
 
         return text, tool_use, provider_specific_fields
 
