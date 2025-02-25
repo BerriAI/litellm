@@ -185,7 +185,6 @@ async def test_single_deployment_no_cooldowns_test_prod():
                 },
             },
         ],
-        allowed_fails=0,
         num_retries=0,
     )
 
