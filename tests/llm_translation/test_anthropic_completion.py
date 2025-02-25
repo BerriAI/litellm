@@ -1161,3 +1161,53 @@ def test_anthropic_citations_api_streaming():
             has_citations = True
 
     assert has_citations
+
+
+def test_anthropic_thinking_output():
+    from litellm import completion
+
+    resp = completion(
+        model="anthropic/claude-3-7-sonnet-20250219",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        thinking={"type": "enabled", "budget_tokens": 1024},
+    )
+
+    print(resp.choices[0].message)
+    assert (
+        resp.choices[0].message.provider_specific_fields["thinking_blocks"] is not None
+    )
+    assert resp.choices[0].message.reasoning_content is not None
+    assert isinstance(resp.choices[0].message.reasoning_content, str)
+    assert resp.choices[0].message.thinking_blocks is not None
+    assert isinstance(resp.choices[0].message.thinking_blocks, list)
+    assert len(resp.choices[0].message.thinking_blocks) > 0
+
+
+def test_anthropic_thinking_output_stream():
+    # litellm.set_verbose = True
+    try:
+        # litellm._turn_on_debug()
+        resp = litellm.completion(
+            model="anthropic/claude-3-7-sonnet-20250219",
+            messages=[{"role": "user", "content": "Tell me a joke."}],
+            stream=True,
+            thinking={"type": "enabled", "budget_tokens": 1024},
+            timeout=5,
+        )
+
+        reasoning_content_exists = False
+        for chunk in resp:
+            print(f"chunk 2: {chunk}")
+            if (
+                hasattr(chunk.choices[0].delta, "thinking_blocks")
+                and chunk.choices[0].delta.thinking_blocks is not None
+                and chunk.choices[0].delta.reasoning_content is not None
+                and isinstance(chunk.choices[0].delta.thinking_blocks, list)
+                and len(chunk.choices[0].delta.thinking_blocks) > 0
+                and isinstance(chunk.choices[0].delta.reasoning_content, str)
+            ):
+                reasoning_content_exists = True
+                break
+        assert reasoning_content_exists
+    except litellm.Timeout:
+        pytest.skip("Model is timing out")

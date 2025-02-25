@@ -1939,7 +1939,7 @@ jobs:
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
             pip install "google-cloud-aiplatform==1.59.0"
-            pip install anthropic
+            pip install "anthropic==0.21.3"
       # Run pytest and generate JUnit XML report
       - run:
           name: Build Docker image
