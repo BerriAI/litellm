@@ -162,6 +162,7 @@ class AmazonConverseConfig(BaseConfig):
         self,
         json_schema: Optional[dict] = None,
         schema_name: str = "json_tool_call",
+        schema_description: str = "",
     ) -> ChatCompletionToolParam:
         """
         Handles creating a tool call for getting responses in JSON format.
@@ -190,6 +191,8 @@ class AmazonConverseConfig(BaseConfig):
                 name=schema_name, parameters=_input_schema
             ),
         )
+        if schema_description != "":
+            _tool["function"]["description"] = schema_description
         return _tool
 
     def map_openai_params(
@@ -204,12 +207,14 @@ class AmazonConverseConfig(BaseConfig):
             if param == "response_format":
                 json_schema: Optional[dict] = None
                 schema_name: str = ""
+                schema_description: str = ""
                 if "response_schema" in value:
                     json_schema = value["response_schema"]
                     schema_name = "json_tool_call"
                 elif "json_schema" in value:
                     json_schema = value["json_schema"]["schema"]
                     schema_name = value["json_schema"]["name"]
+                    schema_description = value["json_schema"].get("description", "")
                 """
                 Follow similar approach to anthropic - translate to a single tool call. 
 
@@ -222,6 +227,7 @@ class AmazonConverseConfig(BaseConfig):
                 _tool = self._create_json_tool_call_for_response_format(
                     json_schema=json_schema,
                     schema_name=schema_name if schema_name != "" else "json_tool_call",
+                    schema_description=schema_description,
                 )
                 optional_params["tools"] = [_tool]
                 if litellm.utils.supports_tool_choice(
