@@ -1756,9 +1756,12 @@ async def test_openai_compatible_custom_api_base(provider):
         assert "hello" in mock_call.call_args.kwargs["extra_body"]
 
 
-
 @pytest.mark.parametrize(
-    "provider", ["openai", "hosted_vllm",]
+    "provider",
+    [
+        "openai",
+        "hosted_vllm",
+    ],
 )  # "vertex_ai",
 @pytest.mark.asyncio
 async def test_openai_compatible_custom_api_video(provider):
@@ -1774,7 +1777,7 @@ async def test_openai_compatible_custom_api_video(provider):
                 {
                     "type": "video_url",
                     "video_url": {"url": "https://www.youtube.com/watch?v=29_ipKNI8I0"},
-                }
+                },
             ],
         }
     ]
@@ -1797,7 +1800,6 @@ async def test_openai_compatible_custom_api_video(provider):
             print(e)
 
         mock_call.assert_called_once()
-        
 
 
 def test_lm_studio_completion(monkeypatch):
@@ -1887,6 +1889,33 @@ async def test_litellm_gateway_from_sdk_structured_output():
         print("Call KWARGS - {}".format(mock_call.call_args.kwargs))
         json_schema = mock_call.call_args.kwargs["response_format"]
         assert "json_schema" in json_schema
+
+
+@pytest.mark.asyncio
+async def test_litellm_gateway_from_sdk():
+    litellm.set_verbose = True
+    litellm._turn_on_debug()
+    from openai import OpenAI
+
+    openai_client = OpenAI(api_key="fake-key")
+
+    with patch.object(openai_client.embeddings, "create", new=MagicMock()) as mock_call:
+        try:
+            litellm.embedding(
+                model="litellm_proxy/my-vllm-model",
+                input="Hello world",
+                client=openai_client,
+                api_base="my-custom-api-base",
+            )
+        except Exception as e:
+            print(e)
+
+        mock_call.assert_called_once()
+
+        print("Call KWARGS - {}".format(mock_call.call_args.kwargs))
+
+        assert "Hello world" == mock_call.call_args.kwargs["input"]
+        assert "my-vllm-model" == mock_call.call_args.kwargs["model"]
 
 
 # ################### Hugging Face Conversational models ########################
