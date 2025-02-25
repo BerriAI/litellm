@@ -46,6 +46,36 @@ export default function UserInfoView({
   const [isEditing, setIsEditing] = useState(false);
 
   const canEditUser = userRole === "Admin" || userRole === "Proxy Admin";
+  
+  // Helper function to safely format teams data
+  const formatTeams = (teams: any): string => {
+    if (!teams) return "Not Set";
+    
+    if (typeof teams === 'string') {
+      return teams === "[]" ? "Not Set" : teams.replace(/[\[\]']/g, '').split(', ').join(', ');
+    }
+    
+    if (Array.isArray(teams)) {
+      return teams.length > 0 ? teams.join(', ') : "Not Set";
+    }
+    
+    return "Not Set";
+  };
+  
+  // Helper function to format teams for form input
+  const formatTeamsForForm = (teams: any): string => {
+    if (!teams) return "";
+    
+    if (typeof teams === 'string') {
+      return teams === "[]" ? "" : teams.replace(/[\[\]']/g, '').split(', ').join(', ');
+    }
+    
+    if (Array.isArray(teams)) {
+      return teams.join(', ');
+    }
+    
+    return "";
+  };
 
   const handleUserUpdate = async (values: any) => {
     try {
@@ -156,9 +186,7 @@ export default function UserInfoView({
                 <Text>Teams</Text>
                 <div className="mt-2">
                   <Title>
-                    {userData.teams && userData.teams !== "[]" 
-                      ? userData.teams.replace(/[\[\]']/g, '').split(', ').join(', ') 
-                      : "Not Set"}
+                    {formatTeams(userData.teams)}
                   </Title>
                 </div>
               </Card>
@@ -222,7 +250,7 @@ export default function UserInfoView({
                   user_role: localUserData.user_role,
                   max_budget: localUserData.max_budget,
                   spend: localUserData.spend,
-                  teams: localUserData.teams ? localUserData.teams.replace(/[\[\]']/g, '').split(', ').join(', ') : "",
+                  teams: formatTeamsForForm(localUserData.teams),
                 }}
                 layout="vertical"
                 onValuesChange={() => setIsDirty(true)}
@@ -309,9 +337,7 @@ export default function UserInfoView({
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
-                          {localUserData.teams && localUserData.teams !== "[]" 
-                            ? localUserData.teams.replace(/[\[\]']/g, '').split(', ').join(', ') 
-                            : "Not Set"}
+                          {formatTeams(localUserData.teams)}
                         </div>
                       )}
                     </div>
