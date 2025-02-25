@@ -19,6 +19,7 @@ import {
   invitationCreateCall,
   getProxyUISettings,
 } from "./networking";
+import BulkCreateUsers from "./bulk_create_users_button";
 const { Option } = Select;
 
 interface CreateuserProps {
@@ -154,10 +155,15 @@ const Createuser: React.FC<CreateuserProps> = ({
   };
 
   return (
-    <div>
+    <div className="flex gap-2">
       <Button2 className="mx-auto mb-0" onClick={() => setIsModalVisible(true)}>
         + Invite User
       </Button2>
+      <BulkCreateUsers 
+        accessToken={accessToken}
+        teams={teams}
+        possibleUIRoles={possibleUIRoles}
+      />
       <Modal
         title="Invite User"
         visible={isModalVisible}
