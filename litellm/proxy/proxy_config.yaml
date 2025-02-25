@@ -9,10 +9,3 @@ model_list:
 general_settings:
   store_model_in_db: true
 
-
-litellm_settings:
-  cache: true
-  cache_params:
-    type: redis
-    ttl: 600
-    redis_startup_nodes: [{"host": "127.0.0.1", "port": "7100"}] 

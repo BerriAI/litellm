@@ -182,50 +182,17 @@ async def new_user(
         # Admin UI Logic
         # Add User to Team and Organization
         # if team_id passed add this user to the team
-        if data_json.get("team_id", None) is not None:
-            from litellm.proxy.management_endpoints.team_endpoints import (
-                team_member_add,
+        if (
+            data_json.get("team_id", None) is not None
+            or data_json.get("teams", None) is not None
+        ):
+            await _add_user_to_teams(
+                user_id=data_json.get("user_id", None),
+                user_email=data_json.get("user_email", None),
+                team_id=data_json.get("team_id", None),
+                teams=data_json.get("teams", None),
+                user_api_key_dict=user_api_key_dict,
             )
-
-            try:
-                await team_member_add(
-                    data=TeamMemberAddRequest(
-                        team_id=data_json.get("team_id", None),
-                        member=Member(
-                            user_id=data_json.get("user_id", None),
-                            role="user",
-                            user_email=data_json.get("user_email", None),
-                        ),
-                    ),
-                    http_request=Request(
-                        scope={"type": "http", "path": "/user/new"},
-                    ),
-                    user_api_key_dict=user_api_key_dict,
-                )
-            except HTTPException as e:
-                if e.status_code == 400 and (
-                    "already exists" in str(e) or "doesn't exist" in str(e)
-                ):
-                    verbose_proxy_logger.debug(
-                        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
-                            str(e)
-                        )
-                    )
-                else:
-                    verbose_proxy_logger.debug(
-                        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): Exception occured - {}".format(
-                            str(e)
-                        )
-                    )
-            except Exception as e:
-                if "already exists" in str(e) or "doesn't exist" in str(e):
-                    verbose_proxy_logger.debug(
-                        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
-                            str(e)
-                        )
-                    )
-                else:
-                    raise e
 
         if data.send_invite_email is True:
             # check if user has setup email alerting
@@ -1066,3 +1033,70 @@ async def ui_view_users(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error searching users: {str(e)}")
+
+
+async def _add_user_to_teams(
+    user_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    user_email: Optional[str],
+    team_id: Optional[str] = None,
+    teams: Optional[List[str]] = None,
+) -> None:
+    """
+    Helper function to add a user to one or more teams.
+
+    Args:
+        user_id: The ID of the user to add to teams
+        user_email: The email of the user (optional)
+        team_id: A single team ID (legacy parameter)
+        teams: A list of team IDs
+        user_api_key_dict: The API key dictionary for authentication
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_add
+
+    # Create a list of all team IDs to process
+    team_ids_to_process = []
+    if team_id is not None:
+        team_ids_to_process.append(team_id)
+    if teams is not None and isinstance(teams, list):
+        team_ids_to_process.extend(teams)
+
+    # If no teams to process, return early
+    if not team_ids_to_process:
+        return
+
+    # Process each team ID
+    for current_team_id in team_ids_to_process:
+        try:
+            await team_member_add(
+                data=TeamMemberAddRequest(
+                    team_id=current_team_id,
+                    member=Member(
+                        user_id=user_id,
+                        role="user",
+                        user_email=user_email,
+                    ),
+                ),
+                http_request=Request(
+                    scope={"type": "http", "path": "/user/new"},
+                ),
+                user_api_key_dict=user_api_key_dict,
+            )
+        except HTTPException as e:
+            if e.status_code == 400 and (
+                "already exists" in str(e) or "doesn't exist" in str(e)
+            ):
+                verbose_proxy_logger.debug(
+                    f"litellm.proxy.management_endpoints.internal_user_endpoints._add_user_to_teams(): User already exists in team {current_team_id} - {str(e)}"
+                )
+            else:
+                verbose_proxy_logger.debug(
+                    f"litellm.proxy.management_endpoints.internal_user_endpoints._add_user_to_teams(): Exception occurred for team {current_team_id} - {str(e)}"
+                )
+        except Exception as e:
+            if "already exists" in str(e) or "doesn't exist" in str(e):
+                verbose_proxy_logger.debug(
+                    f"litellm.proxy.management_endpoints.internal_user_endpoints._add_user_to_teams(): User already exists in team {current_team_id} - {str(e)}"
+                )
+            else:
+                raise e
