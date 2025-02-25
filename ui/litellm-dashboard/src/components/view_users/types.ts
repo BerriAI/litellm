@@ -7,5 +7,4 @@ export interface UserInfo {
   key_count: number;
   created_at: string;
   updated_at: string;
-  updated_by: string;
 } 

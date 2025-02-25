@@ -88,13 +88,6 @@ export const columns = (
     ),
   },
   {
-    header: "Updated By",
-    accessorKey: "updated_by",
-    cell: ({ row }) => (
-      <span className="text-xs">{row.original.updated_by || "-"}</span>
-    ),
-  },
-  {
     id: "actions",
     header: "",
     cell: ({ row }) => (
