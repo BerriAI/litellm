@@ -3388,10 +3388,17 @@ class ProxyStartupEvent:
         DD tracer is used to trace Python applications.
         Doc: https://docs.datadoghq.com/tracing/trace_collection/automatic_instrumentation/dd_libraries/python/
         """
-        if get_secret_bool("USE_DDTRACE", False) is True:
+        if ProxyStartupEvent._should_use_dd_tracer():
             import ddtrace
 
             ddtrace.patch_all(logging=True, openai=False)
+
+    @classmethod
+    def _should_use_dd_tracer(cls):
+        """
+        Returns True if `USE_DDTRACE` is set to True in .env
+        """
+        return get_secret_bool("USE_DDTRACE", False) is True
 
 
 #### API ENDPOINTS ####
