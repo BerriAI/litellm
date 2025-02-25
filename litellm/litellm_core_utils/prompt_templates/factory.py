@@ -1445,10 +1445,11 @@ def anthropic_messages_pt(  # noqa: PLR0915
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
             assistant_content_block: ChatCompletionAssistantMessage = messages[msg_i]  # type: ignore
 
+            thinking_blocks = assistant_content_block.get("thinking_blocks", None)
             if (
-                "thinking_blocks" in assistant_content_block
+                thinking_blocks is not None
             ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
-                assistant_content.extend(assistant_content_block["thinking_blocks"])
+                assistant_content.extend(thinking_blocks)
             if "content" in assistant_content_block and isinstance(
                 assistant_content_block["content"], list
             ):
