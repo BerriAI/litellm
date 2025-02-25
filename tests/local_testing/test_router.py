@@ -718,64 +718,12 @@ def test_router_azure_acompletion():
         pytest.fail(f"Got unexpected exception on router! - {e}")
 
 
-# test_router_azure_acompletion()
-
-
-def test_router_context_window_fallback():
-    """
-    - Give a gpt-3.5-turbo model group with different context windows (4k vs. 16k)
-    - Send a 5k prompt
-    - Assert it works
-    """
-    import os
-
-    from large_text import text
-
-    litellm.set_verbose = False
-
-    print(f"len(text): {len(text)}")
-    try:
-        model_list = [
-            {
-                "model_name": "gpt-3.5-turbo",  # openai model name
-                "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
-                    "api_key": os.getenv("AZURE_API_KEY"),
-                    "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
-                    "base_model": "azure/gpt-35-turbo",
-                },
-            },
-            {
-                "model_name": "gpt-3.5-turbo-large",  # openai model name
-                "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "gpt-3.5-turbo-1106",
-                    "api_key": os.getenv("OPENAI_API_KEY"),
-                },
-            },
-        ]
-
-        router = Router(model_list=model_list, set_verbose=True, context_window_fallbacks=[{"gpt-3.5-turbo": ["gpt-3.5-turbo-large"]}], num_retries=0)  # type: ignore
-
-        response = router.completion(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": text},
-                {"role": "user", "content": "Who was Alexander?"},
-            ],
-        )
-
-        print(f"response: {response}")
-        assert response.model == "gpt-3.5-turbo-1106"
-    except Exception as e:
-        pytest.fail(f"Got unexpected exception on router! - {str(e)}")
-
-
 @pytest.mark.asyncio
-async def test_async_router_context_window_fallback():
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_async_router_context_window_fallback(sync_mode):
     """
-    - Give a gpt-3.5-turbo model group with different context windows (4k vs. 16k)
-    - Send a 5k prompt
+    - Give a gpt-4 model group with different context windows (8192k vs. 128k)
+    - Send a 10k prompt
     - Assert it works
     """
     import os
@@ -783,41 +731,49 @@ async def test_async_router_context_window_fallback():
     from large_text import text
 
     litellm.set_verbose = False
+    litellm._turn_on_debug()
 
     print(f"len(text): {len(text)}")
     try:
         model_list = [
             {
-                "model_name": "gpt-3.5-turbo",  # openai model name
+                "model_name": "gpt-4",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
-                    "api_key": os.getenv("AZURE_API_KEY"),
-                    "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
-                    "base_model": "azure/gpt-35-turbo",
+                    "model": "gpt-4",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                    "api_base": os.getenv("OPENAI_API_BASE"),
                 },
             },
             {
-                "model_name": "gpt-3.5-turbo-large",  # openai model name
+                "model_name": "gpt-4-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "gpt-3.5-turbo-1106",
+                    "model": "gpt-4-turbo",
                     "api_key": os.getenv("OPENAI_API_KEY"),
                 },
             },
         ]
 
-        router = Router(model_list=model_list, set_verbose=True, context_window_fallbacks=[{"gpt-3.5-turbo": ["gpt-3.5-turbo-large"]}], num_retries=0)  # type: ignore
+        router = Router(model_list=model_list, set_verbose=True, context_window_fallbacks=[{"gpt-4": ["gpt-4-turbo"]}], num_retries=0)  # type: ignore
+        if sync_mode is False:
+            response = await router.acompletion(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": text * 2},
+                    {"role": "user", "content": "Who was Alexander?"},
+                ],
+            )
 
-        response = await router.acompletion(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": text},
-                {"role": "user", "content": "Who was Alexander?"},
-            ],
-        )
-
-        print(f"response: {response}")
-        assert response.model == "gpt-3.5-turbo-1106"
+            print(f"response: {response}")
+            assert "gpt-4-turbo" in response.model
+        else:
+            response = router.completion(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": text * 2},
+                    {"role": "user", "content": "Who was Alexander?"},
+                ],
+            )
+            assert "gpt-4-turbo" in response.model
     except Exception as e:
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
@@ -1446,7 +1402,7 @@ def test_bedrock_on_router():
 # test openai-compatible endpoint
 @pytest.mark.asyncio
 async def test_mistral_on_router():
-    litellm.set_verbose = True
+    litellm._turn_on_debug()
     model_list = [
         {
             "model_name": "gpt-3.5-turbo",
@@ -2643,6 +2599,66 @@ def test_model_group_alias(hidden):
     else:
         assert len(models) == len(_model_list) + 1
         assert len(model_names) == len(_model_list) + 1
+
+
+def test_get_team_specific_model():
+    """
+    Test that _get_team_specific_model returns:
+    - team_public_model_name when team_id matches
+    - None when team_id doesn't match
+    - None when no team_id in model_info
+    """
+    router = Router(model_list=[])
+
+    # Test 1: Matching team_id
+    deployment = DeploymentTypedDict(
+        model_name="model-x",
+        litellm_params={},
+        model_info=ModelInfo(team_id="team1", team_public_model_name="public-model-x"),
+    )
+    assert router._get_team_specific_model(deployment, "team1") == "public-model-x"
+
+    # Test 2: Non-matching team_id
+    assert router._get_team_specific_model(deployment, "team2") is None
+
+    # Test 3: No team_id in model_info
+    deployment = DeploymentTypedDict(
+        model_name="model-y",
+        litellm_params={},
+        model_info=ModelInfo(team_public_model_name="public-model-y"),
+    )
+    assert router._get_team_specific_model(deployment, "team1") is None
+
+    # Test 4: No model_info
+    deployment = DeploymentTypedDict(
+        model_name="model-z", litellm_params={}, model_info=ModelInfo()
+    )
+    assert router._get_team_specific_model(deployment, "team1") is None
+
+
+def test_is_team_specific_model():
+    """
+    Test that _is_team_specific_model returns:
+    - True when model_info contains team_id
+    - False when model_info doesn't contain team_id
+    - False when model_info is None
+    """
+    router = Router(model_list=[])
+
+    # Test 1: With team_id
+    model_info = ModelInfo(team_id="team1", team_public_model_name="public-model-x")
+    assert router._is_team_specific_model(model_info) is True
+
+    # Test 2: Without team_id
+    model_info = ModelInfo(team_public_model_name="public-model-y")
+    assert router._is_team_specific_model(model_info) is False
+
+    # Test 3: Empty model_info
+    model_info = ModelInfo()
+    assert router._is_team_specific_model(model_info) is False
+
+    # Test 4: None model_info
+    assert router._is_team_specific_model(None) is False
 
 
 # @pytest.mark.parametrize("on_error", [True, False])

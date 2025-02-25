@@ -143,7 +143,8 @@ def test_all_model_configs():
     )
 
     assert (
-        "max_completion_tokens" in VertexAILlama3Config().get_supported_openai_params()
+        "max_completion_tokens"
+        in VertexAILlama3Config().get_supported_openai_params(model="llama3")
     )
     assert VertexAILlama3Config().map_openai_params(
         {"max_completion_tokens": 10}, {}, "llama3", drop_params=False
@@ -298,19 +299,23 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"max_tokens": 10}
 
-    from litellm.llms.bedrock.common_utils import (
+    from litellm import (
         AmazonAnthropicClaude3Config,
         AmazonAnthropicConfig,
     )
 
     assert (
         "max_completion_tokens"
-        in AmazonAnthropicClaude3Config().get_supported_openai_params()
+        in AmazonAnthropicClaude3Config().get_supported_openai_params(
+            model="anthropic.claude-3-sonnet-20240229-v1:0"
+        )
     )
 
     assert AmazonAnthropicClaude3Config().map_openai_params(
         non_default_params={"max_completion_tokens": 10},
         optional_params={},
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        drop_params=False,
     ) == {"max_tokens": 10}
 
     assert (

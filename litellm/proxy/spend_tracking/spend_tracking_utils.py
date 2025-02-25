@@ -1,7 +1,9 @@
 import json
 import secrets
+from datetime import datetime
 from datetime import datetime as dt
-from typing import Optional, cast
+from datetime import timezone
+from typing import List, Optional, cast
 
 from pydantic import BaseModel
 
@@ -30,17 +32,21 @@ def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
     return False
 
 
-def _get_spend_logs_metadata(metadata: Optional[dict]) -> SpendLogsMetadata:
+def _get_spend_logs_metadata(
+    metadata: Optional[dict], applied_guardrails: Optional[List[str]] = None
+) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
             user_api_key=None,
             user_api_key_alias=None,
             user_api_key_team_id=None,
+            user_api_key_org_id=None,
             user_api_key_user_id=None,
             user_api_key_team_alias=None,
             spend_logs_metadata=None,
             requester_ip_address=None,
             additional_usage_values=None,
+            applied_guardrails=None,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -55,6 +61,8 @@ def _get_spend_logs_metadata(metadata: Optional[dict]) -> SpendLogsMetadata:
             if key in metadata
         }
     )
+    clean_metadata["applied_guardrails"] = applied_guardrails
+
     return clean_metadata
 
 
@@ -127,7 +135,14 @@ def get_logging_payload(  # noqa: PLR0915
     _model_group = metadata.get("model_group", "")
 
     # clean up litellm metadata
-    clean_metadata = _get_spend_logs_metadata(metadata)
+    clean_metadata = _get_spend_logs_metadata(
+        metadata,
+        applied_guardrails=(
+            standard_logging_payload["metadata"].get("applied_guardrails", None)
+            if standard_logging_payload is not None
+            else None
+        ),
+    )
 
     special_usage_fields = ["completion_tokens", "prompt_tokens", "total_tokens"]
     additional_usage_values = {}
@@ -153,9 +168,9 @@ def get_logging_payload(  # noqa: PLR0915
             call_type=call_type or "",
             api_key=str(api_key),
             cache_hit=str(cache_hit),
-            startTime=start_time,
-            endTime=end_time,
-            completionStartTime=completion_start_time,
+            startTime=_ensure_datetime_utc(start_time),
+            endTime=_ensure_datetime_utc(end_time),
+            completionStartTime=_ensure_datetime_utc(completion_start_time),
             model=kwargs.get("model", "") or "",
             user=kwargs.get("litellm_params", {})
             .get("metadata", {})
@@ -193,6 +208,12 @@ def get_logging_payload(  # noqa: PLR0915
             "Error creating spendlogs object - {}".format(str(e))
         )
         raise e
+
+
+def _ensure_datetime_utc(timestamp: datetime) -> datetime:
+    """Helper to ensure datetime is in UTC"""
+    timestamp = timestamp.astimezone(timezone.utc)
+    return timestamp
 
 
 async def get_spend_by_team_and_customer(

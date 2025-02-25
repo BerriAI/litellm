@@ -261,6 +261,7 @@ def test_azure_completion_stream():
 @pytest.mark.asyncio
 async def test_async_custom_handler_completion():
     try:
+        litellm._turn_on_debug
         customHandler_success = MyCustomHandler()
         customHandler_failure = MyCustomHandler()
         # success
@@ -284,6 +285,7 @@ async def test_async_custom_handler_completion():
             == "gpt-3.5-turbo"
         )
         # failure
+        litellm.logging_callback_manager._reset_all_callbacks()
         litellm.callbacks = [customHandler_failure]
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},

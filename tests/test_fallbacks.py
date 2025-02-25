@@ -5,6 +5,7 @@ import asyncio
 import aiohttp
 from large_text import text
 import time
+from typing import Optional
 
 
 async def generate_key(
@@ -44,6 +45,7 @@ async def chat_completion(
     model: str,
     messages: list,
     return_headers: bool = False,
+    extra_headers: Optional[dict] = None,
     **kwargs,
 ):
     url = "http://0.0.0.0:4000/chat/completions"
@@ -51,6 +53,8 @@ async def chat_completion(
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
+    if extra_headers is not None:
+        headers.update(extra_headers)
     data = {"model": model, "messages": messages, **kwargs}
 
     async with session.post(url, headers=headers, json=data) as response:
@@ -153,6 +157,29 @@ async def test_chat_completion_with_retries():
 
 
 @pytest.mark.asyncio
+async def test_chat_completion_with_fallbacks():
+    """
+    make chat completion call with prompt > context window. expect it to work with fallback
+    """
+    async with aiohttp.ClientSession() as session:
+        model = "badly-configured-openai-endpoint"
+        messages = [
+            {"role": "system", "content": text},
+            {"role": "user", "content": "Who was Alexander?"},
+        ]
+        response, headers = await chat_completion(
+            session=session,
+            key="sk-1234",
+            model=model,
+            messages=messages,
+            fallbacks=["fake-openai-endpoint-5"],
+            return_headers=True,
+        )
+        print(f"headers: {headers}")
+        assert headers["x-litellm-attempted-fallbacks"] == "1"
+
+
+@pytest.mark.asyncio
 async def test_chat_completion_with_timeout():
     """
     make chat completion call with low timeout and `mock_timeout`: true. Expect it to fail and correct timeout to be set in headers.
@@ -177,6 +204,38 @@ async def test_chat_completion_with_timeout():
         print(f"headers: {headers}")
         assert (
             headers["x-litellm-timeout"] == "1.0"
+        )  # assert model-specific timeout used
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_with_timeout_from_request():
+    """
+    make chat completion call with low timeout and `mock_timeout`: true. Expect it to fail and correct timeout to be set in headers.
+    """
+    async with aiohttp.ClientSession() as session:
+        model = "fake-openai-endpoint-5"
+        messages = [
+            {"role": "system", "content": text},
+            {"role": "user", "content": "Who was Alexander?"},
+        ]
+        extra_headers = {
+            "x-litellm-timeout": "0.001",
+        }
+        start_time = time.time()
+        response, headers = await chat_completion(
+            session=session,
+            key="sk-1234",
+            model=model,
+            messages=messages,
+            num_retries=0,
+            mock_timeout=True,
+            extra_headers=extra_headers,
+            return_headers=True,
+        )
+        end_time = time.time()
+        print(f"headers: {headers}")
+        assert (
+            headers["x-litellm-timeout"] == "0.001"
         )  # assert model-specific timeout used
 
 

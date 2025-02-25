@@ -56,6 +56,7 @@ model LiteLLM_OrganizationTable {
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
     teams LiteLLM_TeamTable[] 
     users LiteLLM_UserTable[]
+    keys LiteLLM_VerificationToken[]
     members LiteLLM_OrganizationMembership[] @relation("OrganizationToMembership")
 }
 
@@ -103,6 +104,7 @@ model LiteLLM_UserTable {
 		user_id    String @id
     user_alias String? 
     team_id    String?
+    sso_user_id String? @unique
     organization_id String?
     password  String?
     teams    String[] @default([])
@@ -157,9 +159,11 @@ model LiteLLM_VerificationToken {
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
     budget_id String?
+    organization_id String?
     created_at      DateTime?               @default(now()) @map("created_at")
     updated_at      DateTime?               @default(now()) @updatedAt @map("updated_at")
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
+    litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
 }
 
 model LiteLLM_EndUserTable {

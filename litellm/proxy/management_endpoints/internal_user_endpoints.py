@@ -22,10 +22,10 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.key_management_endpoints import (
-    duration_in_seconds,
     generate_key_helper_fn,
     prepare_metadata_fields,
 )
@@ -142,27 +142,51 @@ async def new_user(
     data_json = data.json()  # type: ignore
     data_json = _update_internal_new_user_params(data_json, data)
     response = await generate_key_helper_fn(request_type="user", **data_json)
-
     # Admin UI Logic
     # Add User to Team and Organization
     # if team_id passed add this user to the team
     if data_json.get("team_id", None) is not None:
         from litellm.proxy.management_endpoints.team_endpoints import team_member_add
 
-        await team_member_add(
-            data=TeamMemberAddRequest(
-                team_id=data_json.get("team_id", None),
-                member=Member(
-                    user_id=data_json.get("user_id", None),
-                    role="user",
-                    user_email=data_json.get("user_email", None),
+        try:
+            await team_member_add(
+                data=TeamMemberAddRequest(
+                    team_id=data_json.get("team_id", None),
+                    member=Member(
+                        user_id=data_json.get("user_id", None),
+                        role="user",
+                        user_email=data_json.get("user_email", None),
+                    ),
                 ),
-            ),
-            http_request=Request(
-                scope={"type": "http", "path": "/user/new"},
-            ),
-            user_api_key_dict=user_api_key_dict,
-        )
+                http_request=Request(
+                    scope={"type": "http", "path": "/user/new"},
+                ),
+                user_api_key_dict=user_api_key_dict,
+            )
+        except HTTPException as e:
+            if e.status_code == 400 and (
+                "already exists" in str(e) or "doesn't exist" in str(e)
+            ):
+                verbose_proxy_logger.debug(
+                    "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
+                        str(e)
+                    )
+                )
+            else:
+                verbose_proxy_logger.debug(
+                    "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): Exception occured - {}".format(
+                        str(e)
+                    )
+                )
+        except Exception as e:
+            if "already exists" in str(e) or "doesn't exist" in str(e):
+                verbose_proxy_logger.debug(
+                    "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
+                        str(e)
+                    )
+                )
+            else:
+                raise e
 
     if data.send_invite_email is True:
         # check if user has setup email alerting
@@ -206,6 +230,7 @@ async def new_user(
         tpm_limit=response.get("tpm_limit", None),
         rpm_limit=response.get("rpm_limit", None),
         budget_duration=response.get("budget_duration", None),
+        model_max_budget=response.get("model_max_budget", None),
     )
 
 
@@ -860,6 +885,11 @@ async def delete_user(
         where={"user_id": {"in": data.user_ids}}
     )
 
+    ## DELETE ASSOCIATED ORGANIZATION MEMBERSHIPS
+    await prisma_client.db.litellm_organizationmembership.delete_many(
+        where={"user_id": {"in": data.user_ids}}
+    )
+
     ## DELETE USERS
     deleted_users = await prisma_client.db.litellm_usertable.delete_many(
         where={"user_id": {"in": data.user_ids}}
@@ -912,3 +942,83 @@ async def add_internal_user_to_organization(
         return new_membership
     except Exception as e:
         raise Exception(f"Failed to add user to organization: {str(e)}")
+
+
+@router.get(
+    "/user/filter/ui",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+    responses={
+        200: {"model": List[LiteLLM_UserTableFiltered]},
+    },
+)
+async def ui_view_users(
+    user_id: Optional[str] = fastapi.Query(
+        default=None, description="User ID in the request parameters"
+    ),
+    user_email: Optional[str] = fastapi.Query(
+        default=None, description="User email in the request parameters"
+    ),
+    page: int = fastapi.Query(
+        default=1, description="Page number for pagination", ge=1
+    ),
+    page_size: int = fastapi.Query(
+        default=50, description="Number of items per page", ge=1, le=100
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    [PROXY-ADMIN ONLY]Filter users based on partial match of user_id or email with pagination.
+
+    Args:
+        user_id (Optional[str]): Partial user ID to search for
+        user_email (Optional[str]): Partial email to search for
+        page (int): Page number for pagination (starts at 1)
+        page_size (int): Number of items per page (max 100)
+        user_api_key_dict (UserAPIKeyAuth): User authentication information
+
+    Returns:
+        List[LiteLLM_SpendLogs]: Paginated list of matching user records
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    try:
+        # Calculate offset for pagination
+        skip = (page - 1) * page_size
+
+        # Build where conditions based on provided parameters
+        where_conditions = {}
+
+        if user_id:
+            where_conditions["user_id"] = {
+                "contains": user_id,
+                "mode": "insensitive",  # Case-insensitive search
+            }
+
+        if user_email:
+            where_conditions["user_email"] = {
+                "contains": user_email,
+                "mode": "insensitive",  # Case-insensitive search
+            }
+
+        # Query users with pagination and filters
+        users: Optional[List[BaseModel]] = (
+            await prisma_client.db.litellm_usertable.find_many(
+                where=where_conditions,
+                skip=skip,
+                take=page_size,
+                order={"created_at": "desc"},
+            )
+        )
+
+        if not users:
+            return []
+
+        return [LiteLLM_UserTableFiltered(**user.model_dump()) for user in users]
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error searching users: {str(e)}")

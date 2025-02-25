@@ -377,15 +377,44 @@ class ChatCompletionImageObject(TypedDict):
     type: Literal["image_url"]
     image_url: Union[str, ChatCompletionImageUrlObject]
 
+class ChatCompletionVideoUrlObject(TypedDict, total=False):
+    url: Required[str]
+    detail: str
+
+
+class ChatCompletionVideoObject(TypedDict):
+    type: Literal["video_url"]
+    video_url: Union[str, ChatCompletionVideoUrlObject]
+
 
 class ChatCompletionAudioObject(ChatCompletionContentPartInputAudioParam):
     pass
+
+
+class DocumentObject(TypedDict):
+    type: Literal["text"]
+    media_type: str
+    data: str
+
+
+class CitationsObject(TypedDict):
+    enabled: bool
+
+
+class ChatCompletionDocumentObject(TypedDict):
+    type: Literal["document"]
+    source: DocumentObject
+    title: str
+    context: str
+    citations: Optional[CitationsObject]
 
 
 OpenAIMessageContentListBlock = Union[
     ChatCompletionTextObject,
     ChatCompletionImageObject,
     ChatCompletionAudioObject,
+    ChatCompletionDocumentObject,
+    ChatCompletionVideoObject,
 ]
 
 OpenAIMessageContent = Union[
@@ -442,7 +471,17 @@ class OpenAIChatCompletionSystemMessage(TypedDict, total=False):
     name: str
 
 
+class OpenAIChatCompletionDeveloperMessage(TypedDict, total=False):
+    role: Required[Literal["developer"]]
+    content: Required[Union[str, List]]
+    name: str
+
+
 class ChatCompletionSystemMessage(OpenAIChatCompletionSystemMessage, total=False):
+    cache_control: ChatCompletionCachedContent
+
+
+class ChatCompletionDeveloperMessage(OpenAIChatCompletionDeveloperMessage, total=False):
     cache_control: ChatCompletionCachedContent
 
 
@@ -450,6 +489,8 @@ ValidUserMessageContentTypes = [
     "text",
     "image_url",
     "input_audio",
+    "document",
+    "video_url",
 ]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
 
 AllMessageValues = Union[
@@ -458,6 +499,7 @@ AllMessageValues = Union[
     ChatCompletionToolMessage,
     ChatCompletionSystemMessage,
     ChatCompletionFunctionMessage,
+    ChatCompletionDeveloperMessage,
 ]
 
 

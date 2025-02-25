@@ -2,13 +2,14 @@ import asyncio
 import json
 import os
 import time
-from typing import Any, Callable, List, Literal, Optional, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Union
 
 import httpx  # type: ignore
-from openai import AsyncAzureOpenAI, AzureOpenAI
+from openai import APITimeoutError, AsyncAzureOpenAI, AzureOpenAI
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -98,14 +99,6 @@ class AzureOpenAIAssistantsAPIConfig:
 
 
 def select_azure_base_url_or_endpoint(azure_client_params: dict):
-    # azure_client_params = {
-    #     "api_version": api_version,
-    #     "azure_endpoint": api_base,
-    #     "azure_deployment": model,
-    #     "http_client": litellm.client_session,
-    #     "max_retries": max_retries,
-    #     "timeout": timeout,
-    # }
     azure_endpoint = azure_client_params.get("azure_endpoint", None)
     if azure_endpoint is not None:
         # see : https://github.com/openai/openai-python/blob/3d61ed42aba652b547029095a7eb269ad4e1e957/src/openai/lib/azure.py#L192
@@ -217,7 +210,7 @@ class AzureChatCompletion(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
 
-    def validate_environment(self, api_key, azure_ad_token):
+    def validate_environment(self, api_key, azure_ad_token, azure_ad_token_provider):
         headers = {
             "content-type": "application/json",
         }
@@ -227,6 +220,10 @@ class AzureChatCompletion(BaseLLM):
             if azure_ad_token.startswith("oidc/"):
                 azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
             headers["Authorization"] = f"Bearer {azure_ad_token}"
+        elif azure_ad_token_provider is not None:
+            azure_ad_token = azure_ad_token_provider()
+            headers["Authorization"] = f"Bearer {azure_ad_token}"
+
         return headers
 
     def _get_sync_azure_client(
@@ -235,6 +232,7 @@ class AzureChatCompletion(BaseLLM):
         api_base: Optional[str],
         api_key: Optional[str],
         azure_ad_token: Optional[str],
+        azure_ad_token_provider: Optional[Callable],
         model: str,
         max_retries: int,
         timeout: Union[float, httpx.Timeout],
@@ -242,7 +240,7 @@ class AzureChatCompletion(BaseLLM):
         client_type: Literal["sync", "async"],
     ):
         # init AzureOpenAI Client
-        azure_client_params = {
+        azure_client_params: Dict[str, Any] = {
             "api_version": api_version,
             "azure_endpoint": api_base,
             "azure_deployment": model,
@@ -259,6 +257,8 @@ class AzureChatCompletion(BaseLLM):
             if azure_ad_token.startswith("oidc/"):
                 azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
             azure_client_params["azure_ad_token"] = azure_ad_token
+        elif azure_ad_token_provider is not None:
+            azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
         if client is None:
             if client_type == "sync":
                 azure_client = AzureOpenAI(**azure_client_params)  # type: ignore
@@ -305,6 +305,7 @@ class AzureChatCompletion(BaseLLM):
         - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
         - call chat.completions.create by default
         """
+        start_time = time.time()
         try:
             raw_response = await azure_client.chat.completions.with_raw_response.create(
                 **data, timeout=timeout
@@ -313,6 +314,11 @@ class AzureChatCompletion(BaseLLM):
             headers = dict(raw_response.headers)
             response = raw_response.parse()
             return headers, response
+        except APITimeoutError as e:
+            end_time = time.time()
+            time_delta = round(end_time - start_time, 2)
+            e.message += f" - timeout value={timeout}, time taken={time_delta} seconds"
+            raise e
         except Exception as e:
             raise e
 
@@ -326,6 +332,7 @@ class AzureChatCompletion(BaseLLM):
         api_version: str,
         api_type: str,
         azure_ad_token: str,
+        azure_ad_token_provider: Callable,
         dynamic_params: bool,
         print_verbose: Callable,
         timeout: Union[float, httpx.Timeout],
@@ -345,7 +352,9 @@ class AzureChatCompletion(BaseLLM):
                     status_code=422, message="Missing model or messages"
                 )
 
-            max_retries = optional_params.pop("max_retries", 2)
+            max_retries = optional_params.pop("max_retries", None)
+            if max_retries is None:
+                max_retries = DEFAULT_MAX_RETRIES
             json_mode: Optional[bool] = optional_params.pop("json_mode", False)
 
             ### CHECK IF CLOUDFLARE AI GATEWAY ###
@@ -373,6 +382,10 @@ class AzureChatCompletion(BaseLLM):
                             )
 
                         azure_client_params["azure_ad_token"] = azure_ad_token
+                    elif azure_ad_token_provider is not None:
+                        azure_client_params["azure_ad_token_provider"] = (
+                            azure_ad_token_provider
+                        )
 
                     if acompletion is True:
                         client = AsyncAzureOpenAI(**azure_client_params)
@@ -400,8 +413,10 @@ class AzureChatCompletion(BaseLLM):
                         api_key=api_key,
                         api_version=api_version,
                         azure_ad_token=azure_ad_token,
+                        azure_ad_token_provider=azure_ad_token_provider,
                         timeout=timeout,
                         client=client,
+                        max_retries=max_retries,
                     )
                 else:
                     return self.acompletion(
@@ -412,10 +427,12 @@ class AzureChatCompletion(BaseLLM):
                         api_version=api_version,
                         model=model,
                         azure_ad_token=azure_ad_token,
+                        azure_ad_token_provider=azure_ad_token_provider,
                         dynamic_params=dynamic_params,
                         timeout=timeout,
                         client=client,
                         logging_obj=logging_obj,
+                        max_retries=max_retries,
                         convert_tool_call_to_json_mode=json_mode,
                     )
             elif "stream" in optional_params and optional_params["stream"] is True:
@@ -428,8 +445,10 @@ class AzureChatCompletion(BaseLLM):
                     api_key=api_key,
                     api_version=api_version,
                     azure_ad_token=azure_ad_token,
+                    azure_ad_token_provider=azure_ad_token_provider,
                     timeout=timeout,
                     client=client,
+                    max_retries=max_retries,
                 )
             else:
                 ## LOGGING
@@ -468,6 +487,10 @@ class AzureChatCompletion(BaseLLM):
                     if azure_ad_token.startswith("oidc/"):
                         azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
                     azure_client_params["azure_ad_token"] = azure_ad_token
+                elif azure_ad_token_provider is not None:
+                    azure_client_params["azure_ad_token_provider"] = (
+                        azure_ad_token_provider
+                    )
 
                 if (
                     client is None
@@ -534,18 +557,14 @@ class AzureChatCompletion(BaseLLM):
         dynamic_params: bool,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
+        max_retries: int,
         azure_ad_token: Optional[str] = None,
+        azure_ad_token_provider: Optional[Callable] = None,
         convert_tool_call_to_json_mode: Optional[bool] = None,
         client=None,  # this is the AsyncAzureOpenAI
     ):
         response = None
         try:
-            max_retries = data.pop("max_retries", 2)
-            if not isinstance(max_retries, int):
-                raise AzureOpenAIError(
-                    status_code=422, message="max retries must be an int"
-                )
-
             # init AzureOpenAI Client
             azure_client_params = {
                 "api_version": api_version,
@@ -564,6 +583,8 @@ class AzureChatCompletion(BaseLLM):
                 if azure_ad_token.startswith("oidc/"):
                     azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
                 azure_client_params["azure_ad_token"] = azure_ad_token
+            elif azure_ad_token_provider is not None:
+                azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
 
             # setting Azure client
             if client is None or dynamic_params:
@@ -627,6 +648,7 @@ class AzureChatCompletion(BaseLLM):
             )
             raise AzureOpenAIError(status_code=500, message=str(e))
         except Exception as e:
+            message = getattr(e, "message", str(e))
             ## LOGGING
             logging_obj.post_call(
                 input=data["messages"],
@@ -637,7 +659,7 @@ class AzureChatCompletion(BaseLLM):
             if hasattr(e, "status_code"):
                 raise e
             else:
-                raise AzureOpenAIError(status_code=500, message=str(e))
+                raise AzureOpenAIError(status_code=500, message=message)
 
     def streaming(
         self,
@@ -649,14 +671,11 @@ class AzureChatCompletion(BaseLLM):
         data: dict,
         model: str,
         timeout: Any,
+        max_retries: int,
         azure_ad_token: Optional[str] = None,
+        azure_ad_token_provider: Optional[Callable] = None,
         client=None,
     ):
-        max_retries = data.pop("max_retries", 2)
-        if not isinstance(max_retries, int):
-            raise AzureOpenAIError(
-                status_code=422, message="max retries must be an int"
-            )
         # init AzureOpenAI Client
         azure_client_params = {
             "api_version": api_version,
@@ -675,6 +694,8 @@ class AzureChatCompletion(BaseLLM):
             if azure_ad_token.startswith("oidc/"):
                 azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
             azure_client_params["azure_ad_token"] = azure_ad_token
+        elif azure_ad_token_provider is not None:
+            azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
 
         if client is None or dynamic_params:
             azure_client = AzureOpenAI(**azure_client_params)
@@ -717,7 +738,9 @@ class AzureChatCompletion(BaseLLM):
         data: dict,
         model: str,
         timeout: Any,
+        max_retries: int,
         azure_ad_token: Optional[str] = None,
+        azure_ad_token_provider: Optional[Callable] = None,
         client=None,
     ):
         try:
@@ -727,7 +750,7 @@ class AzureChatCompletion(BaseLLM):
                 "azure_endpoint": api_base,
                 "azure_deployment": model,
                 "http_client": litellm.aclient_session,
-                "max_retries": data.pop("max_retries", 2),
+                "max_retries": max_retries,
                 "timeout": timeout,
             }
             azure_client_params = select_azure_base_url_or_endpoint(
@@ -739,6 +762,8 @@ class AzureChatCompletion(BaseLLM):
                 if azure_ad_token.startswith("oidc/"):
                     azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
                 azure_client_params["azure_ad_token"] = azure_ad_token
+            elif azure_ad_token_provider is not None:
+                azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
             if client is None or dynamic_params:
                 azure_client = AsyncAzureOpenAI(**azure_client_params)
             else:
@@ -779,10 +804,11 @@ class AzureChatCompletion(BaseLLM):
             status_code = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
             error_response = getattr(e, "response", None)
+            message = getattr(e, "message", str(e))
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise AzureOpenAIError(
-                status_code=status_code, message=str(e), headers=error_headers
+                status_code=status_code, message=message, headers=error_headers
             )
 
     async def aembedding(
@@ -844,6 +870,7 @@ class AzureChatCompletion(BaseLLM):
         optional_params: dict,
         api_key: Optional[str] = None,
         azure_ad_token: Optional[str] = None,
+        azure_ad_token_provider: Optional[Callable] = None,
         max_retries: Optional[int] = None,
         client=None,
         aembedding=None,
@@ -883,6 +910,8 @@ class AzureChatCompletion(BaseLLM):
                 if azure_ad_token.startswith("oidc/"):
                     azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
                 azure_client_params["azure_ad_token"] = azure_ad_token
+            elif azure_ad_token_provider is not None:
+                azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
 
             ## LOGGING
             logging_obj.pre_call(
@@ -1240,6 +1269,7 @@ class AzureChatCompletion(BaseLLM):
         api_version: Optional[str] = None,
         model_response: Optional[ImageResponse] = None,
         azure_ad_token: Optional[str] = None,
+        azure_ad_token_provider: Optional[Callable] = None,
         client=None,
         aimg_generation=None,
     ) -> ImageResponse:
@@ -1266,7 +1296,7 @@ class AzureChatCompletion(BaseLLM):
                 )
 
             # init AzureOpenAI Client
-            azure_client_params = {
+            azure_client_params: Dict[str, Any] = {
                 "api_version": api_version,
                 "azure_endpoint": api_base,
                 "azure_deployment": model,
@@ -1282,6 +1312,8 @@ class AzureChatCompletion(BaseLLM):
                 if azure_ad_token.startswith("oidc/"):
                     azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
                 azure_client_params["azure_ad_token"] = azure_ad_token
+            elif azure_ad_token_provider is not None:
+                azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
 
             if aimg_generation is True:
                 return self.aimage_generation(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_key=api_key, client=client, azure_client_params=azure_client_params, timeout=timeout, headers=headers)  # type: ignore
@@ -1342,6 +1374,7 @@ class AzureChatCompletion(BaseLLM):
         max_retries: int,
         timeout: Union[float, httpx.Timeout],
         azure_ad_token: Optional[str] = None,
+        azure_ad_token_provider: Optional[Callable] = None,
         aspeech: Optional[bool] = None,
         client=None,
     ) -> HttpxBinaryResponseContent:
@@ -1358,6 +1391,7 @@ class AzureChatCompletion(BaseLLM):
                 api_base=api_base,
                 api_version=api_version,
                 azure_ad_token=azure_ad_token,
+                azure_ad_token_provider=azure_ad_token_provider,
                 max_retries=max_retries,
                 timeout=timeout,
                 client=client,
@@ -1368,6 +1402,7 @@ class AzureChatCompletion(BaseLLM):
             api_version=api_version,
             api_key=api_key,
             azure_ad_token=azure_ad_token,
+            azure_ad_token_provider=azure_ad_token_provider,
             model=model,
             max_retries=max_retries,
             timeout=timeout,
@@ -1393,6 +1428,7 @@ class AzureChatCompletion(BaseLLM):
         api_base: Optional[str],
         api_version: Optional[str],
         azure_ad_token: Optional[str],
+        azure_ad_token_provider: Optional[Callable],
         max_retries: int,
         timeout: Union[float, httpx.Timeout],
         client=None,
@@ -1403,6 +1439,7 @@ class AzureChatCompletion(BaseLLM):
             api_version=api_version,
             api_key=api_key,
             azure_ad_token=azure_ad_token,
+            azure_ad_token_provider=azure_ad_token_provider,
             model=model,
             max_retries=max_retries,
             timeout=timeout,

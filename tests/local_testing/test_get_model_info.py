@@ -8,7 +8,7 @@ from typing import List, Dict, Any
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+)  # Adds the parent directory to the system-path
 import pytest
 
 import litellm
@@ -321,7 +321,7 @@ def test_get_model_info_bedrock_models():
     """
     Check for drift in base model info for bedrock models and regional model info for bedrock models.
     """
-    from litellm import AmazonConverseConfig
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -337,7 +337,7 @@ def test_get_model_info_bedrock_models():
             if any(commitment in k for commitment in potential_commitments):
                 for commitment in potential_commitments:
                     k = k.replace(f"{commitment}/", "")
-            base_model = AmazonConverseConfig()._get_base_model(k)
+            base_model = BedrockModelInfo.get_base_model(k)
             base_model_info = litellm.model_cost[base_model]
             for base_model_key, base_model_value in base_model_info.items():
                 if base_model_key.startswith("supports_"):
@@ -376,3 +376,24 @@ def test_get_model_info_huggingface_models(monkeypatch):
         providers=["huggingface"],
         **info,
     )
+
+
+@pytest.mark.parametrize(
+    "model, provider",
+    [
+        ("bedrock/us-east-2/us.anthropic.claude-3-haiku-20240307-v1:0", None),
+        (
+            "bedrock/us-east-2/us.anthropic.claude-3-haiku-20240307-v1:0",
+            "bedrock",
+        ),
+    ],
+)
+def test_get_model_info_cost_calculator_bedrock_region_cris_stripped(model, provider):
+    """
+    ensure cross region inferencing model is used correctly
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/8115
+    """
+    info = get_model_info(model=model, custom_llm_provider=provider)
+    print("info", info)
+    assert info["key"] == "us.anthropic.claude-3-haiku-20240307-v1:0"
+    assert info["litellm_provider"] == "bedrock"
