@@ -116,8 +116,7 @@ class AnthropicConfig(BaseConfig):
         computer_tool_used: Optional[str] = None,
         prompt_caching_set: bool = False,
         pdf_used: bool = False,
-        is_vertex_request: bool = False,
-        token_efficient_tools_beta: bool = False
+        is_vertex_request: bool = False
     ) -> dict:
         betas = []
         if prompt_caching_set:
@@ -126,8 +125,6 @@ class AnthropicConfig(BaseConfig):
             betas.append(computer_tool_used)
         if pdf_used:
             betas.append("pdfs-2024-09-25")
-        if token_efficient_tools_beta:
-            betas.append("token-efficient-tools-2025-02-19")
         headers = {
             "anthropic-version": anthropic_version or "2023-06-01",
             "x-api-key": api_key,
@@ -793,8 +790,7 @@ class AnthropicConfig(BaseConfig):
             pdf_used=pdf_used,
             api_key=api_key,
             is_vertex_request=optional_params.get("is_vertex_request", False),
-            token_efficient_tools_beta=token_efficient_tools_beta,
         )
-
         headers = {**headers, **anthropic_headers}
+        print(headers)
         return headers
