@@ -1444,6 +1444,11 @@ def anthropic_messages_pt(  # noqa: PLR0915
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
             assistant_content_block: ChatCompletionAssistantMessage = messages[msg_i]  # type: ignore
+
+            if (
+                "thinking_blocks" in assistant_content_block
+            ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
+                assistant_content.extend(assistant_content_block["thinking_blocks"])
             if "content" in assistant_content_block and isinstance(
                 assistant_content_block["content"], list
             ):
