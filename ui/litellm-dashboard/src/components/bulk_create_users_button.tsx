@@ -118,10 +118,11 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
       </Button2>
       
       <Modal
-        title="Bulk Create Users"
+        title={`Bulk Create Users (${parsedData.length} users)`}
         visible={isModalVisible}
         width={800}
         onCancel={() => setIsModalVisible(false)}
+        bodyStyle={{ maxHeight: '70vh', overflow: 'auto' }}
         footer={[
           <Button2 key="download" onClick={downloadTemplate}>
             <DownloadOutlined /> Download Template
@@ -135,7 +136,7 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
           </Button2>,
         ]}
       >
-        <div className="space-y-4">
+          
           <Text>Upload a CSV file with user information</Text>
           
           <Upload
@@ -156,11 +157,11 @@ const BulkCreateUsers: React.FC<BulkCreateUsersProps> = ({
                 dataSource={parsedData}
                 columns={columns}
                 size="small"
-                pagination={false}
+                pagination={{ pageSize: 5 }}
+                scroll={{ y: 300 }}
               />
             </div>
           )}
-        </div>
       </Modal>
     </>
   );

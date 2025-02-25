@@ -149,7 +149,9 @@ const Createuser: React.FC<CreateuserProps> = ({
       message.success("API user Created");
       form.resetFields();
       localStorage.removeItem("userData" + userID);
-    } catch (error) {
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.detail || error?.message || "Error creating the user";
+      message.error(errorMessage);
       console.error("Error creating the user:", error);
     }
   };
