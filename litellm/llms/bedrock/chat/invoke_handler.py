@@ -26,7 +26,6 @@ import httpx  # type: ignore
 
 import litellm
 from litellm import verbose_logger
-from litellm._logging import print_verbose
 from litellm.caching.caching import InMemoryCache
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
