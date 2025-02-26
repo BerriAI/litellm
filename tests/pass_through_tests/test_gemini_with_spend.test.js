@@ -29,7 +29,7 @@ describe('Gemini AI Tests', () => {
         };
 
         const model = genAI.getGenerativeModel({
-            model: 'gemini-pro'
+            model: 'gemini-1.5-pro'
         }, requestOptions);
 
         const prompt = 'Say "hello test" and nothing else';
@@ -76,7 +76,7 @@ describe('Gemini AI Tests', () => {
         };
 
         const model = genAI.getGenerativeModel({
-            model: 'gemini-pro'
+            model: 'gemini-1.5-pro'
         }, requestOptions);
 
         const prompt = 'Say "hello test" and nothing else';
