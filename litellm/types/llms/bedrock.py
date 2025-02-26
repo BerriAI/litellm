@@ -76,6 +76,12 @@ class BedrockConverseReasoningContentBlock(TypedDict, total=False):
     redactedContent: str
 
 
+class BedrockConverseReasoningContentBlockDelta(TypedDict, total=False):
+    signature: str
+    redactedContent: str
+    text: str
+
+
 class ContentBlock(TypedDict, total=False):
     text: str
     image: ImageBlock
@@ -178,6 +184,7 @@ class ContentBlockDeltaEvent(TypedDict, total=False):
 
     text: str
     toolUse: ToolBlockDeltaEvent
+    reasoningContent: BedrockConverseReasoningContentBlockDelta
 
 
 class CommonRequestObject(

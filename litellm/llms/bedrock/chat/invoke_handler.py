@@ -55,9 +55,14 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionUsageBlock,
 )
-from litellm.types.utils import ChatCompletionMessageToolCall, Choices
+from litellm.types.utils import ChatCompletionMessageToolCall, Choices, Delta
 from litellm.types.utils import GenericStreamingChunk as GChunk
-from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
+from litellm.types.utils import (
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+    Usage,
+)
 from litellm.utils import CustomStreamWrapper, get_secret
 
 from ..base_aws_llm import BaseAWSLLM
@@ -212,7 +217,6 @@ async def make_call(
                 api_key="",
                 data=data,
                 messages=messages,
-                print_verbose=print_verbose,
                 encoding=litellm.encoding,
             )  # type: ignore
             completion_stream: Any = MockResponseIterator(
@@ -298,7 +302,6 @@ def make_sync_call(
                 api_key="",
                 data=data,
                 messages=messages,
-                print_verbose=print_verbose,
                 encoding=litellm.encoding,
             )  # type: ignore
             completion_stream: Any = MockResponseIterator(
@@ -525,7 +528,7 @@ class BedrockLLM(BaseAWSLLM):
                                 ].message.tool_calls:
                                     _tool_call = {**tool_call.dict(), "index": 0}
                                     _tool_calls.append(_tool_call)
-                            delta_obj = litellm.utils.Delta(
+                            delta_obj = Delta(
                                 content=getattr(
                                     model_response.choices[0].message, "content", None
                                 ),
@@ -1258,14 +1261,21 @@ class AWSEventStreamDecoder:
             return True
         return False
 
-    def converse_chunk_parser(self, chunk_data: dict) -> GChunk:
+    def extract_reasoning_content_str(
+        self, reasoning_content_block: BedrockConverseReasoningContentBlockDelta
+    ) -> Optional[str]:
+        if "text" in reasoning_content_block:
+            return reasoning_content_block["text"]
+        return None
+
+    def converse_chunk_parser(self, chunk_data: dict) -> ModelResponseStream:
         try:
             verbose_logger.debug("\n\nRaw Chunk: {}\n\n".format(chunk_data))
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
-            is_finished = False
             finish_reason = ""
             usage: Optional[ChatCompletionUsageBlock] = None
+            provider_specific_fields: dict = {}
 
             index = int(chunk_data.get("contentBlockIndex", 0))
             if "start" in chunk_data:
@@ -1305,6 +1315,13 @@ class AWSEventStreamDecoder:
                         },
                         "index": index,
                     }
+                elif "reasoningContent" in delta_obj:
+                    provider_specific_fields = {
+                        "reasoningContent": delta_obj["reasoningContent"],
+                        "reasoning_content": self.extract_reasoning_content_str(
+                            delta_obj["reasoningContent"]
+                        ),
+                    }
             elif (
                 "contentBlockIndex" in chunk_data
             ):  # stop block, no 'start' or 'delta' object
@@ -1321,7 +1338,6 @@ class AWSEventStreamDecoder:
                     }
             elif "stopReason" in chunk_data:
                 finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
-                is_finished = True
             elif "usage" in chunk_data:
                 usage = ChatCompletionUsageBlock(
                     prompt_tokens=chunk_data.get("inputTokens", 0),
@@ -1329,18 +1345,30 @@ class AWSEventStreamDecoder:
                     total_tokens=chunk_data.get("totalTokens", 0),
                 )
 
-            response = GChunk(
-                text=text,
-                tool_use=tool_use,
-                is_finished=is_finished,
-                finish_reason=finish_reason,
-                usage=usage,
-                index=index,
-            )
-
             if "trace" in chunk_data:
                 trace = chunk_data.get("trace")
-                response["provider_specific_fields"] = {"trace": trace}
+                provider_specific_fields["trace"] = trace
+
+            response = ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        finish_reason=finish_reason,
+                        index=index,
+                        delta=Delta(
+                            content=text,
+                            role="assistant",
+                            tool_calls=[tool_use] if tool_use else None,
+                            provider_specific_fields=(
+                                provider_specific_fields
+                                if provider_specific_fields
+                                else None
+                            ),
+                        ),
+                    )
+                ],
+                usage=usage,
+            )
+
             return response
         except Exception as e:
             raise Exception("Received streaming error - {}".format(str(e)))
