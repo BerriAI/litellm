@@ -3390,7 +3390,7 @@ class ProxyStartupEvent:
         """
         from litellm.litellm_core_utils.dd_tracing import _should_use_dd_tracer
 
-        if _should_use_dd_tracer:
+        if _should_use_dd_tracer():
             import ddtrace
 
             ddtrace.patch_all(logging=True, openai=False)
