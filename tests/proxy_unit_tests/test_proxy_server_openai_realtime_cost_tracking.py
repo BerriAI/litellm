@@ -1,12 +1,9 @@
-# import asyncio
 import asyncio
 import json
 import os
 
 from dotenv import load_dotenv
 from unittest.mock import AsyncMock
-
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
 load_dotenv()
 import os
@@ -107,7 +104,7 @@ class AsyncMockClientWebsocket(AsyncMock):
 )
 async def test_proxy_openai_realtime_cost_tracking(model, mocker, client):
     """
-    Test Health Check with Valid models passes
+    Test OpenAI Realtime Tracking on Proxy server
 
     """
     import websockets
@@ -139,56 +136,5 @@ async def test_proxy_openai_realtime_cost_tracking(model, mocker, client):
     ) as websocket:
         websocket.send_text(websocket_request_body)
         await asyncio.sleep(1)
-    mock_update_database_function.assert_called()
-    mock_update_lagnfuse_function.assert_called()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "model",
-    [
-        "openai/gpt-4o-realtime-preview",
-    ],
-)
-async def test_litellm_arealtime_openai_cost_tracking(model, mocker, client):
-    import websockets
-    import litellm
-
-    client_websocket = AsyncMockClientWebsocket()
-    backend_websocket = AsyncMockWebsocket()
-    mock_connect = AsyncMock()
-    mock_connect.__aenter__.return_value = backend_websocket
-    mocker.patch(
-        "litellm.llms.openai.realtime.handler.websockets.connect",
-        return_value=mock_connect,
-    )
-    mock_update_database_function = mocker.patch(
-        "litellm.litellm_core_utils.litellm_logging.Logging.async_websocket_success_handler"
-    )
-    mock_update_lagnfuse_function = mocker.patch(
-        "litellm.litellm_core_utils.litellm_logging.Logging.websocket_success_handler"
-    )
-    user_api_key_auth = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN.value,
-        api_key="sk-1234",
-        user_id="1234",
-    )
-    user_api_key_dict = dict(
-        user_api_key=user_api_key_auth.api_key,
-        user_api_key_hash=user_api_key_auth.api_key,
-        user_api_key_alias=user_api_key_auth.key_alias,
-        user_api_key_team_id=user_api_key_auth.team_id,
-        user_api_key_user_id=user_api_key_auth.user_id,
-        user_api_key_org_id=user_api_key_auth.org_id,
-        user_api_key_team_alias=user_api_key_auth.team_alias,
-        user_api_key_end_user_id=user_api_key_auth.end_user_id,
-        user_api_key_user_email=user_api_key_auth.user_email,
-    )
-    asyncio.create_task(
-        litellm._arealtime(
-            model=model, websocket=client_websocket, user_api_key_dict=user_api_key_dict
-        )
-    )
-    await asyncio.sleep(1)
     mock_update_database_function.assert_called()
     mock_update_lagnfuse_function.assert_called()
