@@ -42,29 +42,36 @@ class VertexBase(BaseLLM):
             Request,  # type: ignore[import-untyped]
         )
 
-        if credentials is not None and isinstance(credentials, str):
+        if credentials is not None:
             import google.oauth2.service_account
 
-            verbose_logger.debug(
-                "Vertex: Loading vertex credentials from %s", credentials
-            )
-            verbose_logger.debug(
-                "Vertex: checking if credentials is a valid path, os.path.exists(%s)=%s, current dir %s",
-                credentials,
-                os.path.exists(credentials),
-                os.getcwd(),
-            )
+            if isinstance(credentials, str):
+                verbose_logger.debug(
+                    "Vertex: Loading vertex credentials from %s", credentials
+                )
+                verbose_logger.debug(
+                    "Vertex: checking if credentials is a valid path, os.path.exists(%s)=%s, current dir %s",
+                    credentials,
+                    os.path.exists(credentials),
+                    os.getcwd(),
+                )
 
-            try:
-                if os.path.exists(credentials):
-                    json_obj = json.load(open(credentials))
-                else:
-                    json_obj = json.loads(credentials)
-            except Exception:
-                raise Exception(
-                    "Unable to load vertex credentials from environment. Got={}".format(
-                        credentials
+                try:
+                    if os.path.exists(credentials):
+                        json_obj = json.load(open(credentials))
+                    else:
+                        json_obj = json.loads(credentials)
+                except Exception:
+                    raise Exception(
+                        "Unable to load vertex credentials from environment. Got={}".format(
+                            credentials
+                        )
                     )
+            elif isinstance(credentials, dict):
+                json_obj = credentials
+            else:
+                raise ValueError(
+                    "Invalid credentials type: {}".format(type(credentials))
                 )
 
             # Check if the JSON object contains Workload Identity Federation configuration

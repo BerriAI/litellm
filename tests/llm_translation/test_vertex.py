@@ -1297,3 +1297,20 @@ def test_process_gemini_image_http_url(
     # Act
     result = _process_gemini_image(http_url)
     # assert result["file_data"]["file_uri"] == http_url
+
+
+def test_vertex_anthropic_completion():
+    from litellm import completion
+    import json
+
+    litellm.set_verbose = True
+    with open("vertex_test_account.json", "r") as f:
+        vertex_credentials = json.load(f)
+
+    response = completion(
+        model="vertex_ai/claude-3-7-sonnet@20250219",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        vertex_credentials=vertex_credentials,
+        vertex_region="us-east5",
+    )
+    print(response)
