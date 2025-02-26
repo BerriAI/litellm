@@ -26,9 +26,7 @@ ROUTE_ENDPOINT_MAPPING = {
 
 class ProxyModelNotFoundError(HTTPException):
     def __init__(self, route: str, model_name: str):
-        detail = {
-            "error": f"{route}: Invalid model name passed in model={model_name}. Call `/v1/models` to view available models for your key."
-        }
+        detail = f"{route}: Invalid model name passed in model={model_name}. Call `/v1/models` to view available models for your key."
         super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
 
