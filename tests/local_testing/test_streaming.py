@@ -4085,6 +4085,7 @@ def test_deepseek_reasoning_content_completion(model):
         )
 
         reasoning_content_exists = False
+        signature_delta_exists = False
         for chunk in resp:
             print(f"chunk 2: {chunk}")
             if (
@@ -4094,5 +4095,29 @@ def test_deepseek_reasoning_content_completion(model):
                 reasoning_content_exists = True
                 break
         assert reasoning_content_exists
+    except litellm.Timeout:
+        pytest.skip("Model is timing out")
+
+
+def test_claude37_signature_delta_completion():
+    try:
+        resp = litellm.completion(
+            model="anthropic/claude-3-7-sonnet-20250219",
+            messages=[{"role": "user", "content": "Tell me a joke."}],
+            stream=True,
+            thinking={"type": "enabled", "budget_tokens": 1024},
+            timeout=5,
+        )
+
+        signature_delta_exists = False
+        for chunk in resp:
+            if (
+                hasattr(chunk.choices[0].delta, "thinking_blocks")
+                and chunk.choices[0].delta.thinking_blocks
+                and chunk.choices[0].delta.thinking_blocks[0]["signature_delta"]
+            ):
+                signature_delta_exists = True
+                break
+        assert signature_delta_exists
     except litellm.Timeout:
         pytest.skip("Model is timing out")
