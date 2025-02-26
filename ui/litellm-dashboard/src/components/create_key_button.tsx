@@ -161,7 +161,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   >({});
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
   const [userSearchLoading, setUserSearchLoading] = useState<boolean>(false);
-  const [selectedField, setSelectedField] = useState<'user_email' | 'user_id'>('user_id');
 
   const handleOk = () => {
     setIsModalVisible(false);
@@ -287,7 +286,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     setIsCreateUserModalVisible(false);
   };
 
-  const fetchUsers = async (searchText: string, fieldName: 'user_email' | 'user_id'): Promise<void> => {
+  const fetchUsers = async (searchText: string): Promise<void> => {
     if (!searchText) {
       setUserOptions([]);
       return;
@@ -296,7 +295,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     setUserSearchLoading(true);
     try {
       const params = new URLSearchParams();
-      params.append(fieldName, searchText);
+      params.append('user_email', searchText); // Always search by email
       if (accessToken == null) {
         return;
       }
@@ -304,10 +303,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       
       const data: User[] = response;
       const options: UserOption[] = data.map(user => ({
-        label: fieldName === 'user_email' 
-          ? `${user.user_email}`
-          : `${user.user_id}`,
-        value: fieldName === 'user_email' ? user.user_email : user.user_id,
+        label: `${user.user_email}`,
+        value: user.user_email,
         user
       }));
       setUserOptions(options);
@@ -319,12 +316,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   };
 
   const debouncedSearch = useCallback(
-    debounce((text: string, fieldName: 'user_email' | 'user_id') => fetchUsers(text, fieldName), 300),
+    debounce((text: string) => fetchUsers(text), 300),
     []
   );
 
   const handleUserSearch = (value: string): void => {
-    debouncedSearch(value, selectedField);
+    debouncedSearch(value);
   };
 
   const handleUserSelect = (_value: string, option: UserOption): void => {
@@ -374,36 +371,24 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 rules={[{ required: keyOwner === "another_user", message: `Please input the user ID of the user you are assigning the key to` }]}
                 help={"Get User ID - Click on the 'Users' tab in the sidebar."}
               >
-                <div className="flex flex-col gap-2">
-                  <div className="flex items-center gap-2">
-                    <Select
-                      showSearch
-                      className="w-full"
-                      placeholder="Search by user ID"
-                      filterOption={false}
-                      onSearch={handleUserSearch}
-                      onSelect={(value, option) => handleUserSelect(value, option as UserOption)}
-                      options={userOptions}
-                      loading={userSearchLoading}
-                      allowClear
-                    />
-                    <Button2 
-                      onClick={() => setIsCreateUserModalVisible(true)}
-                      size="xs"
-                    >
-                      Create User
-                    </Button2>
-                  </div>
-                  <div className="flex justify-end">
-                    <Radio.Group 
-                      onChange={(e) => setSelectedField(e.target.value)} 
-                      value={selectedField}
-                      size="small"
-                    >
-                      <Radio.Button value="user_id">Search by ID</Radio.Button>
-                      <Radio.Button value="user_email">Search by Email</Radio.Button>
-                    </Radio.Group>
-                  </div>
+                <div className="flex items-center gap-2">
+                  <Select
+                    showSearch
+                    className="w-full"
+                    placeholder="Search by user email"
+                    filterOption={false}
+                    onSearch={handleUserSearch}
+                    onSelect={(value, option) => handleUserSelect(value, option as UserOption)}
+                    options={userOptions}
+                    loading={userSearchLoading}
+                    allowClear
+                  />
+                  <Button2 
+                    onClick={() => setIsCreateUserModalVisible(true)}
+                    size="xs"
+                  >
+                    Create User
+                  </Button2>
                 </div>
               </Form.Item>
             )}
