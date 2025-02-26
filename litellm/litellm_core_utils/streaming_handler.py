@@ -798,9 +798,10 @@ class CustomStreamWrapper:
                         model_response.choices[0].delta, "role"
                     ):
                         _initial_delta = model_response.choices[0].delta.model_dump()
+
                         _initial_delta.pop("role", None)
                         model_response.choices[0].delta = Delta(**_initial_delta)
-                    print_verbose(
+                    verbose_logger.debug(
                         f"model_response.choices[0].delta: {model_response.choices[0].delta}"
                     )
                 else:

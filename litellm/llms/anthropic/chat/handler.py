@@ -512,7 +512,12 @@ class ModelResponseIterator:
 
         return usage_block
 
-    def _content_block_delta_helper(self, chunk: dict):
+    def _content_block_delta_helper(self, chunk: dict) -> Tuple[
+        str,
+        Optional[ChatCompletionToolCallChunk],
+        List[ChatCompletionThinkingBlock],
+        Dict[str, Any],
+    ]:
         """
         Helper function to handle the content block delta
         """
@@ -548,7 +553,8 @@ class ModelResponseIterator:
                     signature_delta=content_block["delta"].get("signature"),
                 )
             ]
-        return text, tool_use, thinking_blocks
+            provider_specific_fields["thinking_blocks"] = thinking_blocks
+        return text, tool_use, thinking_blocks, provider_specific_fields
 
     def _handle_reasoning_content(
         self, thinking_blocks: List[ChatCompletionThinkingBlock]
@@ -582,11 +588,10 @@ class ModelResponseIterator:
                 Anthropic content chunk
                 chunk = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': 'Hello'}}
                 """
-                text, tool_use, thinking_blocks = self._content_block_delta_helper(
-                    chunk=chunk
+                text, tool_use, thinking_blocks, provider_specific_fields = (
+                    self._content_block_delta_helper(chunk=chunk)
                 )
                 if thinking_blocks:
-                    provider_specific_fields["thinking_blocks"] = thinking_blocks
                     reasoning_content = self._handle_reasoning_content(
                         thinking_blocks=thinking_blocks
                     )

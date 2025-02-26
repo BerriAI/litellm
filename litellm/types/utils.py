@@ -551,9 +551,7 @@ class Message(OpenAIObject):
 class Delta(OpenAIObject):
     reasoning_content: Optional[str] = None
     thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
-    provider_specific_fields: Optional[Dict[str, Any]] = Field(
-        default=None, exclude=True
-    )
+    provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
 
     def __init__(
         self,
