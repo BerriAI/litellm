@@ -66,6 +66,16 @@ class ToolUseBlock(TypedDict):
     toolUseId: str
 
 
+class BedrockConverseReasoningTextBlock(TypedDict, total=False):
+    text: Required[str]
+    signature: str
+
+
+class BedrockConverseReasoningContentBlock(TypedDict, total=False):
+    reasoningText: BedrockConverseReasoningTextBlock
+    redactedContent: str
+
+
 class ContentBlock(TypedDict, total=False):
     text: str
     image: ImageBlock
@@ -73,6 +83,7 @@ class ContentBlock(TypedDict, total=False):
     toolResult: ToolResultBlock
     toolUse: ToolUseBlock
     cachePoint: CachePointBlock
+    reasoningContent: BedrockConverseReasoningContentBlock
 
 
 class MessageBlock(TypedDict):
