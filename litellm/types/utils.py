@@ -509,12 +509,16 @@ class Message(OpenAIObject):
                 if tool_calls is not None and len(tool_calls) > 0
                 else None
             ),
-            "reasoning_content": reasoning_content,
-            "thinking_blocks": thinking_blocks,
         }
 
         if audio is not None:
             init_values["audio"] = audio
+
+        if thinking_blocks is not None:
+            init_values["thinking_blocks"] = thinking_blocks
+
+        if reasoning_content is not None:
+            init_values["reasoning_content"] = reasoning_content
 
         super(Message, self).__init__(
             **init_values,  # type: ignore
@@ -525,6 +529,14 @@ class Message(OpenAIObject):
             # delete audio from self
             # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
             del self.audio
+
+        if reasoning_content is None:
+            # ensure default response matches OpenAI spec
+            del self.reasoning_content
+
+        if thinking_blocks is None:
+            # ensure default response matches OpenAI spec
+            del self.thinking_blocks
 
         add_provider_specific_fields(self, provider_specific_fields)
 
