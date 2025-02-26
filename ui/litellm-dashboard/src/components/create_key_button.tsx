@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Button, TextInput, Grid, Col } from "@tremor/react";
 import {
   Card,
@@ -31,12 +31,14 @@ import {
   getGuardrailsList,
   proxyBaseUrl,
   getPossibleUserRoles,
+  userFilterUICall,
 } from "./networking";
 import { Team } from "./key_team_helpers/key_list";
 import TeamDropdown from "./common_components/team_dropdown";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Tooltip } from 'antd';
 import Createuser from "./create_user_button";
+import debounce from 'lodash/debounce';
 
 const { Option } = Select;
 
@@ -48,6 +50,18 @@ interface CreateKeyProps {
   data: any[] | null;
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
   teams: Team[] | null;
+}
+
+interface User {
+  user_id: string;
+  user_email: string;
+  role?: string;
+}
+
+interface UserOption {
+  label: string;
+  value: string;
+  user: User;
 }
 
 const getPredefinedTags = (data: any[] | null) => {
@@ -145,6 +159,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [possibleUIRoles, setPossibleUIRoles] = useState<
     Record<string, Record<string, string>>
   >({});
+  const [userOptions, setUserOptions] = useState<UserOption[]>([]);
+  const [userSearchLoading, setUserSearchLoading] = useState<boolean>(false);
+  const [selectedField, setSelectedField] = useState<'user_email' | 'user_id'>('user_id');
 
   const handleOk = () => {
     setIsModalVisible(false);
@@ -270,6 +287,53 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     setIsCreateUserModalVisible(false);
   };
 
+  const fetchUsers = async (searchText: string, fieldName: 'user_email' | 'user_id'): Promise<void> => {
+    if (!searchText) {
+      setUserOptions([]);
+      return;
+    }
+
+    setUserSearchLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.append(fieldName, searchText);
+      if (accessToken == null) {
+        return;
+      }
+      const response = await userFilterUICall(accessToken, params);
+      
+      const data: User[] = response;
+      const options: UserOption[] = data.map(user => ({
+        label: fieldName === 'user_email' 
+          ? `${user.user_email}`
+          : `${user.user_id}`,
+        value: fieldName === 'user_email' ? user.user_email : user.user_id,
+        user
+      }));
+      setUserOptions(options);
+    } catch (error) {
+      console.error('Error fetching users:', error);
+    } finally {
+      setUserSearchLoading(false);
+    }
+  };
+
+  const debouncedSearch = useCallback(
+    debounce((text: string, fieldName: 'user_email' | 'user_id') => fetchUsers(text, fieldName), 300),
+    []
+  );
+
+  const handleUserSearch = (value: string): void => {
+    debouncedSearch(value, selectedField);
+  };
+
+  const handleUserSelect = (_value: string, option: UserOption): void => {
+    const selectedUser = option.user;
+    form.setFieldsValue({
+      user_id: selectedUser.user_id
+    });
+  };
+
   return (
     <div>
       <Button className="mx-auto" onClick={() => setIsModalVisible(true)}>
@@ -306,23 +370,40 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               <Form.Item
                 label="User ID"
                 name="user_id"
-                valuePropName="user_id"
                 className="mt-8"
                 rules={[{ required: keyOwner === "another_user", message: `Please input the user ID of the user you are assigning the key to` }]}
                 help={"Get User ID - Click on the 'Users' tab in the sidebar."}
               >
-                <div className="flex items-center gap-2">
-                  <TextInput 
-                    placeholder="User ID" 
-                    onChange={(e) => form.setFieldValue('user_id', e.target.value)}
-                    value={form.getFieldValue('user_id') || newlyCreatedUserId || ''}
-                  />
-                  <Button2 
-                    onClick={() => setIsCreateUserModalVisible(true)}
-                    size="xs"
-                  >
-                    Create User
-                  </Button2>
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2">
+                    <Select
+                      showSearch
+                      className="w-full"
+                      placeholder="Search by user ID"
+                      filterOption={false}
+                      onSearch={handleUserSearch}
+                      onSelect={(value, option) => handleUserSelect(value, option as UserOption)}
+                      options={userOptions}
+                      loading={userSearchLoading}
+                      allowClear
+                    />
+                    <Button2 
+                      onClick={() => setIsCreateUserModalVisible(true)}
+                      size="xs"
+                    >
+                      Create User
+                    </Button2>
+                  </div>
+                  <div className="flex justify-end">
+                    <Radio.Group 
+                      onChange={(e) => setSelectedField(e.target.value)} 
+                      value={selectedField}
+                      size="small"
+                    >
+                      <Radio.Button value="user_id">Search by ID</Radio.Button>
+                      <Radio.Button value="user_email">Search by Email</Radio.Button>
+                    </Radio.Group>
+                  </div>
                 </div>
               </Form.Item>
             )}
