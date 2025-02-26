@@ -9,7 +9,8 @@ client = openai.OpenAI(base_url="http://0.0.0.0:4000/openai", api_key="sk-1234")
 
 
 def test_openai_assistants_e2e_operations():
-    assistant = openai_client.beta.assistants.create(
+
+    assistant = client.beta.assistants.create(
         name="Math Tutor",
         instructions="You are a personal math tutor. Write and run code to answer math questions.",
         tools=[{"type": "code_interpreter"}],
@@ -17,10 +18,10 @@ def test_openai_assistants_e2e_operations():
     )
     print("assistant created", assistant)
 
-    get_assistant = openai_client.beta.assistants.retrieve(assistant.id)
+    get_assistant = client.beta.assistants.retrieve(assistant.id)
     print(get_assistant)
 
-    delete_assistant = openai_client.beta.assistants.delete(assistant.id)
+    delete_assistant = client.beta.assistants.delete(assistant.id)
     print(delete_assistant)
 
 
