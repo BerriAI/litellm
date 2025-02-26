@@ -3,7 +3,6 @@
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
 import copy
 import datetime
-from functools import lru_cache
 import json
 import os
 import re
@@ -13,6 +12,7 @@ import time
 import traceback
 import uuid
 from datetime import datetime as dt_object
+from functools import lru_cache
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union, cast
 
 from pydantic import BaseModel
@@ -2513,15 +2513,19 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
 
             # auth can be disabled on local deployments of arize phoenix
             if arize_phoenix_config.otlp_auth_headers is not None:
-                os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = arize_phoenix_config.otlp_auth_headers
-        
+                os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = (
+                    arize_phoenix_config.otlp_auth_headers
+                )
+
             for callback in _in_memory_loggers:
                 if (
                     isinstance(callback, OpenTelemetry)
                     and callback.callback_name == "arize_phoenix"
                 ):
                     return callback  # type: ignore
-            _otel_logger = OpenTelemetry(config=otel_config, callback_name="arize_phoenix")
+            _otel_logger = OpenTelemetry(
+                config=otel_config, callback_name="arize_phoenix"
+            )
             _in_memory_loggers.append(_otel_logger)
             return _otel_logger  # type: ignore
         elif logging_integration == "otel":
