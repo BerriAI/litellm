@@ -31,6 +31,7 @@ import datetime
 import json
 from typing import Any, Dict, List, Optional, Union
 import uuid
+import websockets
 
 import litellm
 
@@ -104,6 +105,10 @@ class RealTimeStreaming:
         from litellm.litellm_core_utils.openai_realtime_tracking import (
             OpenAIRealtimeCostTracking,
         )
+        if not OpenAIRealtimeCostTracking.model_is_openai_realtime(
+            self.logging_obj.model_call_details.get("model")
+        ):
+            return
 
         self.logging_obj.model_call_details["completion_start_time"] = (
             datetime.datetime.now(datetime.timezone.utc)
@@ -118,8 +123,16 @@ class RealTimeStreaming:
             response=copy.deepcopy(message),
             org_id=self.user_api_key_dict["user_api_key_org_id"],
         )
-        await self.logging_obj.async_websocket_success_handler(realtime_cost_tracking)
-        self.logging_obj.websocket_success_handler(realtime_cost_tracking)
+        try:
+            await self.logging_obj.async_websocket_success_handler(
+                realtime_cost_tracking
+            )
+        except Exception as e:
+            pass
+        try:
+            self.logging_obj.websocket_success_handler(realtime_cost_tracking)
+        except Exception as e:
+            pass
 
     async def log_messages(self):
         """Log messages in list"""
@@ -131,8 +144,6 @@ class RealTimeStreaming:
             executor.submit(self.logging_obj.success_handler(self.messages))
 
     async def backend_to_client_send_messages(self):
-        import websockets
-
         try:
             while True:
                 message = await self.backend_ws.recv()
@@ -146,6 +157,7 @@ class RealTimeStreaming:
         except Exception:
             pass
         finally:
+            print("finally in backend to client")
             await self.log_messages()
 
     async def client_ack_messages(self):
@@ -156,7 +168,7 @@ class RealTimeStreaming:
                 self.store_input(message=message)
                 ## FORWARD TO BACKEND
                 await self.backend_ws.send(message)
-        except self.websockets.exceptions.ConnectionClosed:  # type: ignore
+        except websockets.exceptions.ConnectionClosed:  # type: ignore
             pass
 
     async def bidirectional_forward(self):
@@ -164,7 +176,7 @@ class RealTimeStreaming:
         forward_task = asyncio.create_task(self.backend_to_client_send_messages())
         try:
             await self.client_ack_messages()
-        except self.websockets.exceptions.ConnectionClosed:  # type: ignore
+        except websockets.exceptions.ConnectionClosed:  # type: ignore
             forward_task.cancel()
         finally:
             if not forward_task.done():

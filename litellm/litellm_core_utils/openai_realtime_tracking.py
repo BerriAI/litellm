@@ -174,6 +174,8 @@ class OpenAIRealtimeCostTracking:
             return
 
         from litellm.proxy.proxy_server import disable_spend_logs
+        from litellm.proxy.utils import update_spend
+        from litellm.proxy.proxy_server import proxy_logging_obj
 
         update_db_funcs = [
             self.update_user_db,
@@ -186,6 +188,13 @@ class OpenAIRealtimeCostTracking:
             asyncio.create_task(func())
         if not disable_spend_logs:
             await self.insert_spend_log_to_db()
+
+        await self.prisma_client.connect()
+        await update_spend(
+            prisma_client=self.prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
     async def update_user_db(self):
         import litellm
@@ -231,8 +240,6 @@ class OpenAIRealtimeCostTracking:
 
     async def insert_spend_log_to_db(self):
         from litellm.proxy.proxy_server import _set_spend_logs_payload
-        from litellm.proxy.utils import update_spend
-        from litellm.proxy.proxy_server import proxy_logging_obj
         from litellm.proxy.spend_tracking.spend_tracking_utils import (
             get_logging_payload,
         )
@@ -250,15 +257,6 @@ class OpenAIRealtimeCostTracking:
             spend_logs_url=os.getenv("SPEND_LOGS_URL"),
             prisma_client=self.prisma_client,
         )
-        try:
-            await self.prisma_client.connect()
-            await update_spend(
-                prisma_client=self.prisma_client,
-                db_writer_client=None,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-        except Exception as e:
-            raise e
 
     async def update_team_db(self):
         if self.team_id is None:
