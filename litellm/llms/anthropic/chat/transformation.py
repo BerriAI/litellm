@@ -29,7 +29,13 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import Message as LitellmMessage
 from litellm.types.utils import PromptTokensDetailsWrapper
-from litellm.utils import ModelResponse, Usage, add_dummy_tool, has_tool_call_blocks
+from litellm.utils import (
+    ModelResponse,
+    Usage,
+    add_dummy_tool,
+    has_tool_call_blocks,
+    get_max_tokens,
+)
 
 from ..common_utils import AnthropicError, process_anthropic_headers
 
@@ -48,9 +54,7 @@ class AnthropicConfig(BaseConfig):
     to pass metadata to anthropic, it's {"user_id": "any-relevant-information"}
     """
 
-    max_tokens: Optional[int] = (
-        4096  # anthropic requires a default value (Opus, Sonnet, and Haiku have the same default)
-    )
+    max_tokens: Optional[int] = None
     stop_sequences: Optional[list] = None
     temperature: Optional[int] = None
     top_p: Optional[int] = None
@@ -60,9 +64,7 @@ class AnthropicConfig(BaseConfig):
 
     def __init__(
         self,
-        max_tokens: Optional[
-            int
-        ] = 4096,  # You can pass in a value yourself or use the default value 4096
+        max_tokens: Optional[int] = None,
         stop_sequences: Optional[list] = None,
         temperature: Optional[int] = None,
         top_p: Optional[int] = None,
@@ -76,8 +78,27 @@ class AnthropicConfig(BaseConfig):
                 setattr(self.__class__, key, value)
 
     @classmethod
-    def get_config(cls):
-        return super().get_config()
+    def get_config(cls, *, model: Optional[str] = None):
+        config = super().get_config()
+
+        # anthropic requires a default value for max_tokens
+        if config.get("max_tokens") is None:
+            # If you don't set max_tokens when initializing AnthropicConfig,
+            # it will look up the default value for the model.
+            config["max_tokens"] = AnthropicConfig.get_max_tokens_for_model(model)
+
+        return config
+
+    @staticmethod
+    def get_max_tokens_for_model(model: Optional[str] = None) -> int:
+        # Claude 3 Opus, Sonnet, and Haiku have the same default
+        DEFAULT_MAX_TOKENS = 4096
+        if model is None:
+            return DEFAULT_MAX_TOKENS
+        max_tokens = get_max_tokens(model)
+        if max_tokens is None:
+            return DEFAULT_MAX_TOKENS
+        return max_tokens
 
     def get_supported_openai_params(self, model: str):
         return [
@@ -537,7 +558,7 @@ class AnthropicConfig(BaseConfig):
             )  # don't use verbose_logger.exception, if exception is raised
 
         ## Load Config
-        config = litellm.AnthropicConfig.get_config()
+        config = litellm.AnthropicConfig().get_config(model=model)
         for k, v in config.items():
             if (
                 k not in optional_params
