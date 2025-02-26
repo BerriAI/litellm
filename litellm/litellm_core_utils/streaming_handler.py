@@ -721,6 +721,21 @@ class CustomStreamWrapper:
             is_empty = False
         return is_empty
 
+    def set_model_id(
+        self, id: str, model_response: ModelResponseStream
+    ) -> ModelResponseStream:
+        """
+        Set the model id and response id to the given id.
+
+        Ensure model id is always the same across all chunks.
+
+        If first chunk sent + id set, use that id for all chunks.
+        """
+        if self.response_id is None:
+            self.response_id = id
+        model_response.id = self.response_id
+        return model_response
+
     def return_processed_chunk_logic(  # noqa
         self,
         completion_obj: Dict[str, Any],
@@ -763,8 +778,6 @@ class CustomStreamWrapper:
                 ## check if openai/azure chunk
                 original_chunk = response_obj.get("original_chunk", None)
                 if original_chunk:
-                    model_response.id = original_chunk.id
-                    self.response_id = original_chunk.id
                     if len(original_chunk.choices) > 0:
                         choices = []
                         for choice in original_chunk.choices:
