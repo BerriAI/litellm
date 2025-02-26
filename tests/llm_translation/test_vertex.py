@@ -1299,18 +1299,60 @@ def test_process_gemini_image_http_url(
     # assert result["file_data"]["file_uri"] == http_url
 
 
+def vertex_ai_anthropic_thinking_mock_response(*args, **kwargs):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "id": "msg_vrtx_011pL6Np3MKxXL3R8theMRJW",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-3-7-sonnet-20250219",
+        "content": [
+            {
+                "type": "thinking",
+                "thinking": 'This is a very simple and common greeting in programming and computing. "Hello, world!" is often the first program people write when learning a new programming language, where they create a program that outputs this phrase.\n\nI should respond in a friendly way and acknowledge this greeting. I can keep it simple and welcoming.',
+                "signature": "EugBCkYQAhgCIkAqCkezmsp8DG9Jjoc/CD7yXavPXVvP4TAuwjc/ZgHRIgroz5FzAYxic3CnNiW5w2fx/4+1f4ZYVxWJVLmrEA46EgwFsxbpN2jxMxjIzy0aDIAbMy9rW6B5lGVETCIw4r2UW0A7m5Df991SMSMPvHU9VdL8p9S/F2wajLnLVpl5tH89csm4NqnMpxnou61yKlCLldFGIto1Kvit5W1jqn2gx2dGIOyR4YaJ0c8AIFfQa5TIXf+EChVDzhPKLWZ8D/Q3gCGxBx+m/4dLI8HMZA8Ob3iCMI23eBKmh62FCWJGuA==",
+            },
+            {
+                "type": "text",
+                "text": "Hi there! 👋 \n\nIt's nice to meet you! \"Hello, world!\" is such a classic phrase in computing - it's often the first output from someone's very first program.\n\nHow are you doing today? Is there something specific I can help you with?",
+            },
+        ],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 39,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 134,
+        },
+    }
+
+    return mock_response
+
+
 def test_vertex_anthropic_completion():
     from litellm import completion
-    import json
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    litellm.set_verbose = True
-    with open("vertex_test_account.json", "r") as f:
-        vertex_credentials = json.load(f)
+    client = HTTPHandler()
 
-    response = completion(
-        model="vertex_ai/claude-3-7-sonnet@20250219",
-        messages=[{"role": "user", "content": "Hello, world!"}],
-        vertex_credentials=vertex_credentials,
-        vertex_region="us-east5",
-    )
-    print(response)
+    with patch.object(
+        client, "post", side_effect=vertex_ai_anthropic_thinking_mock_response
+    ):
+        response = completion(
+            model="vertex_ai/claude-3-7-sonnet@20250219",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            vertex_ai_location="us-east5",
+            vertex_ai_project="test-project",
+            thinking={"type": "enabled", "budget_tokens": 1024},
+            client=client,
+        )
+        print(response)
+
+        assert response.choices[0].message.reasoning_content is not None
+        assert isinstance(response.choices[0].message.reasoning_content, str)
+        assert response.choices[0].message.thinking_blocks is not None
+        assert isinstance(response.choices[0].message.thinking_blocks, list)
+        assert len(response.choices[0].message.thinking_blocks) > 0
