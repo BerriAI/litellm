@@ -476,14 +476,17 @@ class LLMCachingHandler:
         """
         if litellm.cache is None:
             return None
-
-        new_kwargs = kwargs.copy()
+        new_kwargs = kwargs
         new_kwargs.update(
             convert_args_to_kwargs(
                 self.original_function,
                 args,
             )
         )
+
+        if "litellm_params" not in new_kwargs:
+            new_kwargs["litellm_params"] = {}
+
         cached_result: Optional[Any] = None
         if call_type == CallTypes.aembedding.value and isinstance(
             new_kwargs["input"], list
@@ -503,6 +506,10 @@ class LLMCachingHandler:
         else:
             if litellm.cache._supports_async() is True:
                 cached_result = await litellm.cache.async_get_cache(**new_kwargs)
+                
+                if cached_result == None and list(new_kwargs["litellm_params"].keys()) == ["preset_cache_key"]:
+                    del new_kwargs["litellm_params"]
+
             else:  # for s3 caching. [NOT RECOMMENDED IN PROD - this will slow down responses since boto3 is sync]
                 cached_result = litellm.cache.get_cache(**new_kwargs)
         return cached_result
