@@ -925,7 +925,7 @@ class CustomStreamWrapper:
                     ].items():
                         setattr(model_response, key, value)
 
-                response_obj = cast(GChunk, anthropic_response_obj)
+                response_obj = cast(Dict[str, Any], anthropic_response_obj)
             elif self.model == "replicate" or self.custom_llm_provider == "replicate":
                 response_obj = self.handle_replicate_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
@@ -987,6 +987,7 @@ class CustomStreamWrapper:
                         try:
                             completion_obj["content"] = chunk.text
                         except Exception as e:
+                            original_exception = e
                             if "Part has no text." in str(e):
                                 ## check for function calling
                                 function_call = (
@@ -1028,7 +1029,7 @@ class CustomStreamWrapper:
                                 _model_response.choices = [_streaming_response]
                                 response_obj = {"original_chunk": _model_response}
                             else:
-                                raise e
+                                raise original_exception
                         if (
                             hasattr(chunk.candidates[0], "finish_reason")
                             and chunk.candidates[0].finish_reason.name
@@ -1091,8 +1092,9 @@ class CustomStreamWrapper:
                         total_tokens=response_obj["usage"].total_tokens,
                     )
             elif self.custom_llm_provider == "text-completion-codestral":
-                response_obj = litellm.CodestralTextCompletionConfig()._chunk_parser(
-                    chunk
+                response_obj = cast(
+                    Dict[str, Any],
+                    litellm.CodestralTextCompletionConfig()._chunk_parser(chunk),
                 )
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
