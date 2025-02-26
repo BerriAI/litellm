@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.utils import (
     supports_function_calling,
+    supports_parallel_function_calling,
     supports_response_schema,
     supports_system_messages,
 )
@@ -76,13 +77,18 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
             model, custom_llm_provider
         )
         _supports_response_schema = supports_response_schema(model, custom_llm_provider)
+        _supports_parallel_tool_calls = supports_parallel_function_calling(
+            model, custom_llm_provider
+        )
 
         if not _supports_function_calling:
             non_supported_params.append("tools")
             non_supported_params.append("tool_choice")
-            non_supported_params.append("parallel_tool_calls")
             non_supported_params.append("function_call")
             non_supported_params.append("functions")
+
+        if not _supports_parallel_tool_calls:
+            non_supported_params.append("parallel_tool_calls")
 
         if not _supports_response_schema:
             non_supported_params.append("response_format")
