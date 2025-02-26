@@ -35,6 +35,7 @@ import { Team } from "./key_team_helpers/key_list";
 import TeamDropdown from "./common_components/team_dropdown";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Tooltip } from 'antd';
+import Createuser from "./create_user_button";
 
 const { Option } = Select;
 
@@ -138,6 +139,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
+  const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
+  const [newlyCreatedUserId, setNewlyCreatedUserId] = useState<string | null>(null);
 
   const handleOk = () => {
     setIsModalVisible(false);
@@ -233,6 +236,13 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     form.setFieldValue('models', []);
   }, [selectedCreateKeyTeam, userModels]);
 
+  // Add a callback function to handle user creation
+  const handleUserCreated = (userId: string) => {
+    setNewlyCreatedUserId(userId);
+    form.setFieldsValue({ user_id: userId });
+    setIsCreateUserModalVisible(false);
+  };
+
   return (
     <div>
       <Button className="mx-auto" onClick={() => setIsModalVisible(true)}>
@@ -265,20 +275,30 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               </Radio.Group>
             </Form.Item>
 
-            <Form.Item
-              label="User ID"
-              name="user_id"
-              hidden={keyOwner !== "another_user"}
-              valuePropName="user_id"
-              className="mt-8"
-              rules={[{ required: keyOwner === "another_user", message: `Please input the user ID of the user you are assigning the key to` }]}
-              help={"Get User ID - Click on the 'Users' tab in the sidebar."}
-            >
-              <TextInput 
-                placeholder="User ID" 
-                onChange={(e) => form.setFieldValue('user_id', e.target.value)}
-              />
-            </Form.Item>
+            {keyOwner === "another_user" && (
+              <Form.Item
+                label="User ID"
+                name="user_id"
+                valuePropName="user_id"
+                className="mt-8"
+                rules={[{ required: keyOwner === "another_user", message: `Please input the user ID of the user you are assigning the key to` }]}
+                help={"Get User ID - Click on the 'Users' tab in the sidebar."}
+              >
+                <div className="flex items-center gap-2">
+                  <TextInput 
+                    placeholder="User ID" 
+                    onChange={(e) => form.setFieldValue('user_id', e.target.value)}
+                    value={form.getFieldValue('user_id') || newlyCreatedUserId || ''}
+                  />
+                  <Button2 
+                    onClick={() => setIsCreateUserModalVisible(true)}
+                    size="xs"
+                  >
+                    Create User
+                  </Button2>
+                </div>
+              </Form.Item>
+            )}
 
             <Form.Item
               label={keyOwner === "you" || keyOwner === "another_user" ? "Key Name" : "Service Account ID"}
@@ -514,6 +534,27 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           </div>
         </Form>
       </Modal>
+
+      {/* Add the Create User Modal */}
+      {isCreateUserModalVisible && (
+        <Modal
+          title="Create New User"
+          visible={isCreateUserModalVisible}
+          onCancel={() => setIsCreateUserModalVisible(false)}
+          footer={null}
+          width={800}
+        >
+          <Createuser 
+            userID={userID}
+            accessToken={accessToken}
+            teams={teams}
+            possibleUIRoles={null}
+            onUserCreated={handleUserCreated}
+            isEmbedded={true}
+          />
+        </Modal>
+      )}
+
       {apiKey && (
         <Modal
           visible={isModalVisible}
