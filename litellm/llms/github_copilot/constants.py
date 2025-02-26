@@ -17,9 +17,22 @@ DEFAULT_HEADERS = {
     "User-Agent": "litellm",
 }
 
-class GetDeviceCodeError(Exception): pass
-class GetAccessTokenError(Exception): pass
-class APIKeyExpiredError(Exception): pass
-class RefreshAPIKeyError(Exception): pass
-class GetAPIKeyError(Exception): pass
 
+class GetDeviceCodeError(Exception):
+    pass
+
+
+class GetAccessTokenError(Exception):
+    pass
+
+
+class APIKeyExpiredError(Exception):
+    pass
+
+
+class RefreshAPIKeyError(Exception):
+    pass
+
+
+class GetAPIKeyError(Exception):
+    pass

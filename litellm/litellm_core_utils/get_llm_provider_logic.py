@@ -578,7 +578,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             custom_llm_provider,
         ) = litellm.GithubCopilotConfig()._get_openai_compatible_provider_info(
             model, api_base, api_key, custom_llm_provider
-        ) 
+        )
     if api_base is not None and not isinstance(api_base, str):
         raise Exception("api base needs to be a string. api_base={}".format(api_base))
     if dynamic_api_key is not None and not isinstance(dynamic_api_key, str):
