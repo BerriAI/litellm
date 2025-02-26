@@ -1124,6 +1124,9 @@ def test_anthropic_citations_api():
 def test_anthropic_citations_api_streaming():
     from litellm import completion
 
+    litellm._turn_on_debug()
+    litellm.set_verbose = True
+
     resp = completion(
         model="claude-3-5-sonnet-20241022",
         messages=[

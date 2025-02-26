@@ -762,7 +762,9 @@ class CustomStreamWrapper:
             if hold is False:
                 ## check if openai/azure chunk
                 original_chunk = response_obj.get("original_chunk", None)
-                if original_chunk:
+                if original_chunk and isinstance(original_chunk, ModelResponseStream):
+                    return original_chunk
+                elif original_chunk:
                     model_response.id = original_chunk.id
                     self.response_id = original_chunk.id
                     if len(original_chunk.choices) > 0:
@@ -1444,6 +1446,7 @@ class CustomStreamWrapper:
                     if hasattr(
                         response, "usage"
                     ):  # remove usage from chunk, only send on final chunk
+
                         # Convert the object to a dictionary
                         obj_dict = response.dict()
 
