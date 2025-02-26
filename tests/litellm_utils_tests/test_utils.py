@@ -2025,3 +2025,13 @@ def test_message_object():
     assert not hasattr(message, "audio")
     assert not hasattr(message, "thinking_blocks")
     assert not hasattr(message, "reasoning_content")
+
+
+def test_delta_object():
+    from litellm.types.utils import Delta
+
+    delta = Delta(content="Hello, world!", role="user")
+    assert delta.content == "Hello, world!"
+    assert delta.role == "user"
+    assert not hasattr(delta, "thinking_blocks")
+    assert not hasattr(delta, "reasoning_content")

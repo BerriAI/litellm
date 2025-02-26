@@ -584,8 +584,18 @@ class Delta(OpenAIObject):
         self.function_call: Optional[Union[FunctionCall, Any]] = None
         self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None
         self.audio: Optional[ChatCompletionAudioResponse] = None
-        self.reasoning_content = reasoning_content
-        self.thinking_blocks = thinking_blocks
+
+        if reasoning_content is not None:
+            self.reasoning_content = reasoning_content
+        else:
+            # ensure default response matches OpenAI spec
+            del self.reasoning_content
+
+        if thinking_blocks is not None:
+            self.thinking_blocks = thinking_blocks
+        else:
+            # ensure default response matches OpenAI spec
+            del self.thinking_blocks
 
         if function_call is not None and isinstance(function_call, dict):
             self.function_call = FunctionCall(**function_call)
