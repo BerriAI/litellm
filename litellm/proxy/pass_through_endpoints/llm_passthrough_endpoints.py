@@ -432,7 +432,7 @@ async def openai_proxy_route(
 
 
     """
-    base_target_url = "https://api.openai.com/v1"
+    base_target_url = "https://api.openai.com/"
     # Add or update query parameters
     openai_api_key = passthrough_endpoint_router.get_credentials(
         custom_llm_provider="openai",
@@ -453,21 +453,6 @@ async def openai_proxy_route(
     )
 
 
-def _ensure_openai_base_url_has_v1(base_url: str) -> str:
-    """
-    Ensures that the OpenAI base URL includes the /v1 path component if needed.
-
-    Args:
-        base_url: The base URL to check and potentially modify
-
-    Returns:
-        The base URL with /v1 appended if it's the OpenAI API URL
-    """
-    if base_url.rstrip("/") == "https://api.openai.com":
-        return "https://api.openai.com/v1"
-    return base_url
-
-
 class BaseOpenAIPassThroughHandler:
     @staticmethod
     async def _base_openai_pass_through_handler(
@@ -484,14 +469,18 @@ class BaseOpenAIPassThroughHandler:
         if not encoded_endpoint.startswith("/"):
             encoded_endpoint = "/" + encoded_endpoint
 
-        # # Ensure OpenAI base URL has /v1 if needed
-        # base_target_url = _ensure_openai_base_url_has_v1(base_target_url)
+        # Ensure base_target_url is properly formatted for OpenAI
+        base_target_url = (
+            BaseOpenAIPassThroughHandler._append_v1_to_openai_passthrough_url(
+                base_target_url
+            )
+        )
 
-        # # Construct the full target URL using httpx
-        # base_url = httpx.URL(base_target_url)
-
-        # updated_url = base_url.copy_with(path=encoded_endpoint)
-        updated_url = base_target_url + encoded_endpoint
+        # Construct the full target URL by properly joining the base URL and endpoint path
+        base_url = httpx.URL(base_target_url)
+        updated_url = BaseOpenAIPassThroughHandler._join_url_paths(
+            base_url, encoded_endpoint
+        )
 
         ## check for streaming
         is_streaming_request = False
@@ -517,6 +506,15 @@ class BaseOpenAIPassThroughHandler:
         return received_value
 
     @staticmethod
+    def _append_v1_to_openai_passthrough_url(base_url: str) -> str:
+        """
+        Appends the /v1 path to the OpenAI base URL if it's the OpenAI API URL
+        """
+        if base_url.rstrip("/") == "https://api.openai.com":
+            return "https://api.openai.com/v1"
+        return base_url
+
+    @staticmethod
     def _append_openai_beta_header(headers: dict, request: Request) -> dict:
         """
         Appends the OpenAI-Beta header to the headers if the request is an OpenAI Assistants API request
@@ -535,3 +533,19 @@ class BaseOpenAIPassThroughHandler:
             headers=base_headers,
             request=request,
         )
+
+    @staticmethod
+    def _join_url_paths(base_url: httpx.URL, path: str) -> httpx.URL:
+        """
+        Properly joins a base URL with a path, preserving any existing path in the base URL.
+        """
+        if not base_url.path or base_url.path == "/":
+            # If base URL has no path, just use the new path
+            return base_url.copy_with(path=path)
+
+        # Join paths correctly by removing trailing/leading slashes as needed
+        base_path = base_url.path.rstrip("/")
+        clean_path = path.lstrip("/")
+        full_path = f"{base_path}/{clean_path}"
+
+        return base_url.copy_with(path=full_path)
