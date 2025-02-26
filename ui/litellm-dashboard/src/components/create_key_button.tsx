@@ -355,7 +355,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         >
           {/* Section 1: Key Ownership */}
           <div className="mb-8">
-            <Title level={5} className="mb-4">1. Key Ownership</Title>
+            <Title className="mb-4">1. Key Ownership</Title>
             <Form.Item 
               label={
                 <span>
@@ -444,7 +444,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
 
           {/* Section 2: Key Details */}
           <div className="mb-8">
-            <Title level={5} className="mb-4">2. Key Details</Title>
+            <Title className="mb-4">2. Key Details</Title>
             <Form.Item
               label={
                 <span>
@@ -503,7 +503,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           <div className="mb-8">
             <Accordion className="mt-4 mb-4">
               <AccordionHeader>
-                <Title level={5} className="m-0">3. Optional Settings</Title>
+                <Title className="m-0">3. Optional Settings</Title>
               </AccordionHeader>
               <AccordionBody>
                 <Form.Item
