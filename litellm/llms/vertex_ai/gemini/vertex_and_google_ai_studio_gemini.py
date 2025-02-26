@@ -69,6 +69,7 @@ from .transformation import (
     sync_transform_request_body,
 )
 
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
@@ -833,6 +834,7 @@ async def make_call(
     if client is None:
         client = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.VERTEX_AI,
+            params={"timeout": httpx.Timeout(timeout=600.0, connect=5.0)}
         )
 
     try:
@@ -1058,9 +1060,11 @@ class VertexLLM(VertexBase):
         _async_client_params = {}
         if timeout:
             _async_client_params["timeout"] = timeout
+        
         if client is None or not isinstance(client, AsyncHTTPHandler):
             client = get_async_httpx_client(
-                params=_async_client_params, llm_provider=litellm.LlmProviders.VERTEX_AI
+                params=_async_client_params, 
+                llm_provider=litellm.LlmProviders.VERTEX_AI
             )
         else:
             client = client  # type: ignore

@@ -1,6 +1,7 @@
 import asyncio
 import os
 import time
+import weakref
 from typing import TYPE_CHECKING, Any, Callable, List, Mapping, Optional, Union
 
 import httpx
@@ -653,42 +654,83 @@ class HTTPHandler:
             return None
 
 
+# Per-event-loop client cache to prevent event loop closed errors
+class AsyncClientCache:
+    def __init__(self):
+        # Use WeakKeyDictionary to allow loops to be garbage collected
+        self._clients = weakref.WeakKeyDictionary()
+    
+    def get_client(self, provider: str, params=None, loop=None):
+        """
+        Get or create a client for the specified event loop, provider, and params.
+        Uses loop-specific caching to prevent event loop closed errors.
+        
+        Args:
+            provider: The LLM provider identifier
+            params: Parameters to pass to AsyncHTTPHandler
+            loop: The event loop to use (gets current loop if None)
+            
+        Returns:
+            AsyncHTTPHandler instance specific to this loop and params
+        """
+        if loop is None:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # No running event loop, create a new client and return it without caching
+                return AsyncHTTPHandler(**(params or {}))
+                
+        # Initialize nested dict for this loop if needed
+        if loop not in self._clients:
+            self._clients[loop] = {}
+            
+        # Create a unique key for this provider + params combination
+        params_key = ""
+        if params is not None:
+            for key, value in params.items():
+                try:
+                    params_key += f"{key}_{value}"
+                except Exception:
+                    pass
+                    
+        cache_key = f"{provider}_{params_key}"
+        
+        # Create a new client if needed
+        if cache_key not in self._clients[loop]:
+            if params is not None:
+                self._clients[loop][cache_key] = AsyncHTTPHandler(**params)
+            else:
+                self._clients[loop][cache_key] = AsyncHTTPHandler(
+                    timeout=httpx.Timeout(timeout=600.0, connect=5.0)
+                )
+            
+        return self._clients[loop][cache_key]
+
+# Global cache instance
+_async_client_cache = AsyncClientCache()
+
 def get_async_httpx_client(
     llm_provider: Union[LlmProviders, httpxSpecialProvider],
     params: Optional[dict] = None,
 ) -> AsyncHTTPHandler:
     """
-    Retrieves the async HTTP client from the cache
-    If not present, creates a new client
+    Retrieves the async HTTP client from the event-loop-aware cache.
+    If not present, creates a new client for the current event loop.
+    
+    This implementation uses per-event-loop caching to prevent "event loop closed"
+    errors that can occur in async environments.
 
-    Caches the new client and returns it.
+    Args:
+        llm_provider: Provider identifier string
+        params: Parameters to pass to the AsyncHTTPHandler constructor
+        
+    Returns:
+        AsyncHTTPHandler: An HTTP client instance specific to the current event loop
     """
-    _params_key_name = ""
-    if params is not None:
-        for key, value in params.items():
-            try:
-                _params_key_name += f"{key}_{value}"
-            except Exception:
-                pass
-
-    _cache_key_name = "async_httpx_client" + _params_key_name + llm_provider
-    _cached_client = litellm.in_memory_llm_clients_cache.get_cache(_cache_key_name)
-    if _cached_client:
-        return _cached_client
-
-    if params is not None:
-        _new_client = AsyncHTTPHandler(**params)
-    else:
-        _new_client = AsyncHTTPHandler(
-            timeout=httpx.Timeout(timeout=600.0, connect=5.0)
-        )
-
-    litellm.in_memory_llm_clients_cache.set_cache(
-        key=_cache_key_name,
-        value=_new_client,
-        ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+    return _async_client_cache.get_client(
+        provider=str(llm_provider),
+        params=params
     )
-    return _new_client
 
 
 def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
