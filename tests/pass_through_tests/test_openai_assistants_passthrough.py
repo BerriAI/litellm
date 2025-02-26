@@ -2,6 +2,8 @@ import pytest
 import openai
 import aiohttp
 import asyncio
+from typing_extensions import override
+from openai import AssistantEventHandler
 
 client = openai.OpenAI(base_url="http://0.0.0.0:4000/openai", api_key="sk-1234")
 
@@ -64,8 +66,6 @@ def test_openai_assistants_e2e_operations_stream():
         content="I need to solve the equation `3x + 11 = 14`. Can you help me?",
     )
     print("message created", message)
-    from typing_extensions import override
-    from openai import AssistantEventHandler
 
     # Then, we use the `stream` SDK helper
     # with the `EventHandler` class to create the Run
