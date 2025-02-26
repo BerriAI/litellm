@@ -17,6 +17,7 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.router import Router
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
@@ -59,7 +60,7 @@ def _get_metadata_variable_name(request: Request) -> str:
 
     For ALL other endpoints we call this "metadata
     """
-    if "thread" in request.url.path or "assistant" in request.url.path:
+    if RouteChecks._is_assistants_api_request(request):
         return "litellm_metadata"
     if "batches" in request.url.path:
         return "litellm_metadata"
