@@ -13,7 +13,7 @@ Pass-through endpoints for `/openai`
 ### When to use this?
 
 - For 90% of your use cases, you should use the [native LiteLLM OpenAI Integration](https://docs.litellm.ai/docs/providers/openai) (`/chat/completions`, `/embeddings`, `/completions`, `/images`, `/batches`, etc.)
-- Use this passthrough to call less popular or newer OpenAI endpoints that LiteLLM doesn't support yet, such as `/assistants`, `/threads`, `/vector_stores`
+- Use this passthrough to call less popular or newer OpenAI endpoints that LiteLLM doesn't fully support yet, such as `/assistants`, `/threads`, `/vector_stores`
 
 Simply replace `https://api.openai.com` with `LITELLM_PROXY_BASE_URL/openai`
 
