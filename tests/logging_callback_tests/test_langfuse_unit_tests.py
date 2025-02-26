@@ -364,6 +364,8 @@ def test_get_chat_content_for_langfuse():
         "role": "assistant",
         "tool_calls": None,
         "function_call": None,
+        "thinking_blocks": None,
+        "reasoning_content": None,
     }
 
     # Test with empty choices
