@@ -781,7 +781,10 @@ class CustomStreamWrapper:
                 and completion_obj["function_call"] is not None
             )
             or (model_response.choices[0].delta.provider_specific_fields is not None)
-            or "provider_specific_fields" in model_response
+            or (
+                "provider_specific_fields" in model_response
+                and model_response.choices[0].delta.provider_specific_fields is not None
+            )
             or (
                 "provider_specific_fields" in response_obj
                 and response_obj["provider_specific_fields"] is not None
