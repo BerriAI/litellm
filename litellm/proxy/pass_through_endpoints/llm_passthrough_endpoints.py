@@ -519,7 +519,7 @@ class BaseOpenAIPassThroughHandler:
         """
         Appends the OpenAI-Beta header to the headers if the request is an OpenAI Assistants API request
         """
-        if RouteChecks._is_assistants_api_request(request):
+        if RouteChecks._is_assistants_api_request(request) is True:
             headers["OpenAI-Beta"] = "assistants=v2"
         return headers
 
