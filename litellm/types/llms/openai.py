@@ -597,6 +597,8 @@ class ChatCompletionResponseMessage(TypedDict, total=False):
     role: Literal["assistant"]
     function_call: Optional[ChatCompletionToolCallFunctionChunk]
     provider_specific_fields: Optional[dict]
+    reasoning_content: Optional[str]
+    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]]
 
 
 class ChatCompletionUsageBlock(TypedDict):

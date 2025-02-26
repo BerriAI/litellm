@@ -23,6 +23,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionResponseMessage,
     ChatCompletionSystemMessage,
+    ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
@@ -559,6 +560,23 @@ class AmazonConverseConfig(BaseConfig):
                 reasoning_content_str += block["reasoningText"]["text"]
         return reasoning_content_str
 
+    def _transform_thinking_blocks(
+        self, thinking_blocks: List[BedrockConverseReasoningContentBlock]
+    ) -> List[ChatCompletionThinkingBlock]:
+        """Return a consistent format for thinking blocks between Anthropic and Bedrock."""
+        thinking_blocks_list: List[ChatCompletionThinkingBlock] = []
+        for block in thinking_blocks:
+            if "reasoningText" in block:
+                _thinking_block = ChatCompletionThinkingBlock(type="thinking")
+                _text = block["reasoningText"].get("text")
+                _signature = block["reasoningText"].get("signature")
+                if _text is not None:
+                    _thinking_block["thinking"] = _text
+                if _signature is not None:
+                    _thinking_block["signature_delta"] = _signature
+                thinking_blocks_list.append(_thinking_block)
+        return thinking_blocks_list
+
     def _transform_response(
         self,
         model: str,
@@ -670,10 +688,13 @@ class AmazonConverseConfig(BaseConfig):
         if reasoningContentBlocks is not None:
             chat_completion_message["provider_specific_fields"] = {
                 "reasoningContentBlocks": reasoningContentBlocks,
-                "reasoning_content": self._transform_reasoning_content(
-                    reasoningContentBlocks
-                ),
             }
+            chat_completion_message["reasoning_content"] = (
+                self._transform_reasoning_content(reasoningContentBlocks)
+            )
+            chat_completion_message["thinking_blocks"] = (
+                self._transform_thinking_blocks(reasoningContentBlocks)
+            )
         chat_completion_message["content"] = content_str
         if json_mode is True and tools is not None and len(tools) == 1:
             # to support 'json_schema' logic on bedrock models

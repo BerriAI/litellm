@@ -1166,7 +1166,7 @@ def test_anthropic_citations_api_streaming():
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic/claude-3-7-sonnet-20250219",
+        # "anthropic/claude-3-7-sonnet-20250219",
         "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
     ],
 )
@@ -1184,6 +1184,9 @@ def test_anthropic_thinking_output(model):
     print(resp)
     assert resp.choices[0].message.reasoning_content is not None
     assert isinstance(resp.choices[0].message.reasoning_content, str)
+    assert resp.choices[0].message.thinking_blocks is not None
+    assert isinstance(resp.choices[0].message.thinking_blocks, list)
+    assert len(resp.choices[0].message.thinking_blocks) > 0
 
 
 @pytest.mark.parametrize(

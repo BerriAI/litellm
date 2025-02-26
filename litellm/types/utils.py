@@ -24,6 +24,7 @@ from typing_extensions import Callable, Dict, Required, TypedDict, override
 from ..litellm_core_utils.core_helpers import map_finish_reason
 from .guardrails import GuardrailEventHooks
 from .llms.openai import (
+    ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
     OpenAIChatCompletionChunk,
@@ -487,12 +488,6 @@ def add_provider_specific_fields(
     if not provider_specific_fields:  # set if provider_specific_fields is not empty
         return
     setattr(object, "provider_specific_fields", provider_specific_fields)
-    for k, v in provider_specific_fields.items():
-        if v is not None:
-            setattr(object, k, v)
-            if k in REASONING_CONTENT_COMPATIBLE_PARAMS and k != "reasoning_content":
-                reasoning_content = map_reasoning_content({k: v})
-                setattr(object, "reasoning_content", reasoning_content)
 
 
 class Message(OpenAIObject):
@@ -501,6 +496,8 @@ class Message(OpenAIObject):
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
     audio: Optional[ChatCompletionAudioResponse] = None
+    reasoning_content: Optional[str] = None
+    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
     provider_specific_fields: Optional[Dict[str, Any]] = Field(
         default=None, exclude=True
     )
@@ -513,6 +510,8 @@ class Message(OpenAIObject):
         tool_calls: Optional[list] = None,
         audio: Optional[ChatCompletionAudioResponse] = None,
         provider_specific_fields: Optional[Dict[str, Any]] = None,
+        reasoning_content: Optional[str] = None,
+        thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None,
         **params,
     ):
         init_values: Dict[str, Any] = {
@@ -533,6 +532,8 @@ class Message(OpenAIObject):
                 if tool_calls is not None and len(tool_calls) > 0
                 else None
             ),
+            "reasoning_content": reasoning_content,
+            "thinking_blocks": thinking_blocks,
         }
 
         if audio is not None:
