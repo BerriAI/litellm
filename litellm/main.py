@@ -342,6 +342,7 @@ async def acompletion(
     model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
     extra_headers: Optional[dict] = None,
     # Optional liteLLM function params
+    thinking: Optional[AnthropicThinkingParam] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
