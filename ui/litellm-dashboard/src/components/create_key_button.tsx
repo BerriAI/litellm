@@ -303,13 +303,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       
       const data: User[] = response;
       const options: UserOption[] = data.map(user => ({
-        label: `${user.user_email}`,
-        value: user.user_email,
+        label: `${user.user_email} (${user.user_id})`,
+        value: user.user_id,
         user
       }));
+      
       setUserOptions(options);
     } catch (error) {
       console.error('Error fetching users:', error);
+      message.error('Failed to search for users');
     } finally {
       setUserSearchLoading(false);
     }
@@ -317,7 +319,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
 
   const debouncedSearch = useCallback(
     debounce((text: string) => fetchUsers(text), 300),
-    []
+    [accessToken]
   );
 
   const handleUserSearch = (value: string): void => {
@@ -371,19 +373,22 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 name="user_id"
                 className="mt-4"
                 rules={[{ required: keyOwner === "another_user", message: `Please input the user ID of the user you are assigning the key to` }]}
-                help={"Get User ID - Click on the 'Users' tab in the sidebar."}
+                help="Search by email to find users. Type at least 3 characters to start searching."
               >
                 <div className="flex items-center gap-2">
                   <Select
                     showSearch
                     className="w-full"
-                    placeholder="Search by user email"
+                    placeholder="Type email to search for users"
                     filterOption={false}
                     onSearch={handleUserSearch}
                     onSelect={(value, option) => handleUserSelect(value, option as UserOption)}
                     options={userOptions}
                     loading={userSearchLoading}
                     allowClear
+                    notFoundContent={userSearchLoading ? 'Searching...' : (
+                      userOptions.length === 0 ? 'No users found. Try searching by email.' : 'No match found'
+                    )}
                   />
                   <Button2 
                     onClick={() => setIsCreateUserModalVisible(true)}
