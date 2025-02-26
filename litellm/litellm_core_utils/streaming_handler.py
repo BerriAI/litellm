@@ -5,7 +5,7 @@ import threading
 import time
 import traceback
 import uuid
-from typing import Any, Callable, Dict, List, Optional, cast
+from typing import Any, Callable, Dict, List, Optional, Union, cast
 
 import httpx
 from pydantic import BaseModel
@@ -14,6 +14,7 @@ import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.types.llms.openai import ChatCompletionChunk
 from litellm.types.utils import Delta
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import (
@@ -737,6 +738,23 @@ class CustomStreamWrapper:
             model_response.id = self.response_id
         return model_response
 
+    def copy_model_response_level_provider_specific_fields(
+        self,
+        original_chunk: Union[ModelResponseStream, ChatCompletionChunk],
+        model_response: ModelResponseStream,
+    ) -> ModelResponseStream:
+        """
+        Copy provider_specific_fields from original_chunk to model_response.
+        """
+        provider_specific_fields = getattr(
+            original_chunk, "provider_specific_fields", None
+        )
+        if provider_specific_fields is not None:
+            model_response.provider_specific_fields = provider_specific_fields
+            for k, v in provider_specific_fields.items():
+                setattr(model_response, k, v)
+        return model_response
+
     def return_processed_chunk_logic(  # noqa
         self,
         completion_obj: Dict[str, Any],
@@ -763,6 +781,7 @@ class CustomStreamWrapper:
                 and completion_obj["function_call"] is not None
             )
             or (model_response.choices[0].delta.provider_specific_fields is not None)
+            or "provider_specific_fields" in model_response
             or (
                 "provider_specific_fields" in response_obj
                 and response_obj["provider_specific_fields"] is not None
@@ -1224,6 +1243,12 @@ class CustomStreamWrapper:
                 if hasattr(original_chunk, "id"):
                     model_response = self.set_model_id(
                         original_chunk.id, model_response
+                    )
+                if hasattr(original_chunk, "provider_specific_fields"):
+                    model_response = (
+                        self.copy_model_response_level_provider_specific_fields(
+                            original_chunk, model_response
+                        )
                     )
                 if original_chunk.choices and len(original_chunk.choices) > 0:
                     delta = original_chunk.choices[0].delta
