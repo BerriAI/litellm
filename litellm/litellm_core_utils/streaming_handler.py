@@ -110,7 +110,7 @@ class CustomStreamWrapper:
         )  # GUARANTEE OPENAI HEADERS IN RESPONSE
 
         self._response_headers = _response_headers
-        self.response_id = None
+        self.response_id: Optional[str] = None
         self.logging_loop = None
         self.rules = Rules()
         self.stream_options = stream_options or getattr(
