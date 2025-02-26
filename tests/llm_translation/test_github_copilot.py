@@ -76,7 +76,7 @@ def test_github_copilot_config_get_openai_compatible_provider_info():
 
 @patch("litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider")
 @patch("litellm.llms.openai.openai.OpenAIChatCompletion.completion")
-def test_completion_github_copilot(mock_completion, mock_get_provider):
+def test_completion_github_copilot_mock_response(mock_completion, mock_get_provider):
     """Test the completion function with GitHub Copilot provider."""
 
     # Mock completion response
@@ -167,6 +167,42 @@ def test_completion_github_copilot(stream=False):
         }
         response = completion(
             model="github_copilot/gpt-4",
+            messages=messages,
+            stream=stream,
+            extra_headers=extra_headers,
+        )
+        print(response)
+
+        if stream is True:
+            for chunk in response:
+                print(chunk)
+                assert chunk is not None
+                assert isinstance(chunk, litellm.ModelResponseStream)
+                assert isinstance(chunk.choices[0], litellm.utils.StreamingChoices)
+
+        else:
+            assert response is not None
+            assert isinstance(response, litellm.ModelResponse)
+            assert response.choices[0].message.content is not None
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+def test_completion_github_copilot_sonnet_3_7_thought(stream=False):
+    try:
+        litellm.set_verbose = True
+        messages = [
+            {"role": "system", "content": "You are an AI programming assistant."},
+            {
+                "role": "user",
+                "content": "Write a Python function to calculate fibonacci numbers",
+            },
+        ]
+        extra_headers = {
+            "editor-version": "Neovim/0.9.0",
+            "Copilot-Integration-Id": "vscode-chat",
+        }
+        response = completion(
+            model="github_copilot/claude-3.7-sonnet-thought",
             messages=messages,
             stream=stream,
             extra_headers=extra_headers,
