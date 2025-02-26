@@ -94,7 +94,7 @@ from litellm.utils import (
     read_config_args,
     supports_httpx_timeout,
     token_counter,
-    validate_chat_completion_messages,
+    validate_and_fix_openai_messages,
     validate_chat_completion_tool_choice,
 )
 
@@ -854,7 +854,7 @@ def completion(  # type: ignore # noqa: PLR0915
     if model is None:
         raise ValueError("model param not passed in.")
     # validate messages
-    messages = validate_chat_completion_messages(messages=messages)
+    messages = validate_and_fix_openai_messages(messages=messages)
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
     ######### unpacking kwargs #####################
@@ -3413,6 +3413,7 @@ def embedding(  # noqa: PLR0915
             or custom_llm_provider == "openai"
             or custom_llm_provider == "together_ai"
             or custom_llm_provider == "nvidia_nim"
+            or custom_llm_provider == "litellm_proxy"
         ):
             api_base = (
                 api_base
@@ -3489,7 +3490,8 @@ def embedding(  # noqa: PLR0915
             # set API KEY
             if api_key is None:
                 api_key = (
-                    litellm.api_key
+                    api_key
+                    or litellm.api_key
                     or litellm.openai_like_key
                     or get_secret_str("OPENAI_LIKE_API_KEY")
                 )
@@ -4600,7 +4602,10 @@ def image_generation(  # noqa: PLR0915
                 client=client,
                 headers=headers,
             )
-        elif custom_llm_provider == "openai":
+        elif (
+            custom_llm_provider == "openai"
+            or custom_llm_provider in litellm.openai_compatible_providers
+        ):
             model_response = openai_chat_completions.image_generation(
                 model=model,
                 prompt=prompt,
@@ -5046,8 +5051,7 @@ def transcription(
         )
     elif (
         custom_llm_provider == "openai"
-        or custom_llm_provider == "groq"
-        or custom_llm_provider == "fireworks_ai"
+        or custom_llm_provider in litellm.openai_compatible_providers
     ):
         api_base = (
             api_base
@@ -5205,7 +5209,10 @@ def speech(
         custom_llm_provider=custom_llm_provider,
     )
     response: Optional[HttpxBinaryResponseContent] = None
-    if custom_llm_provider == "openai":
+    if (
+        custom_llm_provider == "openai"
+        or custom_llm_provider in litellm.openai_compatible_providers
+    ):
         if voice is None or not (isinstance(voice, str)):
             raise litellm.BadRequestError(
                 message="'voice' is required to be passed as a string for OpenAI TTS",

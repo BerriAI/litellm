@@ -5927,6 +5927,18 @@ def convert_to_dict(message: Union[BaseModel, dict]) -> dict:
         )
 
 
+def validate_and_fix_openai_messages(messages: List):
+    """
+    Ensures all messages are valid OpenAI chat completion messages.
+
+    Handles missing role for assistant messages.
+    """
+    for message in messages:
+        if not message.get("role"):
+            message["role"] = "assistant"
+    return validate_chat_completion_messages(messages=messages)
+
+
 def validate_chat_completion_messages(messages: List[AllMessageValues]):
     """
     Ensures all messages are valid OpenAI chat completion messages.

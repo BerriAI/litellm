@@ -6,10 +6,22 @@ If the ddtrace package is not installed, the tracer will be a no-op.
 
 from contextlib import contextmanager
 
+from litellm.secret_managers.main import get_secret_bool
+
+
+def _should_use_dd_tracer():
+    """
+    Returns True if `USE_DDTRACE` is set to True in .env
+    """
+    return get_secret_bool("USE_DDTRACE", False) is True
+
+
+has_ddtrace = False
 try:
     from ddtrace import tracer as dd_tracer
 
-    has_ddtrace = True
+    if _should_use_dd_tracer():
+        has_ddtrace = True
 except ImportError:
     has_ddtrace = False
 
