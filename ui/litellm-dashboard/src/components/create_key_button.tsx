@@ -341,7 +341,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       <Modal
         title="Create Key"
         visible={isModalVisible}
-        width={800}
+        width={1000}
         footer={null}
         onOk={handleOk}
         onCancel={handleCancel}
@@ -373,29 +373,31 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 name="user_id"
                 className="mt-4"
                 rules={[{ required: keyOwner === "another_user", message: `Please input the user ID of the user you are assigning the key to` }]}
-                help="Search by email to find users. Type at least 3 characters to start searching."
               >
-                <div className="flex items-center gap-2">
-                  <Select
-                    showSearch
-                    className="w-full"
-                    placeholder="Type email to search for users"
-                    filterOption={false}
-                    onSearch={handleUserSearch}
-                    onSelect={(value, option) => handleUserSelect(value, option as UserOption)}
-                    options={userOptions}
-                    loading={userSearchLoading}
-                    allowClear
-                    notFoundContent={userSearchLoading ? 'Searching...' : (
-                      userOptions.length === 0 ? 'No users found. Try searching by email.' : 'No match found'
-                    )}
-                  />
-                  <Button2 
-                    onClick={() => setIsCreateUserModalVisible(true)}
-                    size="xs"
-                  >
-                    Create User
-                  </Button2>
+                <div>
+                  <div style={{ display: 'flex', marginBottom: '8px' }}>
+                    <Select
+                      showSearch
+                      placeholder="Type email to search for users"
+                      filterOption={false}
+                      onSearch={handleUserSearch}
+                      onSelect={(value, option) => handleUserSelect(value, option as UserOption)}
+                      options={userOptions}
+                      loading={userSearchLoading}
+                      allowClear
+                      style={{ width: '100%' }}
+                      notFoundContent={userSearchLoading ? 'Searching...' : 'No users found'}
+                    />
+                    <Button2 
+                      onClick={() => setIsCreateUserModalVisible(true)}
+                      style={{ marginLeft: '8px' }}
+                    >
+                      Create User
+                    </Button2>
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    Search by email to find users
+                  </div>
                 </div>
               </Form.Item>
             )}
