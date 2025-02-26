@@ -5,7 +5,7 @@ import threading
 import time
 import traceback
 import uuid
-from typing import Any, Callable, Dict, List, Optional, cast
+from typing import Any, Callable, Dict, List, Optional, Union, cast
 
 import httpx
 from pydantic import BaseModel
@@ -874,7 +874,7 @@ class CustomStreamWrapper:
 
     def chunk_creator(self, chunk: Any):  # type: ignore  # noqa: PLR0915
         model_response = self.model_response_creator()
-        response_obj: Dict[str, Any] = {}
+        response_obj: Union[Dict[str, Any], GChunk] = {}
 
         try:
             # return this for all models
