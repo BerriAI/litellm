@@ -1,8 +1,9 @@
 import React from "react";
-import { Form, Select, TextInput } from "@tremor/react";
-import { Form as AntForm, Radio } from "antd";
+import { Select, TextInput } from "@tremor/react";
+import { Form, Radio, Select as AntSelect } from "antd";
 import TeamDropdown from "./team_dropdown";
 import { getPossibleUserRoles } from "../networking";
+import TextArea from "antd/es/input/TextArea";
 
 interface UserFormProps {
   form: any;
@@ -47,14 +48,14 @@ const UserForm: React.FC<UserFormProps> = ({
           {possibleUIRoles &&
             Object.entries(possibleUIRoles).map(
               ([role, { ui_label, description }]) => (
-                <Select.Option key={role} value={role} title={ui_label}>
+                <AntSelect.Option key={role} value={role} title={ui_label}>
                   <div className="flex">
                     {ui_label}{" "}
                     <p className="ml-2" style={{ color: "gray", fontSize: "12px" }}>
                       {description}
                     </p>
                   </div>
-                </Select.Option>
+                </AntSelect.Option>
               )
             )}
         </Select>
@@ -65,7 +66,7 @@ const UserForm: React.FC<UserFormProps> = ({
       </Form.Item>
 
       <Form.Item label="Metadata" name="metadata">
-        <TextInput.TextArea rows={4} placeholder="Enter metadata as JSON" />
+        <TextArea rows={4} placeholder="Enter metadata as JSON" />
       </Form.Item>
     </>
   );
