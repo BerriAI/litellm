@@ -30,6 +30,7 @@ import {
   modelAvailableCall,
   getGuardrailsList,
   proxyBaseUrl,
+  getPossibleUserRoles,
 } from "./networking";
 import { Team } from "./key_team_helpers/key_list";
 import TeamDropdown from "./common_components/team_dropdown";
@@ -141,6 +142,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
   const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
   const [newlyCreatedUserId, setNewlyCreatedUserId] = useState<string | null>(null);
+  const [possibleUIRoles, setPossibleUIRoles] = useState<
+    Record<string, Record<string, string>>
+  >({});
 
   const handleOk = () => {
     setIsModalVisible(false);
@@ -173,6 +177,29 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     };
 
     fetchGuardrails();
+  }, [accessToken]);
+
+  // Fetch possible user roles when component mounts
+  useEffect(() => {
+    const fetchPossibleRoles = async () => {
+      try {
+        if (accessToken) {
+          // Check if roles are cached in session storage
+          const cachedRoles = sessionStorage.getItem('possibleUserRoles');
+          if (cachedRoles) {
+            setPossibleUIRoles(JSON.parse(cachedRoles));
+          } else {
+            const availableUserRoles = await getPossibleUserRoles(accessToken);
+            sessionStorage.setItem('possibleUserRoles', JSON.stringify(availableUserRoles));
+            setPossibleUIRoles(availableUserRoles);
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching possible user roles:", error);
+      }
+    };
+    
+    fetchPossibleRoles();
   }, [accessToken]);
 
   const handleCreate = async (formValues: Record<string, any>) => {
@@ -548,7 +575,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
             userID={userID}
             accessToken={accessToken}
             teams={teams}
-            possibleUIRoles={null}
+            possibleUIRoles={possibleUIRoles}
             onUserCreated={handleUserCreated}
             isEmbedded={true}
           />
