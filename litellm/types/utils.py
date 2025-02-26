@@ -464,6 +464,14 @@ def add_provider_specific_fields(
 ):
     if not provider_specific_fields:  # set if provider_specific_fields is not empty
         return
+    if (
+        "reasoning_content" in provider_specific_fields
+        and isinstance(provider_specific_fields.get("reasoning_content"), str)
+        and not getattr(object, "reasoning_content")
+    ):
+        setattr(
+            object, "reasoning_content", provider_specific_fields["reasoning_content"]
+        )
     setattr(object, "provider_specific_fields", provider_specific_fields)
 
 
