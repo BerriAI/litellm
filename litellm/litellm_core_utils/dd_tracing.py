@@ -16,18 +16,14 @@ def _should_use_dd_tracer():
     return get_secret_bool("USE_DDTRACE", False) is True
 
 
-# Try to import ddtrace, set is_dd_enabled based on both import success and user preference
-is_dd_enabled = False
-datadog_tracer = None
+has_ddtrace = False
 try:
-    from ddtrace import tracer as datadog_tracer
+    from ddtrace import tracer as dd_tracer
 
-    is_dd_enabled = _should_use_dd_tracer()
+    if _should_use_dd_tracer():
+        has_ddtrace = True
 except ImportError:
-    is_dd_enabled = False
-
-# If ddtrace is not available or not enabled, create a null implementation
-if not is_dd_enabled:
+    has_ddtrace = False
 
     @contextmanager
     def null_tracer(name, **kwargs):
@@ -63,7 +59,7 @@ if not is_dd_enabled:
 
             return decorator
 
-    datadog_tracer = NullTracer()
+    dd_tracer = NullTracer()
 
 # Export the tracer instance
-tracer = datadog_tracer
+tracer = dd_tracer
