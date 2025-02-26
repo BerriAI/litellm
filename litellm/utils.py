@@ -119,7 +119,10 @@ from litellm.router_utils.get_retry_from_policy import (
     reset_retry_policy,
 )
 from litellm.secret_managers.main import get_secret
-from litellm.types.llms.anthropic import ANTHROPIC_API_ONLY_HEADERS
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_API_ONLY_HEADERS,
+    AnthropicThinkingParam,
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
     AllPromptValues,
@@ -2741,7 +2744,7 @@ def get_optional_params(  # noqa: PLR0915
     reasoning_effort=None,
     additional_drop_params=None,
     messages: Optional[List[AllMessageValues]] = None,
-    thinking: Optional[Dict] = None,
+    thinking: Optional[AnthropicThinkingParam] = None,
     **kwargs,
 ):
     # retrieve all parameters passed to the function
