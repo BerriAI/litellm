@@ -1169,8 +1169,9 @@ class CustomStreamWrapper:
                     self.received_finish_reason = response_obj["finish_reason"]
                 if response_obj.get("original_chunk", None) is not None:
                     if hasattr(response_obj["original_chunk"], "id"):
-                        model_response.id = response_obj["original_chunk"].id
-                        self.response_id = model_response.id
+                        model_response = self.set_model_id(
+                            response_obj["original_chunk"].id, model_response
+                        )
                     if hasattr(response_obj["original_chunk"], "system_fingerprint"):
                         model_response.system_fingerprint = response_obj[
                             "original_chunk"
@@ -1219,8 +1220,10 @@ class CustomStreamWrapper:
             ):  # function / tool calling branch - only set for openai/azure compatible endpoints
                 # enter this branch when no content has been passed in response
                 original_chunk = response_obj.get("original_chunk", None)
-                model_response.id = original_chunk.id
-                self.response_id = original_chunk.id
+                if hasattr(original_chunk, "id"):
+                    model_response = self.set_model_id(
+                        original_chunk.id, model_response
+                    )
                 if original_chunk.choices and len(original_chunk.choices) > 0:
                     delta = original_chunk.choices[0].delta
                     if delta is not None and (
