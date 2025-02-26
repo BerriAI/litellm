@@ -5932,6 +5932,18 @@ def convert_to_dict(message: Union[BaseModel, dict]) -> dict:
         )
 
 
+def validate_and_fix_openai_messages(messages: List):
+    """
+    Ensures all messages are valid OpenAI chat completion messages.
+
+    Handles missing role for assistant messages.
+    """
+    for message in messages:
+        if not message.get("role"):
+            message["role"] = "assistant"
+    return validate_chat_completion_messages(messages=messages)
+
+
 def validate_chat_completion_messages(messages: List[AllMessageValues]):
     """
     Ensures all messages are valid OpenAI chat completion messages.
@@ -6282,11 +6294,18 @@ def get_end_user_id_for_cost_tracking(
         return None
     return end_user_id
 
-def should_use_cohere_v1_client(api_base: Optional[str], present_version_params: List[str]):
+
+def should_use_cohere_v1_client(
+    api_base: Optional[str], present_version_params: List[str]
+):
     if not api_base:
         return False
-    uses_v1_params = ("max_chunks_per_doc" in present_version_params) and ('max_tokens_per_doc' not in present_version_params) 
-    return api_base.endswith("/v1/rerank") or (uses_v1_params and not api_base.endswith("/v2/rerank"))
+    uses_v1_params = ("max_chunks_per_doc" in present_version_params) and (
+        "max_tokens_per_doc" not in present_version_params
+    )
+    return api_base.endswith("/v1/rerank") or (
+        uses_v1_params and not api_base.endswith("/v2/rerank")
+    )
 
 
 def is_prompt_caching_valid_prompt(
