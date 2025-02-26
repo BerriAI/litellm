@@ -75,7 +75,7 @@ def rerank(  # noqa: PLR0915
     query: str,
     documents: List[Union[str, Dict[str, Any]]],
     custom_llm_provider: Optional[
-        Literal["cohere", "together_ai", "azure_ai", "infinity"]
+        Literal["cohere", "together_ai", "azure_ai", "infinity", "litellm_proxy"]
     ] = None,
     top_n: Optional[int] = None,
     rank_fields: Optional[List[str]] = None,
@@ -162,7 +162,7 @@ def rerank(  # noqa: PLR0915
         )
 
         # Implement rerank logic here based on the custom_llm_provider
-        if _custom_llm_provider == "cohere":
+        if _custom_llm_provider == "cohere" or _custom_llm_provider == "litellm_proxy":
             # Implement Cohere rerank logic
             api_key: Optional[str] = (
                 dynamic_api_key or optional_params.api_key or litellm.api_key
