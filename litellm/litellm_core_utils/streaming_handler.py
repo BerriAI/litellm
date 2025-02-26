@@ -874,7 +874,7 @@ class CustomStreamWrapper:
 
     def chunk_creator(self, chunk: Any):  # type: ignore  # noqa: PLR0915
         model_response = self.model_response_creator()
-        response_obj: Union[Dict[str, Any], GChunk] = {}
+        response_obj: Dict[str, Any] = {}
 
         try:
             # return this for all models
@@ -926,7 +926,7 @@ class CustomStreamWrapper:
                     ].items():
                         setattr(model_response, key, value)
 
-                response_obj = cast(GChunk, anthropic_response_obj)
+                response_obj = cast(Dict[str, Any], anthropic_response_obj)
             elif self.model == "replicate" or self.custom_llm_provider == "replicate":
                 response_obj = self.handle_replicate_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
