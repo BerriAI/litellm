@@ -457,13 +457,22 @@ async def pass_through_request(  # noqa: PLR0915
         )
         verbose_proxy_logger.debug("request body: {}".format(_parsed_body))
 
-        response = await async_client.request(
-            method=request.method,
-            url=url,
-            headers=headers,
-            params=requested_query_params,
-            json=_parsed_body,
-        )
+        # For GET requests, don't include a JSON body
+        if request.method == "GET":
+            response = await async_client.request(
+                method=request.method,
+                url=url,
+                headers=headers,
+                params=requested_query_params,
+            )
+        else:
+            response = await async_client.request(
+                method=request.method,
+                url=url,
+                headers=headers,
+                params=requested_query_params,
+                json=_parsed_body,
+            )
 
         verbose_proxy_logger.debug("response.headers= %s", response.headers)
 
