@@ -51,6 +51,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
+    ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionUsageBlock,
@@ -1268,6 +1269,20 @@ class AWSEventStreamDecoder:
             return reasoning_content_block["text"]
         return None
 
+    def translate_thinking_blocks(
+        self, thinking_block: BedrockConverseReasoningContentBlockDelta
+    ) -> Optional[List[ChatCompletionThinkingBlock]]:
+        """
+        Translate the thinking blocks to a string
+        """
+
+        thinking_blocks_list: List[ChatCompletionThinkingBlock] = []
+        _thinking_block = ChatCompletionThinkingBlock(type="thinking")
+        if "text" in thinking_block:
+            _thinking_block["thinking"] = thinking_block["text"]
+        thinking_blocks_list.append(_thinking_block)
+        return thinking_blocks_list
+
     def converse_chunk_parser(self, chunk_data: dict) -> ModelResponseStream:
         try:
             verbose_logger.debug("\n\nRaw Chunk: {}\n\n".format(chunk_data))
@@ -1276,6 +1291,8 @@ class AWSEventStreamDecoder:
             finish_reason = ""
             usage: Optional[ChatCompletionUsageBlock] = None
             provider_specific_fields: dict = {}
+            reasoning_content: Optional[str] = None
+            thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
 
             index = int(chunk_data.get("contentBlockIndex", 0))
             if "start" in chunk_data:
@@ -1318,10 +1335,13 @@ class AWSEventStreamDecoder:
                 elif "reasoningContent" in delta_obj:
                     provider_specific_fields = {
                         "reasoningContent": delta_obj["reasoningContent"],
-                        "reasoning_content": self.extract_reasoning_content_str(
-                            delta_obj["reasoningContent"]
-                        ),
                     }
+                    reasoning_content = self.extract_reasoning_content_str(
+                        delta_obj["reasoningContent"]
+                    )
+                    thinking_blocks = self.translate_thinking_blocks(
+                        delta_obj["reasoningContent"]
+                    )
             elif (
                 "contentBlockIndex" in chunk_data
             ):  # stop block, no 'start' or 'delta' object
@@ -1363,6 +1383,8 @@ class AWSEventStreamDecoder:
                                 if provider_specific_fields
                                 else None
                             ),
+                            thinking_blocks=thinking_blocks,
+                            reasoning_content=reasoning_content,
                         ),
                     )
                 ],
@@ -1514,7 +1536,7 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
             sync_stream=sync_stream,
         )
 
-    def _chunk_parser(self, chunk_data: dict) -> GChunk:
+    def _chunk_parser(self, chunk_data: dict) -> ModelResponseStream:
         return self.anthropic_model_response_iterator.chunk_parser(chunk=chunk_data)
 
 

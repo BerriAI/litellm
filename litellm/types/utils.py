@@ -549,6 +549,8 @@ class Message(OpenAIObject):
 
 
 class Delta(OpenAIObject):
+    reasoning_content: Optional[str] = None
+    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
     provider_specific_fields: Optional[Dict[str, Any]] = Field(
         default=None, exclude=True
     )
@@ -560,6 +562,8 @@ class Delta(OpenAIObject):
         function_call=None,
         tool_calls=None,
         audio: Optional[ChatCompletionAudioResponse] = None,
+        reasoning_content: Optional[str] = None,
+        thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None,
         **params,
     ):
         super(Delta, self).__init__(**params)
@@ -570,6 +574,8 @@ class Delta(OpenAIObject):
         self.function_call: Optional[Union[FunctionCall, Any]] = None
         self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None
         self.audio: Optional[ChatCompletionAudioResponse] = None
+        self.reasoning_content = reasoning_content
+        self.thinking_blocks = thinking_blocks
 
         if function_call is not None and isinstance(function_call, dict):
             self.function_call = FunctionCall(**function_call)

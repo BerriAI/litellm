@@ -1192,7 +1192,7 @@ def test_anthropic_thinking_output(model):
 @pytest.mark.parametrize(
     "model",
     [
-        # "anthropic/claude-3-7-sonnet-20250219",
+        "anthropic/claude-3-7-sonnet-20250219",
         "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
     ],
 )
@@ -1212,11 +1212,11 @@ def test_anthropic_thinking_output_stream(model):
         for chunk in resp:
             print(f"chunk 2: {chunk}")
             if (
-                # hasattr(chunk.choices[0].delta, "thinking_blocks")
-                # and chunk.choices[0].delta.thinking_blocks is not None
-                chunk.choices[0].delta.reasoning_content is not None
-                # and isinstance(chunk.choices[0].delta.thinking_blocks, list)
-                # and len(chunk.choices[0].delta.thinking_blocks) > 0
+                hasattr(chunk.choices[0].delta, "thinking_blocks")
+                and chunk.choices[0].delta.thinking_blocks is not None
+                and chunk.choices[0].delta.reasoning_content is not None
+                and isinstance(chunk.choices[0].delta.thinking_blocks, list)
+                and len(chunk.choices[0].delta.thinking_blocks) > 0
                 and isinstance(chunk.choices[0].delta.reasoning_content, str)
             ):
                 reasoning_content_exists = True
