@@ -1364,10 +1364,10 @@ class AWSEventStreamDecoder:
                     total_tokens=chunk_data.get("totalTokens", 0),
                 )
 
+            model_response_provider_specific_fields = {}
             if "trace" in chunk_data:
                 trace = chunk_data.get("trace")
-                provider_specific_fields["trace"] = trace
-
+                model_response_provider_specific_fields["trace"] = trace
             response = ModelResponseStream(
                 choices=[
                     StreamingChoices(
@@ -1388,6 +1388,7 @@ class AWSEventStreamDecoder:
                     )
                 ],
                 usage=usage,
+                provider_specific_fields=model_response_provider_specific_fields,
             )
 
             return response

@@ -876,12 +876,14 @@ class ModelResponseBase(OpenAIObject):
 
 class ModelResponseStream(ModelResponseBase):
     choices: List[StreamingChoices]
+    provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
 
     def __init__(
         self,
         choices: Optional[List[Union[StreamingChoices, dict, BaseModel]]] = None,
         id: Optional[str] = None,
         created: Optional[int] = None,
+        provider_specific_fields: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
         if choices is not None and isinstance(choices, list):
@@ -918,6 +920,7 @@ class ModelResponseStream(ModelResponseBase):
         kwargs["id"] = id
         kwargs["created"] = created
         kwargs["object"] = "chat.completion.chunk"
+        kwargs["provider_specific_fields"] = provider_specific_fields
 
         super().__init__(**kwargs)
 
