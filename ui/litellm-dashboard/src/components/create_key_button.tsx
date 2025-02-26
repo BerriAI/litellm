@@ -351,7 +351,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           wrapperCol={{ span: 16 }}
           labelAlign="left"
         >
-          <>
+          {/* Section 1: Key Ownership */}
+          <div className="mb-8">
+            <Title level={5} className="mb-4">1. Key Ownership</Title>
             <Form.Item label="Owned By" className="mb-4">
               <Radio.Group
                 onChange={(e) => setKeyOwner(e.target.value)}
@@ -367,7 +369,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               <Form.Item
                 label="User ID"
                 name="user_id"
-                className="mt-8"
+                className="mt-4"
                 rules={[{ required: keyOwner === "another_user", message: `Please input the user ID of the user you are assigning the key to` }]}
                 help={"Get User ID - Click on the 'Users' tab in the sidebar."}
               >
@@ -392,20 +394,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 </div>
               </Form.Item>
             )}
-
-            <Form.Item
-              label={keyOwner === "you" || keyOwner === "another_user" ? "Key Name" : "Service Account ID"}
-              name="key_alias"
-              rules={[{ required: true, message: `Please input a ${keyOwner === "you" ? "key name" : "service account ID"}` }]}
-              help={keyOwner === "you" ? "required" : "IDs can include letters, numbers, and hyphens"}
-            >
-              <TextInput placeholder="" />
-            </Form.Item>
             <Form.Item
               label="Team"
               name="team_id"
               initialValue={team ? team.team_id : null}
-              className="mt-8"
+              className="mt-4"
             >
               <TeamDropdown 
                 teams={teams} 
@@ -416,6 +409,20 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               />
             </Form.Item>
 
+          </div>
+
+          {/* Section 2: Key Details */}
+          <div className="mb-8">
+            <Title level={5} className="mb-4">2. Key Details</Title>
+            <Form.Item
+              label={keyOwner === "you" || keyOwner === "another_user" ? "Key Name" : "Service Account ID"}
+              name="key_alias"
+              rules={[{ required: true, message: `Please input a ${keyOwner === "you" ? "key name" : "service account ID"}` }]}
+              help={keyOwner === "you" ? "required" : "IDs can include letters, numbers, and hyphens"}
+            >
+              <TextInput placeholder="" />
+            </Form.Item>
+            
             <Form.Item
               label={
                 <span>
@@ -428,6 +435,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               name="models"
               rules={[{ required: true, message: "Please select a model" }]}
               help="required"
+              className="mt-4"
             >
               <Select
                 mode="multiple"
@@ -449,13 +457,17 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 ))}
               </Select>
             </Form.Item>
-            <Accordion className="mt-20 mb-8">
+          </div>
+
+          {/* Section 3: Optional Settings */}
+          <div className="mb-8">
+            <Accordion className="mt-4 mb-4">
               <AccordionHeader>
-                <b>Optional Settings</b>
+                <Title level={5} className="m-0">3. Optional Settings</Title>
               </AccordionHeader>
               <AccordionBody>
                 <Form.Item
-                  className="mt-8"
+                  className="mt-4"
                   label="Max Budget (USD)"
                   name="max_budget"
                   help={`Budget cannot exceed team max budget: $${team?.max_budget !== null && team?.max_budget !== undefined ? team?.max_budget : "unlimited"}`}
@@ -479,7 +491,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   <InputNumber step={0.01} precision={2} width={200} />
                 </Form.Item>
                 <Form.Item
-                  className="mt-8"
+                  className="mt-4"
                   label="Reset Budget"
                   name="budget_duration"
                   help={`Team Reset Budget: ${team?.budget_duration !== null && team?.budget_duration !== undefined ? team?.budget_duration : "None"}`}
@@ -491,7 +503,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   </Select>
                 </Form.Item>
                 <Form.Item
-                  className="mt-8"
+                  className="mt-4"
                   label="Tokens per minute Limit (TPM)"
                   name="tpm_limit"
                   help={`TPM cannot exceed team TPM limit: ${team?.tpm_limit !== null && team?.tpm_limit !== undefined ? team?.tpm_limit : "unlimited"}`}
@@ -515,7 +527,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   <InputNumber step={1} width={400} />
                 </Form.Item>
                 <Form.Item
-                  className="mt-8"
+                  className="mt-4"
                   label="Requests per minute Limit (RPM)"
                   name="rpm_limit"
                   help={`RPM cannot exceed team RPM limit: ${team?.rpm_limit !== null && team?.rpm_limit !== undefined ? team?.rpm_limit : "unlimited"}`}
@@ -541,7 +553,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 <Form.Item
                   label="Expire Key (eg: 30s, 30h, 30d)"
                   name="duration"
-                  className="mt-8"
+                  className="mt-4"
                 >
                   <TextInput placeholder="" />
                 </Form.Item>
@@ -562,7 +574,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     </span>
                   }
                   name="guardrails" 
-                  className="mt-8"
+                  className="mt-4"
                   help="Select existing guardrails or enter new ones"
                 >
                   <Select
@@ -573,13 +585,13 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   />
                 </Form.Item>
 
-                <Form.Item label="Metadata" name="metadata" className="mt-8">
+                <Form.Item label="Metadata" name="metadata" className="mt-4">
                   <Input.TextArea
                     rows={4}
                     placeholder="Enter metadata as JSON"
                   />
                 </Form.Item>
-                <Form.Item label="Tags" name="tags" className="mt-8" help={`Tags for tracking spend and/or doing tag-based routing.`}>
+                <Form.Item label="Tags" name="tags" className="mt-4" help={`Tags for tracking spend and/or doing tag-based routing.`}>
                 <Select
                     mode="tags"
                     style={{ width: '100%' }}
@@ -588,7 +600,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     options={predefinedTags}
                   />
                 </Form.Item>
-                <Accordion className="mt-20 mb-8">
+                <Accordion className="mt-4 mb-4">
                   <AccordionHeader>
                   <div className="flex items-center gap-2">
 
@@ -620,7 +632,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 </Accordion>
               </AccordionBody>
             </Accordion>
-          </>
+          </div>
 
           <div style={{ textAlign: "right", marginTop: "10px" }}>
             <Button2 htmlType="submit">Create Key</Button2>
