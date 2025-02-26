@@ -23,6 +23,7 @@ class AthinaLogger:
             "context",
             "expected_response",
             "user_query",
+            "tags",
             "custom_attributes",
         ]
 
@@ -78,10 +79,12 @@ class AthinaLogger:
             # Add additional metadata keys
             metadata = kwargs.get("litellm_params", {}).get("metadata", {})
             if metadata:
+                print("additional_keys", self.additional_keys)
                 for key in self.additional_keys:
+                    print("key", key)
                     if key in metadata:
+                        print("key is being added", key)
                         data[key] = metadata[key]
-
             response = litellm.module_level_client.post(
                 self.athina_logging_url,
                 headers=self.headers,
