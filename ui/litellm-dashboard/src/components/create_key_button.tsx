@@ -356,7 +356,17 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           {/* Section 1: Key Ownership */}
           <div className="mb-8">
             <Title level={5} className="mb-4">1. Key Ownership</Title>
-            <Form.Item label="Owned By" className="mb-4">
+            <Form.Item 
+              label={
+                <span>
+                  Owned By{' '}
+                  <Tooltip title="Select who will own this API key">
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              } 
+              className="mb-4"
+            >
               <Radio.Group
                 onChange={(e) => setKeyOwner(e.target.value)}
                 value={keyOwner}
@@ -369,7 +379,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({
 
             {keyOwner === "another_user" && (
               <Form.Item
-                label="User ID"
+                label={
+                  <span>
+                    User ID{' '}
+                    <Tooltip title="The user who will own this key and be responsible for its usage">
+                      <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                    </Tooltip>
+                  </span>
+                }
                 name="user_id"
                 className="mt-4"
                 rules={[{ required: keyOwner === "another_user", message: `Please input the user ID of the user you are assigning the key to` }]}
@@ -402,7 +419,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               </Form.Item>
             )}
             <Form.Item
-              label="Team"
+              label={
+                <span>
+                  Team{' '}
+                  <Tooltip title="The team this key belongs to, which determines available models and budget limits">
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              }
               name="team_id"
               initialValue={team ? team.team_id : null}
               className="mt-4"
@@ -422,10 +446,19 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           <div className="mb-8">
             <Title level={5} className="mb-4">2. Key Details</Title>
             <Form.Item
-              label={keyOwner === "you" || keyOwner === "another_user" ? "Key Name" : "Service Account ID"}
+              label={
+                <span>
+                  {keyOwner === "you" || keyOwner === "another_user" ? "Key Name" : "Service Account ID"}{' '}
+                  <Tooltip title={keyOwner === "you" || keyOwner === "another_user" ? 
+                    "A descriptive name to identify this key" : 
+                    "Unique identifier for this service account"}>
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              }
               name="key_alias"
               rules={[{ required: true, message: `Please input a ${keyOwner === "you" ? "key name" : "service account ID"}` }]}
-              help={keyOwner === "you" ? "required" : "IDs can include letters, numbers, and hyphens"}
+              help="required"
             >
               <TextInput placeholder="" />
             </Form.Item>
@@ -434,7 +467,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               label={
                 <span>
                   Models{' '}
-                  <Tooltip title="These are the models that your selected team has access to">
+                  <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team">
                     <InfoCircleOutlined style={{ marginLeft: '4px' }} />
                   </Tooltip>
                 </span>
@@ -475,7 +508,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               <AccordionBody>
                 <Form.Item
                   className="mt-4"
-                  label="Max Budget (USD)"
+                  label={
+                    <span>
+                      Max Budget (USD){' '}
+                      <Tooltip title="Maximum amount in USD this key can spend. When reached, the key will be blocked from making further requests">
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </span>
+                  }
                   name="max_budget"
                   help={`Budget cannot exceed team max budget: $${team?.max_budget !== null && team?.max_budget !== undefined ? team?.max_budget : "unlimited"}`}
                   rules={[
@@ -499,7 +539,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 </Form.Item>
                 <Form.Item
                   className="mt-4"
-                  label="Reset Budget"
+                  label={
+                    <span>
+                      Reset Budget{' '}
+                      <Tooltip title="How often the budget should reset. For example, setting 'daily' will reset the budget every 24 hours">
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </span>
+                  }
                   name="budget_duration"
                   help={`Team Reset Budget: ${team?.budget_duration !== null && team?.budget_duration !== undefined ? team?.budget_duration : "None"}`}
                 >
@@ -511,7 +558,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 </Form.Item>
                 <Form.Item
                   className="mt-4"
-                  label="Tokens per minute Limit (TPM)"
+                  label={
+                    <span>
+                      Tokens per minute Limit (TPM){' '}
+                      <Tooltip title="Maximum number of tokens this key can process per minute. Helps control usage and costs">
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </span>
+                  }
                   name="tpm_limit"
                   help={`TPM cannot exceed team TPM limit: ${team?.tpm_limit !== null && team?.tpm_limit !== undefined ? team?.tpm_limit : "unlimited"}`}
                   rules={[
@@ -535,7 +589,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 </Form.Item>
                 <Form.Item
                   className="mt-4"
-                  label="Requests per minute Limit (RPM)"
+                  label={
+                    <span>
+                      Requests per minute Limit (RPM){' '}
+                      <Tooltip title="Maximum number of API requests this key can make per minute. Helps prevent abuse and manage load">
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </span>
+                  }
                   name="rpm_limit"
                   help={`RPM cannot exceed team RPM limit: ${team?.rpm_limit !== null && team?.rpm_limit !== undefined ? team?.rpm_limit : "unlimited"}`}
                   rules={[
@@ -558,17 +619,24 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   <InputNumber step={1} width={400} />
                 </Form.Item>
                 <Form.Item
-                  label="Expire Key (eg: 30s, 30h, 30d)"
+                  label={
+                    <span>
+                      Expire Key{' '}
+                      <Tooltip title="Set when this key should expire. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days)">
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </span>
+                  }
                   name="duration"
                   className="mt-4"
                 >
-                  <TextInput placeholder="" />
+                  <TextInput placeholder="e.g., 30d" />
                 </Form.Item>
                 <Form.Item 
                   label={
                     <span>
                       Guardrails{' '}
-                      <Tooltip title="Setup your first guardrail">
+                      <Tooltip title="Apply safety guardrails to this key to filter content or enforce policies">
                         <a 
                           href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
                           target="_blank" 
@@ -592,13 +660,36 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   />
                 </Form.Item>
 
-                <Form.Item label="Metadata" name="metadata" className="mt-4">
+                <Form.Item 
+                  label={
+                    <span>
+                      Metadata{' '}
+                      <Tooltip title="JSON object with additional information about this key. Used for tracking or custom logic">
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </span>
+                  } 
+                  name="metadata" 
+                  className="mt-4"
+                >
                   <Input.TextArea
                     rows={4}
                     placeholder="Enter metadata as JSON"
                   />
                 </Form.Item>
-                <Form.Item label="Tags" name="tags" className="mt-4" help={`Tags for tracking spend and/or doing tag-based routing.`}>
+                <Form.Item 
+                  label={
+                    <span>
+                      Tags{' '}
+                      <Tooltip title="Tags for tracking spend and/or doing tag-based routing. Used for analytics and filtering">
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </span>
+                  } 
+                  name="tags" 
+                  className="mt-4" 
+                  help={`Tags for tracking spend and/or doing tag-based routing.`}
+                >
                 <Select
                     mode="tags"
                     style={{ width: '100%' }}
