@@ -1,6 +1,5 @@
 # OpenAI Passthrough
 
-
 Pass-through endpoints for `/openai`
 
 ## Overview
@@ -8,27 +7,25 @@ Pass-through endpoints for `/openai`
 | Feature | Supported | Notes | 
 |-------|-------|-------|
 | Cost Tracking | ❌ | Not supported |
-| Logging | ✅ | works across all integrations |
-| Streaming | ✅ | |
+| Logging | ✅ | Works across all integrations |
+| Streaming | ✅ | Fully supported |
 
 ### When to use this?
 
-- For 90% of your use cases, you should use the [native Litellm OpenAI Integration](https://docs.litellm.ai/docs/providers/openai). (`/chat/completions`, `/embeddings`, `/completions`, `/images`, `/batches`, etc.)
-- Use this to call less popular or newer OpenAI endpoints that LiteLLM doesn't support yet. eg. `/assistants`, `/threads`, `/vector_stores`
+- For 90% of your use cases, you should use the [native LiteLLM OpenAI Integration](https://docs.litellm.ai/docs/providers/openai) (`/chat/completions`, `/embeddings`, `/completions`, `/images`, `/batches`, etc.)
+- Use this passthrough to call less popular or newer OpenAI endpoints that LiteLLM doesn't support yet, such as `/assistants`, `/threads`, `/vector_stores`
 
-
-Just replace `https://api.openai.com` with `LITELLM_PROXY_BASE_URL/openai`
+Simply replace `https://api.openai.com` with `LITELLM_PROXY_BASE_URL/openai`
 
 ## Usage Examples
 
+### Assistants API
 
-### Assistants
-
-### Create OpenAI Client
+#### Create OpenAI Client
 
 Make sure you do the following:
-- point `base_url` to your `LITELLM_PROXY_BASE_URL/openai`
-- use your `LITELLM_API_KEY` as the `api_key`
+- Point `base_url` to your `LITELLM_PROXY_BASE_URL/openai`
+- Use your `LITELLM_API_KEY` as the `api_key`
 
 ```python
 import openai
@@ -39,10 +36,9 @@ client = openai.OpenAI(
 )
 ```
 
-### Create an Assistant
+#### Create an Assistant
 
 ```python
-
 # Create an assistant
 assistant = client.beta.assistants.create(
     name="Math Tutor",
@@ -51,13 +47,13 @@ assistant = client.beta.assistants.create(
 )
 ```
 
-### Create a Thread
+#### Create a Thread
 ```python
 # Create a thread
 thread = client.beta.threads.create()
 ```
 
-### Add a message to the thread
+#### Add a Message to the Thread
 ```python
 # Add a message
 message = client.beta.threads.messages.create(
@@ -67,12 +63,33 @@ message = client.beta.threads.messages.create(
 )
 ```
 
+#### Run the Assistant
+```python
+# Create a run to get the assistant's response
+run = client.beta.threads.runs.create(
+    thread_id=thread.id,
+    assistant_id=assistant.id,
+)
 
+# Check run status
+run_status = client.beta.threads.runs.retrieve(
+    thread_id=thread.id,
+    run_id=run.id
+)
+```
 
-### Delete the assistant
+#### Retrieve Messages
+```python
+# List messages after the run completes
+messages = client.beta.threads.messages.list(
+    thread_id=thread.id
+)
+```
+
+#### Delete the Assistant
 
 ```python
-# Delete the assistant
+# Delete the assistant when done
 client.beta.assistants.delete(assistant.id)
 ```
 
