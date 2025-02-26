@@ -120,6 +120,7 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "top_logprobs",
     "reasoning_effort",
     "extra_headers",
+    "thinking",
 ]
 
 openai_compatible_endpoints: List = [
