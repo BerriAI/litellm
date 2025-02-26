@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import List, Optional
 
 import httpx
+from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 
@@ -298,9 +299,10 @@ class HttpPassThroughEndpointHelpers:
 
     @staticmethod
     def get_endpoint_type(url: str) -> EndpointType:
+        parsed_url = urlparse(url)
         if ("generateContent") in url or ("streamGenerateContent") in url:
             return EndpointType.VERTEX_AI
-        elif ("api.anthropic.com") in url:
+        elif parsed_url.hostname == "api.anthropic.com":
             return EndpointType.ANTHROPIC
         return EndpointType.GENERIC
 
