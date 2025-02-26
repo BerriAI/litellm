@@ -487,8 +487,6 @@ class LLMCachingHandler:
                 args,
             )
         )
-
-
         cached_result: Optional[Any] = None
         if call_type == CallTypes.aembedding.value and isinstance(
             new_kwargs["input"], list
