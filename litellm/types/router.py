@@ -8,8 +8,12 @@ import uuid
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, get_type_hints
 
 import httpx
+from httpx import AsyncClient, Client
+from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Required, TypedDict
+
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 from ..exceptions import RateLimitError
 from .completion import CompletionRequest
@@ -103,7 +107,15 @@ class ModelInfo(BaseModel):
         None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
     )
     tier: Optional[Literal["free", "paid"]] = None
-    team_id: Optional[str] = None  # the team id that this model belongs to
+
+    """
+    Team Model Specific Fields
+    """
+    # the team id that this model belongs to
+    team_id: Optional[str] = None
+
+    # the model_name that can be used by the team when making LLM calls
+    team_public_model_name: Optional[str] = None
 
     def __init__(self, id: Optional[Union[str, int]] = None, **params):
         if id is None:
@@ -151,6 +163,7 @@ class GenericLiteLLMParams(BaseModel):
     max_retries: Optional[int] = None
     organization: Optional[str] = None  # for openai orgs
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
+
     ## LOGGING PARAMS ##
     litellm_trace_id: Optional[str] = None
     ## UNIFIED PROJECT/REGION ##
@@ -176,7 +189,7 @@ class GenericLiteLLMParams(BaseModel):
     # Deployment budgets
     max_budget: Optional[float] = None
     budget_duration: Optional[str] = None
-
+    use_in_pass_through: Optional[bool] = False
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
 
     def __init__(
@@ -215,6 +228,8 @@ class GenericLiteLLMParams(BaseModel):
         # Deployment budgets
         max_budget: Optional[float] = None,
         budget_duration: Optional[str] = None,
+        # Pass through params
+        use_in_pass_through: Optional[bool] = False,
         **params,
     ):
         args = locals()
@@ -276,6 +291,8 @@ class LiteLLM_Params(GenericLiteLLMParams):
         # OpenAI / Azure Whisper
         # set a max-size of file that can be passed to litellm proxy
         max_file_size_mb: Optional[float] = None,
+        # will use deployment on pass-through endpoints if True
+        use_in_pass_through: Optional[bool] = False,
         **params,
     ):
         args = locals()

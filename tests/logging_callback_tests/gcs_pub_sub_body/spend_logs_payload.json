@@ -9,7 +9,7 @@
     "model": "gpt-4o",
     "user": "",
     "team_id": "",
-    "metadata": "{\"additional_usage_values\": {\"completion_tokens_details\": null, \"prompt_tokens_details\": null}}",
+    "metadata": "{\"applied_guardrails\": [], \"additional_usage_values\": {\"completion_tokens_details\": null, \"prompt_tokens_details\": null}}",
     "cache_key": "Cache OFF",
     "spend": 0.00022500000000000002,
     "total_tokens": 30,

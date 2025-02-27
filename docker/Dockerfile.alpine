@@ -11,9 +11,7 @@ FROM $LITELLM_BUILD_IMAGE AS builder
 WORKDIR /app
 
 # Install build dependencies
-RUN apk update && \
-    apk add --no-cache gcc python3-dev musl-dev && \
-    rm -rf /var/cache/apk/*
+RUN apk add --no-cache gcc python3-dev musl-dev
 
 RUN pip install --upgrade pip && \
     pip install build

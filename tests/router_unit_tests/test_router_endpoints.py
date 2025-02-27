@@ -324,3 +324,28 @@ async def test_anthropic_router_completion_e2e(model_list):
     AnthropicResponse.model_validate(response)
 
     assert response.model == "gpt-3.5-turbo"
+
+
+@pytest.mark.asyncio
+async def test_router_with_empty_choices(model_list):
+    """
+    https://github.com/BerriAI/litellm/issues/8306
+    """
+    router = Router(model_list=model_list)
+    mock_response = litellm.ModelResponse(
+        choices=[],
+        usage=litellm.Usage(
+            prompt_tokens=10,
+            completion_tokens=10,
+            total_tokens=20,
+        ),
+        model="gpt-3.5-turbo",
+        object="chat.completion",
+        created=1723081200,
+    ).model_dump()
+    response = await router.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        mock_response=mock_response,
+    )
+    assert response is not None

@@ -14,14 +14,19 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 import litellm
 from litellm.constants import BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES
 from litellm.proxy._types import *
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     create_pass_through_route,
 )
 from litellm.secret_managers.main import get_secret_str
 
+from .passthrough_endpoint_router import PassthroughEndpointRouter
+
 router = APIRouter()
 default_vertex_config = None
+
+passthrough_endpoint_router = PassthroughEndpointRouter()
 
 
 def create_request_copy(request: Request):
@@ -68,8 +73,9 @@ async def gemini_proxy_route(
     updated_url = base_url.copy_with(path=encoded_endpoint)
 
     # Add or update query parameters
-    gemini_api_key: Optional[str] = litellm.utils.get_secret(  # type: ignore
-        secret_name="GEMINI_API_KEY"
+    gemini_api_key: Optional[str] = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider="gemini",
+        region_name=None,
     )
     if gemini_api_key is None:
         raise Exception(
@@ -126,7 +132,10 @@ async def cohere_proxy_route(
     updated_url = base_url.copy_with(path=encoded_endpoint)
 
     # Add or update query parameters
-    cohere_api_key = litellm.utils.get_secret(secret_name="COHERE_API_KEY")
+    cohere_api_key = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider="cohere",
+        region_name=None,
+    )
 
     ## check for streaming
     is_streaming_request = False
@@ -175,7 +184,10 @@ async def anthropic_proxy_route(
     updated_url = base_url.copy_with(path=encoded_endpoint)
 
     # Add or update query parameters
-    anthropic_api_key = litellm.utils.get_secret(secret_name="ANTHROPIC_API_KEY")
+    anthropic_api_key = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider="anthropic",
+        region_name=None,
+    )
 
     ## check for streaming
     is_streaming_request = False
@@ -293,6 +305,77 @@ def _is_bedrock_agent_runtime_route(endpoint: str) -> bool:
 
 
 @router.api_route(
+    "/assemblyai/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["AssemblyAI Pass-through", "pass-through"],
+)
+@router.api_route(
+    "/eu.assemblyai/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["AssemblyAI EU Pass-through", "pass-through"],
+)
+async def assemblyai_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.assembly_passthrough_logging_handler import (
+        AssemblyAIPassthroughLoggingHandler,
+    )
+
+    """
+    [Docs](https://api.assemblyai.com)
+    """
+    # Set base URL based on the route
+    assembly_region = AssemblyAIPassthroughLoggingHandler._get_assembly_region_from_url(
+        url=str(request.url)
+    )
+    base_target_url = (
+        AssemblyAIPassthroughLoggingHandler._get_assembly_base_url_from_region(
+            region=assembly_region
+        )
+    )
+    encoded_endpoint = httpx.URL(endpoint).path
+    # Ensure endpoint starts with '/' for proper URL construction
+    if not encoded_endpoint.startswith("/"):
+        encoded_endpoint = "/" + encoded_endpoint
+
+    # Construct the full target URL using httpx
+    base_url = httpx.URL(base_target_url)
+    updated_url = base_url.copy_with(path=encoded_endpoint)
+
+    # Add or update query parameters
+    assemblyai_api_key = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider="assemblyai",
+        region_name=assembly_region,
+    )
+
+    ## check for streaming
+    is_streaming_request = False
+    # assemblyai is streaming when 'stream' = True is in the body
+    if request.method == "POST":
+        _request_body = await request.json()
+        if _request_body.get("stream"):
+            is_streaming_request = True
+
+    ## CREATE PASS-THROUGH
+    endpoint_func = create_pass_through_route(
+        endpoint=endpoint,
+        target=str(updated_url),
+        custom_headers={"Authorization": "{}".format(assemblyai_api_key)},
+    )  # dynamically construct pass-through endpoint based on incoming path
+    received_value = await endpoint_func(
+        request=request,
+        fastapi_response=fastapi_response,
+        user_api_key_dict=user_api_key_dict,
+        stream=is_streaming_request,  # type: ignore
+    )
+
+    return received_value
+
+
+@router.api_route(
     "/azure/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     tags=["Azure Pass-through", "pass-through"],
@@ -314,13 +397,16 @@ async def azure_proxy_route(
             "Required 'AZURE_API_BASE' in environment to make pass-through calls to Azure."
         )
     # Add or update query parameters
-    azure_api_key = get_secret_str(secret_name="AZURE_API_KEY")
+    azure_api_key = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider="azure",
+        region_name=None,
+    )
     if azure_api_key is None:
         raise Exception(
             "Required 'AZURE_API_KEY' in environment to make pass-through calls to Azure."
         )
 
-    return await _base_openai_pass_through_handler(
+    return await BaseOpenAIPassThroughHandler._base_openai_pass_through_handler(
         endpoint=endpoint,
         request=request,
         fastapi_response=fastapi_response,
@@ -346,15 +432,18 @@ async def openai_proxy_route(
 
 
     """
-    base_target_url = "https://api.openai.com"
+    base_target_url = "https://api.openai.com/"
     # Add or update query parameters
-    openai_api_key = get_secret_str(secret_name="OPENAI_API_KEY")
+    openai_api_key = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider="openai",
+        region_name=None,
+    )
     if openai_api_key is None:
         raise Exception(
             "Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI."
         )
 
-    return await _base_openai_pass_through_handler(
+    return await BaseOpenAIPassThroughHandler._base_openai_pass_through_handler(
         endpoint=endpoint,
         request=request,
         fastapi_response=fastapi_response,
@@ -364,44 +453,99 @@ async def openai_proxy_route(
     )
 
 
-async def _base_openai_pass_through_handler(
-    endpoint: str,
-    request: Request,
-    fastapi_response: Response,
-    user_api_key_dict: UserAPIKeyAuth,
-    base_target_url: str,
-    api_key: str,
-):
-    encoded_endpoint = httpx.URL(endpoint).path
+class BaseOpenAIPassThroughHandler:
+    @staticmethod
+    async def _base_openai_pass_through_handler(
+        endpoint: str,
+        request: Request,
+        fastapi_response: Response,
+        user_api_key_dict: UserAPIKeyAuth,
+        base_target_url: str,
+        api_key: str,
+    ):
+        encoded_endpoint = httpx.URL(endpoint).path
 
-    # Ensure endpoint starts with '/' for proper URL construction
-    if not encoded_endpoint.startswith("/"):
-        encoded_endpoint = "/" + encoded_endpoint
+        # Ensure endpoint starts with '/' for proper URL construction
+        if not encoded_endpoint.startswith("/"):
+            encoded_endpoint = "/" + encoded_endpoint
 
-    # Construct the full target URL using httpx
-    base_url = httpx.URL(base_target_url)
-    updated_url = base_url.copy_with(path=encoded_endpoint)
+        # Ensure base_target_url is properly formatted for OpenAI
+        base_target_url = (
+            BaseOpenAIPassThroughHandler._append_v1_to_openai_passthrough_url(
+                base_target_url
+            )
+        )
 
-    ## check for streaming
-    is_streaming_request = False
-    if "stream" in str(updated_url):
-        is_streaming_request = True
+        # Construct the full target URL by properly joining the base URL and endpoint path
+        base_url = httpx.URL(base_target_url)
+        updated_url = BaseOpenAIPassThroughHandler._join_url_paths(
+            base_url, encoded_endpoint
+        )
 
-    ## CREATE PASS-THROUGH
-    endpoint_func = create_pass_through_route(
-        endpoint=endpoint,
-        target=str(updated_url),
-        custom_headers={
+        ## check for streaming
+        is_streaming_request = False
+        if "stream" in str(updated_url):
+            is_streaming_request = True
+
+        ## CREATE PASS-THROUGH
+        endpoint_func = create_pass_through_route(
+            endpoint=endpoint,
+            target=str(updated_url),
+            custom_headers=BaseOpenAIPassThroughHandler._assemble_headers(
+                api_key=api_key, request=request
+            ),
+        )  # dynamically construct pass-through endpoint based on incoming path
+        received_value = await endpoint_func(
+            request,
+            fastapi_response,
+            user_api_key_dict,
+            stream=is_streaming_request,  # type: ignore
+            query_params=dict(request.query_params),  # type: ignore
+        )
+
+        return received_value
+
+    @staticmethod
+    def _append_v1_to_openai_passthrough_url(base_url: str) -> str:
+        """
+        Appends the /v1 path to the OpenAI base URL if it's the OpenAI API URL
+        """
+        if base_url.rstrip("/") == "https://api.openai.com":
+            return "https://api.openai.com/v1"
+        return base_url
+
+    @staticmethod
+    def _append_openai_beta_header(headers: dict, request: Request) -> dict:
+        """
+        Appends the OpenAI-Beta header to the headers if the request is an OpenAI Assistants API request
+        """
+        if RouteChecks._is_assistants_api_request(request) is True:
+            headers["OpenAI-Beta"] = "assistants=v2"
+        return headers
+
+    @staticmethod
+    def _assemble_headers(api_key: str, request: Request) -> dict:
+        base_headers = {
             "authorization": "Bearer {}".format(api_key),
             "api-key": "{}".format(api_key),
-        },
-    )  # dynamically construct pass-through endpoint based on incoming path
-    received_value = await endpoint_func(
-        request,
-        fastapi_response,
-        user_api_key_dict,
-        stream=is_streaming_request,  # type: ignore
-        query_params=dict(request.query_params),  # type: ignore
-    )
+        }
+        return BaseOpenAIPassThroughHandler._append_openai_beta_header(
+            headers=base_headers,
+            request=request,
+        )
 
-    return received_value
+    @staticmethod
+    def _join_url_paths(base_url: httpx.URL, path: str) -> httpx.URL:
+        """
+        Properly joins a base URL with a path, preserving any existing path in the base URL.
+        """
+        if not base_url.path or base_url.path == "/":
+            # If base URL has no path, just use the new path
+            return base_url.copy_with(path=path)
+
+        # Join paths correctly by removing trailing/leading slashes as needed
+        base_path = base_url.path.rstrip("/")
+        clean_path = path.lstrip("/")
+        full_path = f"{base_path}/{clean_path}"
+
+        return base_url.copy_with(path=full_path)

@@ -1621,7 +1621,7 @@ def test_completion_replicate_stream_bad_key():
 
 def test_completion_bedrock_claude_stream():
     try:
-        litellm.set_verbose = False
+        litellm.set_verbose = True
         response = completion(
             model="bedrock/anthropic.claude-instant-v1",
             messages=[
@@ -4065,18 +4065,33 @@ def test_mock_response_iterator_tool_use():
     assert response_chunk["tool_use"] is not None
 
 
-def test_deepseek_reasoning_content_completion():
+@pytest.mark.parametrize(
+    "model",
+    [
+        # "deepseek/deepseek-reasoner",
+        "anthropic/claude-3-7-sonnet-20250219",
+    ],
+)
+def test_reasoning_content_completion(model):
     # litellm.set_verbose = True
-    resp = litellm.completion(
-        model="deepseek/deepseek-reasoner",
-        messages=[{"role": "user", "content": "Tell me a joke."}],
-        stream=True,
-    )
+    try:
+        # litellm._turn_on_debug()
+        resp = litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "Tell me a joke."}],
+            stream=True,
+            thinking={"type": "enabled", "budget_tokens": 1024},
+        )
 
-    reasoning_content_exists = False
-    for chunk in resp:
-        print(f"chunk: {chunk}")
-        if chunk.choices[0].delta.reasoning_content is not None:
-            reasoning_content_exists = True
-            break
-    assert reasoning_content_exists
+        reasoning_content_exists = False
+        for chunk in resp:
+            print(f"chunk 2: {chunk}")
+            if (
+                hasattr(chunk.choices[0].delta, "reasoning_content")
+                and chunk.choices[0].delta.reasoning_content is not None
+            ):
+                reasoning_content_exists = True
+                break
+        assert reasoning_content_exists
+    except litellm.Timeout:
+        pytest.skip("Model is timing out")

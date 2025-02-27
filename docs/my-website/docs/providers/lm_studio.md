@@ -69,7 +69,7 @@ for chunk in response:
 
 ## Usage with LiteLLM Proxy Server
 
-Here's how to call a XAI model with the LiteLLM Proxy Server
+Here's how to call a LM Studio model with the LiteLLM Proxy Server
 
 1. Modify the config.yaml 
 
