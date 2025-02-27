@@ -196,12 +196,6 @@ class AnthropicPassthroughLoggingHandler:
             streaming_response=None,
             sync_stream=False,
         )
-        litellm_custom_stream_wrapper = litellm.CustomStreamWrapper(
-            completion_stream=anthropic_model_response_iterator,
-            model=model,
-            logging_obj=litellm_logging_obj,
-            custom_llm_provider="anthropic",
-        )
         all_openai_chunks = []
         for _chunk_str in all_chunks:
             try:
