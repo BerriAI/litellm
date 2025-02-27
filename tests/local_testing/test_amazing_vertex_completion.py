@@ -1518,7 +1518,7 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
                 )
         elif resp is not None:
 
-            assert resp.model == model.split("/")[1].split("@")[0]
+            assert resp.model == model.split("/")[1]
 
 
 @pytest.mark.parametrize(
