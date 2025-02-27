@@ -78,3 +78,4 @@ litellm/proxy/_experimental/out/model_hub.html
 .mypy_cache/*
 litellm/proxy/application.log
 tests/llm_translation/vertex_test_account.json
+tests/llm_translation/test_vertex_key.json

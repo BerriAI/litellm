@@ -1350,6 +1350,9 @@ def test_vertex_anthropic_completion():
             client=client,
         )
         print(response)
+        assert response.model == "claude-3-7-sonnet@20250219"
+        assert response._hidden_params["response_cost"] is not None
+        assert response._hidden_params["response_cost"] > 0
 
         assert response.choices[0].message.reasoning_content is not None
         assert isinstance(response.choices[0].message.reasoning_content, str)
