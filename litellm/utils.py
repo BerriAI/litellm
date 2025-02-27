@@ -119,7 +119,10 @@ from litellm.router_utils.get_retry_from_policy import (
     reset_retry_policy,
 )
 from litellm.secret_managers.main import get_secret
-from litellm.types.llms.anthropic import ANTHROPIC_API_ONLY_HEADERS
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_API_ONLY_HEADERS,
+    AnthropicThinkingParam,
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
     AllPromptValues,
@@ -1969,6 +1972,19 @@ def supports_response_schema(
     )
 
 
+def supports_parallel_function_calling(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> bool:
+    """
+    Check if the given model supports parallel tool calls and return a boolean value.
+    """
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_parallel_function_calling",
+    )
+
+
 def supports_function_calling(
     model: str, custom_llm_provider: Optional[str] = None
 ) -> bool:
@@ -2116,30 +2132,6 @@ def supports_embedding_image_input(
         custom_llm_provider=custom_llm_provider,
         key="supports_embedding_image_input",
     )
-
-
-def supports_parallel_function_calling(model: str):
-    """
-    Check if the given model supports parallel function calling and return True if it does, False otherwise.
-
-    Parameters:
-        model (str): The model to check for support of parallel function calling.
-
-    Returns:
-        bool: True if the model supports parallel function calling, False otherwise.
-
-    Raises:
-        Exception: If the model is not found in the model_cost dictionary.
-    """
-    if model in litellm.model_cost:
-        model_info = litellm.model_cost[model]
-        if model_info.get("supports_parallel_function_calling", False) is True:
-            return True
-        return False
-    else:
-        raise Exception(
-            f"Model not supports parallel function calling. You passed model={model}."
-        )
 
 
 ####### HELPER FUNCTIONS ################
@@ -2752,6 +2744,7 @@ def get_optional_params(  # noqa: PLR0915
     reasoning_effort=None,
     additional_drop_params=None,
     messages: Optional[List[AllMessageValues]] = None,
+    thinking: Optional[AnthropicThinkingParam] = None,
     **kwargs,
 ):
     # retrieve all parameters passed to the function
@@ -2836,9 +2829,11 @@ def get_optional_params(  # noqa: PLR0915
         "additional_drop_params": None,
         "messages": None,
         "reasoning_effort": None,
+        "thinking": None,
     }
 
     # filter out those parameters that were passed with non-default values
+
     non_default_params = {
         k: v
         for k, v in passed_params.items()
@@ -5932,6 +5927,18 @@ def convert_to_dict(message: Union[BaseModel, dict]) -> dict:
         )
 
 
+def validate_and_fix_openai_messages(messages: List):
+    """
+    Ensures all messages are valid OpenAI chat completion messages.
+
+    Handles missing role for assistant messages.
+    """
+    for message in messages:
+        if not message.get("role"):
+            message["role"] = "assistant"
+    return validate_chat_completion_messages(messages=messages)
+
+
 def validate_chat_completion_messages(messages: List[AllMessageValues]):
     """
     Ensures all messages are valid OpenAI chat completion messages.
@@ -6282,11 +6289,18 @@ def get_end_user_id_for_cost_tracking(
         return None
     return end_user_id
 
-def should_use_cohere_v1_client(api_base: Optional[str], present_version_params: List[str]):
+
+def should_use_cohere_v1_client(
+    api_base: Optional[str], present_version_params: List[str]
+):
     if not api_base:
         return False
-    uses_v1_params = ("max_chunks_per_doc" in present_version_params) and ('max_tokens_per_doc' not in present_version_params) 
-    return api_base.endswith("/v1/rerank") or (uses_v1_params and not api_base.endswith("/v2/rerank"))
+    uses_v1_params = ("max_chunks_per_doc" in present_version_params) and (
+        "max_tokens_per_doc" not in present_version_params
+    )
+    return api_base.endswith("/v1/rerank") or (
+        uses_v1_params and not api_base.endswith("/v2/rerank")
+    )
 
 
 def is_prompt_caching_valid_prompt(

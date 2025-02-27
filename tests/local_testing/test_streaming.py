@@ -4072,7 +4072,7 @@ def test_mock_response_iterator_tool_use():
         "anthropic/claude-3-7-sonnet-20250219",
     ],
 )
-def test_deepseek_reasoning_content_completion(model):
+def test_reasoning_content_completion(model):
     # litellm.set_verbose = True
     try:
         # litellm._turn_on_debug()
@@ -4081,7 +4081,6 @@ def test_deepseek_reasoning_content_completion(model):
             messages=[{"role": "user", "content": "Tell me a joke."}],
             stream=True,
             thinking={"type": "enabled", "budget_tokens": 1024},
-            timeout=5,
         )
 
         reasoning_content_exists = False

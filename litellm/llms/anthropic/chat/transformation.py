@@ -81,7 +81,7 @@ class AnthropicConfig(BaseConfig):
         return super().get_config()
 
     def get_supported_openai_params(self, model: str):
-        return [
+        params = [
             "stream",
             "stop",
             "temperature",
@@ -95,6 +95,11 @@ class AnthropicConfig(BaseConfig):
             "response_format",
             "user",
         ]
+
+        if "claude-3-7-sonnet" in model:
+            params.append("thinking")
+
+        return params
 
     def get_json_schema_from_pydantic_object(
         self, response_format: Union[Any, Dict, None]
@@ -303,6 +308,7 @@ class AnthropicConfig(BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_tokens"] = value
@@ -359,7 +365,8 @@ class AnthropicConfig(BaseConfig):
                 optional_params["json_mode"] = True
             if param == "user":
                 optional_params["metadata"] = {"user_id": value}
-
+            if param == "thinking":
+                optional_params["thinking"] = value
         return optional_params
 
     def _create_json_tool_call_for_response_format(

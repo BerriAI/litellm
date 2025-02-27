@@ -75,7 +75,7 @@ def get_litellm_params(
         "model_info": model_info,
         "proxy_server_request": proxy_server_request,
         "preset_cache_key": preset_cache_key,
-        "no-log": no_log,
+        "no-log": no_log or kwargs.get("no-log"),
         "stream_response": {},  # litellm_call_id: ModelResponse Dict
         "input_cost_per_token": input_cost_per_token,
         "input_cost_per_second": input_cost_per_second,

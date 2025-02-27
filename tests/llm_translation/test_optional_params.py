@@ -1069,7 +1069,6 @@ def test_gemini_frequency_penalty():
     assert optional_params["frequency_penalty"] == 0.5
 
 
-
 def test_azure_prediction_param():
     optional_params = get_optional_params(
         model="chatgpt-v2",
@@ -1084,6 +1083,7 @@ def test_azure_prediction_param():
         "content": "LiteLLM is a very useful way to connect to a variety of LLMs.",
     }
 
+
 def test_vertex_ai_ft_llama():
     optional_params = get_optional_params(
         model="1984786713414729728",
@@ -1093,3 +1093,24 @@ def test_vertex_ai_ft_llama():
     )
     assert optional_params["frequency_penalty"] == 0.5
     assert "max_retries" not in optional_params
+
+
+@pytest.mark.parametrize(
+    "model, expected_thinking",
+    [
+        ("claude-3-5-sonnet", False),
+        ("claude-3-7-sonnet", True),
+        ("gpt-3.5-turbo", False),
+    ],
+)
+def test_anthropic_thinking_param(model, expected_thinking):
+    optional_params = get_optional_params(
+        model=model,
+        custom_llm_provider="anthropic",
+        thinking={"type": "enabled", "budget_tokens": 1024},
+        drop_params=True,
+    )
+    if expected_thinking:
+        assert "thinking" in optional_params
+    else:
+        assert "thinking" not in optional_params

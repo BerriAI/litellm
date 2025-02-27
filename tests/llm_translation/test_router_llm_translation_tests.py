@@ -47,7 +47,6 @@ class TestRouterLLMTranslation(BaseLLMChatTest):
 
     def test_prompt_caching(self):
         """
-        Test that prompt caching works correctly.
-        Skip for now, as it's working locally but not in CI
+        Works locally but CI/CD is failing this test. Temporary skip to push out a new release.
         """
         pass
