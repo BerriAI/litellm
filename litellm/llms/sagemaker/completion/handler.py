@@ -511,7 +511,7 @@ class SagemakerLLM(BaseAWSLLM):
                 # Add model_id as InferenceComponentName header
                 # boto3 doc: https://docs.aws.amazon.com/sagemaker/latest/APIReference/API_runtime_InvokeEndpoint.html
                 prepared_request.headers.update(
-                    {"X-Amzn-SageMaker-Inference-Componen": model_id}
+                    {"X-Amzn-SageMaker-Inference-Component": model_id}
                 )
             # make async httpx post request here
             try:
