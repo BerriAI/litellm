@@ -161,7 +161,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
               >
                 Cancel
               </Button>
-              <Button type="primary" onClick={handleApplyFilters}>
+              <Button onClick={handleApplyFilters}>
                 Apply Filters
               </Button>
             </div>
