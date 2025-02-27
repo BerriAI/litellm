@@ -249,7 +249,7 @@ class BaseConfig(ABC):
 
     def get_complete_url(
         self,
-        api_base: str,
+        api_base: Optional[str],
         model: str,
         optional_params: dict,
         stream: Optional[bool] = None,
@@ -261,6 +261,8 @@ class BaseConfig(ABC):
 
         Some providers need `model` in `api_base`
         """
+        if api_base is None:
+            raise ValueError("api_base is required")
         return api_base
 
     @abstractmethod

@@ -263,7 +263,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
     def get_complete_url(
         self,
-        api_base: str,
+        api_base: Optional[str],
         model: str,
         optional_params: dict,
         stream: Optional[bool] = None,
@@ -274,6 +274,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         Returns:
             str: The complete URL for the API call.
         """
+        if api_base is None:
+            api_base = "https://api.openai.com"
         endpoint = "chat/completions"
 
         # Remove trailing slash from api_base if present
