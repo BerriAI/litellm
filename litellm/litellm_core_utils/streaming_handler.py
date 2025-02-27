@@ -714,7 +714,7 @@ class CustomStreamWrapper:
 
     def is_delta_empty(self, delta: Delta) -> bool:
         is_empty = True
-        if delta.content is not None:
+        if delta.content:
             is_empty = False
         elif delta.tool_calls is not None:
             is_empty = False
