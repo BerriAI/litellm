@@ -2740,7 +2740,7 @@ async def test_partner_models_httpx_ai21():
                 "total_tokens": 194,
             },
             "meta": {"requestDurationMillis": 501},
-            "model": "jamba-1.5",
+            "model": "jamba-1.5-mini@001",
         }
 
     mock_response.json = return_val
