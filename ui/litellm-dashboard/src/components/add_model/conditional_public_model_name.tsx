@@ -7,17 +7,57 @@ const ConditionalPublicModelName: React.FC = () => {
   // Access the form instance
   const form = Form.useFormInstance();
 
-  // Watch the 'model' field for changes
-  const selectedModels = Form.useWatch('model', form) || [];
+  // Watch the 'model' field for changes and ensure it's always an array
+  const modelValue = Form.useWatch('model', form) || [];
+  const selectedModels = Array.isArray(modelValue) ? modelValue : [modelValue];
+  const customModelName = Form.useWatch('custom_model_name', form);
   const showPublicModelName = !selectedModels.includes('all-wildcard');
 
-  // Auto-populate model mappings when selected models change
+  // Update model mappings immediately when custom model name changes
+  const handleCustomModelNameChange = (value: string) => {
+    if (selectedModels.includes('custom') && value) {
+      const currentMappings = form.getFieldValue('model_mappings') || [];
+      const updatedMappings = currentMappings.map((mapping: any) => {
+        if (mapping.public_name === 'custom' || 
+            (mapping.public_name !== value && mapping.litellm_model !== value && 
+             mapping.public_name === mapping.litellm_model)) {
+          return {
+            public_name: value,
+            litellm_model: value
+          };
+        }
+        return mapping;
+      });
+      form.setFieldValue('model_mappings', updatedMappings);
+    }
+  };
+
+  // Listen for changes to the custom_model_name field
+  useEffect(() => {
+    const unsubscribe = form.getFieldInstance('custom_model_name')?.addEventListener('input', (e: any) => {
+      handleCustomModelNameChange(e.target.value);
+    });
+    
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, [form]);
+
+  // Initial setup of model mappings when models are selected
   useEffect(() => {
     if (selectedModels.length > 0 && !selectedModels.includes('all-wildcard')) {
-      const mappings = selectedModels.map((model: string) => ({
-        public_name: model,
-        litellm_model: model
-      }));
+      const mappings = selectedModels.map((model: string) => {
+        if (model === 'custom' && customModelName) {
+          return {
+            public_name: customModelName,
+            litellm_model: customModelName
+          };
+        }
+        return {
+          public_name: model,
+          litellm_model: model
+        };
+      });
       form.setFieldValue('model_mappings', mappings);
     }
   }, [selectedModels, form]);
@@ -32,7 +72,7 @@ const ConditionalPublicModelName: React.FC = () => {
       render: (text: string, record: any, index: number) => {
         return (
           <TextInput
-            defaultValue={text}
+            value={text}
             onChange={(e) => {
               const newMappings = [...form.getFieldValue('model_mappings')];
               newMappings[index].public_name = e.target.value;

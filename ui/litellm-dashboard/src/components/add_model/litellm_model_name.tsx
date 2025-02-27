@@ -64,17 +64,17 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
               }
               options={[
                 {
+                  label: 'Custom Model Name (Enter below)',
+                  value: 'custom'
+                },
+                {
                   label: `All ${selectedProvider} Models (Wildcard)`,
                   value: 'all-wildcard'
                 },
                 ...providerModels.map(model => ({
                   label: model,
                   value: model
-                })),
-                {
-                  label: 'Custom Model Name (Enter below)',
-                  value: 'custom'
-                }
+                }))
               ]}
               style={{ width: '100%' }}
             />
@@ -92,7 +92,9 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
         >
           {({ getFieldValue }) => {
             const selectedModels = getFieldValue('model') || [];
-            return selectedModels.includes('custom') && (
+            // Ensure selectedModels is always an array
+            const modelArray = Array.isArray(selectedModels) ? selectedModels : [selectedModels];
+            return modelArray.includes('custom') && (
               <Form.Item
                 name="custom_model_name"
                 rules={[{ required: true, message: "Please enter a custom model name." }]}
