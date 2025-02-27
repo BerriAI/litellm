@@ -11,6 +11,7 @@ from litellm.llms.base_llm.chat.transformation import (
     BaseLLMException,
     LiteLLMLoggingObj,
 )
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     ChatCompletionToolCallChunk,
@@ -75,11 +76,16 @@ class CloudflareChatConfig(BaseConfig):
 
     def get_complete_url(
         self,
-        api_base: str,
+        api_base: Optional[str],
         model: str,
         optional_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
+        if api_base is None:
+            account_id = get_secret_str("CLOUDFLARE_ACCOUNT_ID")
+            api_base = (
+                f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/"
+            )
         return api_base + model
 
     def get_supported_openai_params(self, model: str) -> List[str]:
