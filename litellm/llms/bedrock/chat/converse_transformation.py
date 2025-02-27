@@ -117,6 +117,10 @@ class AmazonConverseConfig(BaseConfig):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
 
+        if (
+            "claude-3-7" in model
+        ):  # [TODO]: move to a 'supports_reasoning_content' param from model cost map
+            supported_params.append("thinking")
         return supported_params
 
     def map_tool_choice_values(
@@ -258,7 +262,8 @@ class AmazonConverseConfig(BaseConfig):
                 )
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
-
+            if param == "thinking":
+                optional_params["thinking"] = value
         return optional_params
 
     @overload
