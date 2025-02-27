@@ -187,7 +187,7 @@ def rerank(  # noqa: PLR0915
                 optional_rerank_params=optional_rerank_params,
                 logging_obj=litellm_logging_obj,
                 timeout=optional_params.timeout,
-                api_key=dynamic_api_key or optional_params.api_key,
+                api_key=api_key,
                 api_base=api_base,
                 _is_async=_is_async,
                 headers=headers or litellm.headers or {},
