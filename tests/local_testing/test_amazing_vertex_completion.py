@@ -2769,7 +2769,7 @@ async def test_partner_models_httpx_ai21():
         kwargs["data"] = json.loads(kwargs["data"])
 
         assert kwargs["data"] == {
-            "model": "jamba-1.5-mini",
+            "model": "jamba-1.5-mini@001",
             "messages": [
                 {
                     "role": "system",
