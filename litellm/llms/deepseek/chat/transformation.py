@@ -34,3 +34,18 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("DEEPSEEK_API_KEY")
         return api_base, dynamic_api_key
+
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        model: str,
+        optional_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        """
+        If api_base is not provided, use the default DeepSeek /chat/completions endpoint.
+        """
+        if api_base:
+            return api_base
+        else:
+            return "https://api.deepseek.com/beta/chat/completions"
