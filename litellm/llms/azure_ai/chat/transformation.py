@@ -1,4 +1,5 @@
 from typing import Any, List, Optional, Tuple, cast
+from urllib.parse import urlparse
 
 import httpx
 from httpx import Response
@@ -39,7 +40,12 @@ class AzureAIStudioConfig(OpenAIConfig):
         """
         Returns True if the request should use `api-key` header for authentication.
         """
-        if "services.ai.azure.com" in api_base or "openai.azure.com" in api_base:
+        parsed_url = urlparse(api_base)
+        host = parsed_url.hostname
+        if host and (
+            host.endswith(".services.ai.azure.com")
+            or host.endswith(".openai.azure.com")
+        ):
             return True
         return False
 
