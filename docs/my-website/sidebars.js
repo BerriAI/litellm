@@ -242,6 +242,7 @@ const sidebars = {
         "completion/document_understanding",
         "completion/vision",
         "completion/json_mode",
+        "reasoning_content",
         "completion/prompt_caching",
         "completion/predict_outputs",
         "completion/prefix",

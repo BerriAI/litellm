@@ -443,7 +443,7 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 **Expected Response**
 
-Same as Anthropic API response.
+Same as [Anthropic API response](../providers/anthropic#usage---thinking--reasoning_content).
 
 ```python
 {
