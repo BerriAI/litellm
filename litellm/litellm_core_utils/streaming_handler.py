@@ -879,6 +879,9 @@ class CustomStreamWrapper:
             _is_delta_empty = self.is_delta_empty(delta=model_response.choices[0].delta)
 
             if _is_delta_empty:
+                model_response.choices[0].delta = Delta(
+                    content=None
+                )  # ensure empty delta chunk returned
                 # get any function call arguments
                 model_response.choices[0].finish_reason = map_finish_reason(
                     finish_reason=self.received_finish_reason
