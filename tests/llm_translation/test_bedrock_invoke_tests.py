@@ -108,10 +108,10 @@ def test_nova_invoke_streaming_chunk_parsing():
         }
     }
     result = decoder._chunk_parser(nova_text_chunk)
-    assert result["text"] == "Hello, how can I help?"
-    assert result["index"] == 0
-    assert not result["is_finished"]
-    assert result["tool_use"] is None
+    assert result.choices[0].delta.content == "Hello, how can I help?"
+    assert result.choices[0].index == 0
+    assert not result.choices[0].finish_reason
+    assert result.choices[0].delta.tool_calls is None
 
     # Test case 2: Tool use start in contentBlockDelta
     nova_tool_start_chunk = {
@@ -121,12 +121,12 @@ def test_nova_invoke_streaming_chunk_parsing():
         }
     }
     result = decoder._chunk_parser(nova_tool_start_chunk)
-    assert result["text"] == ""
-    assert result["index"] == 1
-    assert result["tool_use"] is not None
-    assert result["tool_use"]["type"] == "function"
-    assert result["tool_use"]["function"]["name"] == "get_weather"
-    assert result["tool_use"]["id"] == "tool_1"
+    assert result.choices[0].delta.content == ""
+    assert result.choices[0].index == 1
+    assert result.choices[0].delta.tool_calls is not None
+    assert result.choices[0].delta.tool_calls[0].type == "function"
+    assert result.choices[0].delta.tool_calls[0].function.name == "get_weather"
+    assert result.choices[0].delta.tool_calls[0].id == "tool_1"
 
     # Test case 3: Tool use arguments in contentBlockDelta
     nova_tool_args_chunk = {
@@ -136,10 +136,13 @@ def test_nova_invoke_streaming_chunk_parsing():
         }
     }
     result = decoder._chunk_parser(nova_tool_args_chunk)
-    assert result["text"] == ""
-    assert result["index"] == 2
-    assert result["tool_use"] is not None
-    assert result["tool_use"]["function"]["arguments"] == '{"location": "New York"}'
+    assert result.choices[0].delta.content == ""
+    assert result.choices[0].index == 2
+    assert result.choices[0].delta.tool_calls is not None
+    assert (
+        result.choices[0].delta.tool_calls[0].function.arguments
+        == '{"location": "New York"}'
+    )
 
     # Test case 4: Stop reason in contentBlockDelta
     nova_stop_chunk = {
@@ -149,5 +152,4 @@ def test_nova_invoke_streaming_chunk_parsing():
     }
     result = decoder._chunk_parser(nova_stop_chunk)
     print(result)
-    assert result["is_finished"] is True
-    assert result["finish_reason"] == "tool_calls"
+    assert result.choices[0].finish_reason == "tool_calls"

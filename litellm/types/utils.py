@@ -24,6 +24,7 @@ from typing_extensions import Callable, Dict, Required, TypedDict, override
 from ..litellm_core_utils.core_helpers import map_finish_reason
 from .guardrails import GuardrailEventHooks
 from .llms.openai import (
+    ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
     OpenAIChatCompletionChunk,
@@ -457,29 +458,6 @@ Reference:
 ChatCompletionMessage(content='This is a test', role='assistant', function_call=None, tool_calls=None))
 """
 
-REASONING_CONTENT_COMPATIBLE_PARAMS = [
-    "thinking_blocks",
-    "reasoning_content",
-]
-
-
-def map_reasoning_content(provider_specific_fields: Dict[str, Any]) -> str:
-    """
-    Extract reasoning_content from provider_specific_fields
-    """
-
-    reasoning_content: str = ""
-    for k, v in provider_specific_fields.items():
-        if k == "thinking_blocks" and isinstance(v, list):
-            _reasoning_content = ""
-            for block in v:
-                if block.get("type") == "thinking":
-                    _reasoning_content += block.get("thinking", "")
-            reasoning_content = _reasoning_content
-        elif k == "reasoning_content":
-            reasoning_content = v
-    return reasoning_content
-
 
 def add_provider_specific_fields(
     object: BaseModel, provider_specific_fields: Optional[Dict[str, Any]]
@@ -487,12 +465,6 @@ def add_provider_specific_fields(
     if not provider_specific_fields:  # set if provider_specific_fields is not empty
         return
     setattr(object, "provider_specific_fields", provider_specific_fields)
-    for k, v in provider_specific_fields.items():
-        if v is not None:
-            setattr(object, k, v)
-            if k in REASONING_CONTENT_COMPATIBLE_PARAMS and k != "reasoning_content":
-                reasoning_content = map_reasoning_content({k: v})
-                setattr(object, "reasoning_content", reasoning_content)
 
 
 class Message(OpenAIObject):
@@ -501,6 +473,8 @@ class Message(OpenAIObject):
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
     audio: Optional[ChatCompletionAudioResponse] = None
+    reasoning_content: Optional[str] = None
+    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
     provider_specific_fields: Optional[Dict[str, Any]] = Field(
         default=None, exclude=True
     )
@@ -513,6 +487,8 @@ class Message(OpenAIObject):
         tool_calls: Optional[list] = None,
         audio: Optional[ChatCompletionAudioResponse] = None,
         provider_specific_fields: Optional[Dict[str, Any]] = None,
+        reasoning_content: Optional[str] = None,
+        thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None,
         **params,
     ):
         init_values: Dict[str, Any] = {
@@ -538,6 +514,12 @@ class Message(OpenAIObject):
         if audio is not None:
             init_values["audio"] = audio
 
+        if thinking_blocks is not None:
+            init_values["thinking_blocks"] = thinking_blocks
+
+        if reasoning_content is not None:
+            init_values["reasoning_content"] = reasoning_content
+
         super(Message, self).__init__(
             **init_values,  # type: ignore
             **params,
@@ -547,6 +529,14 @@ class Message(OpenAIObject):
             # delete audio from self
             # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
             del self.audio
+
+        if reasoning_content is None:
+            # ensure default response matches OpenAI spec
+            del self.reasoning_content
+
+        if thinking_blocks is None:
+            # ensure default response matches OpenAI spec
+            del self.thinking_blocks
 
         add_provider_specific_fields(self, provider_specific_fields)
 
@@ -571,9 +561,9 @@ class Message(OpenAIObject):
 
 
 class Delta(OpenAIObject):
-    provider_specific_fields: Optional[Dict[str, Any]] = Field(
-        default=None, exclude=True
-    )
+    reasoning_content: Optional[str] = None
+    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
+    provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
 
     def __init__(
         self,
@@ -582,6 +572,8 @@ class Delta(OpenAIObject):
         function_call=None,
         tool_calls=None,
         audio: Optional[ChatCompletionAudioResponse] = None,
+        reasoning_content: Optional[str] = None,
+        thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None,
         **params,
     ):
         super(Delta, self).__init__(**params)
@@ -592,6 +584,18 @@ class Delta(OpenAIObject):
         self.function_call: Optional[Union[FunctionCall, Any]] = None
         self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None
         self.audio: Optional[ChatCompletionAudioResponse] = None
+
+        if reasoning_content is not None:
+            self.reasoning_content = reasoning_content
+        else:
+            # ensure default response matches OpenAI spec
+            del self.reasoning_content
+
+        if thinking_blocks is not None:
+            self.thinking_blocks = thinking_blocks
+        else:
+            # ensure default response matches OpenAI spec
+            del self.thinking_blocks
 
         if function_call is not None and isinstance(function_call, dict):
             self.function_call = FunctionCall(**function_call)
@@ -894,12 +898,14 @@ class ModelResponseBase(OpenAIObject):
 
 class ModelResponseStream(ModelResponseBase):
     choices: List[StreamingChoices]
+    provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
 
     def __init__(
         self,
         choices: Optional[List[Union[StreamingChoices, dict, BaseModel]]] = None,
         id: Optional[str] = None,
         created: Optional[int] = None,
+        provider_specific_fields: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
         if choices is not None and isinstance(choices, list):
@@ -936,6 +942,7 @@ class ModelResponseStream(ModelResponseBase):
         kwargs["id"] = id
         kwargs["created"] = created
         kwargs["object"] = "chat.completion.chunk"
+        kwargs["provider_specific_fields"] = provider_specific_fields
 
         super().__init__(**kwargs)
 
