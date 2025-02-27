@@ -45,7 +45,10 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         """
         If api_base is not provided, use the default DeepSeek /chat/completions endpoint.
         """
-        if api_base:
-            return api_base
-        else:
-            return "https://api.deepseek.com/beta/chat/completions"
+        if not api_base:
+            api_base = "https://api.deepseek.com/beta"
+
+        if not api_base.endswith("/chat/completions"):
+            api_base = f"{api_base}/chat/completions"
+
+        return api_base
