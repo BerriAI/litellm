@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { Form, Table, Input } from "antd";
 import { Text, TextInput } from "@tremor/react";
 import { Row, Col } from "antd";
@@ -6,6 +6,7 @@ import { Row, Col } from "antd";
 const ConditionalPublicModelName: React.FC = () => {
   // Access the form instance
   const form = Form.useFormInstance();
+  const [tableKey, setTableKey] = useState(0); // Add a key to force table re-render
 
   // Watch the 'model' field for changes and ensure it's always an array
   const modelValue = Form.useWatch('model', form) || [];
@@ -13,35 +14,23 @@ const ConditionalPublicModelName: React.FC = () => {
   const customModelName = Form.useWatch('custom_model_name', form);
   const showPublicModelName = !selectedModels.includes('all-wildcard');
 
-  // Update model mappings immediately when custom model name changes
-  const handleCustomModelNameChange = (value: string) => {
-    if (selectedModels.includes('custom') && value) {
+  // Force table to re-render when custom model name changes
+  useEffect(() => {
+    if (customModelName && selectedModels.includes('custom')) {
       const currentMappings = form.getFieldValue('model_mappings') || [];
       const updatedMappings = currentMappings.map((mapping: any) => {
-        if (mapping.public_name === 'custom' || 
-            (mapping.public_name !== value && mapping.litellm_model !== value && 
-             mapping.public_name === mapping.litellm_model)) {
+        if (mapping.public_name === 'custom' || mapping.litellm_model === 'custom') {
           return {
-            public_name: value,
-            litellm_model: value
+            public_name: customModelName,
+            litellm_model: customModelName
           };
         }
         return mapping;
       });
       form.setFieldValue('model_mappings', updatedMappings);
+      setTableKey(prev => prev + 1); // Force table re-render
     }
-  };
-
-  // Listen for changes to the custom_model_name field
-  useEffect(() => {
-    const unsubscribe = form.getFieldInstance('custom_model_name')?.addEventListener('input', (e: any) => {
-      handleCustomModelNameChange(e.target.value);
-    });
-    
-    return () => {
-      if (unsubscribe) unsubscribe();
-    };
-  }, [form]);
+  }, [customModelName, selectedModels, form]);
 
   // Initial setup of model mappings when models are selected
   useEffect(() => {
@@ -59,8 +48,9 @@ const ConditionalPublicModelName: React.FC = () => {
         };
       });
       form.setFieldValue('model_mappings', mappings);
+      setTableKey(prev => prev + 1); // Force table re-render
     }
-  }, [selectedModels, form]);
+  }, [selectedModels, customModelName, form]);
 
   if (!showPublicModelName) return null;
 
@@ -101,6 +91,7 @@ const ConditionalPublicModelName: React.FC = () => {
         required={true}
       >
         <Table 
+          key={tableKey} // Add key to force re-render
           dataSource={form.getFieldValue('model_mappings')} 
           columns={columns} 
           pagination={false}
