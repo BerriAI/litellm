@@ -353,6 +353,7 @@ def test_handle_logging_anthropic_collected_chunks(all_chunks):
     )
 
     assert isinstance(result["result"], ModelResponse)
+    print("result=", json.dumps(result, indent=4, default=str))
 
 
 def test_build_complete_streaming_response(all_chunks):
@@ -370,3 +371,6 @@ def test_build_complete_streaming_response(all_chunks):
     )
 
     assert isinstance(result, ModelResponse)
+    assert result.usage.prompt_tokens == 17
+    assert result.usage.completion_tokens == 249
+    assert result.usage.total_tokens == 266
