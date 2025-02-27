@@ -97,7 +97,9 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 ## Spec 
 
-- `reasoning_content` - str: The reasoning content from the model.
+These fields can be accessed via `response.choices[0].message.reasoning_content` and `response.choices[0].message.thinking_blocks`.
+
+- `reasoning_content` - str: The reasoning content from the model. Returned across all providers.
 - `thinking_blocks` - Optional[List[Dict[str, str]]]: A list of thinking blocks from the model. Only returned for Anthropic models.
   - `type` - str: The type of thinking block.
   - `thinking` - str: The thinking from the model.
