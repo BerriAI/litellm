@@ -73,7 +73,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
 
     def get_complete_url(
         self,
-        api_base: str,
+        api_base: Optional[str],
         model: str,
         optional_params: dict,
         stream: Optional[bool] = None,
