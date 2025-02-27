@@ -1,4 +1,5 @@
 from typing import Any, List, Optional, Tuple, cast
+from urllib.parse import urlparse
 
 import httpx
 from httpx import Response
@@ -28,12 +29,25 @@ class AzureAIStudioConfig(OpenAIConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        if api_base and "services.ai.azure.com" in api_base:
+        if api_base and self._should_use_api_key_header(api_base):
             headers["api-key"] = api_key
         else:
             headers["Authorization"] = f"Bearer {api_key}"
 
         return headers
+
+    def _should_use_api_key_header(self, api_base: str) -> bool:
+        """
+        Returns True if the request should use `api-key` header for authentication.
+        """
+        parsed_url = urlparse(api_base)
+        host = parsed_url.hostname
+        if host and (
+            host.endswith(".services.ai.azure.com")
+            or host.endswith(".openai.azure.com")
+        ):
+            return True
+        return False
 
     def get_complete_url(
         self,
