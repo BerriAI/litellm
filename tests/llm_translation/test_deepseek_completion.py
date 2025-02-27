@@ -47,7 +47,7 @@ def test_deepseek_mock_completion(stream):
         assert response is not None
 
 
-@pytest.mark.parametrize("stream", [True])
+@pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.asyncio
 async def test_deepseek_provider_async_completion(stream):
     """
@@ -55,7 +55,7 @@ async def test_deepseek_provider_async_completion(stream):
     """
     import litellm
     import json
-    from unittest.mock import patch, AsyncMock
+    from unittest.mock import patch, AsyncMock, MagicMock
     from litellm import acompletion
 
     litellm._turn_on_debug()
@@ -69,8 +69,26 @@ async def test_deepseek_provider_async_completion(stream):
     with patch(
         "litellm.llms.custom_httpx.llm_http_handler.AsyncHTTPHandler.post"
     ) as mock_post:
-        # Set up mock response
-        mock_post.return_value = AsyncMock()
+        mock_response_data = litellm.ModelResponse(
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(content="Hello!"),
+                    index=0,
+                    finish_reason="stop",
+                )
+            ]
+        ).model_dump()
+        # Create a proper mock response
+        mock_response = MagicMock()  # Use MagicMock instead of AsyncMock
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(mock_response_data)
+        mock_response.headers = {"Content-Type": "application/json"}
+
+        # Make json() return a value directly, not a coroutine
+        mock_response.json.return_value = mock_response_data
+
+        # Set the return value for the post method
+        mock_post.return_value = mock_response
 
         await acompletion(
             custom_llm_provider="deepseek",
