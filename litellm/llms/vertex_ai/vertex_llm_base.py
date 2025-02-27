@@ -12,6 +12,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.base import BaseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 
 from .common_utils import _get_gemini_url, _get_vertex_url, all_gemini_url_modes
 
@@ -34,7 +35,7 @@ class VertexBase(BaseLLM):
         return vertex_region or "us-central1"
 
     def load_auth(
-        self, credentials: Optional[str], project_id: Optional[str]
+        self, credentials: Optional[VERTEX_CREDENTIALS_TYPES], project_id: Optional[str]
     ) -> Tuple[Any, str]:
         import google.auth as google_auth
         from google.auth import identity_pool
@@ -116,7 +117,7 @@ class VertexBase(BaseLLM):
 
     def _ensure_access_token(
         self,
-        credentials: Optional[str],
+        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
         project_id: Optional[str],
         custom_llm_provider: Literal[
             "vertex_ai", "vertex_ai_beta", "gemini"
@@ -209,7 +210,7 @@ class VertexBase(BaseLLM):
         gemini_api_key: Optional[str],
         vertex_project: Optional[str],
         vertex_location: Optional[str],
-        vertex_credentials: Optional[str],
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
         stream: Optional[bool],
         custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
         api_base: Optional[str],
@@ -260,7 +261,7 @@ class VertexBase(BaseLLM):
 
     async def _ensure_access_token_async(
         self,
-        credentials: Optional[str],
+        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
         project_id: Optional[str],
         custom_llm_provider: Literal[
             "vertex_ai", "vertex_ai_beta", "gemini"

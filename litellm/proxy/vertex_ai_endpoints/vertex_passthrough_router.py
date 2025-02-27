@@ -1,11 +1,12 @@
 import json
 import re
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
     VertexPassThroughCredentials,
 )
+from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 
 
 class VertexPassThroughRouter:
@@ -58,7 +59,7 @@ class VertexPassThroughRouter:
         self,
         project_id: str,
         location: str,
-        vertex_credentials: str,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES,
     ):
         """
         Add the vertex credentials for the given project-id, location

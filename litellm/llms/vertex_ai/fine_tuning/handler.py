@@ -13,6 +13,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import Ver
 from litellm.types.fine_tuning import OpenAIFineTuningHyperparameters
 from litellm.types.llms.openai import FineTuningJobCreate
 from litellm.types.llms.vertex_ai import (
+    VERTEX_CREDENTIALS_TYPES,
     FineTuneHyperparameters,
     FineTuneJobCreate,
     FineTunesupervisedTuningSpec,
@@ -222,7 +223,7 @@ class VertexFineTuningAPI(VertexLLM):
         create_fine_tuning_job_data: FineTuningJobCreate,
         vertex_project: Optional[str],
         vertex_location: Optional[str],
-        vertex_credentials: Optional[str],
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
         kwargs: Optional[dict] = None,
