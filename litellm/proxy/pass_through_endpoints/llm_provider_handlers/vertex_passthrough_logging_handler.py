@@ -8,9 +8,6 @@ import httpx
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.litellm_logging import (
-    get_standard_logging_object_payload,
-)
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as VertexModelResponseIterator,
 )
@@ -236,21 +233,8 @@ class VertexPassthroughLoggingHandler:
         kwargs["response_cost"] = response_cost
         kwargs["model"] = model
 
-        # Make standard logging object for Vertex AI
-        standard_logging_object = get_standard_logging_object_payload(
-            kwargs=kwargs,
-            init_response_obj=litellm_model_response,
-            start_time=start_time,
-            end_time=end_time,
-            logging_obj=logging_obj,
-            status="success",
-        )
-
         # pretty print standard logging object
-        verbose_proxy_logger.debug(
-            "standard_logging_object= %s", json.dumps(standard_logging_object, indent=4)
-        )
-        kwargs["standard_logging_object"] = standard_logging_object
+        verbose_proxy_logger.debug("kwargs= %s", json.dumps(kwargs, indent=4))
 
         # set litellm_call_id to logging response object
         litellm_model_response.id = logging_obj.litellm_call_id
