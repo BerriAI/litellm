@@ -160,7 +160,8 @@ class VertexAIPartnerModels(VertexBase):
                 url=default_api_base,
             )
 
-            model = model.split("@")[0]
+            if "codestral" in model or "mistral" in model:
+                model = model.split("@")[0]
 
             if "codestral" in model and litellm_params.get("text_completion") is True:
                 optional_params["model"] = model

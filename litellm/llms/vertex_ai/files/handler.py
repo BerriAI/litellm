@@ -9,6 +9,7 @@ from litellm.integrations.gcs_bucket.gcs_bucket_base import (
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.openai import CreateFileRequest, FileObject
+from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 
 from .transformation import VertexAIFilesTransformation
 
@@ -34,7 +35,7 @@ class VertexAIFilesHandler(GCSBucketBase):
         self,
         create_file_data: CreateFileRequest,
         api_base: Optional[str],
-        vertex_credentials: Optional[str],
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
         vertex_project: Optional[str],
         vertex_location: Optional[str],
         timeout: Union[float, httpx.Timeout],
@@ -70,7 +71,7 @@ class VertexAIFilesHandler(GCSBucketBase):
         _is_async: bool,
         create_file_data: CreateFileRequest,
         api_base: Optional[str],
-        vertex_credentials: Optional[str],
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
         vertex_project: Optional[str],
         vertex_location: Optional[str],
         timeout: Union[float, httpx.Timeout],
