@@ -433,6 +433,7 @@ async def acompletion(
         "reasoning_effort": reasoning_effort,
         "extra_headers": extra_headers,
         "acompletion": True,  # assuming this is a required parameter
+        "thinking": thinking,
     }
     if custom_llm_provider is None:
         _, custom_llm_provider, _, _ = get_llm_provider(
