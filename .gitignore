@@ -77,3 +77,6 @@ litellm/proxy/_experimental/out/404.html
 litellm/proxy/_experimental/out/model_hub.html
 .mypy_cache/*
 litellm/proxy/application.log
+
+**/__pycache__/**
+**/*.pyc
