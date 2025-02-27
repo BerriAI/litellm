@@ -379,7 +379,7 @@ print(f"\nResponse: {resp}")
 
 ## Usage - 'thinking' / 'reasoning content'
 
-This is currently only supported for Anthropic's Claude 3.5 Sonnet.
+This is currently only supported for Anthropic's Claude 3.7 Sonnet.
 
 Works for:
 - sync completion calls (SDK) - v1.61.19+
