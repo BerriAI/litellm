@@ -51,7 +51,7 @@ class AzureAIStudioConfig(OpenAIConfig):
 
     def get_complete_url(
         self,
-        api_base: str,
+        api_base: Optional[str],
         model: str,
         optional_params: dict,
         stream: Optional[bool] = None,
@@ -72,6 +72,10 @@ class AzureAIStudioConfig(OpenAIConfig):
         - A complete URL string, e.g.,
         "https://litellm8397336933.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview"
         """
+        if api_base is None:
+            raise ValueError(
+                f"api_base is required for Azure AI Studio. Please set the api_base parameter. Passed `api_base={api_base}`"
+            )
         original_url = httpx.URL(api_base)
 
         # Extract api_version or use default
