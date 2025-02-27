@@ -663,6 +663,11 @@ def get_async_httpx_client(
 
     Caches the new client and returns it.
     """
+    try:
+        current_loop = asyncio.get_running_loop()
+        loop_id = id(current_loop)
+    except RuntimeError:
+        loop_id = "no_loop"
     _params_key_name = ""
     if params is not None:
         for key, value in params.items():
@@ -671,7 +676,7 @@ def get_async_httpx_client(
             except Exception:
                 pass
 
-    _cache_key_name = "async_httpx_client" + _params_key_name + llm_provider
+    _cache_key_name = "async_httpx_client" + _params_key_name + llm_provider + f"_loop_{loop_id}"
     _cached_client = litellm.in_memory_llm_clients_cache.get_cache(_cache_key_name)
     if _cached_client:
         return _cached_client
