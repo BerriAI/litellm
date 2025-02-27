@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Dict, Optional, Union
+from typing import Dict, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
