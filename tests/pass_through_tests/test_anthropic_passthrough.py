@@ -6,6 +6,7 @@ import pytest
 import anthropic
 import aiohttp
 import asyncio
+import json
 
 client = anthropic.Anthropic(
     base_url="http://0.0.0.0:4000/anthropic", api_key="sk-1234"
@@ -78,6 +79,13 @@ async def test_anthropic_basic_completion_with_headers():
 
             response_json = await response.json()
             response_headers = response.headers
+            print(
+                "non-streaming response",
+                json.dumps(response_json, indent=4, default=str),
+            )
+            reported_usage = response_json.get("usage", None)
+            anthropic_api_input_tokens = reported_usage.get("input_tokens", None)
+            anthropic_api_output_tokens = reported_usage.get("output_tokens", None)
             litellm_call_id = response_headers.get("x-litellm-call-id")
 
             print(f"LiteLLM Call ID: {litellm_call_id}")
@@ -121,10 +129,12 @@ async def test_anthropic_basic_completion_with_headers():
                     log_entry["spend"], (int, float)
                 ), "Spend should be a number"
                 assert log_entry["total_tokens"] > 0, "Should have some tokens"
-                assert log_entry["prompt_tokens"] > 0, "Should have prompt tokens"
                 assert (
-                    log_entry["completion_tokens"] > 0
-                ), "Should have completion tokens"
+                    log_entry["prompt_tokens"] == anthropic_api_input_tokens
+                ), f"Should have prompt tokens matching anthropic api. Expected {anthropic_api_input_tokens} but got {log_entry['prompt_tokens']}"
+                assert (
+                    log_entry["completion_tokens"] == anthropic_api_output_tokens
+                ), f"Should have completion tokens matching anthropic api. Expected {anthropic_api_output_tokens} but got {log_entry['completion_tokens']}"
                 assert (
                     log_entry["total_tokens"]
                     == log_entry["prompt_tokens"] + log_entry["completion_tokens"]
