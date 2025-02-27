@@ -1655,10 +1655,6 @@ class ProxyConfig:
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
 
-            ## INIT ROUTER REDIS CACHE ##
-            if llm_router is not None:
-                llm_router._update_redis_cache(cache=redis_usage_cache)
-
     async def get_config(self, config_file_path: Optional[str] = None) -> dict:
         """
         Load config file
@@ -2184,6 +2180,9 @@ class ProxyConfig:
                 async_only_mode=True  # only init async clients
             ),
         )  # type:ignore
+
+        if redis_usage_cache is not None and router.cache.redis_cache is None:
+            router._update_redis_cache(cache=redis_usage_cache)
 
         # Guardrail settings
         guardrails_v2: Optional[List[Dict]] = None
