@@ -1,6 +1,6 @@
 import json
 import urllib
-from typing import Any, Callable, Optional, Union
+from typing import Any, Optional, Union
 
 import httpx
 
@@ -60,7 +60,6 @@ def make_sync_call(
             api_key="",
             data=data,
             messages=messages,
-            print_verbose=litellm.print_verbose,
             encoding=litellm.encoding,
         )  # type: ignore
         completion_stream: Any = MockResponseIterator(
@@ -102,7 +101,6 @@ class BedrockConverseLLM(BaseAWSLLM):
         messages: list,
         api_base: str,
         model_response: ModelResponse,
-        print_verbose: Callable,
         timeout: Optional[Union[float, httpx.Timeout]],
         encoding,
         logging_obj,
@@ -170,7 +168,6 @@ class BedrockConverseLLM(BaseAWSLLM):
         messages: list,
         api_base: str,
         model_response: ModelResponse,
-        print_verbose: Callable,
         timeout: Optional[Union[float, httpx.Timeout]],
         encoding,
         logging_obj: LiteLLMLoggingObject,
@@ -247,7 +244,6 @@ class BedrockConverseLLM(BaseAWSLLM):
             api_key="",
             data=data,
             messages=messages,
-            print_verbose=print_verbose,
             optional_params=optional_params,
             encoding=encoding,
         )
@@ -259,7 +255,6 @@ class BedrockConverseLLM(BaseAWSLLM):
         api_base: Optional[str],
         custom_prompt_dict: dict,
         model_response: ModelResponse,
-        print_verbose: Callable,
         encoding,
         logging_obj: LiteLLMLoggingObject,
         optional_params: dict,
@@ -270,11 +265,6 @@ class BedrockConverseLLM(BaseAWSLLM):
         extra_headers: Optional[dict] = None,
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
     ):
-
-        try:
-            from botocore.credentials import Credentials
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
         ## SETUP ##
         stream = optional_params.pop("stream", None)
@@ -367,7 +357,6 @@ class BedrockConverseLLM(BaseAWSLLM):
                     messages=messages,
                     api_base=proxy_endpoint_url,
                     model_response=model_response,
-                    print_verbose=print_verbose,
                     encoding=encoding,
                     logging_obj=logging_obj,
                     optional_params=optional_params,
@@ -387,7 +376,6 @@ class BedrockConverseLLM(BaseAWSLLM):
                 messages=messages,
                 api_base=proxy_endpoint_url,
                 model_response=model_response,
-                print_verbose=print_verbose,
                 encoding=encoding,
                 logging_obj=logging_obj,
                 optional_params=optional_params,
@@ -489,7 +477,6 @@ class BedrockConverseLLM(BaseAWSLLM):
             api_key="",
             data=data,
             messages=messages,
-            print_verbose=print_verbose,
             optional_params=optional_params,
             encoding=encoding,
         )

@@ -27,7 +27,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
-from litellm.utils import CustomStreamWrapper, get_secret
+from litellm.utils import CustomStreamWrapper
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -94,7 +94,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
-            aws_region_name=self._get_aws_region_name(optional_params=optional_params),
+            aws_region_name=self._get_aws_region_name(
+                optional_params=optional_params, model=model
+            ),
         )
 
         if (stream is not None and stream is True) and provider != "ai21":
@@ -114,6 +116,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         optional_params: dict,
         request_data: dict,
         api_base: str,
+        model: Optional[str] = None,
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
     ) -> dict:
@@ -135,7 +138,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         aws_profile_name = optional_params.get("aws_profile_name", None)
         aws_web_identity_token = optional_params.get("aws_web_identity_token", None)
         aws_sts_endpoint = optional_params.get("aws_sts_endpoint", None)
-        aws_region_name = self._get_aws_region_name(optional_params)
+        aws_region_name = self._get_aws_region_name(
+            optional_params=optional_params, model=model
+        )
 
         credentials: Credentials = self.get_credentials(
             aws_access_key_id=aws_access_key_id,
@@ -586,43 +591,22 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
 
         modelId = modelId.replace("invoke/", "", 1)
         if provider == "llama" and "llama/" in modelId:
-            modelId = self._get_model_id_for_llama_like_model(modelId)
+            modelId = self._get_model_id_from_model_with_spec(modelId, spec="llama")
+        elif provider == "deepseek_r1" and "deepseek_r1/" in modelId:
+            modelId = self._get_model_id_from_model_with_spec(
+                modelId, spec="deepseek_r1"
+            )
         return modelId
 
-    def _get_aws_region_name(self, optional_params: dict) -> str:
-        """
-        Get the AWS region name from the environment variables
-        """
-        aws_region_name = optional_params.get("aws_region_name", None)
-        ### SET REGION NAME ###
-        if aws_region_name is None:
-            # check env #
-            litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
-
-            if litellm_aws_region_name is not None and isinstance(
-                litellm_aws_region_name, str
-            ):
-                aws_region_name = litellm_aws_region_name
-
-            standard_aws_region_name = get_secret("AWS_REGION", None)
-            if standard_aws_region_name is not None and isinstance(
-                standard_aws_region_name, str
-            ):
-                aws_region_name = standard_aws_region_name
-
-        if aws_region_name is None:
-            aws_region_name = "us-west-2"
-
-        return aws_region_name
-
-    def _get_model_id_for_llama_like_model(
+    def _get_model_id_from_model_with_spec(
         self,
         model: str,
+        spec: str,
     ) -> str:
         """
         Remove `llama` from modelID since `llama` is simply a spec to follow for custom bedrock models
         """
-        model_id = model.replace("llama/", "")
+        model_id = model.replace(spec + "/", "")
         return self.encode_model_id(model_id=model_id)
 
     def encode_model_id(self, model_id: str) -> str:

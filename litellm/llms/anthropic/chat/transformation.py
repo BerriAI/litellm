@@ -1,6 +1,6 @@
 import json
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 import httpx
 
@@ -80,7 +80,7 @@ class AnthropicConfig(BaseConfig):
         return super().get_config()
 
     def get_supported_openai_params(self, model: str):
-        return [
+        params = [
             "stream",
             "stop",
             "temperature",
@@ -94,6 +94,11 @@ class AnthropicConfig(BaseConfig):
             "response_format",
             "user",
         ]
+
+        if "claude-3-7-sonnet" in model:
+            params.append("thinking")
+
+        return params
 
     def get_json_schema_from_pydantic_object(
         self, response_format: Union[Any, Dict, None]
@@ -302,6 +307,7 @@ class AnthropicConfig(BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_tokens"] = value
@@ -358,7 +364,8 @@ class AnthropicConfig(BaseConfig):
                 optional_params["json_mode"] = True
             if param == "user":
                 optional_params["metadata"] = {"user_id": value}
-
+            if param == "thinking":
+                optional_params["thinking"] = value
         return optional_params
 
     def _create_json_tool_call_for_response_format(
@@ -581,6 +588,43 @@ class AnthropicConfig(BaseConfig):
                 )
         return _message
 
+    def extract_response_content(self, completion_response: dict) -> Tuple[
+        str,
+        Optional[List[Any]],
+        Optional[List[Dict[str, Any]]],
+        List[ChatCompletionToolCallChunk],
+    ]:
+        text_content = ""
+        citations: Optional[List[Any]] = None
+        thinking_blocks: Optional[List[Dict[str, Any]]] = None
+        tool_calls: List[ChatCompletionToolCallChunk] = []
+        for idx, content in enumerate(completion_response["content"]):
+            if content["type"] == "text":
+                text_content += content["text"]
+            ## TOOL CALLING
+            elif content["type"] == "tool_use":
+                tool_calls.append(
+                    ChatCompletionToolCallChunk(
+                        id=content["id"],
+                        type="function",
+                        function=ChatCompletionToolCallFunctionChunk(
+                            name=content["name"],
+                            arguments=json.dumps(content["input"]),
+                        ),
+                        index=idx,
+                    )
+                )
+            ## CITATIONS
+            if content.get("citations", None) is not None:
+                if citations is None:
+                    citations = []
+                citations.append(content["citations"])
+            if content.get("thinking", None) is not None:
+                if thinking_blocks is None:
+                    thinking_blocks = []
+                thinking_blocks.append(content)
+        return text_content, citations, thinking_blocks, tool_calls
+
     def transform_response(
         self,
         model: str,
@@ -628,32 +672,21 @@ class AnthropicConfig(BaseConfig):
             )
         else:
             text_content = ""
-            citations: List[Any] = []
+            citations: Optional[List[Any]] = None
+            thinking_blocks: Optional[List[Dict[str, Any]]] = None
             tool_calls: List[ChatCompletionToolCallChunk] = []
-            for idx, content in enumerate(completion_response["content"]):
-                if content["type"] == "text":
-                    text_content += content["text"]
-                ## TOOL CALLING
-                elif content["type"] == "tool_use":
-                    tool_calls.append(
-                        ChatCompletionToolCallChunk(
-                            id=content["id"],
-                            type="function",
-                            function=ChatCompletionToolCallFunctionChunk(
-                                name=content["name"],
-                                arguments=json.dumps(content["input"]),
-                            ),
-                            index=idx,
-                        )
-                    )
-                ## CITATIONS
-                if content.get("citations", None) is not None:
-                    citations.append(content["citations"])
+
+            text_content, citations, thinking_blocks, tool_calls = (
+                self.extract_response_content(completion_response=completion_response)
+            )
 
             _message = litellm.Message(
                 tool_calls=tool_calls,
                 content=text_content or None,
-                provider_specific_fields={"citations": citations},
+                provider_specific_fields={
+                    "citations": citations,
+                    "thinking_blocks": thinking_blocks,
+                },
             )
 
             ## HANDLE JSON MODE - anthropic returns single function call

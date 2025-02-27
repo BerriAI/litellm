@@ -19,6 +19,7 @@ import {
   invitationCreateCall,
   getProxyUISettings,
 } from "./networking";
+import BulkCreateUsers from "./bulk_create_users_button";
 const { Option } = Select;
 
 interface CreateuserProps {
@@ -26,6 +27,8 @@ interface CreateuserProps {
   accessToken: string;
   teams: any[] | null;
   possibleUIRoles: null | Record<string, Record<string, string>>;
+  onUserCreated?: (userId: string) => void;
+  isEmbedded?: boolean;
 }
 
 // Define an interface for the UI settings
@@ -41,6 +44,8 @@ const Createuser: React.FC<CreateuserProps> = ({
   accessToken,
   teams,
   possibleUIRoles,
+  onUserCreated,
+  isEmbedded = false,
 }) => {
   const [uiSettings, setUISettings] = useState<UISettings | null>(null);
   const [form] = Form.useForm();
@@ -112,12 +117,21 @@ const Createuser: React.FC<CreateuserProps> = ({
   const handleCreate = async (formValues: { user_id: string }) => {
     try {
       message.info("Making API Call");
-      setIsModalVisible(true);
+      if (!isEmbedded) {
+        setIsModalVisible(true);
+      }
       console.log("formValues in create user:", formValues);
       const response = await userCreateCall(accessToken, null, formValues);
       console.log("user create Response:", response);
       setApiuser(response["key"]);
       const user_id = response.data?.user_id || response.user_id;
+
+      // Call the callback if provided (for embedded mode)
+      if (onUserCreated && isEmbedded) {
+        onUserCreated(user_id);
+        form.resetFields();
+        return; // Skip the invitation flow when embedded
+      }
 
       // only do invite link flow if sso is not enabled
       if (!uiSettings?.SSO_ENABLED) {
@@ -148,16 +162,83 @@ const Createuser: React.FC<CreateuserProps> = ({
       message.success("API user Created");
       form.resetFields();
       localStorage.removeItem("userData" + userID);
-    } catch (error) {
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.detail || error?.message || "Error creating the user";
+      message.error(errorMessage);
       console.error("Error creating the user:", error);
     }
   };
 
+  // Modify the return statement to handle embedded mode
+  if (isEmbedded) {
+    return (
+      <Form
+        form={form}
+        onFinish={handleCreate}
+        labelCol={{ span: 8 }}
+        wrapperCol={{ span: 16 }}
+        labelAlign="left"
+      >
+        <Form.Item label="User Email" name="user_email">
+          <TextInput placeholder="" />
+        </Form.Item>
+        <Form.Item label="User Role" name="user_role">
+          <Select2>
+            {possibleUIRoles &&
+              Object.entries(possibleUIRoles).map(
+                ([role, { ui_label, description }]) => (
+                  <SelectItem key={role} value={role} title={ui_label}>
+                    <div className="flex">
+                      {ui_label}{" "}
+                      <p
+                        className="ml-2"
+                        style={{ color: "gray", fontSize: "12px" }}
+                      >
+                        {description}
+                      </p>
+                    </div>
+                  </SelectItem>
+                ),
+              )}
+          </Select2>
+        </Form.Item>
+        <Form.Item label="Team ID" name="team_id">
+          <Select placeholder="Select Team ID" style={{ width: "100%" }}>
+            {teams ? (
+              teams.map((team: any) => (
+                <Option key={team.team_id} value={team.team_id}>
+                  {team.team_alias}
+                </Option>
+              ))
+            ) : (
+              <Option key="default" value={null}>
+                Default Team
+              </Option>
+            )}
+          </Select>
+        </Form.Item>
+
+        <Form.Item label="Metadata" name="metadata">
+          <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
+        </Form.Item>
+        <div style={{ textAlign: "right", marginTop: "10px" }}>
+          <Button htmlType="submit">Create User</Button>
+        </div>
+      </Form>
+    );
+  }
+
+  // Original return for standalone mode
   return (
-    <div>
+    <div className="flex gap-2">
       <Button2 className="mx-auto mb-0" onClick={() => setIsModalVisible(true)}>
         + Invite User
       </Button2>
+      <BulkCreateUsers 
+        accessToken={accessToken}
+        teams={teams}
+        possibleUIRoles={possibleUIRoles}
+      />
       <Modal
         title="Invite User"
         visible={isModalVisible}

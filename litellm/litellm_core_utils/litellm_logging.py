@@ -69,7 +69,8 @@ from litellm.types.utils import (
 from litellm.utils import _get_base_model_from_metadata, executor, print_verbose
 
 from ..integrations.argilla import ArgillaLogger
-from ..integrations.arize_ai import ArizeLogger
+from ..integrations.arize.arize import ArizeLogger
+from ..integrations.arize.arize_phoenix import ArizePhoenixLogger
 from ..integrations.athina import AthinaLogger
 from ..integrations.azure_storage.azure_storage import AzureBlobStorageLogger
 from ..integrations.braintrust_logging import BraintrustLogger
@@ -831,7 +832,7 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception as e:  # error creating kwargs for cost calculation
             debug_info = StandardLoggingModelCostFailureDebugInformation(
                 error_str=str(e),
-                traceback_str=traceback.format_exc(),
+                traceback_str=_get_traceback_str_for_error(str(e)),
             )
             verbose_logger.debug(
                 f"response_cost_failure_debug_information: {debug_info}"
@@ -2476,13 +2477,18 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                 OpenTelemetryConfig,
             )
 
-            otel_config = ArizeLogger.get_arize_opentelemetry_config()
-            if otel_config is None:
+            arize_config = ArizeLogger.get_arize_config()
+            if arize_config.endpoint is None:
                 raise ValueError(
                     "No valid endpoint found for Arize, please set 'ARIZE_ENDPOINT' to your GRPC endpoint or 'ARIZE_HTTP_ENDPOINT' to your HTTP endpoint"
                 )
+            otel_config = OpenTelemetryConfig(
+                exporter=arize_config.protocol,
+                endpoint=arize_config.endpoint,
+            )
+
             os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = (
-                f"space_key={os.getenv('ARIZE_SPACE_KEY')},api_key={os.getenv('ARIZE_API_KEY')}"
+                f"space_key={arize_config.space_key},api_key={arize_config.api_key}"
             )
             for callback in _in_memory_loggers:
                 if (
@@ -2491,6 +2497,35 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                 ):
                     return callback  # type: ignore
             _otel_logger = OpenTelemetry(config=otel_config, callback_name="arize")
+            _in_memory_loggers.append(_otel_logger)
+            return _otel_logger  # type: ignore
+        elif logging_integration == "arize_phoenix":
+            from litellm.integrations.opentelemetry import (
+                OpenTelemetry,
+                OpenTelemetryConfig,
+            )
+
+            arize_phoenix_config = ArizePhoenixLogger.get_arize_phoenix_config()
+            otel_config = OpenTelemetryConfig(
+                exporter=arize_phoenix_config.protocol,
+                endpoint=arize_phoenix_config.endpoint,
+            )
+
+            # auth can be disabled on local deployments of arize phoenix
+            if arize_phoenix_config.otlp_auth_headers is not None:
+                os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = (
+                    arize_phoenix_config.otlp_auth_headers
+                )
+
+            for callback in _in_memory_loggers:
+                if (
+                    isinstance(callback, OpenTelemetry)
+                    and callback.callback_name == "arize_phoenix"
+                ):
+                    return callback  # type: ignore
+            _otel_logger = OpenTelemetry(
+                config=otel_config, callback_name="arize_phoenix"
+            )
             _in_memory_loggers.append(_otel_logger)
             return _otel_logger  # type: ignore
         elif logging_integration == "otel":

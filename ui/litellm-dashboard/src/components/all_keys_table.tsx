@@ -187,6 +187,18 @@ export function AllKeysTable({
       cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
     },
     {
+      header: "User ID",
+      accessorKey: "user_id",
+      cell: (info) => {
+        const userId = info.getValue() as string;
+        return userId ? (
+          <Tooltip title={userId}>
+            <span>{userId.slice(0, 5)}...</span>
+          </Tooltip>
+        ) : "Not Set";
+      },
+    },
+    {
       header: "Created",
       accessorKey: "created_at",
       cell: (info) => {

@@ -1574,7 +1574,11 @@ def test_completion_cost_azure_ai_rerank(model):
                 "relevance_score": 0.990732,
             },
         ],
-        meta={},
+        meta={
+            "billed_units": {
+                "search_units": 1,
+            }
+        },
     )
     print("response", response)
     model = model
@@ -2770,6 +2774,8 @@ def test_bedrock_cost_calc_with_region():
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    litellm.add_known_models()
 
     hidden_params = {
         "custom_llm_provider": "bedrock",

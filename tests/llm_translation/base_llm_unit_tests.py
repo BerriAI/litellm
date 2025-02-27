@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
 import os
 import uuid
+import time
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -196,15 +197,18 @@ class BaseLLMChatTest(ABC):
         assert response is not None
 
     def test_message_with_name(self):
-        litellm.set_verbose = True
-        base_completion_call_args = self.get_base_completion_call_args()
-        messages = [
-            {"role": "user", "content": "Hello", "name": "test_name"},
-        ]
-        response = self.completion_function(
-            **base_completion_call_args, messages=messages
-        )
-        assert response is not None
+        try:
+            litellm.set_verbose = True
+            base_completion_call_args = self.get_base_completion_call_args()
+            messages = [
+                {"role": "user", "content": "Hello", "name": "test_name"},
+            ]
+            response = self.completion_function(
+                **base_completion_call_args, messages=messages
+            )
+            assert response is not None
+        except litellm.RateLimitError:
+            pass
 
     @pytest.mark.parametrize(
         "response_format",
@@ -597,6 +601,8 @@ class BaseLLMChatTest(ABC):
                 max_tokens=10,
             )
 
+            time.sleep(1)
+
             cached_cost = response._hidden_params["response_cost"]
 
             assert (
@@ -613,7 +619,9 @@ class BaseLLMChatTest(ABC):
             _usage_format_tests(response.usage)
 
             assert "prompt_tokens_details" in response.usage
-            assert response.usage.prompt_tokens_details.cached_tokens > 0
+            assert (
+                response.usage.prompt_tokens_details.cached_tokens > 0
+            ), f"cached_tokens={response.usage.prompt_tokens_details.cached_tokens} should be greater than 0. Got usage={response.usage}"
         except litellm.InternalServerError:
             pass
 
@@ -730,6 +738,8 @@ class BaseLLMChatTest(ABC):
                 second_response.choices[0].message.content is not None
                 or second_response.choices[0].message.tool_calls is not None
             )
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
         except litellm.RateLimitError:
             pass
         except Exception as e:

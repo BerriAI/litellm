@@ -25,18 +25,21 @@ from litellm.proxy._types import (
     PrismaCompatibleUpdateDBModel,
     ProxyErrorTypes,
     ProxyException,
+    TeamModelAddRequest,
     UpdateTeamRequest,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
-from litellm.proxy.management_endpoints.team_endpoints import update_team
+from litellm.proxy.management_endpoints.team_endpoints import (
+    team_model_add,
+    update_team,
+)
 from litellm.proxy.utils import PrismaClient
 from litellm.types.router import (
     Deployment,
     DeploymentTypedDict,
     LiteLLMParamsTypedDict,
-    ModelInfo,
     updateDeployment,
 )
 from litellm.utils import get_utc_datetime
@@ -88,16 +91,11 @@ def update_db_model(
 
     # update model info
     if updated_patch.model_info:
-        _updated_model_info_dict = updated_patch.model_info.model_dump(
-            exclude_unset=True
-        )
         if "model_info" not in merged_deployment_dict:
-            merged_deployment_dict["model_info"] = ModelInfo()
-        _original_model_info_dict = merged_deployment_dict["model_info"].model_dump(
-            exclude_unset=True
+            merged_deployment_dict["model_info"] = {}
+        merged_deployment_dict["model_info"].update(
+            updated_patch.model_info.model_dump(exclude_none=True)
         )
-        _original_model_info_dict.update(_updated_model_info_dict)
-        merged_deployment_dict["model_info"] = ModelInfo(**_original_model_info_dict)
 
     # convert to prisma compatible format
 
@@ -292,6 +290,16 @@ async def _add_team_model_to_db(
         ),
         user_api_key_dict=user_api_key_dict,
         http_request=Request(scope={"type": "http"}),
+    )
+
+    # add model to team object
+    await team_model_add(
+        data=TeamModelAddRequest(
+            team_id=_team_id,
+            models=[original_model_name],
+        ),
+        http_request=Request(scope={"type": "http"}),
+        user_api_key_dict=user_api_key_dict,
     )
 
     return model_response

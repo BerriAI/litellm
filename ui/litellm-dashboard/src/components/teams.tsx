@@ -267,15 +267,9 @@ const Teams: React.FC<TeamProps> = ({
         } else {
           formValues.organization_id = organizationId.trim();
         }
-        
-        // Create metadata object with guardrails if they exist
-        formValues.metadata = {
-          ...(formValues.guardrails ? { guardrails: formValues.guardrails } : {})
-        };
+
         
         // Remove guardrails from top level since it's now in metadata
-        delete formValues.guardrails;
-
         if (existingTeamAliases.includes(newTeamAlias)) {
           throw new Error(
             `Team alias ${newTeamAlias} already exists, please pick another alias`
@@ -291,6 +285,7 @@ const Teams: React.FC<TeamProps> = ({
         }
         console.log(`response for team create call: ${response}`);
         message.success("Team created");
+        form.resetFields();
         setIsTeamModalVisible(false);
       }
     } catch (error) {
@@ -395,7 +390,6 @@ const Teams: React.FC<TeamProps> = ({
                         >
                           {team["team_alias"]}
                         </TableCell>
-                        <TableRow>
                         <TableCell>
                           <div className="overflow-hidden">
                             <Tooltip title={team.team_id}>
@@ -414,8 +408,6 @@ const Teams: React.FC<TeamProps> = ({
                             </Tooltip>
                           </div>
                         </TableCell>
-                      </TableRow>
-
                         <TableCell
                           style={{
                             maxWidth: "4px",
@@ -622,14 +614,35 @@ const Teams: React.FC<TeamProps> = ({
                   <TextInput placeholder="" />
                 </Form.Item>
                 <Form.Item
-                  label="Organization"
+                  label={
+                    <span>
+                      Organization{' '}
+                      <Tooltip title={
+                        <span>
+                          Organizations can have multiple teams. Learn more about{' '}
+                          <a 
+                            href="https://docs.litellm.ai/docs/proxy/user_management_heirarchy"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ color: '#1890ff', textDecoration: 'underline' }}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            user management hierarchy
+                          </a>
+                        </span>
+                      }>
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </span>
+                  }
                   name="organization_id"
                   initialValue={currentOrg ? currentOrg.organization_id : null}
                   className="mt-8"
                 >
                   <Select2
                     showSearch
-                    placeholder="Search or select a team"
+                    allowClear
+                    placeholder="Search or select an Organization"
                     onChange={(value) => {
                       form.setFieldValue('organization_id', value);
                       setCurrentOrgForCreateTeam(organizations?.find((org) => org.organization_id === value) || null);
@@ -702,6 +715,7 @@ const Teams: React.FC<TeamProps> = ({
                 >
                   <InputNumber step={1} width={400} />
                 </Form.Item>
+
                 <Accordion className="mt-20 mb-8">
                   <AccordionHeader>
                     <b>Additional Settings</b>
@@ -717,6 +731,9 @@ const Teams: React.FC<TeamProps> = ({
                           e.target.value = e.target.value.trim();
                         }} 
                       />
+                    </Form.Item>
+                    <Form.Item label="Metadata" name="metadata" help="Additional team metadata. Enter metadata as JSON object.">
+                      <Input.TextArea rows={4} />
                     </Form.Item>
                     <Form.Item 
                       label={
