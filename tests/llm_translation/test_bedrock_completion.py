@@ -131,7 +131,7 @@ def test_completion_bedrock_guardrails(streaming):
 
             print("TRACE=", response.trace)
         else:
-
+            litellm.set_verbose = True
             response = completion(
                 model="anthropic.claude-v2",
                 messages=[

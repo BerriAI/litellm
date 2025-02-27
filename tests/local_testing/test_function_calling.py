@@ -161,6 +161,7 @@ def test_aaparallel_function_call(model):
     "model",
     [
         "anthropic/claude-3-7-sonnet-20250219",
+        "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
