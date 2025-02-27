@@ -620,7 +620,7 @@ def _init_kwargs_for_pass_through_endpoint(
             user_api_key_end_user_id=user_api_key_dict.end_user_id,
         )
     )
-    _metadata["user_api_key"] = user_api_key_dict.token
+    _metadata["user_api_key"] = user_api_key_dict.api_key
     if _litellm_metadata:
         _metadata.update(_litellm_metadata)
 
