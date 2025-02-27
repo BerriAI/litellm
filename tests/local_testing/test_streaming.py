@@ -4095,3 +4095,26 @@ def test_reasoning_content_completion(model):
         assert reasoning_content_exists
     except litellm.Timeout:
         pytest.skip("Model is timing out")
+
+
+def test_is_delta_empty():
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.types.utils import Delta
+
+    custom_stream_wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model=None,
+        logging_obj=MagicMock(),
+        custom_llm_provider=None,
+        stream_options=None,
+    )
+
+    assert custom_stream_wrapper.is_delta_empty(
+        delta=Delta(
+            content="",
+            role="assistant",
+            function_call=None,
+            tool_calls=None,
+            audio=None,
+        )
+    )
