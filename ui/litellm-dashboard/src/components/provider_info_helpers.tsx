@@ -3,7 +3,7 @@ import React from "react";
 export enum Providers {
     OpenAI = "OpenAI",
     Azure = "Azure",
-    Azure_AI_Studio = "Azure AI Studio",
+    Azure_AI_Studio = "Azure AI Foundry (Studio)",
     Anthropic = "Anthropic",
     Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
     Google_AI_Studio = "Google AI Studio",
