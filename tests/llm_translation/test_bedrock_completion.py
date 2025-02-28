@@ -2715,3 +2715,30 @@ def test_bedrock_top_k_param(model, expected_params):
             assert data["top_k"] == 2
         else:
             assert data["additionalModelRequestFields"] == expected_params
+
+
+def test_bedrock_invoke_provider():
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "bedrock/invoke/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+        )
+        == "anthropic"
+    )
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+        )
+        == "anthropic"
+    )
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "bedrock/llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n"
+        )
+        == "llama"
+    )
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "us.amazon.nova-pro-v1:0"
+        )
+        == "nova"
+    )
