@@ -1994,7 +1994,9 @@ jobs:
             
             # Install Ruby version manager (RVM)
             curl -sSL https://get.rvm.io | bash -s stable
-            source /etc/profile.d/rvm.sh
+            
+            # Source RVM from the correct location
+            source $HOME/.rvm/scripts/rvm
             
             # Install Ruby 3.2.2
             rvm install 3.2.2
@@ -2002,10 +2004,11 @@ jobs:
             
             # Install latest Bundler
             gem install bundler
+
       - run:
           name: Run Ruby tests
           command: |
-            source /etc/profile.d/rvm.sh
+            source $HOME/.rvm/scripts/rvm
             cd tests/pass_through_tests/ruby_passthrough_tests
             bundle install
             bundle exec rspec
