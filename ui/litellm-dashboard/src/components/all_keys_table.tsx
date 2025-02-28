@@ -8,7 +8,9 @@ import KeyInfoView from "./key_info_view";
 import { Tooltip } from "antd";
 import { Team, KeyResponse } from "./key_team_helpers/key_list";
 import FilterComponent from "./common_components/filter";
+import { FilterOption } from "./common_components/filter";
 import { Organization } from "./networking";
+import { createTeamSearchFunction } from "./key_team_helpers/team_search_fn";
 interface AllKeysTableProps {
   keys: KeyResponse[];
   isLoading?: boolean;
@@ -272,8 +274,8 @@ export function AllKeysTable({
     },
   ];
 
-  const filterOptions = [
-    { name: 'Team ID', label: 'Team ID' },
+  const filterOptions: FilterOption[] = [
+    { name: 'Team ID', label: 'Team ID', isSearchable: true, searchFn: createTeamSearchFunction(teams) },
     { name: 'Organization ID', label: 'Organization ID' }
   ];
   
