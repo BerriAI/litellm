@@ -199,11 +199,19 @@ export function AllKeysTable({
       },
     },
     {
-      header: "Created",
+      header: "Created At",
       accessorKey: "created_at",
       cell: (info) => {
         const value = info.getValue();
         return value ? new Date(value as string).toLocaleDateString() : "-";
+      },
+    },
+    {
+      header: "Created By",
+      accessorKey: "created_by",
+      cell: (info) => {
+        const value = info.getValue();
+        return value ? value : "Unknown";
       },
     },
     {
