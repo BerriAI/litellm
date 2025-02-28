@@ -651,6 +651,66 @@ export const teamDeleteCall = async (accessToken: String, teamID: String) => {
   }
 };
 
+
+export const userListCall = async (
+  accessToken: String, 
+  userIDs: string[] | null = null,
+  page: number | null = null,
+  page_size: number | null = null,
+) => {
+  /**
+   * Get all available teams on proxy
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/list` : `/user/list`;
+    console.log("in userListCall");
+    const queryParams = new URLSearchParams();
+    
+    if (userIDs && userIDs.length > 0) {
+      // Convert array to comma-separated string
+      const userIDsString = userIDs.join(',');
+      queryParams.append('user_ids', userIDsString);
+    }
+    
+    if (page) {
+      queryParams.append('page', page.toString());
+    }
+    
+    if (page_size) {
+      queryParams.append('page_size', page_size.toString());
+    }
+    
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("/user/list API Response:", data);
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+
+
 export const userInfoCall = async (
   accessToken: String,
   userID: String | null,
