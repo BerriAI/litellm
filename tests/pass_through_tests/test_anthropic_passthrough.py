@@ -231,7 +231,7 @@ async def test_anthropic_streaming_with_headers():
             print("anthropic_api_output_tokens", anthropic_api_output_tokens)
 
             # Wait for spend to be logged
-            await asyncio.sleep(10)
+            await asyncio.sleep(20)
 
             # Check spend logs for this specific request
             async with session.get(
