@@ -1152,27 +1152,6 @@ class BedrockLLM(BaseAWSLLM):
         return streaming_response
 
     @staticmethod
-    def get_bedrock_invoke_provider(
-        model: str,
-    ) -> Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL]:
-        """
-        Helper function to get the bedrock provider from the model
-
-        handles 2 scenarions:
-        1. model=anthropic.claude-3-5-sonnet-20240620-v1:0 -> Returns `anthropic`
-        2. model=llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n -> Returns `llama`
-        """
-        _split_model = model.split(".")[0]
-        if _split_model in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
-            return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, _split_model)
-
-        # If not a known provider, check for pattern with two slashes
-        provider = BedrockLLM._get_provider_from_model_path(model)
-        if provider is not None:
-            return provider
-        return None
-
-    @staticmethod
     def _get_provider_from_model_path(
         model_path: str,
     ) -> Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL]:

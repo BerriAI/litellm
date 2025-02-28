@@ -332,6 +332,7 @@ class BaseLLMHTTPHandler:
                     data=data,
                     messages=messages,
                     client=client,
+                    json_mode=json_mode,
                 )
             completion_stream, headers = self.make_sync_call(
                 provider_config=provider_config,
@@ -385,6 +386,7 @@ class BaseLLMHTTPHandler:
             optional_params=optional_params,
             litellm_params=litellm_params,
             encoding=encoding,
+            json_mode=json_mode,
         )
 
     def make_sync_call(

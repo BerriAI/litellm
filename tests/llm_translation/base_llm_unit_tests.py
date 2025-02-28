@@ -248,7 +248,7 @@ class BaseLLMChatTest(ABC):
             response_format=response_format,
         )
 
-        print(response)
+        print(f"response={response}")
 
         # OpenAI guarantees that the JSON schema is returned in the content
         # relevant issue: https://github.com/BerriAI/litellm/issues/6741
