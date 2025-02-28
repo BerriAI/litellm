@@ -1,5 +1,5 @@
 "use client";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { ColumnDef, Row } from "@tanstack/react-table";
 import { DataTable } from "./view_logs/table";
 import { Select, SelectItem } from "@tremor/react"
@@ -9,7 +9,7 @@ import { Tooltip } from "antd";
 import { Team, KeyResponse } from "./key_team_helpers/key_list";
 import FilterComponent from "./common_components/filter";
 import { FilterOption } from "./common_components/filter";
-import { Organization } from "./networking";
+import { Organization, userListCall } from "./networking";
 import { createTeamSearchFunction } from "./key_team_helpers/team_search_fn";
 import { createOrgSearchFunction } from "./key_team_helpers/organization_search_fn";
 interface AllKeysTableProps {
@@ -33,6 +33,12 @@ interface AllKeysTableProps {
 }
 
 // Define columns similar to our logs table
+
+interface UserResponse {
+  user_id: string;
+  user_email: string;
+  user_role: string;
+}
 
 const TeamFilter = ({ 
   teams, 
@@ -99,6 +105,18 @@ export function AllKeysTable({
     'Team ID': '',
     'Organization ID': ''
   });
+  const [userList, setUserList] = useState<UserResponse[]>([]);
+
+  useEffect(() => {
+    if (accessToken) {
+      const user_IDs = keys.map(key => key.user_id).filter(id => id !== null);
+      const fetchUserList = async () => {
+        const userListData = await userListCall(accessToken, user_IDs, 1, 100);
+        setUserList(userListData.users);
+      };
+      fetchUserList();
+    }
+  }, [accessToken, keys]);
 
   const handleFilterChange = (newFilters: Record<string, string>) => {
     // Update filters state
@@ -163,7 +181,7 @@ export function AllKeysTable({
               className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
               onClick={() => setSelectedKeyId(info.getValue() as string)}
             >
-              {info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "Not Set"}
+              {info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}
             </Button>
           </Tooltip>
         </div>
@@ -186,31 +204,28 @@ export function AllKeysTable({
     {
       header: "Team ID",
       accessorKey: "team_id",
-      cell: (info) => <Tooltip title={info.getValue() as string}>{info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "Not Set"}</Tooltip>
+      cell: (info) => <Tooltip title={info.getValue() as string}>{info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}</Tooltip>
     },
 
     {
       header: "Key Alias",
       accessorKey: "key_alias",
-      cell: (info) => <Tooltip title={info.getValue() as string}>{info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "Not Set"}</Tooltip>
+      cell: (info) => <Tooltip title={info.getValue() as string}>{info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}</Tooltip>
     },
     {
       header: "Organization ID",
       accessorKey: "organization_id",
-      cell: (info) => <Tooltip title={info.getValue() as string}>{info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "Not Set"}</Tooltip>
+      cell: (info) => info.getValue() ? info.renderValue() : "-",
     },
-    // {
-    //   header: "User Email",
-    //   accessorKey: "user_id",
-    //   cell: (info) => {
-    //     const userId = info.getValue() as string;
-    //     return userId ? (
-    //       <Tooltip title={userId}>
-    //         <span>{userId.slice(0, 5)}...</span>
-    //       </Tooltip>
-    //     ) : "Not Set";
-    //   },
-    // },
+    {
+      header: "User Email",
+      accessorKey: "user_id",
+      cell: (info) => {
+        const userId = info.getValue() as string;
+        const user = userList.find(u => u.user_id === userId);
+        return user?.user_email ? user.user_email : "-";
+      },
+    },
     {
       header: "User ID",
       accessorKey: "user_id",
@@ -218,9 +233,9 @@ export function AllKeysTable({
         const userId = info.getValue() as string;
         return userId ? (
           <Tooltip title={userId}>
-            <span>{userId.slice(0, 5)}...</span>
+            <span>{userId.slice(0, 7)}...</span>
           </Tooltip>
-        ) : "Not Set";
+        ) : "-";
       },
     },
     {
