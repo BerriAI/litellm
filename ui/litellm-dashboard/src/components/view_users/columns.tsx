@@ -53,6 +53,15 @@ export const columns = (
     ),
   },
   {
+    header: "SSO ID",
+    accessorKey: "sso_user_id",
+    cell: ({ row }) => (
+      <span className="text-xs">
+        {row.original.sso_user_id !== null ? row.original.sso_user_id : "-"}
+      </span>
+    ),
+  },
+  {
     header: "API Keys",
     accessorKey: "key_count",
     cell: ({ row }) => (
