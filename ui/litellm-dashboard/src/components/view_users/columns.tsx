@@ -2,7 +2,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { Badge, Grid, Icon } from "@tremor/react";
 import { Tooltip } from "antd";
 import { UserInfo } from "./types";
-import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
+import { PencilAltIcon, TrashIcon, InformationCircleIcon } from "@heroicons/react/outline";
 
 export const columns = (
   possibleUIRoles: Record<string, Record<string, string>>,
@@ -53,7 +53,14 @@ export const columns = (
     ),
   },
   {
-    header: "SSO ID",
+    header: () => (
+      <div className="flex items-center gap-2">
+        <span>SSO ID</span>
+        <Tooltip title="SSO ID is the ID of the user in the SSO provider. If the user is not using SSO, this will be null.">
+          <InformationCircleIcon className="w-4 h-4" />
+        </Tooltip>
+      </div>
+    ),
     accessorKey: "sso_user_id",
     cell: ({ row }) => (
       <span className="text-xs">
