@@ -1,5 +1,5 @@
 "use client";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { ColumnDef, Row } from "@tanstack/react-table";
 import { DataTable } from "./view_logs/table";
 import { Select, SelectItem } from "@tremor/react"
@@ -8,7 +8,7 @@ import KeyInfoView from "./key_info_view";
 import { Tooltip } from "antd";
 import { Team, KeyResponse } from "./key_team_helpers/key_list";
 import FilterComponent from "./common_components/filter";
-import { Organization } from "./networking";
+import { Organization, userListCall } from "./networking";
 interface AllKeysTableProps {
   keys: KeyResponse[];
   isLoading?: boolean;
@@ -30,6 +30,12 @@ interface AllKeysTableProps {
 }
 
 // Define columns similar to our logs table
+
+interface UserResponse {
+  user_id: string;
+  user_email: string;
+  user_role: string;
+}
 
 const TeamFilter = ({ 
   teams, 
@@ -96,6 +102,18 @@ export function AllKeysTable({
     'Team ID': '',
     'Organization ID': ''
   });
+  const [userList, setUserList] = useState<UserResponse[]>([]);
+
+  useEffect(() => {
+    if (accessToken) {
+      const user_IDs = keys.map(key => key.user_id).filter(id => id !== null);
+      const fetchUserList = async () => {
+        const userListData = await userListCall(accessToken, user_IDs, 1, 100);
+        setUserList(userListData.users);
+      };
+      fetchUserList();
+    }
+  }, [accessToken, keys]);
 
   const handleFilterChange = (newFilters: Record<string, string>) => {
     // Update filters state
@@ -185,6 +203,15 @@ export function AllKeysTable({
       header: "Organization ID",
       accessorKey: "organization_id",
       cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
+    },
+    {
+      header: "User Email",
+      accessorKey: "user_id",
+      cell: (info) => {
+        const userId = info.getValue() as string;
+        const user = userList.find(u => u.user_id === userId);
+        return user ? user.user_email : "Not Set";
+      },
     },
     {
       header: "User ID",
