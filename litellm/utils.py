@@ -6166,10 +6166,10 @@ class ProviderConfigManager:
             return litellm.PetalsConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
-            bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
-                model
-            )
             base_model = BedrockModelInfo.get_base_model(model)
+            bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
+                base_model
+            )
 
             if bedrock_route == "converse" or bedrock_route == "converse_like":
                 return litellm.AmazonConverseConfig()
