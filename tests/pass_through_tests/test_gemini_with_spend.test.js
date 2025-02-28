@@ -62,6 +62,7 @@ describe('Gemini AI Tests', () => {
         expect(spendData[0].request_tags).toEqual(['gemini-js-sdk', 'pass-through-endpoint']);
         expect(spendData[0].metadata).toHaveProperty('user_api_key');
         expect(spendData[0].model).toContain('gemini');
+        expect(spendData[0].custom_llm_provider).toBe('gemini');
         expect(spendData[0].spend).toBeGreaterThan(0);
     }, 25000);
 
@@ -119,5 +120,6 @@ describe('Gemini AI Tests', () => {
         expect(spendData[0].metadata).toHaveProperty('user_api_key');
         expect(spendData[0].model).toContain('gemini');
         expect(spendData[0].spend).toBeGreaterThan(0);
+        expect(spendData[0].custom_llm_provider).toBe('gemini');
     }, 25000);
 });

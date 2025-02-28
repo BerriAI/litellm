@@ -599,6 +599,10 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
             <span>{row.original.model}</span>
           </div>
           <div className="flex">
+            <span className="font-medium w-1/3">Custom LLM Provider:</span>
+            <span>{row.original.custom_llm_provider}</span>
+          </div>
+          <div className="flex">
             <span className="font-medium w-1/3">Api Base:</span>
             <span>{row.original.api_base}</span>
           </div>
