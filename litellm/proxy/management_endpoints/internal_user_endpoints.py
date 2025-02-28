@@ -795,7 +795,7 @@ async def get_users(
 
     # Prepare the query conditions
     # Build where conditions based on provided parameters
-    where_conditions = {}
+    where_conditions: Dict[str, Any] = {}
 
     if role:
         where_conditions["user_role"] = {
@@ -804,8 +804,9 @@ async def get_users(
         }
 
     if user_ids:
+        user_id_list = [uid.strip() for uid in user_ids.split(",") if uid.strip()]
         where_conditions["user_id"] = {
-            "in": user_ids,
+            "in": user_id_list,  # Now passing a list of strings as required by Prisma
         }
 
     users: Optional[List[BaseModel]] = (
