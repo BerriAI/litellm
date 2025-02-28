@@ -205,7 +205,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
                             }
                           }}
                         >
-                          Use "{searchInputValue}" as filter value
+                          Use &ldquo;{searchInputValue}&rdquo; as filter value
                         </Button>
                         )}
                     </div>
