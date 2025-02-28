@@ -3274,6 +3274,12 @@ def get_optional_params(  # noqa: PLR0915
                 optional_params = litellm.AmazonAnthropicConfig().map_openai_params(
                     non_default_params=non_default_params,
                     optional_params=optional_params,
+                    model=model,
+                    drop_params=(
+                        drop_params
+                        if drop_params is not None and isinstance(drop_params, bool)
+                        else False
+                    ),
                 )
         elif provider_config is not None:
             optional_params = provider_config.map_openai_params(
@@ -6168,6 +6174,8 @@ class ProviderConfigManager:
                 return litellm.AmazonConverseConfig()
             elif bedrock_invoke_provider == "amazon":  # amazon titan llms
                 return litellm.AmazonTitanConfig()
+            elif bedrock_invoke_provider == "anthropic":
+                return litellm.AmazonAnthropicConfig()
             elif (
                 bedrock_invoke_provider == "meta" or bedrock_invoke_provider == "llama"
             ):  # amazon / meta llms

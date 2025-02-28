@@ -325,6 +325,8 @@ def test_all_model_configs():
     assert AmazonAnthropicConfig().map_openai_params(
         non_default_params={"max_completion_tokens": 10},
         optional_params={},
+        model="",
+        drop_params=False,
     ) == {"max_tokens_to_sample": 10}
 
     from litellm.llms.databricks.chat.handler import DatabricksConfig
