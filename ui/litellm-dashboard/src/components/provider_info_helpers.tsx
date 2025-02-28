@@ -62,6 +62,13 @@ export const getProviderLogoAndName = (providerValue: string): { logo: string, d
         return { logo: "", displayName: "-" };
     }
 
+    // Handle special case for "gemini" provider value
+    if (providerValue.toLowerCase() === "gemini") {
+        const displayName = Providers.Google_AI_Studio;
+        const logo = providerLogoMap[displayName];
+        return { logo, displayName };
+    }
+
     // Find the enum key by matching provider_map values
     const enumKey = Object.keys(provider_map).find(
         key => provider_map[key].toLowerCase() === providerValue.toLowerCase()
