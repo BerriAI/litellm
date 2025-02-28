@@ -461,6 +461,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         data: dict,
         messages: list,
         client: Optional[AsyncHTTPHandler] = None,
+        json_mode: Optional[bool] = None,
     ) -> CustomStreamWrapper:
         streaming_response = CustomStreamWrapper(
             completion_stream=None,
@@ -475,6 +476,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 logging_obj=logging_obj,
                 fake_stream=True if "ai21" in api_base else False,
                 bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
+                json_mode=json_mode,
             ),
             model=model,
             custom_llm_provider="bedrock",

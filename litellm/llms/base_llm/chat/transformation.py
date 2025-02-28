@@ -317,6 +317,7 @@ class BaseConfig(ABC):
         data: dict,
         messages: list,
         client: Optional[AsyncHTTPHandler] = None,
+        json_mode: Optional[bool] = None,
     ) -> CustomStreamWrapper:
         raise NotImplementedError
 

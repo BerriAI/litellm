@@ -226,6 +226,7 @@ async def make_call(
             decoder: AWSEventStreamDecoder = AmazonAnthropicClaudeStreamDecoder(
                 model=model,
                 sync_stream=False,
+                json_mode=json_mode,
             )
             completion_stream = decoder.aiter_bytes(
                 response.aiter_bytes(chunk_size=1024)
@@ -311,6 +312,7 @@ def make_sync_call(
             decoder: AWSEventStreamDecoder = AmazonAnthropicClaudeStreamDecoder(
                 model=model,
                 sync_stream=True,
+                json_mode=json_mode,
             )
             completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
         elif bedrock_invoke_provider == "deepseek_r1":
@@ -1524,6 +1526,7 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
         self,
         model: str,
         sync_stream: bool,
+        json_mode: Optional[bool] = None,
     ) -> None:
         """
         Child class of AWSEventStreamDecoder that handles the streaming response from the Anthropic family of models
@@ -1534,6 +1537,7 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
         self.anthropic_model_response_iterator = AnthropicModelResponseIterator(
             streaming_response=None,
             sync_stream=sync_stream,
+            json_mode=json_mode,
         )
 
     def _chunk_parser(self, chunk_data: dict) -> ModelResponseStream:

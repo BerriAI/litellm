@@ -289,6 +289,7 @@ class BaseLLMHTTPHandler:
                         else None
                     ),
                     litellm_params=litellm_params,
+                    json_mode=json_mode,
                 )
 
             else:
@@ -457,6 +458,7 @@ class BaseLLMHTTPHandler:
         litellm_params: dict,
         fake_stream: bool = False,
         client: Optional[AsyncHTTPHandler] = None,
+        json_mode: Optional[bool] = None,
     ):
         if provider_config.has_custom_stream_wrapper is True:
             return provider_config.get_async_custom_stream_wrapper(
@@ -468,6 +470,7 @@ class BaseLLMHTTPHandler:
                 data=data,
                 messages=messages,
                 client=client,
+                json_mode=json_mode,
             )
 
         completion_stream, _response_headers = await self.make_async_call_stream_helper(
