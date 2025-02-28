@@ -186,19 +186,31 @@ export function AllKeysTable({
     {
       header: "Team ID",
       accessorKey: "team_id",
-      cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
+      cell: (info) => <Tooltip title={info.getValue() as string}>{info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "Not Set"}</Tooltip>
     },
 
     {
       header: "Key Alias",
       accessorKey: "key_alias",
-      cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
+      cell: (info) => <Tooltip title={info.getValue() as string}>{info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "Not Set"}</Tooltip>
     },
     {
       header: "Organization ID",
       accessorKey: "organization_id",
-      cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
+      cell: (info) => <Tooltip title={info.getValue() as string}>{info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "Not Set"}</Tooltip>
     },
+    // {
+    //   header: "User Email",
+    //   accessorKey: "user_id",
+    //   cell: (info) => {
+    //     const userId = info.getValue() as string;
+    //     return userId ? (
+    //       <Tooltip title={userId}>
+    //         <span>{userId.slice(0, 5)}...</span>
+    //       </Tooltip>
+    //     ) : "Not Set";
+    //   },
+    // },
     {
       header: "User ID",
       accessorKey: "user_id",
