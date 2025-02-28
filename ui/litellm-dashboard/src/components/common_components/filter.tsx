@@ -114,6 +114,18 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
   }));
 
   const currentOption = options.find(option => option.name === selectedFilter);
+
+  const resetFilters = () => {
+    const emptyValues: FilterValues = {};
+    options.forEach(option => {
+      emptyValues[option.name] = '';
+    });
+    setTempValues(emptyValues);
+    setFilterValues(emptyValues);
+    setSearchInputValue('');
+    setSearchOptions([]);
+    onResetFilters(); // Call the parent's reset function
+  };
   
   return (
     <div className="relative" ref={filtersRef}>
@@ -220,20 +232,30 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
                 />
               )}
             </div>
-            
-            <div className="flex justify-end gap-2">
-              <Button
-                onClick={() => {
-                  clearFilters();
-                  onResetFilters();
-                  setShowFilters(false);
-                }}
-              >
-                Cancel
-              </Button>
-              <Button onClick={handleApplyFilters}>
-                Apply Filters
-              </Button>
+
+
+            <div className="flex justify-between w-full">
+              <div>
+                <Button
+                  onClick={() => resetFilters()}
+                >
+                  Reset All
+                </Button>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  onClick={() => {
+                    clearFilters();
+                    onResetFilters();
+                    setShowFilters(false);
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button onClick={handleApplyFilters}>
+                  Apply Filters
+                </Button>
+              </div>
             </div>
           </div>
         </Card>
