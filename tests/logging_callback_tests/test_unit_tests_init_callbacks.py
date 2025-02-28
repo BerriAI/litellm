@@ -2,7 +2,10 @@ import json
 import os
 import sys
 from datetime import datetime
+import threading
 from unittest.mock import AsyncMock
+
+from litellm.litellm_core_utils.dd_tracing import contextmanager
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -264,7 +267,7 @@ def test_dynamic_logging_global_callback():
 
         try:
             litellm_logging.success_handler(
-                ModelResponse(
+                result=ModelResponse(
                     id="chatcmpl-5418737b-ab14-420b-b9c5-b278b6681b70",
                     created=1732306261,
                     model="claude-3-opus-20240229",
@@ -290,9 +293,10 @@ def test_dynamic_logging_global_callback():
                         prompt_tokens_details=None,
                     ),
                 ),
-                datetime.now(),
-                datetime.now(),
-                False,
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+                cache_hit=False,
+                synchronous=True,
             )
         except Exception as e:
             print(f"Error: {e}")
@@ -319,3 +323,90 @@ def test_get_combined_callback_list():
     assert "lago" in _logging.get_combined_callback_list(
         dynamic_success_callbacks=["langfuse"], global_callbacks=["lago"]
     )
+
+
+
+@pytest.mark.parametrize("sync_logging", [True, False])
+def test_success_handler_sync_async(sync_logging):
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.types.utils import ModelResponse, Choices, Message
+
+    cl = CustomLogger()
+
+    litellm_logging = LiteLLMLoggingObj(
+        model="claude-3-opus-20240229",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="123",
+        function_id="456",
+    )
+
+    litellm.sync_logging = sync_logging
+
+
+    @contextmanager
+    def patch_thread():
+        """
+        A context manager to collect threads started for logging handlers.
+        This is done by monkey-patching the start() method of threading.Thread.
+        Note that failure handlers are executed synchronously, so we don't need to patch them.
+        """
+        original = threading.Thread.start
+        logging_threads = []
+
+        def _patched_start(self, *args, **kwargs):
+            logging_threads.append(self)
+            return original(self, *args, **kwargs)
+
+        threading.Thread.start = _patched_start
+        try:
+            yield logging_threads
+        finally:
+            threading.Thread.start = original
+
+    result = ModelResponse(
+        id="chatcmpl-5418737b-ab14-420b-b9c5-b278b6681b70",
+        created=1732306261,
+        model="claude-3-opus-20240229",
+        object="chat.completion",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="hello",
+                    role="assistant",
+                    tool_calls=None,
+                    function_call=None,
+                ),
+            )
+        ],
+    )
+
+
+    with patch.object(cl, "log_success_event") as mock_log_success_event:
+        litellm.success_callback = [cl]
+
+        with patch_thread() as logging_threads:
+            litellm_logging.success_handler(
+                result=result,
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+                cache_hit=False,
+            )
+
+        if sync_logging:
+            mock_log_success_event.assert_called_once()
+            assert "standard_logging_object" in mock_log_success_event.call_args.kwargs["kwargs"]
+            assert logging_threads == []
+        else:
+            mock_log_success_event.assert_not_called()
+            assert len(logging_threads) == 1
+
+            # Wait for the thread to finish
+            logging_threads[0].join()
+            mock_log_success_event.assert_called_once()
+            assert "standard_logging_object" in mock_log_success_event.call_args.kwargs["kwargs"]

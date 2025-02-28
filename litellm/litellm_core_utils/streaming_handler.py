@@ -1696,26 +1696,21 @@ class CustomStreamWrapper:
                     self.sent_stream_usage = True
                     return response
 
-                asyncio.create_task(
-                    self.logging_obj.async_success_handler(
-                        complete_streaming_response,
-                        cache_hit=cache_hit,
-                        start_time=None,
-                        end_time=None,
-                    )
-                )
 
+                logging_params = dict(
+                    result=complete_streaming_response,
+                    cache_hit=cache_hit,
+                    start_time=None,
+                    end_time=None,
+                )
                 if litellm.sync_logging:
-                    self.logging_obj.success_handler(
-                        complete_streaming_response, None, None, cache_hit
-                    )
+                    await self.logging_obj.async_success_handler(**logging_params)
+                    self.logging_obj.success_handler(**logging_params, synchronous=True)
                 else:
+                    asyncio.create_task(self.logging_obj.async_success_handler(**logging_params))
                     executor.submit(
                         self.logging_obj.success_handler,
-                        complete_streaming_response,
-                        None,
-                        None,
-                        cache_hit,
+                        **logging_params,
                         # NB: We already run this in a TPE so the handler itself should run sync
                         synchronous=True,
                     )

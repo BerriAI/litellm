@@ -1012,7 +1012,15 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception as e:
             raise Exception(f"[Non-Blocking] LiteLLM.Success_Call Error: {str(e)}")
 
-    def success_handler(self, *args, synchronous: Optional[bool]=None):
+    def success_handler(
+        self,
+        result=None,
+        start_time=None,
+        end_time=None,
+        cache_hit=None,
+        synchronous=None,
+        **kwargs
+    ):
         """
         Execute the success handler function in a sync or async manner.
         If synchronous argument is not provided, global `litellm.sync_logging` config is used.
@@ -1021,11 +1029,12 @@ class Logging(LiteLLMLoggingBaseClass):
             synchronous = litellm.sync_logging
 
         if synchronous:
-            self._success_handler(*args)
+            self._success_handler(result, start_time, end_time, cache_hit, **kwargs)
         else:
             threading.Thread(
                 target=self._success_handler,
-                args=args,
+                args=(result, start_time, end_time, cache_hit),
+                kwargs=kwargs,
             ).start()
 
     def _success_handler(  # noqa: PLR0915
