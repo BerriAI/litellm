@@ -48,9 +48,13 @@ class _ProxyDBLogger(CustomLogger):
         )
         _metadata["user_api_key"] = user_api_key_dict.api_key
         _metadata["status"] = "failure"
+        existing_metadata: dict = request_data.get("metadata", None) or {}
+        existing_metadata.update(_metadata)
+        existing_metadata["proxy_server_request"] = (
+            request_data.get("proxy_server_request", {}) or {}
+        )
         request_data["litellm_params"] = {}
-        request_data["litellm_params"]["metadata"] = _metadata
-        # print("failure kwargs=", json.dumps(request_data, indent=4, default=str))
+        request_data["litellm_params"]["metadata"] = existing_metadata
 
         await update_database(
             token=user_api_key_dict.api_key,

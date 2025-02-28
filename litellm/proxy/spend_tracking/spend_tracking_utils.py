@@ -298,15 +298,15 @@ def _get_messages_for_spend_logs_payload(
     standard_logging_payload: Optional[StandardLoggingPayload],
     metadata: Optional[dict] = None,
 ) -> str:
-    if standard_logging_payload is None:
-        return "{}"
     if _should_store_prompts_and_responses_in_spend_logs():
         metadata = metadata or {}
         if metadata.get("status", None) == "failure":
             _proxy_server_request = metadata.get("proxy_server_request", {})
-            _request_body = _proxy_server_request.get("request", {})
-            return json.dumps(_request_body)
+            _request_body = _proxy_server_request.get("body", {}) or {}
+            return json.dumps(_request_body, default=str)
         else:
+            if standard_logging_payload is None:
+                return "{}"
             return json.dumps(standard_logging_payload.get("messages", {}))
     return "{}"
 
