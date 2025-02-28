@@ -11,6 +11,7 @@ import FilterComponent from "./common_components/filter";
 import { FilterOption } from "./common_components/filter";
 import { Organization } from "./networking";
 import { createTeamSearchFunction } from "./key_team_helpers/team_search_fn";
+import { createOrgSearchFunction } from "./key_team_helpers/organization_search_fn";
 interface AllKeysTableProps {
   keys: KeyResponse[];
   isLoading?: boolean;
@@ -276,7 +277,7 @@ export function AllKeysTable({
 
   const filterOptions: FilterOption[] = [
     { name: 'Team ID', label: 'Team ID', isSearchable: true, searchFn: createTeamSearchFunction(teams) },
-    { name: 'Organization ID', label: 'Organization ID' }
+    { name: 'Organization ID', label: 'Organization ID', isSearchable: true, searchFn: createOrgSearchFunction(organizations) }
   ];
   
   

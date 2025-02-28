@@ -44,6 +44,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
   const [dropdownOpen, setDropdownOpen] = useState<boolean>(false);
   const [searchOptions, setSearchOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [searchLoading, setSearchLoading] = useState<boolean>(false);
+  const [searchInputValue, setSearchInputValue] = useState<string>('');
   
   const filtersRef = useRef<HTMLDivElement>(null);
   
@@ -155,20 +156,51 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
               </Dropdown>
               
               {currentOption?.isSearchable ? (
-                <Select
-                  showSearch
-                  placeholder={`Search ${currentOption.label || selectedFilter}...`}
-                  value={tempValues[selectedFilter] || undefined}
-                  onChange={(value) => handleFilterChange(value)}
-                  onSearch={(value) => debouncedSearch(value, currentOption)}
-                  filterOption={false}
-                  className="flex-1 w-full max-w-full truncate"
-                  loading={searchLoading}
-                  options={searchOptions}
-                  allowClear
-                  notFoundContent={searchLoading ? <Spin size="small" /> : "No results found"}
-                />
-              ) : (
+              <Select
+                showSearch
+                placeholder={`Search ${currentOption.label || selectedFilter}...`}
+                value={tempValues[selectedFilter] || undefined}
+                onChange={(value) => handleFilterChange(value)}
+                onSearch={(value) => {
+                  setSearchInputValue(value);
+                  debouncedSearch(value, currentOption);
+                }}
+                onInputKeyDown={(e) => {
+                  if (e.key === 'Enter' && searchInputValue) {
+                    // Allow manual entry of the value on Enter
+                    handleFilterChange(searchInputValue);
+                    e.preventDefault();
+                  }
+                }}
+                filterOption={false}
+                className="flex-1 w-full max-w-full truncate"
+                loading={searchLoading}
+                options={searchOptions}
+                allowClear
+                notFoundContent={
+                  searchLoading ? <Spin size="small" /> : (
+                    <div className="p-2">
+                      {searchInputValue && (
+                        <Button 
+                          type="link" 
+                          className="p-0 mt-1"
+                          onClick={() => {
+                            handleFilterChange(searchInputValue);
+                            // Close the dropdown/select after selecting the value
+                            const selectElement = document.activeElement as HTMLElement;
+                            if (selectElement) {
+                              selectElement.blur();
+                            }
+                          }}
+                        >
+                          Use "{searchInputValue}" as filter value
+                        </Button>
+                        )}
+                    </div>
+                  )
+                }
+              />
+            ) : (
                 <Input
                   placeholder="Enter value..."
                   value={tempValues[selectedFilter] || ''}
