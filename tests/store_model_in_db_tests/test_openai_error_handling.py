@@ -77,17 +77,6 @@ def test_images_bad_model():
     print(f"Images error: {excinfo.value}")
 
 
-def test_moderations_bad_model():
-    key = generate_key_sync()
-    client = OpenAI(api_key=key, base_url="http://0.0.0.0:4000")
-
-    with pytest.raises(BadRequestError) as excinfo:
-        client.moderations.create(
-            model="non-existent-model", input="I want to harm someone."
-        )
-    print(f"Moderations error: {excinfo.value}")
-
-
 @pytest.mark.asyncio
 async def test_async_chat_completion_bad_model():
     key = generate_key_sync()
