@@ -12,6 +12,31 @@ interface ErrorViewerProps {
 }
 
 export const ErrorViewer: React.FC<ErrorViewerProps> = ({ errorInfo }) => {
+  const [expandedFrames, setExpandedFrames] = React.useState<{[key: number]: boolean}>({});
+  const [allExpanded, setAllExpanded] = React.useState(false);
+  
+  // Toggle individual frame
+  const toggleFrame = (index: number) => {
+    setExpandedFrames(prev => ({
+      ...prev,
+      [index]: !prev[index]
+    }));
+  };
+  
+  // Toggle all frames
+  const toggleAllFrames = () => {
+    const newState = !allExpanded;
+    setAllExpanded(newState);
+    
+    if (tracebackFrames.length > 0) {
+      const newExpandedState: {[key: number]: boolean} = {};
+      tracebackFrames.forEach((_, idx) => {
+        newExpandedState[idx] = newState;
+      });
+      setExpandedFrames(newExpandedState);
+    }
+  };
+
   // Parse traceback into frames
   const parseTraceback = (traceback: string) => {
     if (!traceback) return [];
@@ -81,29 +106,50 @@ export const ErrorViewer: React.FC<ErrorViewerProps> = ({ errorInfo }) => {
           <div className="mt-4">
             <div className="flex justify-between items-center mb-2">
               <h4 className="font-medium">Traceback</h4>
-              <button 
-                onClick={() => navigator.clipboard.writeText(errorInfo.traceback || "")}
-                className="text-gray-500 hover:text-gray-700 flex items-center"
-                title="Copy traceback"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                </svg>
-                <span className="ml-1">Copy</span>
-              </button>
+              <div className="flex items-center space-x-4">
+                <button 
+                  onClick={toggleAllFrames}
+                  className="text-gray-500 hover:text-gray-700 flex items-center text-sm"
+                >
+                  {allExpanded ? "Collapse All" : "Expand All"}
+                </button>
+                <button 
+                  onClick={() => navigator.clipboard.writeText(errorInfo.traceback || "")}
+                  className="text-gray-500 hover:text-gray-700 flex items-center"
+                  title="Copy traceback"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                  <span className="ml-1">Copy</span>
+                </button>
+              </div>
             </div>
             
             <div className="bg-white rounded-md border border-gray-200 overflow-hidden shadow-sm">
               {tracebackFrames.map((frame, index) => (
-                <div key={index} className="border-b border-gray-200 last:border-b-0 hover:bg-gray-50">
-                  <div className="px-4 py-2 flex items-center">
-                    <span className="text-gray-400 mr-2 w-8 text-right">{frame.lineNumber}</span>
-                    <span className="text-gray-600 font-medium">{frame.fileName}</span>
-                    <span className="text-gray-500 mx-1">in</span>
-                    <span className="text-indigo-600 font-medium">{frame.inFunction || frame.fileName}</span>
+                <div key={index} className="border-b border-gray-200 last:border-b-0">
+                  <div 
+                    className="px-4 py-2 flex items-center justify-between cursor-pointer hover:bg-gray-50"
+                    onClick={() => toggleFrame(index)}
+                  >
+                    <div className="flex items-center">
+                      <span className="text-gray-400 mr-2 w-12 text-right">{frame.lineNumber}</span>
+                      <span className="text-gray-600 font-medium">{frame.fileName}</span>
+                      <span className="text-gray-500 mx-1">in</span>
+                      <span className="text-indigo-600 font-medium">{frame.inFunction || frame.fileName}</span>
+                    </div>
+                    <svg 
+                      className={`w-5 h-5 text-gray-500 transition-transform ${expandedFrames[index] ? 'transform rotate-180' : ''}`} 
+                      fill="none" 
+                      viewBox="0 0 24 24" 
+                      stroke="currentColor"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
                   </div>
-                  {frame.code && (
+                  {(expandedFrames[index] || false) && frame.code && (
                     <div className="px-12 py-2 font-mono text-sm text-gray-800 bg-gray-50 overflow-x-auto border-t border-gray-100">
                       {frame.code}
                     </div>
