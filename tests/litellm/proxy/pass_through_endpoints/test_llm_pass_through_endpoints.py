@@ -12,6 +12,7 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
 
+import litellm
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
@@ -21,60 +22,42 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
 
 class TestBaseOpenAIPassThroughHandler:
 
-    def test_append_v1_to_openai_passthrough_url(self):
-        print("\nTesting _append_v1_to_openai_passthrough_url method...")
-
-        # Test with OpenAI API URL
-        result1 = BaseOpenAIPassThroughHandler._append_v1_to_openai_passthrough_url(
-            "https://api.openai.com"
-        )
-        print(f"OpenAI URL: 'https://api.openai.com' → '{result1}'")
-        assert result1 == "https://api.openai.com/v1"
-
-        # Test with OpenAI API URL with trailing slash
-        result2 = BaseOpenAIPassThroughHandler._append_v1_to_openai_passthrough_url(
-            "https://api.openai.com/"
-        )
-        print(
-            f"OpenAI URL with trailing slash: 'https://api.openai.com/' → '{result2}'"
-        )
-        assert result2 == "https://api.openai.com/v1"
-
-        # Test with non-OpenAI URL
-        result3 = BaseOpenAIPassThroughHandler._append_v1_to_openai_passthrough_url(
-            "https://api.anthropic.com"
-        )
-        print(f"Non-OpenAI URL: 'https://api.anthropic.com' → '{result3}'")
-        assert result3 == "https://api.anthropic.com"
-
     def test_join_url_paths(self):
         print("\nTesting _join_url_paths method...")
 
         # Test joining base URL with no path and a path
         base_url = httpx.URL("https://api.example.com")
         path = "/v1/chat/completions"
-        result = BaseOpenAIPassThroughHandler._join_url_paths(base_url, path)
+        result = BaseOpenAIPassThroughHandler._join_url_paths(
+            base_url, path, litellm.LlmProviders.OPENAI.value
+        )
         print(f"Base URL with no path: '{base_url}' + '{path}' → '{result}'")
         assert str(result) == "https://api.example.com/v1/chat/completions"
 
         # Test joining base URL with path and another path
         base_url = httpx.URL("https://api.example.com/v1")
         path = "/chat/completions"
-        result = BaseOpenAIPassThroughHandler._join_url_paths(base_url, path)
+        result = BaseOpenAIPassThroughHandler._join_url_paths(
+            base_url, path, litellm.LlmProviders.OPENAI.value
+        )
         print(f"Base URL with path: '{base_url}' + '{path}' → '{result}'")
         assert str(result) == "https://api.example.com/v1/chat/completions"
 
         # Test with path not starting with slash
         base_url = httpx.URL("https://api.example.com/v1")
         path = "chat/completions"
-        result = BaseOpenAIPassThroughHandler._join_url_paths(base_url, path)
+        result = BaseOpenAIPassThroughHandler._join_url_paths(
+            base_url, path, litellm.LlmProviders.OPENAI.value
+        )
         print(f"Path without leading slash: '{base_url}' + '{path}' → '{result}'")
         assert str(result) == "https://api.example.com/v1/chat/completions"
 
         # Test with base URL having trailing slash
         base_url = httpx.URL("https://api.example.com/v1/")
         path = "/chat/completions"
-        result = BaseOpenAIPassThroughHandler._join_url_paths(base_url, path)
+        result = BaseOpenAIPassThroughHandler._join_url_paths(
+            base_url, path, litellm.LlmProviders.OPENAI.value
+        )
         print(f"Base URL with trailing slash: '{base_url}' + '{path}' → '{result}'")
         assert str(result) == "https://api.example.com/v1/chat/completions"
 
@@ -170,6 +153,7 @@ class TestBaseOpenAIPassThroughHandler:
             user_api_key_dict=mock_user_api_key_dict,
             base_target_url="https://api.openai.com",
             api_key="test_api_key",
+            custom_llm_provider=litellm.LlmProviders.OPENAI.value,
         )
 
         # Verify the result
