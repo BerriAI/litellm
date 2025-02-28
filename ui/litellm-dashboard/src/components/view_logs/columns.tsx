@@ -57,6 +57,24 @@ export const columns: ColumnDef<LogEntry>[] = [
     cell: (info: any) => <TimeCell utcTime={info.getValue()} />,
   },
   {
+    header: "Status",
+    accessorKey: "metadata.status",
+    cell: (info: any) => {
+      const status = info.getValue() || "Success";
+      const isSuccess = status.toLowerCase() !== "failure";
+      
+      return (
+        <span className={`px-2 py-1 rounded-md text-xs font-medium inline-block text-center w-16 ${
+          isSuccess 
+            ? 'bg-green-100 text-green-800' 
+            : 'bg-red-100 text-red-800'
+        }`}>
+          {isSuccess ? "Success" : "Failure"}
+        </span>
+      );
+    },
+  },
+  {
     header: "Request ID",
     accessorKey: "request_id",
     cell: (info: any) => (
