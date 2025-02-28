@@ -11,10 +11,12 @@ from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
 )
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import log_db_metrics
 from litellm.types.utils import (
     StandardLoggingPayload,
+    StandardLoggingPayloadErrorInformation,
     StandardLoggingUserAPIKeyMetadata,
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
@@ -48,6 +50,12 @@ class _ProxyDBLogger(CustomLogger):
         )
         _metadata["user_api_key"] = user_api_key_dict.api_key
         _metadata["status"] = "failure"
+        _metadata["error_information"] = (
+            StandardLoggingPayloadSetup.get_error_information(
+                original_exception=original_exception,
+            )
+        )
+
         existing_metadata: dict = request_data.get("metadata", None) or {}
         existing_metadata.update(_metadata)
         existing_metadata["proxy_server_request"] = (
