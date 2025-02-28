@@ -14,7 +14,7 @@ export const columns = (
     accessorKey: "user_id",
     cell: ({ row }) => (
       <Tooltip title={row.original.user_id}>
-        <span className="text-xs">{row.original.user_id ? `${row.original.user_id.slice(0, 4)}...` : "-"}</span>
+        <span className="text-xs">{row.original.user_id ? `${row.original.user_id.slice(0, 7)}...` : "-"}</span>
       </Tooltip>
     ),
   },
@@ -26,7 +26,7 @@ export const columns = (
     ),
   },
   {
-    header: "Role",
+    header: "Global Proxy Role",
     accessorKey: "user_role",
     cell: ({ row }) => (
       <span className="text-xs">
