@@ -220,10 +220,10 @@ class VertexPassthroughLoggingHandler:
         return "unknown"
 
     @staticmethod
-    def _get_custom_llm_provider_from_url(url: str) -> litellm.LlmProviders:
+    def _get_custom_llm_provider_from_url(url: str) -> str:
         if "generativelanguage.googleapis.com" in url:
-            return litellm.LlmProviders.GEMINI
-        return litellm.LlmProviders.VERTEX_AI
+            return litellm.LlmProviders.GEMINI.value
+        return litellm.LlmProviders.VERTEX_AI.value
 
     @staticmethod
     def _create_vertex_response_logging_payload_for_generate_content(
@@ -233,7 +233,7 @@ class VertexPassthroughLoggingHandler:
         start_time: datetime,
         end_time: datetime,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: litellm.LlmProviders,
+        custom_llm_provider: str,
     ):
         """
         Create the standard logging object for Vertex passthrough generateContent (streaming and non-streaming)
@@ -253,5 +253,5 @@ class VertexPassthroughLoggingHandler:
         litellm_model_response.id = logging_obj.litellm_call_id
         logging_obj.model = litellm_model_response.model or model
         logging_obj.model_call_details["model"] = logging_obj.model
-        logging_obj.model_call_details["custom_llm_provider"] = str(custom_llm_provider)
+        logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
         return kwargs
