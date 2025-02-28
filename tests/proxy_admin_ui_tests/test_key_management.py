@@ -370,11 +370,7 @@ async def test_get_users(prisma_client):
     assert "users" in result
 
     for user in result["users"]:
-        assert "user_id" in user
-        assert "spend" in user
-        assert "user_email" in user
-        assert "user_role" in user
-        assert "key_count" in user
+        assert isinstance(user, LiteLLM_UserTable)
 
     # Clean up test users
     for user in test_users:
