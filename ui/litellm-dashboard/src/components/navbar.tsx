@@ -4,6 +4,7 @@ import type { MenuProps } from "antd";
 import { Dropdown } from "antd";
 import { Organization } from "@/components/networking";
 import { defaultOrg } from "@/components/common_components/default_org";
+import { setTokenCookie } from "@/utils/cookies";
 import { 
   UserOutlined,
   LogoutOutlined
@@ -27,7 +28,7 @@ const Navbar: React.FC<NavbarProps> = ({
   let logoutUrl = proxySettings?.PROXY_LOGOUT_URL || "";
 
   const handleLogout = () => {
-    document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+    setTokenCookie("")
     window.location.href = logoutUrl;
   };
 

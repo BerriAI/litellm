@@ -2,7 +2,7 @@
  * Helper file for calls being made to proxy
  */
 import { message } from "antd";
-
+import { setTokenCookie } from "@/utils/cookies";
 const isLocal = process.env.NODE_ENV === "development";
 export const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 if (isLocal != true) {
@@ -50,7 +50,7 @@ const handleError = async (errorData: string) => {
       message.info("UI Session Expired. Logging out.");
       lastErrorTime = currentTime;
       await sleep(3000); // 5 second sleep
-      document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+      setTokenCookie("");
       window.location.href = baseUrl;
     }
     lastErrorTime = currentTime;
