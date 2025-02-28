@@ -21,6 +21,8 @@ import {
 } from "./networking";
 import BulkCreateUsers from "./bulk_create_users_button";
 const { Option } = Select;
+import { Tooltip } from "antd";
+import { InfoCircleOutlined } from '@ant-design/icons';
 
 interface CreateuserProps {
   userID: string;
@@ -258,7 +260,15 @@ const Createuser: React.FC<CreateuserProps> = ({
           <Form.Item label="User Email" name="user_email">
             <TextInput placeholder="" />
           </Form.Item>
-          <Form.Item label="User Role" name="user_role">
+          <Form.Item label={
+                  <span>
+                    Global Proxy Role{' '}
+                    <Tooltip title="This is the role that the user will globally on the proxy. This role is independent of any team/org specific roles.">
+                      <InfoCircleOutlined/>
+                    </Tooltip>
+                  </span>
+                } 
+              name="user_role">
             <Select2>
               {possibleUIRoles &&
                 Object.entries(possibleUIRoles).map(
@@ -278,7 +288,7 @@ const Createuser: React.FC<CreateuserProps> = ({
                 )}
             </Select2>
           </Form.Item>
-          <Form.Item label="Team ID" name="team_id">
+          <Form.Item label="Team ID" name="team_id" help="If selected, user will be added as a 'user' role to the team.">
             <Select placeholder="Select Team ID" style={{ width: "100%" }}>
               {teams ? (
                 teams.map((team: any) => (
