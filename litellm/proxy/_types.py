@@ -1387,7 +1387,9 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     litellm_budget_table: Optional[dict] = None
     org_id: Optional[str] = None  # org id for a given key
     created_at: Optional[datetime] = None
+    created_by: Optional[str] = None
     updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
