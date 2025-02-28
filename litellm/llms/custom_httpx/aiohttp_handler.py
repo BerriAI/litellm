@@ -174,6 +174,7 @@ class BaseLLMAIOHTTPHandler:
         api_key: Optional[str] = None,
         client: Optional[ClientSession] = None,
     ):
+        data.pop("max_retries", None) #added this as this was extra param which is not needed for openai
         _response = await self._make_common_async_call(
             async_client_session=client,
             provider_config=provider_config,
@@ -257,27 +258,50 @@ class BaseLLMAIOHTTPHandler:
         )
 
         if acompletion is True:
-            return self.async_completion(
-                custom_llm_provider=custom_llm_provider,
-                provider_config=provider_config,
-                api_base=api_base,
-                headers=headers,
-                data=data,
-                timeout=timeout,
-                model=model,
-                model_response=model_response,
-                logging_obj=logging_obj,
-                api_key=api_key,
-                messages=messages,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                encoding=encoding,
-                client=(
-                    client
-                    if client is not None and isinstance(client, ClientSession)
-                    else None
-                ),
-            )
+            if stream is True:
+                if fake_stream is not True:
+                    data["stream"] = stream
+                return self.acompletion_stream_function(
+                    model=model,
+                    messages=messages,
+                    api_base=api_base,
+                    headers=headers,
+                    custom_llm_provider=custom_llm_provider,
+                    provider_config=provider_config,
+                    timeout=timeout,
+                    logging_obj=logging_obj,
+                    data=data,
+                    fake_stream=fake_stream,
+                    client=(
+                        client
+                        if client is not None and isinstance(client, ClientSession)
+                        else None
+                    ),
+                    litellm_params=litellm_params,
+                )
+                
+            else:    
+                return self.async_completion(
+                    custom_llm_provider=custom_llm_provider,
+                    provider_config=provider_config,
+                    api_base=api_base,
+                    headers=headers,
+                    data=data,
+                    timeout=timeout,
+                    model=model,
+                    model_response=model_response,
+                    logging_obj=logging_obj,
+                    api_key=api_key,
+                    messages=messages,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    encoding=encoding,
+                    client=(
+                        client
+                        if client is not None and isinstance(client, ClientSession)
+                        else None
+                    ),
+                )
 
         if stream is True:
             if fake_stream is not True:
@@ -332,7 +356,95 @@ class BaseLLMAIOHTTPHandler:
             litellm_params=litellm_params,
             encoding=encoding,
         )
+          
+    async def acompletion_stream_function(
+        self,
+        model: str,
+        messages: list,
+        api_base: str,
+        custom_llm_provider: str,
+        headers: dict,
+        provider_config: BaseConfig,
+        timeout: Union[float, httpx.Timeout],
+        logging_obj: LiteLLMLoggingObj,
+        data: dict,
+        litellm_params: dict,
+        fake_stream: bool = False,
+        client: Optional[ClientSession] = None,
+    ):
+        completion_stream, _response_headers = await self.make_async_call(
+            custom_llm_provider=custom_llm_provider,
+            provider_config=provider_config,
+            api_base=api_base,
+            headers=headers,
+            data=data,
+            messages=messages,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            fake_stream=fake_stream,
+            client=client,
+            litellm_params=litellm_params,
+        )
+        
+        streamwrapper = CustomStreamWrapper(
+            completion_stream=completion_stream,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            logging_obj=logging_obj,
+        )
+        return streamwrapper
 
+    async def make_async_call(
+        self,
+        custom_llm_provider: str,
+        provider_config: BaseConfig,
+        api_base: str,
+        headers: dict,
+        data: dict,
+        messages: list,
+        logging_obj: LiteLLMLoggingObj,
+        timeout: Union[float, httpx.Timeout],
+        litellm_params: dict,
+        fake_stream: bool = False,
+        client: Optional[Union[AsyncHTTPHandler, ClientSession]] = None,
+    ) -> Tuple[Any, httpx.Headers]:
+        if client is None or not isinstance(client, ClientSession):
+            async_client_session = self._get_async_client_session()
+            
+        stream = True
+        if fake_stream is True:
+            stream = False
+        data.pop("max_retries", None)
+        response = await self._make_common_async_call(
+            async_client_session=async_client_session,
+            provider_config=provider_config,
+            api_base=api_base,
+            headers=headers,
+            data=data,
+            timeout=timeout,
+            litellm_params=litellm_params,
+            stream=stream,
+        )
+
+        if fake_stream is True:
+            json_response = await response.json()
+            completion_stream = provider_config.get_model_response_iterator(
+                streaming_response=json_response, sync_stream=False
+            )
+        else:
+            completion_stream = provider_config.get_model_response_iterator(
+                streaming_response=response.content, sync_stream=False
+            )
+        # LOGGING
+        logging_obj.post_call(
+            input=messages,
+            api_key="",
+            original_response="first stream response received:: ",
+            additional_args={"complete_input_dict": data},
+        )
+
+        return completion_stream, response.headers
+    
     def make_sync_call(
         self,
         provider_config: BaseConfig,
@@ -372,7 +484,7 @@ class BaseLLMAIOHTTPHandler:
             )
         else:
             completion_stream = provider_config.get_model_response_iterator(
-                streaming_response=response.iter_lines(), sync_stream=True
+                streaming_response=response.content, sync_stream=True
             )
 
         # LOGGING
