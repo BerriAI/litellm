@@ -240,4 +240,7 @@ class VertexPassthroughLoggingHandler:
         litellm_model_response.id = logging_obj.litellm_call_id
         logging_obj.model = litellm_model_response.model or model
         logging_obj.model_call_details["model"] = logging_obj.model
+        logging_obj.model_call_details["custom_llm_provider"] = (
+            litellm.LlmProviders.VERTEX_AI
+        )
         return kwargs
