@@ -234,28 +234,19 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
             </div>
 
 
-            <div className="flex justify-between w-full">
-              <div>
-                <Button
-                  onClick={() => resetFilters()}
-                >
-                  Reset All
-                </Button>
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  onClick={() => {
-                    clearFilters();
-                    onResetFilters();
-                    setShowFilters(false);
-                  }}
-                >
-                  Cancel
-                </Button>
-                <Button onClick={handleApplyFilters}>
-                  Apply Filters
-                </Button>
-              </div>
+            <div className="flex gap-2 justify-end">
+              <Button
+                onClick={() => {
+                  clearFilters();
+                  onResetFilters();
+                  setShowFilters(false);
+                }}
+              >
+                Reset
+              </Button>
+              <Button onClick={handleApplyFilters}>
+                Apply Filters
+              </Button>
             </div>
           </div>
         </Card>

@@ -175,10 +175,20 @@ export function AllKeysTable({
       cell: (info) => <span className="font-mono text-xs">{info.getValue() as string}</span>,
     },
     {
+      header: "Team Alias",
+      accessorKey: "team_id", // Change to access the team_id
+      cell: ({ row, getValue }) => {
+        const teamId = getValue() as string;
+        const team = teams?.find(t => t.team_id === teamId);
+        return team?.team_alias || "Unknown";
+      },
+    },
+    {
       header: "Team ID",
       accessorKey: "team_id",
       cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
     },
+
     {
       header: "Key Alias",
       accessorKey: "key_alias",
