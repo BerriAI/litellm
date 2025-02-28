@@ -10,7 +10,7 @@ from litellm import get_secret, get_secret_str
 from litellm._logging import verbose_router_logger
 from litellm.llms.azure.azure import get_azure_ad_token_from_oidc
 from litellm.llms.azure.common_utils import (
-    get_azure_ad_token_from_entrata_id,
+    get_azure_ad_token_from_entra_id,
     get_azure_ad_token_from_username_password,
 )
 from litellm.secret_managers.get_azure_ad_token_provider import (
@@ -199,7 +199,7 @@ class InitalizeOpenAISDKClient:
                 verbose_router_logger.debug(
                     "Using Azure AD Token Provider for Azure Auth"
                 )
-                azure_ad_token_provider = get_azure_ad_token_from_entrata_id(
+                azure_ad_token_provider = get_azure_ad_token_from_entra_id(
                     tenant_id=litellm_params.get("tenant_id"),
                     client_id=litellm_params.get("client_id"),
                     client_secret=litellm_params.get("client_secret"),
