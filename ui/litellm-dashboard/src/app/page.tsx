@@ -30,12 +30,7 @@ import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
 import { fetchUserModels } from "@/components/create_key_button";
 import { fetchTeams } from "@/components/common_components/fetch_teams";
-function getCookie(name: string) {
-  const cookieValue = document.cookie
-    .split("; ")
-    .find((row) => row.startsWith(name + "="));
-  return cookieValue ? cookieValue.split("=")[1] : null;
-}
+import { getCookie, setCookie } from "@/utils/cookies";
 
 function formatUserRole(userRole: string) {
   if (!userRole) {
@@ -117,9 +112,11 @@ export default function CreateKeyPage() {
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
   useEffect(() => {
-    const token = getCookie("token");
-    setToken(token);
-  }, []);
+    if (userID) {
+      const token = getCookie("token", userID);
+      setToken(token);
+    }
+  }, [userID]);
 
   useEffect(() => {
     if (!token) {

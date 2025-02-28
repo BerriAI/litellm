@@ -8,6 +8,8 @@ import {
   UserOutlined,
   LogoutOutlined
 } from '@ant-design/icons';
+import { removeCookie } from "@/utils/cookies";
+
 interface NavbarProps {
   userID: string | null;
   userRole: string | null;
@@ -27,7 +29,9 @@ const Navbar: React.FC<NavbarProps> = ({
   let logoutUrl = proxySettings?.PROXY_LOGOUT_URL || "";
 
   const handleLogout = () => {
-    document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+    if (userID) {
+      removeCookie("token", userID);
+    }
     window.location.href = logoutUrl;
   };
 

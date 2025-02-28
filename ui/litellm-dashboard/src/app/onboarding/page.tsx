@@ -20,14 +20,7 @@ import {
 } from "@/components/networking";
 import { jwtDecode } from "jwt-decode";
 import { Form, Button as Button2, message } from "antd";
-
-function getCookie(name: string) {
-  console.log("COOKIES", document.cookie)
-  const cookieValue = document.cookie
-      .split('; ')
-      .find(row => row.startsWith(name + '='));
-  return cookieValue ? cookieValue.split('=')[1] : null;
-}
+import { getCookie, setCookie } from "@/utils/cookies";
 
 export default function Onboarding() {
   const [form] = Form.useForm();
@@ -66,6 +59,13 @@ export default function Onboarding() {
     });
   }, [inviteID]);
 
+  useEffect(() => {
+    if (userID) {
+      const token = getCookie("token", userID);
+      setAccessToken(token);
+    }
+  }, [userID]);
+
   const handleSubmit = (formValues: Record<string, any>) => {
     console.log(
       "in handle submit. accessToken:",
@@ -95,7 +95,7 @@ export default function Onboarding() {
       litellm_dashboard_ui += "?userID=" + user_id;
 
       // set cookie "token" to jwtToken
-      document.cookie = "token=" + jwtToken;
+      setCookie("token", jwtToken, user_id);
       console.log("redirecting to:", litellm_dashboard_ui);
 
       window.location.href = litellm_dashboard_ui;
