@@ -528,26 +528,23 @@ class BaseOpenAIPassThroughHandler:
 
     @staticmethod
     def _join_url_paths(
-        base_url: httpx.URL,
-        path: str,
-        custom_llm_provider: str,
-    ) -> httpx.URL:
+        base_url: httpx.URL, path: str, custom_llm_provider: str
+    ) -> str:
         """
         Properly joins a base URL with a path, preserving any existing path in the base URL.
-        For OpenAI requests, ensures /v1 is included in the path.
         """
         if not base_url.path or base_url.path == "/":
             # If base URL has no path, just use the new path
-            return base_url.copy_with(path=path)
+            return str(base_url.copy_with(path=path))
 
         # Join paths correctly by removing trailing/leading slashes as needed
         base_path = base_url.path.rstrip("/")
         clean_path = path.lstrip("/")
         full_path = f"{base_path}/{clean_path}"
-
-        # Ensure OpenAI requests include /v1 in the path
-        if custom_llm_provider == "openai" and "/v1/" not in full_path:
-            # If path doesn't have v1, insert it at the beginning
-            full_path = f"/v1/{clean_path}"
-
-        return base_url.copy_with(path=full_path)
+        joined_path_str: str = str(base_url.copy_with(path=full_path))
+        if custom_llm_provider == "openai" and "/v1/" not in joined_path_str:
+            # Insert v1 after api.openai.com for OpenAI requests
+            joined_path_str = joined_path_str.replace(
+                "api.openai.com/", "api.openai.com/v1/"
+            )
+        return joined_path_str
