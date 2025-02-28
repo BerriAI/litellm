@@ -425,9 +425,9 @@ class LiteLLMProxyRequestSetup:
                     tags = [tag.strip() for tag in _tags]
                 elif isinstance(headers["x-litellm-tags"], list):
                     tags = headers["x-litellm-tags"]
-            # Check request body for tags
-            if "tags" in data and isinstance(data["tags"], list):
-                tags = data["tags"]
+        # Check request body for tags
+        if "tags" in data and isinstance(data["tags"], list):
+            tags = data["tags"]
 
         return tags
 
