@@ -774,13 +774,18 @@ async def get_users(
             - internal_user
             - internal_user_viewer
         user_ids: Optional[str]
-            Get list of users by user_ids
+            Get list of users by user_ids. Comma separated list of user_ids.
         page: int
             The page number to return
         page_size: int
             The number of items per page
 
     Currently - admin-only endpoint.
+
+    Example curl:
+    ```
+    http://0.0.0.0:4000/user/list?user_ids=default_user_id,693c1a4a-1cc0-4c7c-afe8-b5d2c8d52e17
+    ```
     """
     from litellm.proxy.proxy_server import prisma_client
 
