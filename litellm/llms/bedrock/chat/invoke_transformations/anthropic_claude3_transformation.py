@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, List, Optional
 import httpx
 
 import litellm
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
@@ -17,7 +18,7 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class AmazonAnthropicClaude3Config(AmazonInvokeConfig):
+class AmazonAnthropicClaude3Config(AnthropicConfig, AmazonInvokeConfig):
     """
     Reference:
         https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=claude
@@ -41,27 +42,27 @@ class AmazonAnthropicClaude3Config(AmazonInvokeConfig):
             "extra_headers",
         ]
 
-    def map_openai_params(
-        self,
-        non_default_params: dict,
-        optional_params: dict,
-        model: str,
-        drop_params: bool,
-    ):
-        for param, value in non_default_params.items():
-            if param == "max_tokens" or param == "max_completion_tokens":
-                optional_params["max_tokens"] = value
-            if param == "tools":
-                optional_params["tools"] = value
-            if param == "stream":
-                optional_params["stream"] = value
-            if param == "stop":
-                optional_params["stop_sequences"] = value
-            if param == "temperature":
-                optional_params["temperature"] = value
-            if param == "top_p":
-                optional_params["top_p"] = value
-        return optional_params
+    # def map_openai_params(
+    #     self,
+    #     non_default_params: dict,
+    #     optional_params: dict,
+    #     model: str,
+    #     drop_params: bool,
+    # ):
+    #     for param, value in non_default_params.items():
+    #         if param == "max_tokens" or param == "max_completion_tokens":
+    #             optional_params["max_tokens"] = value
+    #         if param == "tools":
+    #             optional_params["tools"] = value
+    #         if param == "stream":
+    #             optional_params["stream"] = value
+    #         if param == "stop":
+    #             optional_params["stop_sequences"] = value
+    #         if param == "temperature":
+    #             optional_params["temperature"] = value
+    #         if param == "top_p":
+    #             optional_params["top_p"] = value
+    #     return optional_params
 
     def transform_request(
         self,

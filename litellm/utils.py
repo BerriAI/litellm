@@ -3240,6 +3240,7 @@ def get_optional_params(  # noqa: PLR0915
         )
     elif custom_llm_provider == "bedrock":
         bedrock_route = BedrockModelInfo.get_bedrock_route(model)
+        bedrock_base_model = BedrockModelInfo.get_base_model(model)
         if bedrock_route == "converse" or bedrock_route == "converse_like":
             optional_params = litellm.AmazonConverseConfig().map_openai_params(
                 model=model,
@@ -3253,8 +3254,9 @@ def get_optional_params(  # noqa: PLR0915
                 messages=messages,
             )
 
-        elif "anthropic" in model and bedrock_route == "invoke":
-            if model.startswith("anthropic.claude-3"):
+        elif "anthropic" in bedrock_base_model and bedrock_route == "invoke":
+            if bedrock_base_model.startswith("anthropic.claude-3"):
+
                 optional_params = (
                     litellm.AmazonAnthropicClaude3Config().map_openai_params(
                         non_default_params=non_default_params,
@@ -3267,6 +3269,7 @@ def get_optional_params(  # noqa: PLR0915
                         ),
                     )
                 )
+
             else:
                 optional_params = litellm.AmazonAnthropicConfig().map_openai_params(
                     non_default_params=non_default_params,
