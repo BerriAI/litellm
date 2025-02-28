@@ -3535,7 +3535,7 @@ async def chat_completion(  # noqa: PLR0915
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args
             or model  # for azure deployments
-            or data["model"]  # default passed in http request
+            or data.get("model", None)  # default passed in http request
         )
 
         global user_temperature, user_request_timeout, user_max_tokens, user_api_base
