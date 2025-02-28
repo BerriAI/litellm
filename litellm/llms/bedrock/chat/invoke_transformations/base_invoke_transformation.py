@@ -534,7 +534,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         """
         Helper function to get the bedrock provider from the model
 
-        handles 3 scenarions:
+        handles 4 scenarios:
         1. model=invoke/anthropic.claude-3-5-sonnet-20240620-v1:0 -> Returns `anthropic`
         2. model=anthropic.claude-3-5-sonnet-20240620-v1:0 -> Returns `anthropic`
         3. model=llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n -> Returns `llama`
@@ -555,6 +555,10 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         # check if provider == "nova"
         if "nova" in model:
             return "nova"
+
+        for provider in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
+            if provider in model:
+                return provider
         return None
 
     @staticmethod
