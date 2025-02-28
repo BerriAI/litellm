@@ -814,7 +814,7 @@ async def get_users(
             "in": user_id_list,  # Now passing a list of strings as required by Prisma
         }
 
-    users: Optional[List[BaseModel]] = (
+    users: Optional[List[LiteLLM_UserTable]] = (
         await prisma_client.db.litellm_usertable.find_many(
             where=where_conditions,
             skip=skip,
@@ -828,17 +828,32 @@ async def get_users(
         where=where_conditions  # type: ignore
     )
 
+    # Get key count for each user
+    if users is not None:
+        user_keys = await prisma_client.db.litellm_verificationtoken.group_by(
+            by=["user_id"],
+            count={"user_id": True},
+            where={"user_id": {"in": [user.user_id for user in users]}},
+        )
+        user_key_counts = {
+            item["user_id"]: item["_count"]["user_id"] for item in user_keys
+        }
+    else:
+        user_key_counts = {}
+
     verbose_proxy_logger.debug(f"Total count of users: {total_count}")
 
     # Calculate total pages
     total_pages = -(-total_count // page_size)  # Ceiling division
 
     # Prepare response
-    user_list: List[LiteLLM_UserTable] = []
+    user_list: List[LiteLLM_UserTableWithKeyCount] = []
     if users is not None:
         for user in users:
             user_list.append(
-                LiteLLM_UserTable(**user.model_dump())
+                LiteLLM_UserTableWithKeyCount(
+                    **user.model_dump(), key_count=user_key_counts.get(user.user_id, 0)
+                )
             )  # Return full key object
     else:
         user_list = []
