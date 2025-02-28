@@ -2017,7 +2017,9 @@ jobs:
       - run:
           name: Install Node.js
           command: |
+            export DEBIAN_FRONTEND=noninteractive
             curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+            sudo apt-get update
             sudo apt-get install -y nodejs
             node --version
             npm --version
