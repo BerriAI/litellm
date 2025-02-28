@@ -808,7 +808,7 @@ async def get_users(
             "mode": "insensitive",  # Case-insensitive search
         }
 
-    if user_ids:
+    if user_ids and isinstance(user_ids, str):
         user_id_list = [uid.strip() for uid in user_ids.split(",") if uid.strip()]
         where_conditions["user_id"] = {
             "in": user_id_list,  # Now passing a list of strings as required by Prisma
