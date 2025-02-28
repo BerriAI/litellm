@@ -576,6 +576,25 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
     return input;
   };
 
+  // Extract error information from metadata if available
+  const hasError = row.original.metadata?.status === "failure";
+  const errorInfo = hasError ? row.original.metadata?.error_information : null;
+  
+  // Format the response with error details if present
+  const formattedResponse = () => {
+    if (hasError && errorInfo) {
+      return {
+        error: {
+          message: errorInfo.error_message || "An error occurred",
+          type: errorInfo.error_class || "error",
+          code: errorInfo.error_code || errorInfo.status_code || "unknown",
+          param: null
+        }
+      };
+    }
+    return formatData(row.original.response);
+  };
+
   return (
     <div className="p-6 bg-gray-50 space-y-6">
       {/* Combined Info Card */}
@@ -640,10 +659,54 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
       </div>
 
       {/* Request/Response Panel */}
-      <RequestResponsePanel 
-        request={formatData(row.original.messages)} 
-        response={formatData(row.original.response)} 
-      />
+      <div className="grid grid-cols-2 gap-4">
+        {/* Request Side */}
+        <div className="bg-white rounded-lg shadow">
+          <div className="flex justify-between items-center p-4 border-b">
+            <h3 className="text-lg font-medium">Request</h3>
+            <button 
+              onClick={() => navigator.clipboard.writeText(JSON.stringify(formatData(row.original.messages), null, 2))}
+              className="p-1 hover:bg-gray-200 rounded"
+              title="Copy request"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
+          </div>
+          <div className="p-4 overflow-auto max-h-96">
+            <pre className="text-xs font-mono whitespace-pre-wrap break-all">{JSON.stringify(formatData(row.original.messages), null, 2)}</pre>
+          </div>
+        </div>
+
+        {/* Response Side */}
+        <div className="bg-white rounded-lg shadow">
+          <div className="flex justify-between items-center p-4 border-b">
+            <h3 className="text-lg font-medium">
+              Response
+              {hasError && (
+                <span className="ml-2 text-sm text-red-600">
+                  • HTTP code {errorInfo?.status_code || 400}
+                </span>
+              )}
+            </h3>
+            <button 
+              onClick={() => navigator.clipboard.writeText(JSON.stringify(formattedResponse(), null, 2))}
+              className="p-1 hover:bg-gray-200 rounded"
+              title="Copy response"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
+          </div>
+          <div className="p-4 overflow-auto max-h-96 bg-gray-50">
+            <pre className="text-xs font-mono whitespace-pre-wrap break-all">{JSON.stringify(formattedResponse(), null, 2)}</pre>
+          </div>
+        </div>
+      </div>
 
       {/* Tags Card - Only show if there are tags */}
       {row.original.request_tags && Object.keys(row.original.request_tags).length > 0 && (
@@ -679,9 +742,9 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
               </svg>
             </button>
           </div>
-          <pre className="p-4 overflow-auto text-xs font-mono max-h-64">
-            {JSON.stringify(row.original.metadata, null, 2)}
-          </pre>
+          <div className="p-4 overflow-auto max-h-64">
+            <pre className="text-xs font-mono whitespace-pre-wrap break-all">{JSON.stringify(row.original.metadata, null, 2)}</pre>
+          </div>
         </div>
       )}
     </div>

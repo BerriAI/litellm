@@ -247,7 +247,7 @@ export const RequestResponsePanel = ({ request, response }: { request: any; resp
             </svg>
           </button>
         </div>
-        <pre className="p-4 overflow-auto text-xs font-mono h-64">{requestStr}</pre>
+        <pre className="p-4 overflow-auto text-xs font-mono h-64 whitespace-pre-wrap break-words">{requestStr}</pre>
       </div>
       
       <div className="rounded-lg border border-gray-200 bg-gray-50">
@@ -264,7 +264,7 @@ export const RequestResponsePanel = ({ request, response }: { request: any; resp
             </svg>
           </button>
         </div>
-        <pre className="p-4 overflow-auto text-xs font-mono h-64">{responseStr}</pre>
+        <pre className="p-4 overflow-auto text-xs font-mono h-64 whitespace-pre-wrap break-words">{responseStr}</pre>
       </div>
     </div>
   );
