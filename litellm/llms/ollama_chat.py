@@ -508,6 +508,7 @@ async def ollama_async_streaming(
         verbose_logger.exception(
             "LiteLLM.ollama(): Exception occured - {}".format(str(e))
         )
+        raise e
 
 
 async def ollama_acompletion(
