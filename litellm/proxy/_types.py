@@ -1578,6 +1578,10 @@ class LiteLLM_UserTableFiltered(BaseModel):  # done to avoid exposing sensitive 
     user_email: str
 
 
+class LiteLLM_UserTableWithKeyCount(LiteLLM_UserTable):
+    key_count: int = 0
+
+
 class LiteLLM_EndUserTable(LiteLLMPydanticObjectBase):
     user_id: str
     blocked: bool
