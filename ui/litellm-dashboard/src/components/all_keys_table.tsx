@@ -178,7 +178,7 @@ export function AllKeysTable({
               className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
               onClick={() => setSelectedKeyId(info.getValue() as string)}
             >
-              {info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "Not Set"}
+              {info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}
             </Button>
           </Tooltip>
         </div>
@@ -192,17 +192,17 @@ export function AllKeysTable({
     {
       header: "Team ID",
       accessorKey: "team_id",
-      cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
+      cell: (info) => info.getValue() ? info.renderValue() : "-",
     },
     {
       header: "Key Alias",
       accessorKey: "key_alias",
-      cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
+      cell: (info) => info.getValue() ? info.renderValue() : "-",
     },
     {
       header: "Organization ID",
       accessorKey: "organization_id",
-      cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
+      cell: (info) => info.getValue() ? info.renderValue() : "-",
     },
     {
       header: "User Email",
@@ -210,7 +210,7 @@ export function AllKeysTable({
       cell: (info) => {
         const userId = info.getValue() as string;
         const user = userList.find(u => u.user_id === userId);
-        return user ? user.user_email : "Not Set";
+        return user?.user_email ? user.user_email : "-";
       },
     },
     {
@@ -220,9 +220,9 @@ export function AllKeysTable({
         const userId = info.getValue() as string;
         return userId ? (
           <Tooltip title={userId}>
-            <span>{userId.slice(0, 5)}...</span>
+            <span>{userId.slice(0, 7)}...</span>
           </Tooltip>
-        ) : "Not Set";
+        ) : "-";
       },
     },
     {
