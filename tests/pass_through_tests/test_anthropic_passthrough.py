@@ -162,6 +162,7 @@ async def test_anthropic_basic_completion_with_headers():
                 ), "Should have user API key in metadata"
 
                 assert "claude" in log_entry["model"]
+                assert log_entry["custom_llm_provider"] == "anthropic"
 
 
 @pytest.mark.asyncio
@@ -301,3 +302,4 @@ async def test_anthropic_streaming_with_headers():
                 assert "claude" in log_entry["model"]
 
                 assert log_entry["end_user"] == "test-user-1"
+                assert log_entry["custom_llm_provider"] == "anthropic"
