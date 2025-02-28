@@ -413,7 +413,7 @@ async def azure_proxy_route(
         user_api_key_dict=user_api_key_dict,
         base_target_url=base_target_url,
         api_key=azure_api_key,
-        custom_llm_provider=litellm.LlmProviders.AZURE.value,
+        custom_llm_provider=litellm.LlmProviders.AZURE,
     )
 
 
@@ -451,7 +451,7 @@ async def openai_proxy_route(
         user_api_key_dict=user_api_key_dict,
         base_target_url=base_target_url,
         api_key=openai_api_key,
-        custom_llm_provider=litellm.LlmProviders.OPENAI.value,
+        custom_llm_provider=litellm.LlmProviders.OPENAI,
     )
 
 
@@ -464,10 +464,9 @@ class BaseOpenAIPassThroughHandler:
         user_api_key_dict: UserAPIKeyAuth,
         base_target_url: str,
         api_key: str,
-        custom_llm_provider: str,
+        custom_llm_provider: litellm.LlmProviders,
     ):
         encoded_endpoint = httpx.URL(endpoint).path
-
         # Ensure endpoint starts with '/' for proper URL construction
         if not encoded_endpoint.startswith("/"):
             encoded_endpoint = "/" + encoded_endpoint
@@ -528,23 +527,30 @@ class BaseOpenAIPassThroughHandler:
 
     @staticmethod
     def _join_url_paths(
-        base_url: httpx.URL, path: str, custom_llm_provider: str
+        base_url: httpx.URL, path: str, custom_llm_provider: litellm.LlmProviders
     ) -> str:
         """
         Properly joins a base URL with a path, preserving any existing path in the base URL.
         """
+        # Join paths correctly by removing trailing/leading slashes as needed
         if not base_url.path or base_url.path == "/":
             # If base URL has no path, just use the new path
-            return str(base_url.copy_with(path=path))
+            joined_path_str = str(base_url.copy_with(path=path))
+        else:
+            # Otherwise, combine the paths
+            base_path = base_url.path.rstrip("/")
+            clean_path = path.lstrip("/")
+            full_path = f"{base_path}/{clean_path}"
+            joined_path_str = str(base_url.copy_with(path=full_path))
 
-        # Join paths correctly by removing trailing/leading slashes as needed
-        base_path = base_url.path.rstrip("/")
-        clean_path = path.lstrip("/")
-        full_path = f"{base_path}/{clean_path}"
-        joined_path_str: str = str(base_url.copy_with(path=full_path))
-        if custom_llm_provider == "openai" and "/v1/" not in joined_path_str:
+        # Apply OpenAI-specific path handling for both branches
+        if (
+            custom_llm_provider == litellm.LlmProviders.OPENAI
+            and "/v1/" not in joined_path_str
+        ):
             # Insert v1 after api.openai.com for OpenAI requests
             joined_path_str = joined_path_str.replace(
                 "api.openai.com/", "api.openai.com/v1/"
             )
+
         return joined_path_str
