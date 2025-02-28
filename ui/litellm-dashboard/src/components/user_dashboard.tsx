@@ -18,6 +18,7 @@ import ViewUserTeam from "./view_user_team";
 import DashboardTeam from "./dashboard_default_team";
 import Onboarding from "../app/onboarding/page";
 import { useSearchParams, useRouter } from "next/navigation";
+import { setTokenCookie } from "@/utils/cookies";
 import { Team } from "./key_team_helpers/key_list";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
@@ -301,7 +302,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     
 
     // clear cookie called "token" since user will be logging in again
-    document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+    setTokenCookie("");
 
     console.log("Full URL:", url);
     window.location.href = url;
