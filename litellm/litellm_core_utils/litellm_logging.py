@@ -70,7 +70,8 @@ from litellm.types.utils import (
 from litellm.utils import _get_base_model_from_metadata, executor, print_verbose
 
 from ..integrations.argilla import ArgillaLogger
-from ..integrations.arize_ai import ArizeLogger
+from ..integrations.arize.arize import ArizeLogger
+from ..integrations.arize.arize_phoenix import ArizePhoenixLogger
 from ..integrations.athina import AthinaLogger
 from ..integrations.azure_storage.azure_storage import AzureBlobStorageLogger
 from ..integrations.braintrust_logging import BraintrustLogger
@@ -200,6 +201,7 @@ class Logging(LiteLLMLoggingBaseClass):
         dynamic_async_failure_callbacks: Optional[
             List[Union[str, Callable, CustomLogger]]
         ] = None,
+        applied_guardrails: Optional[List[str]] = None,
         kwargs: Optional[Dict] = None,
     ):
         _input: Optional[str] = messages  # save original value of messages
@@ -272,6 +274,7 @@ class Logging(LiteLLMLoggingBaseClass):
             "litellm_call_id": litellm_call_id,
             "input": _input,
             "litellm_params": litellm_params,
+            "applied_guardrails": applied_guardrails,
         }
 
     def process_dynamic_callbacks(self):
@@ -830,7 +833,7 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception as e:  # error creating kwargs for cost calculation
             debug_info = StandardLoggingModelCostFailureDebugInformation(
                 error_str=str(e),
-                traceback_str=traceback.format_exc(),
+                traceback_str=_get_traceback_str_for_error(str(e)),
             )
             verbose_logger.debug(
                 f"response_cost_failure_debug_information: {debug_info}"
@@ -1264,13 +1267,12 @@ class Logging(LiteLLMLoggingBaseClass):
                             in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
                         )
                         if langfuse_logger_to_use is not None:
-                            _response = langfuse_logger_to_use._old_log_event(
+                            _response = langfuse_logger_to_use.log_event_on_langfuse(
                                 kwargs=kwargs,
                                 response_obj=result,
                                 start_time=start_time,
                                 end_time=end_time,
                                 user_id=kwargs.get("user", None),
-                                print_verbose=print_verbose,
                             )
                             if _response is not None and isinstance(_response, dict):
                                 _trace_id = _response.get("trace_id", None)
@@ -1974,12 +1976,11 @@ class Logging(LiteLLMLoggingBaseClass):
                             standard_callback_dynamic_params=self.standard_callback_dynamic_params,
                             in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
                         )
-                        _response = langfuse_logger_to_use._old_log_event(
+                        _response = langfuse_logger_to_use.log_event_on_langfuse(
                             start_time=start_time,
                             end_time=end_time,
                             response_obj=None,
                             user_id=kwargs.get("user", None),
-                            print_verbose=print_verbose,
                             status_message=str(exception),
                             level="ERROR",
                             kwargs=self.model_call_details,
@@ -2495,13 +2496,18 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                 OpenTelemetryConfig,
             )
 
-            otel_config = ArizeLogger.get_arize_opentelemetry_config()
-            if otel_config is None:
+            arize_config = ArizeLogger.get_arize_config()
+            if arize_config.endpoint is None:
                 raise ValueError(
                     "No valid endpoint found for Arize, please set 'ARIZE_ENDPOINT' to your GRPC endpoint or 'ARIZE_HTTP_ENDPOINT' to your HTTP endpoint"
                 )
+            otel_config = OpenTelemetryConfig(
+                exporter=arize_config.protocol,
+                endpoint=arize_config.endpoint,
+            )
+
             os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = (
-                f"space_key={os.getenv('ARIZE_SPACE_KEY')},api_key={os.getenv('ARIZE_API_KEY')}"
+                f"space_key={arize_config.space_key},api_key={arize_config.api_key}"
             )
             for callback in _in_memory_loggers:
                 if (
@@ -2510,6 +2516,35 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                 ):
                     return callback  # type: ignore
             _otel_logger = OpenTelemetry(config=otel_config, callback_name="arize")
+            _in_memory_loggers.append(_otel_logger)
+            return _otel_logger  # type: ignore
+        elif logging_integration == "arize_phoenix":
+            from litellm.integrations.opentelemetry import (
+                OpenTelemetry,
+                OpenTelemetryConfig,
+            )
+
+            arize_phoenix_config = ArizePhoenixLogger.get_arize_phoenix_config()
+            otel_config = OpenTelemetryConfig(
+                exporter=arize_phoenix_config.protocol,
+                endpoint=arize_phoenix_config.endpoint,
+            )
+
+            # auth can be disabled on local deployments of arize phoenix
+            if arize_phoenix_config.otlp_auth_headers is not None:
+                os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = (
+                    arize_phoenix_config.otlp_auth_headers
+                )
+
+            for callback in _in_memory_loggers:
+                if (
+                    isinstance(callback, OpenTelemetry)
+                    and callback.callback_name == "arize_phoenix"
+                ):
+                    return callback  # type: ignore
+            _otel_logger = OpenTelemetry(
+                config=otel_config, callback_name="arize_phoenix"
+            )
             _in_memory_loggers.append(_otel_logger)
             return _otel_logger  # type: ignore
         elif logging_integration == "otel":
@@ -2873,6 +2908,7 @@ class StandardLoggingPayloadSetup:
         metadata: Optional[Dict[str, Any]],
         litellm_params: Optional[dict] = None,
         prompt_integration: Optional[str] = None,
+        applied_guardrails: Optional[List[str]] = None,
     ) -> StandardLoggingMetadata:
         """
         Clean and filter the metadata dictionary to include only the specified keys in StandardLoggingMetadata.
@@ -2887,6 +2923,7 @@ class StandardLoggingPayloadSetup:
             - If the input metadata is None or not a dictionary, an empty StandardLoggingMetadata object is returned.
             - If 'user_api_key' is present in metadata and is a valid SHA256 hash, it's stored as 'user_api_key_hash'.
         """
+
         prompt_management_metadata: Optional[
             StandardLoggingPromptManagementMetadata
         ] = None
@@ -2911,11 +2948,13 @@ class StandardLoggingPayloadSetup:
             user_api_key_org_id=None,
             user_api_key_user_id=None,
             user_api_key_team_alias=None,
+            user_api_key_user_email=None,
             spend_logs_metadata=None,
             requester_ip_address=None,
             requester_metadata=None,
             user_api_key_end_user_id=None,
             prompt_management_metadata=prompt_management_metadata,
+            applied_guardrails=applied_guardrails,
         )
         if isinstance(metadata, dict):
             # Filter the metadata dictionary to include only the specified keys
@@ -3214,6 +3253,7 @@ def get_standard_logging_object_payload(
             metadata=metadata,
             litellm_params=litellm_params,
             prompt_integration=kwargs.get("prompt_integration", None),
+            applied_guardrails=kwargs.get("applied_guardrails", None),
         )
 
         _request_body = proxy_server_request.get("body", {})
@@ -3343,12 +3383,14 @@ def get_standard_logging_metadata(
         user_api_key_team_id=None,
         user_api_key_org_id=None,
         user_api_key_user_id=None,
+        user_api_key_user_email=None,
         user_api_key_team_alias=None,
         spend_logs_metadata=None,
         requester_ip_address=None,
         requester_metadata=None,
         user_api_key_end_user_id=None,
         prompt_management_metadata=None,
+        applied_guardrails=None,
     )
     if isinstance(metadata, dict):
         # Filter the metadata dictionary to include only the specified keys

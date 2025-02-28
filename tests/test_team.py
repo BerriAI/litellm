@@ -538,6 +538,13 @@ async def test_team_delete():
             {"role": "user", "user_id": normal_user},
         ]
         team_data = await new_team(session=session, i=0, member_list=member_list)
+
+        ## ASSERT USER MEMBERSHIP IS CREATED
+        user_info = await get_user_info(
+            session=session, get_user=normal_user, call_user="sk-1234"
+        )
+        assert len(user_info["teams"]) == 1
+
         ## Create key
         key_gen = await generate_key(session=session, i=0, team_id=team_data["team_id"])
         key = key_gen["key"]
@@ -545,6 +552,12 @@ async def test_team_delete():
         response = await chat_completion(session=session, key=key)
         ## Delete team
         await delete_team(session=session, i=0, team_id=team_data["team_id"])
+
+        ## ASSERT USER MEMBERSHIP IS DELETED
+        user_info = await get_user_info(
+            session=session, get_user=normal_user, call_user="sk-1234"
+        )
+        assert len(user_info["teams"]) == 0
 
 
 @pytest.mark.parametrize("dimension", ["user_id", "user_email"])

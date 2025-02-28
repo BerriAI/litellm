@@ -27,6 +27,7 @@ verbose_logger.setLevel(logging.DEBUG)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
 import random
+from unittest.mock import patch, MagicMock
 
 
 def load_vertex_ai_credentials():
@@ -170,6 +171,69 @@ class TestCustomLogger(CustomLogger):
         self.standard_logging_object = kwargs["standard_logging_object"]
 
 
+def cleanup_azure_files():
+    """
+    Delete all files for Azure - helper for when we run out of Azure Files Quota
+    """
+    azure_files = litellm.file_list(
+        custom_llm_provider="azure",
+        api_key=os.getenv("AZURE_FT_API_KEY"),
+        api_base=os.getenv("AZURE_FT_API_BASE"),
+    )
+    print("azure_files=", azure_files)
+    for _file in azure_files:
+        print("deleting file=", _file)
+        delete_file_response = litellm.file_delete(
+            file_id=_file.id,
+            custom_llm_provider="azure",
+            api_key=os.getenv("AZURE_FT_API_KEY"),
+            api_base=os.getenv("AZURE_FT_API_BASE"),
+        )
+        print("delete_file_response=", delete_file_response)
+        assert delete_file_response.id == _file.id
+
+
+def cleanup_azure_ft_models():
+    """
+    Test CLEANUP: Delete all existing fine tuning jobs for Azure
+    """
+    try:
+        from openai import AzureOpenAI
+        import requests
+
+        client = AzureOpenAI(
+            api_key=os.getenv("AZURE_FT_API_KEY"),
+            azure_endpoint=os.getenv("AZURE_FT_API_BASE"),
+            api_version=os.getenv("AZURE_API_VERSION"),
+        )
+
+        _list_ft_jobs = client.fine_tuning.jobs.list()
+        print("_list_ft_jobs=", _list_ft_jobs)
+
+        # delete all ft jobs make post request to this
+        # Delete all fine-tuning jobs
+        for job in _list_ft_jobs:
+            try:
+                endpoint = os.getenv("AZURE_FT_API_BASE").rstrip("/")
+                url = f"{endpoint}/openai/fine_tuning/jobs/{job.id}?api-version=2024-10-21"
+                print("url=", url)
+
+                headers = {
+                    "api-key": os.getenv("AZURE_FT_API_KEY"),
+                    "Content-Type": "application/json",
+                }
+
+                response = requests.delete(url, headers=headers)
+                print(f"Deleting job {job.id}: Status {response.status_code}")
+                if response.status_code != 204:
+                    print(f"Error deleting job {job.id}: {response.text}")
+
+            except Exception as e:
+                print(f"Error deleting job {job.id}: {str(e)}")
+    except Exception as e:
+        print(f"Error on cleanup_azure_ft_models: {str(e)}")
+
+
 @pytest.mark.parametrize("provider", ["openai"])
 @pytest.mark.asyncio()
 @pytest.mark.flaky(retries=3, delay=1)
@@ -298,106 +362,137 @@ async def test_async_create_batch(provider):
     )
     print("cancel_batch_response=", cancel_batch_response)
 
-    if random.randint(1, 15) == 1:
+    if random.randint(1, 3) == 1:
         print("Running random cleanup of Azure files and models...")
         cleanup_azure_files()
         cleanup_azure_ft_models()
 
 
-def cleanup_azure_files():
-    """
-    Delete all files for Azure - helper for when we run out of Azure Files Quota
-    """
-    azure_files = litellm.file_list(
-        custom_llm_provider="azure",
-        api_key=os.getenv("AZURE_FT_API_KEY"),
-        api_base=os.getenv("AZURE_FT_API_BASE"),
-    )
-    print("azure_files=", azure_files)
-    for _file in azure_files:
-        print("deleting file=", _file)
-        delete_file_response = litellm.file_delete(
-            file_id=_file.id,
-            custom_llm_provider="azure",
-            api_key=os.getenv("AZURE_FT_API_KEY"),
-            api_base=os.getenv("AZURE_FT_API_BASE"),
-        )
-        print("delete_file_response=", delete_file_response)
-        assert delete_file_response.id == _file.id
+mock_file_response = {
+    "kind": "storage#object",
+    "id": "litellm-local/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/5f7b99ad-9203-4430-98bf-3b45451af4cb/1739598666670574",
+    "selfLink": "https://www.googleapis.com/storage/v1/b/litellm-local/o/litellm-vertex-files%2Fpublishers%2Fgoogle%2Fmodels%2Fgemini-1.5-flash-001%2F5f7b99ad-9203-4430-98bf-3b45451af4cb",
+    "mediaLink": "https://storage.googleapis.com/download/storage/v1/b/litellm-local/o/litellm-vertex-files%2Fpublishers%2Fgoogle%2Fmodels%2Fgemini-1.5-flash-001%2F5f7b99ad-9203-4430-98bf-3b45451af4cb?generation=1739598666670574&alt=media",
+    "name": "litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/5f7b99ad-9203-4430-98bf-3b45451af4cb",
+    "bucket": "litellm-local",
+    "generation": "1739598666670574",
+    "metageneration": "1",
+    "contentType": "application/json",
+    "storageClass": "STANDARD",
+    "size": "416",
+    "md5Hash": "hbBNj7C8KJ7oVH+JmyRM6A==",
+    "crc32c": "oDmiUA==",
+    "etag": "CO7D0IT+xIsDEAE=",
+    "timeCreated": "2025-02-15T05:51:06.741Z",
+    "updated": "2025-02-15T05:51:06.741Z",
+    "timeStorageClassUpdated": "2025-02-15T05:51:06.741Z",
+    "timeFinalized": "2025-02-15T05:51:06.741Z",
+}
 
-
-def cleanup_azure_ft_models():
-    """
-    Test CLEANUP: Delete all existing fine tuning jobs for Azure
-    """
-    try:
-        from openai import AzureOpenAI
-        import requests
-
-        client = AzureOpenAI(
-            api_key=os.getenv("AZURE_FT_API_KEY"),
-            azure_endpoint=os.getenv("AZURE_FT_API_BASE"),
-            api_version=os.getenv("AZURE_API_VERSION"),
-        )
-
-        _list_ft_jobs = client.fine_tuning.jobs.list()
-        print("_list_ft_jobs=", _list_ft_jobs)
-
-        # delete all ft jobs make post request to this
-        # Delete all fine-tuning jobs
-        for job in _list_ft_jobs:
-            try:
-                endpoint = os.getenv("AZURE_FT_API_BASE").rstrip("/")
-                url = f"{endpoint}/openai/fine_tuning/jobs/{job.id}?api-version=2024-10-21"
-                print("url=", url)
-
-                headers = {
-                    "api-key": os.getenv("AZURE_FT_API_KEY"),
-                    "Content-Type": "application/json",
-                }
-
-                response = requests.delete(url, headers=headers)
-                print(f"Deleting job {job.id}: Status {response.status_code}")
-                if response.status_code != 204:
-                    print(f"Error deleting job {job.id}: {response.text}")
-
-            except Exception as e:
-                print(f"Error deleting job {job.id}: {str(e)}")
-    except Exception as e:
-        print(f"Error on cleanup_azure_ft_models: {str(e)}")
+mock_vertex_batch_response = {
+    "name": "projects/123456789/locations/us-central1/batchPredictionJobs/test-batch-id-456",
+    "displayName": "litellm_batch_job",
+    "model": "projects/123456789/locations/us-central1/models/gemini-1.5-flash-001",
+    "modelVersionId": "v1",
+    "inputConfig": {
+        "gcsSource": {
+            "uris": [
+                "gs://litellm-local/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/5f7b99ad-9203-4430-98bf-3b45451af4cb"
+            ]
+        }
+    },
+    "outputConfig": {
+        "gcsDestination": {"outputUriPrefix": "gs://litellm-local/batch-outputs/"}
+    },
+    "dedicatedResources": {
+        "machineSpec": {
+            "machineType": "n1-standard-4",
+            "acceleratorType": "NVIDIA_TESLA_T4",
+            "acceleratorCount": 1,
+        },
+        "startingReplicaCount": 1,
+        "maxReplicaCount": 1,
+    },
+    "state": "JOB_STATE_RUNNING",
+    "createTime": "2025-02-15T05:51:06.741Z",
+    "startTime": "2025-02-15T05:51:07.741Z",
+    "updateTime": "2025-02-15T05:51:08.741Z",
+    "labels": {"key1": "value1", "key2": "value2"},
+    "completionStats": {"successfulCount": 0, "failedCount": 0, "remainingCount": 100},
+}
 
 
 @pytest.mark.asyncio
 async def test_avertex_batch_prediction():
-    load_vertex_ai_credentials()
-    litellm.set_verbose = True
-    file_name = "vertex_batch_completions.jsonl"
-    _current_dir = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(_current_dir, file_name)
-    file_obj = await litellm.acreate_file(
-        file=open(file_path, "rb"),
-        purpose="batch",
-        custom_llm_provider="vertex_ai",
-    )
-    print("Response from creating file=", file_obj)
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+    ) as mock_post:
+        # Configure mock responses
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
 
-    batch_input_file_id = file_obj.id
-    assert (
-        batch_input_file_id is not None
-    ), f"Failed to create file, expected a non null file_id but got {batch_input_file_id}"
+        # Set up different responses for different API calls
+        async def mock_side_effect(*args, **kwargs):
+            url = kwargs.get("url", "")
+            if "files" in url:
+                mock_response.json.return_value = mock_file_response
+            elif "batch" in url:
+                mock_response.json.return_value = mock_vertex_batch_response
+                mock_response.status_code = 200
+            return mock_response
 
-    create_batch_response = await litellm.acreate_batch(
-        completion_window="24h",
-        endpoint="/v1/chat/completions",
-        input_file_id=batch_input_file_id,
-        custom_llm_provider="vertex_ai",
-        metadata={"key1": "value1", "key2": "value2"},
-    )
-    print("create_batch_response=", create_batch_response)
+        mock_post.side_effect = mock_side_effect
 
-    retrieved_batch = await litellm.aretrieve_batch(
-        batch_id=create_batch_response.id,
-        custom_llm_provider="vertex_ai",
-    )
-    print("retrieved_batch=", retrieved_batch)
-    pass
+        # load_vertex_ai_credentials()
+        litellm.set_verbose = True
+        litellm._turn_on_debug()
+        file_name = "vertex_batch_completions.jsonl"
+        _current_dir = os.path.dirname(os.path.abspath(__file__))
+        file_path = os.path.join(_current_dir, file_name)
+
+        # Create file
+        file_obj = await litellm.acreate_file(
+            file=open(file_path, "rb"),
+            purpose="batch",
+            custom_llm_provider="vertex_ai",
+        )
+        print("Response from creating file=", file_obj)
+
+        assert (
+            file_obj.id
+            == "gs://litellm-local/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/5f7b99ad-9203-4430-98bf-3b45451af4cb"
+        )
+
+        # Create batch
+        create_batch_response = await litellm.acreate_batch(
+            completion_window="24h",
+            endpoint="/v1/chat/completions",
+            input_file_id=file_obj.id,
+            custom_llm_provider="vertex_ai",
+            metadata={"key1": "value1", "key2": "value2"},
+        )
+        print("create_batch_response=", create_batch_response)
+
+        assert create_batch_response.id == "test-batch-id-456"
+        assert (
+            create_batch_response.input_file_id
+            == "gs://litellm-local/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/5f7b99ad-9203-4430-98bf-3b45451af4cb"
+        )
+
+        # Mock the retrieve batch response
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get"
+        ) as mock_get:
+            mock_get_response = MagicMock()
+            mock_get_response.json.return_value = mock_vertex_batch_response
+            mock_get_response.status_code = 200
+            mock_get_response.raise_for_status.return_value = None
+            mock_get.return_value = mock_get_response
+
+            retrieved_batch = await litellm.aretrieve_batch(
+                batch_id=create_batch_response.id,
+                custom_llm_provider="vertex_ai",
+            )
+            print("retrieved_batch=", retrieved_batch)
+
+            assert retrieved_batch.id == "test-batch-id-456"

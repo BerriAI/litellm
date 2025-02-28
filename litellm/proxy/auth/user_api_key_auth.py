@@ -8,6 +8,7 @@ Returns a UserAPIKeyAuth object if the API key is valid
 """
 
 import asyncio
+import re
 import secrets
 from datetime import datetime, timezone
 from typing import Optional, cast
@@ -20,6 +21,7 @@ import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.caching import DualCache
+from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
@@ -276,6 +278,21 @@ def get_rbac_role(jwt_handler: JWTHandler, scopes: List[str]) -> str:
         return LitellmUserRoles.PROXY_ADMIN
     else:
         return LitellmUserRoles.TEAM
+
+
+def get_model_from_request(request_data: dict, route: str) -> Optional[str]:
+
+    # First try to get model from request_data
+    model = request_data.get("model")
+
+    # If model not in request_data, try to extract from route
+    if model is None:
+        # Parse model from route that follows the pattern /openai/deployments/{model}/*
+        match = re.match(r"/openai/deployments/([^/]+)", route)
+        if match:
+            model = match.group(1)
+
+    return model
 
 
 async def _user_api_key_auth_builder(  # noqa: PLR0915
@@ -790,21 +807,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 raise Exception(
                     "Key is blocked. Update via `/key/unblock` if you're admin."
                 )
-
-            # Check 1. If token can call model
-            _model_alias_map = {}
-            model: Optional[str] = None
-            if (
-                hasattr(valid_token, "team_model_aliases")
-                and valid_token.team_model_aliases is not None
-            ):
-                _model_alias_map = {
-                    **valid_token.aliases,
-                    **valid_token.team_model_aliases,
-                }
-            else:
-                _model_alias_map = {**valid_token.aliases}
-            litellm.model_alias_map = _model_alias_map
             config = valid_token.config
 
             if config != {}:
@@ -821,7 +823,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 # the validation will occur when checking the team has access to this model
                 pass
             else:
-                model = request_data.get("model", None)
+                model = get_model_from_request(request_data, route)
                 fallback_models = cast(
                     Optional[List[ALL_FALLBACK_MODEL_VALUES]],
                     request_data.get("fallbacks", None),
@@ -912,7 +914,10 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             # Check 3. If token is expired
             if valid_token.expires is not None:
                 current_time = datetime.now(timezone.utc)
-                expiry_time = datetime.fromisoformat(valid_token.expires)
+                if isinstance(valid_token.expires, datetime):
+                    expiry_time = valid_token.expires
+                else:
+                    expiry_time = datetime.fromisoformat(valid_token.expires)
                 if (
                     expiry_time.tzinfo is None
                     or expiry_time.tzinfo.utcoffset(expiry_time) is None
@@ -1142,6 +1147,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         )
 
 
+@tracer.wrap()
 async def user_api_key_auth(
     request: Request,
     api_key: str = fastapi.Security(api_key_header),
@@ -1211,6 +1217,7 @@ async def _return_user_api_key_auth_obj(
         user_api_key_kwargs.update(
             user_tpm_limit=user_obj.tpm_limit,
             user_rpm_limit=user_obj.rpm_limit,
+            user_email=user_obj.user_email,
         )
     if user_obj is not None and _is_user_proxy_admin(user_obj=user_obj):
         user_api_key_kwargs.update(

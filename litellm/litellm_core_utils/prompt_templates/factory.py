@@ -325,26 +325,6 @@ def phind_codellama_pt(messages):
     return prompt
 
 
-known_tokenizer_config = {
-    "mistralai/Mistral-7B-Instruct-v0.1": {
-        "tokenizer": {
-            "chat_template": "{{ bos_token }}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + message['content'] + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token + ' ' }}{% else %}{{ raise_exception('Only user and assistant roles are supported!') }}{% endif %}{% endfor %}",
-            "bos_token": "<s>",
-            "eos_token": "</s>",
-        },
-        "status": "success",
-    },
-    "meta-llama/Meta-Llama-3-8B-Instruct": {
-        "tokenizer": {
-            "chat_template": "{% set loop_messages = messages %}{% for message in loop_messages %}{% set content = '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ message['content'] | trim + '<|eot_id|>' %}{% if loop.index0 == 0 %}{% set content = bos_token + content %}{% endif %}{{ content }}{% endfor %}{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}",
-            "bos_token": "<|begin_of_text|>",
-            "eos_token": "",
-        },
-        "status": "success",
-    },
-}
-
-
 def hf_chat_template(  # noqa: PLR0915
     model: str, messages: list, chat_template: Optional[Any] = None
 ):
@@ -378,11 +358,11 @@ def hf_chat_template(  # noqa: PLR0915
             else:
                 return {"status": "failure"}
 
-        if model in known_tokenizer_config:
-            tokenizer_config = known_tokenizer_config[model]
+        if model in litellm.known_tokenizer_config:
+            tokenizer_config = litellm.known_tokenizer_config[model]
         else:
             tokenizer_config = _get_tokenizer_config(model)
-            known_tokenizer_config.update({model: tokenizer_config})
+            litellm.known_tokenizer_config.update({model: tokenizer_config})
 
         if (
             tokenizer_config["status"] == "failure"
@@ -473,6 +453,12 @@ def hf_chat_template(  # noqa: PLR0915
         raise Exception(
             f"Error rendering template - {str(e)}"
         )  # don't use verbose_logger.exception, if exception is raised
+
+
+def deepseek_r1_pt(messages):
+    return hf_chat_template(
+        model="deepseek-r1/deepseek-r1-7b-instruct", messages=messages
+    )
 
 
 # Anthropic template
@@ -1421,6 +1407,8 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
 
                             user_content.append(_content_element)
+                        elif m.get("type", "") == "document":
+                            user_content.append(cast(AnthropicMessagesDocumentParam, m))
                 elif isinstance(user_message_types_block["content"], str):
                     _anthropic_content_text_element: AnthropicMessagesTextParam = {
                         "type": "text",
@@ -1456,6 +1444,12 @@ def anthropic_messages_pt(  # noqa: PLR0915
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
             assistant_content_block: ChatCompletionAssistantMessage = messages[msg_i]  # type: ignore
+
+            thinking_blocks = assistant_content_block.get("thinking_blocks", None)
+            if (
+                thinking_blocks is not None
+            ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
+                assistant_content.extend(thinking_blocks)
             if "content" in assistant_content_block and isinstance(
                 assistant_content_block["content"], list
             ):
@@ -2157,6 +2151,10 @@ from email.message import Message
 
 import httpx
 
+from litellm.types.llms.bedrock import (
+    BedrockConverseReasoningContentBlock,
+    BedrockConverseReasoningTextBlock,
+)
 from litellm.types.llms.bedrock import ContentBlock as BedrockContentBlock
 from litellm.types.llms.bedrock import DocumentBlock as BedrockDocumentBlock
 from litellm.types.llms.bedrock import ImageBlock as BedrockImageBlock
@@ -2175,7 +2173,7 @@ from litellm.types.llms.bedrock import ToolUseBlock as BedrockToolUseBlock
 
 def _parse_content_type(content_type: str) -> str:
     m = Message()
-    m['content-type'] = content_type
+    m["content-type"] = content_type
     return m.get_content_type()
 
 
@@ -2307,7 +2305,7 @@ class BedrockImageProcessor:
         """Synchronous image processing."""
         if "base64" in image_url:
             img_bytes, mime_type, image_format = cls._parse_base64_image(image_url)
-        elif "https:/" in image_url:
+        elif "http://" in image_url or "https://" in image_url:
             img_bytes, mime_type = BedrockImageProcessor.get_image_details(image_url)
             image_format = mime_type.split("/")[1]
         else:
@@ -2969,6 +2967,28 @@ class BedrockConverseMessagesProcessor:
 
         return contents
 
+    @staticmethod
+    def translate_thinking_blocks_to_reasoning_content_blocks(
+        thinking_blocks: List[ChatCompletionThinkingBlock],
+    ) -> List[BedrockContentBlock]:
+        reasoning_content_blocks: List[BedrockContentBlock] = []
+        for thinking_block in thinking_blocks:
+            reasoning_text = thinking_block.get("thinking")
+            reasoning_signature = thinking_block.get("signature_delta")
+            text_block = BedrockConverseReasoningTextBlock(
+                text=reasoning_text or "",
+            )
+            if reasoning_signature is not None:
+                text_block["signature"] = reasoning_signature
+            reasoning_content_block = BedrockConverseReasoningContentBlock(
+                reasoningText=text_block,
+            )
+            bedrock_content_block = BedrockContentBlock(
+                reasoningContent=reasoning_content_block
+            )
+            reasoning_content_blocks.append(bedrock_content_block)
+        return reasoning_content_blocks
+
 
 def _bedrock_converse_messages_pt(  # noqa: PLR0915
     messages: List,
@@ -3115,11 +3135,23 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
         assistant_content: List[BedrockContentBlock] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
+
             assistant_message_block = get_assistant_message_block_or_continue_message(
                 message=messages[msg_i],
                 assistant_continue_message=assistant_continue_message,
             )
             _assistant_content = assistant_message_block.get("content", None)
+            thinking_blocks = cast(
+                Optional[List[ChatCompletionThinkingBlock]],
+                assistant_message_block.get("thinking_blocks"),
+            )
+
+            if thinking_blocks is not None:
+                assistant_content.extend(
+                    BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
+                        thinking_blocks
+                    )
+                )
 
             if _assistant_content is not None and isinstance(_assistant_content, list):
                 assistants_parts: List[BedrockContentBlock] = []

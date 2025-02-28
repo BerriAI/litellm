@@ -24,6 +24,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
+from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
@@ -33,11 +35,11 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
+from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import (
     PrismaClient,
     _hash_token_if_needed,
-    duration_in_seconds,
     handle_exception_on_proxy,
 )
 from litellm.router import Router
@@ -65,7 +67,7 @@ def _get_user_in_team(
     return None
 
 
-def _is_allowed_to_create_key(
+def _is_allowed_to_make_key_request(
     user_api_key_dict: UserAPIKeyAuth, user_id: Optional[str], team_id: Optional[str]
 ) -> bool:
     """
@@ -168,6 +170,8 @@ def _team_key_generation_check(
     user_api_key_dict: UserAPIKeyAuth,
     data: GenerateKeyRequest,
 ):
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return True
     if (
         litellm.key_generation_settings is not None
         and "team_key_generation" in litellm.key_generation_settings
@@ -264,6 +268,40 @@ def key_generation_check(
         return _personal_key_generation_check(
             user_api_key_dict=user_api_key_dict, data=data
         )
+
+
+def common_key_access_checks(
+    user_api_key_dict: UserAPIKeyAuth,
+    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    llm_router: Optional[Router],
+    premium_user: bool,
+) -> Literal[True]:
+    """
+    Check if user is allowed to make a key request, for this key
+    """
+    try:
+        _is_allowed_to_make_key_request(
+            user_api_key_dict=user_api_key_dict,
+            user_id=data.user_id,
+            team_id=data.team_id,
+        )
+    except AssertionError as e:
+        raise HTTPException(
+            status_code=403,
+            detail=str(e),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e),
+        )
+
+    _check_model_access_group(
+        models=data.models,
+        llm_router=llm_router,
+        premium_user=premium_user,
+    )
+    return True
 
 
 router = APIRouter()
@@ -381,25 +419,9 @@ async def generate_key_fn(  # noqa: PLR0915
             data=data,
         )
 
-        try:
-            _is_allowed_to_create_key(
-                user_api_key_dict=user_api_key_dict,
-                user_id=data.user_id,
-                team_id=data.team_id,
-            )
-        except AssertionError as e:
-            raise HTTPException(
-                status_code=403,
-                detail=str(e),
-            )
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=str(e),
-            )
-
-        _check_model_access_group(
-            models=data.models,
+        common_key_access_checks(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
             llm_router=llm_router,
             premium_user=premium_user,
         )
@@ -495,6 +517,10 @@ async def generate_key_fn(  # noqa: PLR0915
 
         if "budget_duration" in data_json:
             data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
+
+        if user_api_key_dict.user_id is not None:
+            data_json["created_by"] = user_api_key_dict.user_id
+            data_json["updated_by"] = user_api_key_dict.user_id
 
         # Set tags on the new key
         if "tags" in data_json:
@@ -684,6 +710,8 @@ async def update_key_fn(
     ```
     """
     from litellm.proxy.proxy_server import (
+        llm_router,
+        premium_user,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
@@ -692,9 +720,17 @@ async def update_key_fn(
     try:
         data_json: dict = data.model_dump(exclude_unset=True, exclude_none=True)
         key = data_json.pop("key")
+
         # get the row from db
         if prisma_client is None:
             raise Exception("Not connected to DB!")
+
+        common_key_access_checks(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            llm_router=llm_router,
+            premium_user=premium_user,
+        )
 
         existing_key_row = await prisma_client.get_data(
             token=data.key, table_name="key", query_type="find_unique"
@@ -1090,6 +1126,8 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     organization_id: Optional[str] = None,
     table_name: Optional[Literal["key", "user"]] = None,
     send_invite_email: Optional[bool] = None,
+    created_by: Optional[str] = None,
+    updated_by: Optional[str] = None,
 ):
     from litellm.proxy.proxy_server import (
         litellm_proxy_budget_name,
@@ -1193,6 +1231,8 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "model_max_budget": model_max_budget_json,
             "budget_id": budget_id,
             "blocked": blocked,
+            "created_by": created_by,
+            "updated_by": updated_by,
         }
 
         if (
@@ -1412,6 +1452,13 @@ async def delete_verification_tokens(
                         ):
                             await prisma_client.delete_data(tokens=[key.token])
                             deleted_tokens.append(key.token)
+                        else:
+                            raise HTTPException(
+                                status_code=status.HTTP_403_FORBIDDEN,
+                                detail={
+                                    "error": "You are not authorized to delete this key"
+                                },
+                            )
 
                     tasks.append(_delete_key(key))
                 await asyncio.gather(*tasks)
@@ -1639,6 +1686,108 @@ async def regenerate_key_fn(
         raise handle_exception_on_proxy(e)
 
 
+async def validate_key_list_check(
+    user_api_key_dict: UserAPIKeyAuth,
+    user_id: Optional[str],
+    team_id: Optional[str],
+    organization_id: Optional[str],
+    key_alias: Optional[str],
+    prisma_client: PrismaClient,
+) -> Optional[LiteLLM_UserTable]:
+
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return None
+
+    if user_api_key_dict.user_id is None:
+        raise ProxyException(
+            message="You are not authorized to access this endpoint. No 'user_id' is associated with your API key.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="user_id",
+            code=status.HTTP_403_FORBIDDEN,
+        )
+    complete_user_info_db_obj: Optional[BaseModel] = (
+        await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": user_api_key_dict.user_id},
+            include={"organization_memberships": True},
+        )
+    )
+
+    if complete_user_info_db_obj is None:
+        raise ProxyException(
+            message="You are not authorized to access this endpoint. No 'user_id' is associated with your API key.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="user_id",
+            code=status.HTTP_403_FORBIDDEN,
+        )
+
+    complete_user_info = LiteLLM_UserTable(**complete_user_info_db_obj.model_dump())
+
+    # internal user can only see their own keys
+    if user_id:
+        if complete_user_info.user_id != user_id:
+            raise ProxyException(
+                message="You are not authorized to check another user's keys",
+                type=ProxyErrorTypes.bad_request_error,
+                param="user_id",
+                code=status.HTTP_403_FORBIDDEN,
+            )
+
+    if team_id:
+        if team_id not in complete_user_info.teams:
+            raise ProxyException(
+                message="You are not authorized to check this team's keys",
+                type=ProxyErrorTypes.bad_request_error,
+                param="team_id",
+                code=status.HTTP_403_FORBIDDEN,
+            )
+
+    if organization_id:
+        if (
+            complete_user_info.organization_memberships is None
+            or organization_id
+            not in [
+                membership.organization_id
+                for membership in complete_user_info.organization_memberships
+            ]
+        ):
+            raise ProxyException(
+                message="You are not authorized to check this organization's keys",
+                type=ProxyErrorTypes.bad_request_error,
+                param="organization_id",
+                code=status.HTTP_403_FORBIDDEN,
+            )
+    return complete_user_info
+
+
+async def get_admin_team_ids(
+    complete_user_info: Optional[LiteLLM_UserTable],
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+) -> List[str]:
+    """
+    Get all team IDs where the user is an admin.
+    """
+    if complete_user_info is None:
+        return []
+    # Get all teams that user is an admin of
+    teams: Optional[List[BaseModel]] = (
+        await prisma_client.db.litellm_teamtable.find_many(
+            where={"team_id": {"in": complete_user_info.teams}}
+        )
+    )
+    if teams is None:
+        return []
+
+    teams_pydantic_obj = [LiteLLM_TeamTable(**team.model_dump()) for team in teams]
+
+    admin_team_ids = [
+        team.team_id
+        for team in teams_pydantic_obj
+        if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)
+    ]
+    return admin_team_ids
+
+
 @router.get(
     "/key/list",
     tags=["key management"],
@@ -1652,14 +1801,21 @@ async def list_keys(
     size: int = Query(10, description="Page size", ge=1, le=100),
     user_id: Optional[str] = Query(None, description="Filter keys by user ID"),
     team_id: Optional[str] = Query(None, description="Filter keys by team ID"),
+    organization_id: Optional[str] = Query(
+        None, description="Filter keys by organization ID"
+    ),
     key_alias: Optional[str] = Query(None, description="Filter keys by key alias"),
+    return_full_object: bool = Query(False, description="Return full key object"),
+    include_team_keys: bool = Query(
+        False, description="Include all keys for teams that user is an admin of."
+    ),
 ) -> KeyListResponseObject:
     """
-    List all keys for a given user or team.
+    List all keys for a given user / team / organization.
 
     Returns:
         {
-            "keys": List[str],
+            "keys": List[str] or List[UserAPIKeyAuth],
             "total_count": int,
             "current_page": int,
             "total_pages": int,
@@ -1668,22 +1824,35 @@ async def list_keys(
     try:
         from litellm.proxy.proxy_server import prisma_client
 
-        # Check for unsupported parameters
-        supported_params = {"page", "size", "user_id", "team_id", "key_alias"}
-        unsupported_params = set(request.query_params.keys()) - supported_params
-        if unsupported_params:
-            raise ProxyException(
-                message=f"Unsupported parameter(s): {', '.join(unsupported_params)}. Supported parameters: {', '.join(supported_params)}",
-                type=ProxyErrorTypes.bad_request_error,
-                param=", ".join(unsupported_params),
-                code=status.HTTP_400_BAD_REQUEST,
-            )
-
         verbose_proxy_logger.debug("Entering list_keys function")
 
         if prisma_client is None:
             verbose_proxy_logger.error("Database not connected")
             raise Exception("Database not connected")
+
+        complete_user_info = await validate_key_list_check(
+            user_api_key_dict=user_api_key_dict,
+            user_id=user_id,
+            team_id=team_id,
+            organization_id=organization_id,
+            key_alias=key_alias,
+            prisma_client=prisma_client,
+        )
+
+        if include_team_keys:
+            admin_team_ids = await get_admin_team_ids(
+                complete_user_info=complete_user_info,
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+            )
+        else:
+            admin_team_ids = None
+
+        if user_id is None and user_api_key_dict.user_role not in [
+            LitellmUserRoles.PROXY_ADMIN.value,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+        ]:
+            user_id = user_api_key_dict.user_id
 
         response = await _list_key_helper(
             prisma_client=prisma_client,
@@ -1692,6 +1861,9 @@ async def list_keys(
             user_id=user_id,
             team_id=team_id,
             key_alias=key_alias,
+            return_full_object=return_full_object,
+            organization_id=organization_id,
+            admin_team_ids=admin_team_ids,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -1699,6 +1871,7 @@ async def list_keys(
         return response
 
     except Exception as e:
+        verbose_proxy_logger.exception(f"Error in list_keys: {e}")
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"error({str(e)})"),
@@ -1722,9 +1895,13 @@ async def _list_key_helper(
     size: int,
     user_id: Optional[str],
     team_id: Optional[str],
+    organization_id: Optional[str],
     key_alias: Optional[str],
     exclude_team_id: Optional[str] = None,
     return_full_object: bool = False,
+    admin_team_ids: Optional[
+        List[str]
+    ] = None,  # New parameter for teams where user is admin
 ) -> KeyListResponseObject:
     """
     Helper function to list keys
@@ -1736,6 +1913,7 @@ async def _list_key_helper(
         key_alias: Optional[str]
         exclude_team_id: Optional[str] # exclude a specific team_id
         return_full_object: bool # when true, will return UserAPIKeyAuth objects instead of just the token
+        admin_team_ids: Optional[List[str]] # list of team IDs where the user is an admin
 
     Returns:
         KeyListResponseObject
@@ -1748,15 +1926,37 @@ async def _list_key_helper(
     """
 
     # Prepare filter conditions
-    where: Dict[str, Union[str, Dict[str, str]]] = {}
+    where: Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]] = {}
+    where.update(_get_condition_to_filter_out_ui_session_tokens())
+
+    # Build the OR conditions for user's keys and admin team keys
+    or_conditions: List[Dict[str, Any]] = []
+
+    # Base conditions for user's own keys
+    user_condition: Dict[str, Any] = {}
     if user_id and isinstance(user_id, str):
-        where["user_id"] = user_id
+        user_condition["user_id"] = user_id
     if team_id and isinstance(team_id, str):
-        where["team_id"] = team_id
+        user_condition["team_id"] = team_id
     if key_alias and isinstance(key_alias, str):
-        where["key_alias"] = key_alias
+        user_condition["key_alias"] = key_alias
     if exclude_team_id and isinstance(exclude_team_id, str):
-        where["team_id"] = {"not": exclude_team_id}
+        user_condition["team_id"] = {"not": exclude_team_id}
+    if organization_id and isinstance(organization_id, str):
+        user_condition["organization_id"] = organization_id
+
+    if user_condition:
+        or_conditions.append(user_condition)
+
+    # Add condition for admin team keys if provided
+    if admin_team_ids:
+        or_conditions.append({"team_id": {"in": admin_team_ids}})
+
+    # Combine conditions with OR if we have multiple conditions
+    if len(or_conditions) > 1:
+        where["OR"] = or_conditions
+    elif len(or_conditions) == 1:
+        where.update(or_conditions[0])
 
     verbose_proxy_logger.debug(f"Filter conditions: {where}")
 
@@ -1770,6 +1970,10 @@ async def _list_key_helper(
         where=where,  # type: ignore
         skip=skip,  # type: ignore
         take=size,  # type: ignore
+        order=[
+            {"created_at": "desc"},
+            {"token": "desc"},  # fallback sort
+        ],
     )
 
     verbose_proxy_logger.debug(f"Fetched {len(keys)} keys")
@@ -1799,6 +2003,20 @@ async def _list_key_helper(
         current_page=page,
         total_pages=total_pages,
     )
+
+
+def _get_condition_to_filter_out_ui_session_tokens() -> Dict[str, Any]:
+    """
+    Condition to filter out UI session tokens
+    """
+    return {
+        "OR": [
+            {"team_id": None},  # Include records where team_id is null
+            {
+                "team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}
+            },  # Include records where team_id != UI_SESSION_TOKEN_TEAM_ID
+        ]
+    }
 
 
 @router.post(
