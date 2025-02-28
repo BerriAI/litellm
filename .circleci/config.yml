@@ -2014,6 +2014,30 @@ jobs:
       - store_test_results:
           path: test-results
 
+      # Add Ruby installation and testing before the existing Node.js and Python tests
+      - run:
+          name: Install Ruby and Bundler
+          command: |
+            # Install Ruby version manager (RVM)
+            curl -sSL https://get.rvm.io | bash -s stable
+            source /etc/profile.d/rvm.sh
+            
+            # Install Ruby 3.2.2
+            rvm install 3.2.2
+            rvm use 3.2.2 --default
+            
+            # Install latest Bundler
+            gem install bundler
+
+      - run:
+          name: Run Ruby tests
+          command: |
+            source /etc/profile.d/rvm.sh
+            cd tests/pass_through_tests/ruby_passthrough_tests
+            bundle install
+            bundle exec rspec
+          no_output_timeout: 30m
+
   upload-coverage:
     docker:
       - image: cimg/python:3.9
