@@ -319,7 +319,8 @@ def test_all_model_configs():
     ) == {"max_tokens": 10}
 
     assert (
-        "max_completion_tokens" in AmazonAnthropicConfig().get_supported_openai_params()
+        "max_completion_tokens"
+        in AmazonAnthropicConfig().get_supported_openai_params(model="")
     )
 
     assert AmazonAnthropicConfig().map_openai_params(

@@ -30,7 +30,7 @@ class AmazonAnthropicClaude3Config(AmazonInvokeConfig, AnthropicConfig):
     anthropic_version: str = "bedrock-2023-05-31"
 
     def get_supported_openai_params(self, model: str) -> List[str]:
-        return AmazonAnthropicClaude3Config.get_supported_openai_params(self, model)
+        return AnthropicConfig.get_supported_openai_params(self, model)
 
     def map_openai_params(
         self,
