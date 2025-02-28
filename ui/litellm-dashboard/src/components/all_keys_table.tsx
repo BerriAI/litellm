@@ -8,7 +8,10 @@ import KeyInfoView from "./key_info_view";
 import { Tooltip } from "antd";
 import { Team, KeyResponse } from "./key_team_helpers/key_list";
 import FilterComponent from "./common_components/filter";
+import { FilterOption } from "./common_components/filter";
 import { Organization } from "./networking";
+import { createTeamSearchFunction } from "./key_team_helpers/team_search_fn";
+import { createOrgSearchFunction } from "./key_team_helpers/organization_search_fn";
 interface AllKeysTableProps {
   keys: KeyResponse[];
   isLoading?: boolean;
@@ -172,20 +175,42 @@ export function AllKeysTable({
       cell: (info) => <span className="font-mono text-xs">{info.getValue() as string}</span>,
     },
     {
+      header: "Team Alias",
+      accessorKey: "team_id", // Change to access the team_id
+      cell: ({ row, getValue }) => {
+        const teamId = getValue() as string;
+        const team = teams?.find(t => t.team_id === teamId);
+        return team?.team_alias || "Unknown";
+      },
+    },
+    {
       header: "Team ID",
       accessorKey: "team_id",
-      cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
+      cell: (info) => <Tooltip title={info.getValue() as string}>{info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "Not Set"}</Tooltip>
     },
+
     {
       header: "Key Alias",
       accessorKey: "key_alias",
-      cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
+      cell: (info) => <Tooltip title={info.getValue() as string}>{info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "Not Set"}</Tooltip>
     },
     {
       header: "Organization ID",
       accessorKey: "organization_id",
-      cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
+      cell: (info) => <Tooltip title={info.getValue() as string}>{info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "Not Set"}</Tooltip>
     },
+    // {
+    //   header: "User Email",
+    //   accessorKey: "user_id",
+    //   cell: (info) => {
+    //     const userId = info.getValue() as string;
+    //     return userId ? (
+    //       <Tooltip title={userId}>
+    //         <span>{userId.slice(0, 5)}...</span>
+    //       </Tooltip>
+    //     ) : "Not Set";
+    //   },
+    // },
     {
       header: "User ID",
       accessorKey: "user_id",
@@ -272,9 +297,9 @@ export function AllKeysTable({
     },
   ];
 
-  const filterOptions = [
-    { name: 'Team ID', label: 'Team ID' },
-    { name: 'Organization ID', label: 'Organization ID' }
+  const filterOptions: FilterOption[] = [
+    { name: 'Team ID', label: 'Team ID', isSearchable: true, searchFn: createTeamSearchFunction(teams) },
+    { name: 'Organization ID', label: 'Organization ID', isSearchable: true, searchFn: createOrgSearchFunction(organizations) }
   ];
   
   
