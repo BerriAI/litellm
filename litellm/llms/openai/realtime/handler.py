@@ -9,6 +9,7 @@ from typing import Any, Optional
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ....litellm_core_utils.realtime_streaming import RealTimeStreaming
 from ..openai import OpenAIChatCompletion
+import websockets
 
 
 class OpenAIRealtime(OpenAIChatCompletion):
@@ -30,8 +31,8 @@ class OpenAIRealtime(OpenAIChatCompletion):
         api_key: Optional[str] = None,
         client: Optional[Any] = None,
         timeout: Optional[float] = None,
+        user_api_key_dict: Optional[dict] = None,
     ):
-        import websockets
 
         if api_base is None:
             raise ValueError("api_base is required for Azure OpenAI calls")
@@ -49,7 +50,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
                 },
             ) as backend_ws:
                 realtime_streaming = RealTimeStreaming(
-                    websocket, backend_ws, logging_obj
+                    websocket, backend_ws, logging_obj, user_api_key_dict
                 )
                 await realtime_streaming.bidirectional_forward()
 
