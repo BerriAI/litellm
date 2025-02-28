@@ -6169,13 +6169,17 @@ class ProviderConfigManager:
             bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
                 model
             )
+            base_model = BedrockModelInfo.get_base_model(model)
 
             if bedrock_route == "converse" or bedrock_route == "converse_like":
                 return litellm.AmazonConverseConfig()
             elif bedrock_invoke_provider == "amazon":  # amazon titan llms
                 return litellm.AmazonTitanConfig()
             elif bedrock_invoke_provider == "anthropic":
-                return litellm.AmazonAnthropicConfig()
+                if base_model.startswith("anthropic.claude-3"):
+                    return litellm.AmazonAnthropicClaude3Config()
+                else:
+                    return litellm.AmazonAnthropicConfig()
             elif (
                 bedrock_invoke_provider == "meta" or bedrock_invoke_provider == "llama"
             ):  # amazon / meta llms
