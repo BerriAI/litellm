@@ -253,6 +253,42 @@ class BaseLLMChatTest(ABC):
         # relevant issue: https://github.com/BerriAI/litellm/issues/6741
         assert response.choices[0].message.content is not None
 
+    def test_response_format_type_text_with_tool_calls(self):
+        base_completion_call_args = self.get_base_completion_call_args()
+        messages = [
+            {"role": "user", "content": "What's the weather like in Boston today?"},
+        ]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "description": "Get the current weather in a given location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The city and state, e.g. San Francisco, CA",
+                            },
+                            "unit": {
+                                "type": "string",
+                                "enum": ["celsius", "fahrenheit"],
+                            },
+                        },
+                        "required": ["location"],
+                    },
+                },
+            }
+        ]
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages=messages,
+            response_format={"type": "text"},
+            tools=tools,
+        )
+        assert response is not None
+
     @pytest.mark.flaky(retries=6, delay=1)
     def test_json_response_pydantic_obj(self):
         litellm.set_verbose = True

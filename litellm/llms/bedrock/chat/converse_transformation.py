@@ -215,6 +215,9 @@ class AmazonConverseConfig(BaseConfig):
                 elif "json_schema" in value:
                     json_schema = value["json_schema"]["schema"]
                     schema_name = value["json_schema"]["name"]
+
+                if "type" in value and value["type"] == "text":
+                    continue
                 """
                 Follow similar approach to anthropic - translate to a single tool call. 
 
