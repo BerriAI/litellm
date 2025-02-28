@@ -296,6 +296,7 @@ class BaseLLMChatTest(ABC):
             messages=messages,
             response_format=response_format,
             tools=tools,
+            drop_params=True,
         )
         assert response is not None
 
