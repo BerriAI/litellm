@@ -9,6 +9,7 @@ import { columns, LogEntry } from "./columns";
 import { Row } from "@tanstack/react-table";
 import { prefetchLogDetails } from "./prefetch";
 import { RequestResponsePanel } from "./columns";
+import { ErrorViewer } from './ErrorViewer';
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -707,6 +708,11 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
           </div>
         </div>
       </div>
+
+
+      {/* Error Card - Only show for failures */}
+      {hasError && errorInfo && <ErrorViewer errorInfo={errorInfo} />}
+
 
       {/* Tags Card - Only show if there are tags */}
       {row.original.request_tags && Object.keys(row.original.request_tags).length > 0 && (
