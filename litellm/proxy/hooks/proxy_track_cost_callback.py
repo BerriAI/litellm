@@ -1,4 +1,5 @@
 import asyncio
+import json
 import traceback
 from datetime import datetime
 from typing import Any, Optional, Union, cast
@@ -12,7 +13,10 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import log_db_metrics
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import (
+    StandardLoggingPayload,
+    StandardLoggingUserAPIKeyMetadata,
+)
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 
@@ -29,6 +33,24 @@ class _ProxyDBLogger(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
     ):
         from litellm.proxy.proxy_server import update_database
+
+        _metadata = dict(
+            StandardLoggingUserAPIKeyMetadata(
+                user_api_key_hash=user_api_key_dict.api_key,
+                user_api_key_alias=user_api_key_dict.key_alias,
+                user_api_key_user_email=user_api_key_dict.user_email,
+                user_api_key_user_id=user_api_key_dict.user_id,
+                user_api_key_team_id=user_api_key_dict.team_id,
+                user_api_key_org_id=user_api_key_dict.org_id,
+                user_api_key_team_alias=user_api_key_dict.team_alias,
+                user_api_key_end_user_id=user_api_key_dict.end_user_id,
+            )
+        )
+        _metadata["user_api_key"] = user_api_key_dict.api_key
+        _metadata["status"] = "failure"
+        request_data["litellm_params"] = {}
+        request_data["litellm_params"]["metadata"] = _metadata
+        # print("failure kwargs=", json.dumps(request_data, indent=4, default=str))
 
         await update_database(
             token=user_api_key_dict.api_key,
