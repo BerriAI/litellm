@@ -28,11 +28,19 @@ class _ProxyDBLogger(CustomLogger):
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
     ):
-        await self._PROXY_track_cost_callback(
+        from litellm.proxy.proxy_server import update_database
+
+        await update_database(
+            token=user_api_key_dict.api_key,
+            response_cost=0.0,
+            user_id=user_api_key_dict.user_id,
+            end_user_id=user_api_key_dict.end_user_id,
+            team_id=user_api_key_dict.team_id,
             kwargs=request_data,
             completion_response=original_exception,
             start_time=datetime.now(),
             end_time=datetime.now(),
+            org_id=user_api_key_dict.org_id,
         )
 
     @log_db_metrics
