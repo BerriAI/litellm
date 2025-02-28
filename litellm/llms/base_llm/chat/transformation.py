@@ -111,6 +111,19 @@ class BaseConfig(ABC):
         """
         return False
 
+    def _add_tools_to_optional_params(self, optional_params: dict, tools: List) -> dict:
+        """
+        Helper util to add tools to optional_params.
+        """
+        if "tools" not in optional_params:
+            optional_params["tools"] = tools
+        else:
+            optional_params["tools"] = [
+                *optional_params["tools"],
+                *tools,
+            ]
+        return optional_params
+
     def translate_developer_role_to_system_role(
         self,
         messages: List[AllMessageValues],

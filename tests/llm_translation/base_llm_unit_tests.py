@@ -253,7 +253,17 @@ class BaseLLMChatTest(ABC):
         # relevant issue: https://github.com/BerriAI/litellm/issues/6741
         assert response.choices[0].message.content is not None
 
-    def test_response_format_type_text_with_tool_calls(self):
+    @pytest.mark.parametrize(
+        "response_format",
+        [
+            {"type": "json_object"},
+            {"type": "text"},
+        ],
+    )
+    @pytest.mark.flaky(retries=6, delay=1)
+    def test_response_format_type_text_with_tool_calls_no_tool_choice(
+        self, response_format
+    ):
         base_completion_call_args = self.get_base_completion_call_args()
         messages = [
             {"role": "user", "content": "What's the weather like in Boston today?"},
@@ -284,7 +294,7 @@ class BaseLLMChatTest(ABC):
         response = self.completion_function(
             **base_completion_call_args,
             messages=messages,
-            response_format={"type": "text"},
+            response_format=response_format,
             tools=tools,
         )
         assert response is not None
