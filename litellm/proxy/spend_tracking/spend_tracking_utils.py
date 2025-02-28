@@ -11,7 +11,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import StandardLoggingPayload, StandardLoggingPayloadStatus
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 
@@ -162,7 +162,6 @@ def get_logging_payload(  # noqa: PLR0915
         import time
 
         id = f"{id}_cache_hit{time.time()}"  # SpendLogs does not allow duplicate request_id
-
     try:
         payload: SpendLogsPayload = SpendLogsPayload(
             request_id=str(id),
@@ -194,7 +193,9 @@ def get_logging_payload(  # noqa: PLR0915
             model_id=_model_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             custom_llm_provider=kwargs.get("custom_llm_provider", ""),
-            messages=_get_messages_for_spend_logs_payload(standard_logging_payload),
+            messages=_get_messages_for_spend_logs_payload(
+                standard_logging_payload=standard_logging_payload, metadata=metadata
+            ),
             response=_get_response_for_spend_logs_payload(standard_logging_payload),
         )
 
@@ -294,12 +295,19 @@ async def get_spend_by_team_and_customer(
 
 
 def _get_messages_for_spend_logs_payload(
-    payload: Optional[StandardLoggingPayload],
+    standard_logging_payload: Optional[StandardLoggingPayload],
+    metadata: Optional[dict] = None,
 ) -> str:
-    if payload is None:
+    if standard_logging_payload is None:
         return "{}"
     if _should_store_prompts_and_responses_in_spend_logs():
-        return json.dumps(payload.get("messages", {}))
+        metadata = metadata or {}
+        if metadata.get("status", None) == "failure":
+            _proxy_server_request = metadata.get("proxy_server_request", {})
+            _request_body = _proxy_server_request.get("request", {})
+            return json.dumps(_request_body)
+        else:
+            return json.dumps(standard_logging_payload.get("messages", {}))
     return "{}"
 
 
