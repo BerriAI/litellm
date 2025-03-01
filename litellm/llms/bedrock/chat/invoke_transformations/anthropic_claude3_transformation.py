@@ -65,6 +65,7 @@ class AmazonAnthropicClaude3Config(AmazonInvokeConfig, AnthropicConfig):
         )
 
         _anthropic_request.pop("model", None)
+        _anthropic_request.pop("stream", None)
         if "anthropic_version" not in _anthropic_request:
             _anthropic_request["anthropic_version"] = self.anthropic_version
 
