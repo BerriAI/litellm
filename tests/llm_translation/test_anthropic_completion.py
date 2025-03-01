@@ -1224,3 +1224,42 @@ def test_anthropic_thinking_output_stream(model):
         assert reasoning_content_exists
     except litellm.Timeout:
         pytest.skip("Model is timing out")
+
+
+def test_anthropic_custom_headers():
+    from litellm import completion
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    tools = [
+        {
+            "type": "computer_20241022",
+            "function": {
+                "name": "get_current_weather",
+                "parameters": {
+                    "display_height_px": 100,
+                    "display_width_px": 100,
+                    "display_number": 1,
+                },
+            },
+        }
+    ]
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            resp = completion(
+                model="claude-3-5-sonnet-20240620",
+                headers={"anthropic-beta": "structured-output-2024-03-01"},
+                messages=[
+                    {"role": "user", "content": "What is the capital of France?"}
+                ],
+                client=client,
+                tools=tools,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_post.assert_called_once()
+        headers = mock_post.call_args[1]["headers"]
+        assert "structured-output-2024-03-01" in headers["anthropic-beta"]
