@@ -6,12 +6,14 @@ import { CountryCell } from "./country_cell";
 import { getProviderLogoAndName } from "../provider_info_helpers";
 import { Tooltip } from "antd";
 import { TimeCell } from "./time_cell";
+import { Button } from "@tremor/react";
 
 export type LogEntry = {
   request_id: string;
   api_key: string;
   team_id: string;
   model: string;
+  model_id?: string;
   api_base?: string;
   call_type: string;
   spend: number;
@@ -32,183 +34,210 @@ export type LogEntry = {
   response: string | any[] | Record<string, any>;
 };
 
-export const columns: ColumnDef<LogEntry>[] = [
-  {
-    id: "expander",
-    header: () => null,
-    cell: ({ row }) => {
-      return row.getCanExpand() ? (
-        <button
-          {...{
-            onClick: row.getToggleExpandedHandler(),
-            style: { cursor: "pointer" },
-          }}
-        >
-          {row.getIsExpanded() ? "▼" : "▶"}
-        </button>
-      ) : (
-        "●"
-      );
-    },
-  },
-  {
-    header: "Time",
-    accessorKey: "startTime",
-    cell: (info: any) => <TimeCell utcTime={info.getValue()} />,
-  },
-  {
-    header: "Status",
-    accessorKey: "metadata.status",
-    cell: (info: any) => {
-      const status = info.getValue() || "Success";
-      const isSuccess = status.toLowerCase() !== "failure";
-      
-      return (
-        <span className={`px-2 py-1 rounded-md text-xs font-medium inline-block text-center w-16 ${
-          isSuccess 
-            ? 'bg-green-100 text-green-800' 
-            : 'bg-red-100 text-red-800'
-        }`}>
-          {isSuccess ? "Success" : "Failure"}
-        </span>
-      );
-    },
-  },
-  {
-    header: "Request ID",
-    accessorKey: "request_id",
-    cell: (info: any) => (
-      <Tooltip title={String(info.getValue() || "")}>
-        <span className="font-mono text-xs max-w-[100px] truncate block">
-          {String(info.getValue() || "")}
-        </span>
-      </Tooltip>
-    ),
-  },
-  {
-    header: "Cost",
-    accessorKey: "spend",
-    cell: (info: any) => (
-      <span>${Number(info.getValue() || 0).toFixed(6)}</span>
-    ),
-  },
-  {
-    header: "Country",
-    accessorKey: "requester_ip_address",
-    cell: (info: any) => <CountryCell ipAddress={info.getValue()} />,
-  },
-  {
-    header: "Team Name",
-    accessorKey: "metadata.user_api_key_team_alias",
-    cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
-  },
-  {
-    header: "Key Hash",
-    accessorKey: "metadata.user_api_key",
-    cell: (info: any) => {
-      const value = String(info.getValue() || "-");
-      return (
-        <Tooltip title={value}>
-          <span className="font-mono">{value.slice(0, 5)}...</span>
-        </Tooltip>
-      );
-    },
-  },
-  {
-    header: "Key Name",
-    accessorKey: "metadata.user_api_key_alias",
-    cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
-  },
-  {
-    header: "Model",
-    accessorKey: "model",
-    cell: (info: any) => {
-      const row = info.row.original;
-      const provider = row.custom_llm_provider;
-      const modelName = String(info.getValue() || "");
-      return (
-        <div className="flex items-center space-x-2">
-          {provider && (
-            <img
-              src={getProviderLogoAndName(provider).logo}
-              alt=""
-              className="w-4 h-4"
-              onError={(e) => {
-                const target = e.target as HTMLImageElement;
-                target.style.display = 'none';
-              }}
-            />
-          )}
-          <Tooltip title={modelName}>
-            <span className="max-w-[100px] truncate">
-              {modelName}
-            </span>
-          </Tooltip>
-        </div>
-      );
-    },
-  },
-  {
-    header: "Tokens",
-    accessorKey: "total_tokens",
-    cell: (info: any) => {
-      const row = info.row.original;
-      return (
-        <span className="text-sm">
-          {String(row.total_tokens || "0")}
-          <span className="text-gray-400 text-xs ml-1">
-            ({String(row.prompt_tokens || "0")}+
-            {String(row.completion_tokens || "0")})
-          </span>
-        </span>
-      );
-    },
-  },
-  {
-    header: "Internal User",
-    accessorKey: "user",
-    cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
-  },
-  {
-    header: "End User",
-    accessorKey: "end_user",
-    cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
-  },
-
-  {
-    header: "Tags",
-    accessorKey: "request_tags",
-    cell: (info: any) => {
-      const tags = info.getValue();
-      if (!tags || Object.keys(tags).length === 0) return "-";
-      
-      const tagEntries = Object.entries(tags);
-      const firstTag = tagEntries[0];
-      const remainingTags = tagEntries.slice(1);
-      
-      return (
-        <div className="flex flex-wrap gap-1">
-          <Tooltip 
-            title={
-              <div className="flex flex-col gap-1">
-                {tagEntries.map(([key, value]) => (
-                  <span key={key}>
-                    {key}: {String(value)}
-                  </span>
-                ))}
-              </div>
-            }
+export function getViewLogsColumns(
+  onModelIdClick: (modelId: string) => void
+) {
+  return [
+    {
+      id: "expander",
+      header: () => null,
+      cell: ({ row }) => {
+        return row.getCanExpand() ? (
+          <button
+            {...{
+              onClick: row.getToggleExpandedHandler(),
+              style: { cursor: "pointer" },
+            }}
           >
-            <span className="px-2 py-1 bg-gray-100 rounded-full text-xs">
-              {firstTag[0]}: {String(firstTag[1])}
-              {remainingTags.length > 0 && ` +${remainingTags.length}`}
-            </span>
-          </Tooltip>
-        </div>
-      );
+            {row.getIsExpanded() ? "▼" : "▶"}
+          </button>
+        ) : (
+          "●"
+        );
+      },
     },
-  },
-];
+    {
+      header: "Time",
+      accessorKey: "startTime",
+      cell: (info: any) => <TimeCell utcTime={info.getValue()} />,
+    },
+    {
+      header: "Status",
+      accessorKey: "metadata.status",
+      cell: (info: any) => {
+        const status = info.getValue() || "Success";
+        const isSuccess = status.toLowerCase() !== "failure";
+        
+        return (
+          <span className={`px-2 py-1 rounded-md text-xs font-medium inline-block text-center w-16 ${
+            isSuccess 
+              ? 'bg-green-100 text-green-800' 
+              : 'bg-red-100 text-red-800'
+          }`}>
+            {isSuccess ? "Success" : "Failure"}
+          </span>
+        );
+      },
+    },
+    {
+      header: "Request ID",
+      accessorKey: "request_id",
+      cell: (info: any) => (
+        <Tooltip title={String(info.getValue() || "")}>
+          <span className="font-mono text-xs max-w-[100px] truncate block">
+            {String(info.getValue() || "")}
+          </span>
+        </Tooltip>
+      ),
+    },
+    {
+      header: "Cost",
+      accessorKey: "spend",
+      cell: (info: any) => (
+        <span>${Number(info.getValue() || 0).toFixed(6)}</span>
+      ),
+    },
+    {
+      header: "Country",
+      accessorKey: "requester_ip_address",
+      cell: (info: any) => <CountryCell ipAddress={info.getValue()} />,
+    },
+    {
+      header: "Team Name",
+      accessorKey: "metadata.user_api_key_team_alias",
+      cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
+    },
+    {
+      header: "Key Hash",
+      accessorKey: "metadata.user_api_key",
+      cell: (info: any) => {
+        const value = String(info.getValue() || "-");
+        return (
+          <Tooltip title={value}>
+            <span className="font-mono">{value.slice(0, 5)}...</span>
+          </Tooltip>
+        );
+      },
+    },
+    {
+      header: "Key Name",
+      accessorKey: "metadata.user_api_key_alias",
+      cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
+    },
+    {
+      header: "Model",
+      accessorKey: "model",
+      cell: (info: any) => {
+        const row = info.row.original;
+        const provider = row.custom_llm_provider;
+        const modelName = String(info.getValue() || "");
+        return (
+          <div className="flex items-center space-x-2">
+            {provider && (
+              <img
+                src={getProviderLogoAndName(provider).logo}
+                alt=""
+                className="w-4 h-4"
+                onError={(e) => {
+                  const target = e.target as HTMLImageElement;
+                  target.style.display = 'none';
+                }}
+              />
+            )}
+            <Tooltip title={modelName}>
+              <span className="max-w-[100px] truncate">
+                {modelName}
+              </span>
+            </Tooltip>
+          </div>
+        );
+      },
+    },
+    {
+      header: "Tokens",
+      accessorKey: "total_tokens",
+      cell: (info: any) => {
+        const row = info.row.original;
+        return (
+          <span className="text-sm">
+            {String(row.total_tokens || "0")}
+            <span className="text-gray-400 text-xs ml-1">
+              ({String(row.prompt_tokens || "0")}+
+              {String(row.completion_tokens || "0")})
+            </span>
+          </span>
+        );
+      },
+    },
+    {
+      header: "Internal User",
+      accessorKey: "user",
+      cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
+    },
+    {
+      header: "End User",
+      accessorKey: "end_user",
+      cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
+    },
+    {
+      header: "Tags",
+      accessorKey: "request_tags",
+      cell: (info: any) => {
+        const tags = info.getValue();
+        if (!tags || Object.keys(tags).length === 0) return "-";
+        
+        const tagEntries = Object.entries(tags);
+        const firstTag = tagEntries[0];
+        const remainingTags = tagEntries.slice(1);
+        
+        return (
+          <div className="flex flex-wrap gap-1">
+            <Tooltip 
+              title={
+                <div className="flex flex-col gap-1">
+                  {tagEntries.map(([key, value]) => (
+                    <span key={key}>
+                      {key}: {String(value)}
+                    </span>
+                  ))}
+                </div>
+              }
+            >
+              <span className="px-2 py-1 bg-gray-100 rounded-full text-xs">
+                {firstTag[0]}: {String(firstTag[1])}
+                {remainingTags.length > 0 && ` +${remainingTags.length}`}
+              </span>
+            </Tooltip>
+          </div>
+        );
+      },
+    },
+    {
+      header: "Model ID",
+      accessorKey: "model_id",
+      cell: ({ row }: { row: { original: LogEntry } }) => {
+        const modelId = row.original?.model_id;
+
+        if (!modelId) {
+          return <span>-</span>;
+        }
+
+        return (
+          <Tooltip title={modelId}>
+            <Button
+              size="xs"
+              variant="light"
+              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+              onClick={() => onModelIdClick(modelId)}
+            >
+              {modelId.slice(0, 7)}...
+            </Button>
+          </Tooltip>
+        );
+      },
+    },
+  ];
+}
 
 const formatMessage = (message: any): string => {
   if (!message) return "N/A";

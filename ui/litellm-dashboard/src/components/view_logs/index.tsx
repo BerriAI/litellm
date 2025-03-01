@@ -1,15 +1,17 @@
 import moment from "moment";
 import { useQuery } from "@tanstack/react-query";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { uiSpendLogsCall } from "../networking";
 import { DataTable } from "./table";
-import { columns, LogEntry } from "./columns";
+import { LogEntry } from "./columns";
 import { Row } from "@tanstack/react-table";
 import { prefetchLogDetails } from "./prefetch";
 import { RequestResponsePanel } from "./columns";
 import { ErrorViewer } from './ErrorViewer';
+import ModelInfoView from "../model_info_view";
+import { getViewLogsColumns } from "./columns";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -62,6 +64,10 @@ export default function SpendLogsTable({
   const [selectedTeamId, setSelectedTeamId] = useState("");
   const [selectedKeyHash, setSelectedKeyHash] = useState("");
   const [selectedFilter, setSelectedFilter] = useState("Team ID");
+
+  // Tracks the currently selected model ID
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+  const [showModelInfo, setShowModelInfo] = useState(false);
 
   const queryClient = useQueryClient();
 
@@ -205,6 +211,16 @@ export default function SpendLogsTable({
     if (diffHours <= 168) return 'Last 7 Days';
     return `${start.format('MMM D')} - ${now.format('MMM D')}`;
   };
+
+  // Create columns with a callback for model_id clicks
+  const columns = useMemo(
+    () =>
+      getViewLogsColumns((modelId: string) => {
+        setSelectedModelId(modelId);
+        setShowModelInfo(true);
+      }),
+    []
+  );
 
   return (
     <div className="w-full p-6">
@@ -561,6 +577,25 @@ export default function SpendLogsTable({
           getRowCanExpand={() => true}
         />
       </div>
+
+      {/* Show the ModelInfoView when user picks a model_id, 
+          then close when the user is done */}
+      {showModelInfo && selectedModelId && (
+        <ModelInfoView
+          modelId={selectedModelId}
+          onClose={() => {
+            setShowModelInfo(false);
+            setSelectedModelId(null);
+          }}
+          modelData={{}}
+          accessToken={accessToken}
+          userID={userID}
+          userRole={userRole}
+          editModel={false}
+          setEditModalVisible={() => {}}
+          setSelectedModel={() => {}}
+        />
+      )}
     </div>
   );
 }
