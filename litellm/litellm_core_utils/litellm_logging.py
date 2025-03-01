@@ -3114,10 +3114,26 @@ class StandardLoggingPayloadSetup:
             str(original_exception.__class__.__name__) if original_exception else ""
         )
         _llm_provider_in_exception = getattr(original_exception, "llm_provider", "")
+
+        # Get traceback information (first 100 lines)
+        traceback_info = ""
+        if original_exception:
+            tb = getattr(original_exception, "__traceback__", None)
+            if tb:
+                import traceback
+
+                tb_lines = traceback.format_tb(tb)
+                traceback_info = "".join(tb_lines[:100])  # Limit to first 100 lines
+
+        # Get additional error details
+        error_message = str(original_exception)
+
         return StandardLoggingPayloadErrorInformation(
             error_code=error_status,
             error_class=error_class,
             llm_provider=_llm_provider_in_exception,
+            traceback=traceback_info,
+            error_message=error_message if original_exception else "",
         )
 
     @staticmethod
