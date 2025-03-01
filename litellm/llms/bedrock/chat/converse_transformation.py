@@ -167,6 +167,7 @@ class AmazonConverseConfig(BaseConfig):
         self,
         json_schema: Optional[dict] = None,
         schema_name: str = "json_tool_call",
+        description: Optional[str] = None,
     ) -> ChatCompletionToolParam:
         """
         Handles creating a tool call for getting responses in JSON format.
