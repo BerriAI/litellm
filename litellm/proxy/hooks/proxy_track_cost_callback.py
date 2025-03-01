@@ -16,7 +16,6 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import log_db_metrics
 from litellm.types.utils import (
     StandardLoggingPayload,
-    StandardLoggingPayloadErrorInformation,
     StandardLoggingUserAPIKeyMetadata,
 )
 from litellm.utils import get_end_user_id_for_cost_tracking

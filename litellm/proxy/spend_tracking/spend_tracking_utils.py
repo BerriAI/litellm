@@ -11,7 +11,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
-from litellm.types.utils import StandardLoggingPayload, StandardLoggingPayloadStatus
+from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 
