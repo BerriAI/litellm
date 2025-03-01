@@ -10,6 +10,7 @@ import { Row } from "@tanstack/react-table";
 import { prefetchLogDetails } from "./prefetch";
 import { RequestResponsePanel } from "./columns";
 import { ErrorViewer } from './ErrorViewer';
+import { internalUserRoles } from "../../utils/roles";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -62,7 +63,9 @@ export default function SpendLogsTable({
   const [selectedTeamId, setSelectedTeamId] = useState("");
   const [selectedKeyHash, setSelectedKeyHash] = useState("");
   const [selectedFilter, setSelectedFilter] = useState("Team ID");
-  const [filterByCurrentUser, setFilterByCurrentUser] = useState(userRole === "Internal User");
+  const [filterByCurrentUser, setFilterByCurrentUser] = useState(
+    userRole && internalUserRoles.includes(userRole)
+  );
 
   const queryClient = useQueryClient();
 
@@ -241,23 +244,6 @@ export default function SpendLogsTable({
                   />
                 </svg>
               </div>
-              {userRole === "Internal User" && (
-                <div className="flex items-center">
-                  <label className="inline-flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      className="sr-only peer"
-                      checked={filterByCurrentUser}
-                      onChange={() => {
-                        setFilterByCurrentUser(!filterByCurrentUser);
-                        setCurrentPage(1); // Reset to first page when changing filter
-                      }}
-                    />
-                    <div className="relative w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-                    <span className="ms-3 text-sm font-medium text-gray-700">My Requests Only</span>
-                  </label>
-                </div>
-              )}
               <div className="relative" ref={filtersRef}>
                 <button
                   className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
