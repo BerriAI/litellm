@@ -311,9 +311,7 @@ def _add_proxy_server_request_to_metadata(
     litellm_params: dict,
 ) -> dict:
     """
-    If failure, by default store the raw request
-
-    If success, only store if general_settings: store_prompts_in_spend_logs = True
+    Only store if _should_store_prompts_and_responses_in_spend_logs() is True
     """
     if _should_store_prompts_and_responses_in_spend_logs():
         _proxy_server_request = litellm_params.get("proxy_server_request", {})
