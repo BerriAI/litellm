@@ -1,12 +1,5 @@
-"""
-_ProxyDBLogger, handles writing per request logs to the database
-
-- track_cost_callback, stores successful requests to the database
-- async_post_call_failure_hook, stores failed requests to the database
-    - for now this is opt in, we don't track failed requests in the DB by default
-"""
-
 import asyncio
+import json
 import traceback
 from datetime import datetime
 from typing import Any, Optional, Union, cast
@@ -41,9 +34,6 @@ class _ProxyDBLogger(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
     ):
         from litellm.proxy.proxy_server import update_database
-
-        if _ProxyDBLogger._should_store_errors_in_spend_logs() is not True:
-            return
 
         _metadata = dict(
             StandardLoggingUserAPIKeyMetadata(
@@ -211,26 +201,6 @@ class _ProxyDBLogger(CustomLogger):
             verbose_proxy_logger.exception(
                 "Error in tracking cost callback - %s", str(e)
             )
-
-    @staticmethod
-    def _should_store_errors_in_spend_logs() -> bool:
-        """
-        Returns True if we should store errors in the spend logs
-
-        Enabled when `store_errors_in_spend_logs` is set to `true` in the `general_settings` section of the config file.
-
-        By Default, this is disabled.
-
-        ```yaml
-        general_settings:
-            store_errors_in_spend_logs: true
-        ```
-        """
-        from litellm.proxy.proxy_server import general_settings
-
-        if general_settings.get("store_errors_in_spend_logs", False) is True:
-            return True
-        return False
 
 
 def _should_track_cost_callback(
