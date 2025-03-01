@@ -446,6 +446,7 @@ const sidebars = {
           items: [
             "projects/smolagents",
             "projects/Docq.AI",
+            "projects/PDL",
             "projects/OpenInterpreter",
             "projects/Elroy",
             "projects/dbally",
@@ -461,7 +462,6 @@ const sidebars = {
             "projects/YiVal",
             "projects/LiteLLM Proxy",
             "projects/llm_cord",
-            "projects/PDL",
           ],
         },
         "contributing",
