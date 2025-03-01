@@ -11,6 +11,7 @@ import { prefetchLogDetails } from "./prefetch";
 import { RequestResponsePanel } from "./columns";
 import { ErrorViewer } from './ErrorViewer';
 import { internalUserRoles } from "../../utils/roles";
+import { ConfigInfoMessage } from './ConfigInfoMessage';
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -587,6 +588,12 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
   const hasError = row.original.metadata?.status === "failure";
   const errorInfo = hasError ? row.original.metadata?.error_information : null;
   
+  // Check if request/response data is missing
+  const hasMessages = row.original.messages && 
+    (Array.isArray(row.original.messages) ? row.original.messages.length > 0 : Object.keys(row.original.messages).length > 0);
+  const hasResponse = row.original.response && Object.keys(formatData(row.original.response)).length > 0;
+  const missingData = !hasMessages || !hasResponse;
+  
   // Format the response with error details if present
   const formattedResponse = () => {
     if (hasError && errorInfo) {
@@ -665,6 +672,9 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
         </div>
       </div>
 
+      {/* Configuration Info Message - Show when data is missing */}
+      <ConfigInfoMessage show={missingData} />
+
       {/* Request/Response Panel */}
       <div className="grid grid-cols-2 gap-4">
         {/* Request Side */}
@@ -675,6 +685,7 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
               onClick={() => navigator.clipboard.writeText(JSON.stringify(formatData(row.original.messages), null, 2))}
               className="p-1 hover:bg-gray-200 rounded"
               title="Copy request"
+              disabled={!hasMessages}
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
@@ -683,7 +694,11 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
             </button>
           </div>
           <div className="p-4 overflow-auto max-h-96">
-            <pre className="text-xs font-mono whitespace-pre-wrap break-all">{JSON.stringify(formatData(row.original.messages), null, 2)}</pre>
+            {hasMessages ? (
+              <pre className="text-xs font-mono whitespace-pre-wrap break-all">{JSON.stringify(formatData(row.original.messages), null, 2)}</pre>
+            ) : (
+              <div className="text-gray-500 text-sm italic text-center py-4">Request data not available</div>
+            )}
           </div>
         </div>
 
@@ -702,6 +717,7 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
               onClick={() => navigator.clipboard.writeText(JSON.stringify(formattedResponse(), null, 2))}
               className="p-1 hover:bg-gray-200 rounded"
               title="Copy response"
+              disabled={!hasResponse}
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
@@ -710,15 +726,17 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
             </button>
           </div>
           <div className="p-4 overflow-auto max-h-96 bg-gray-50">
-            <pre className="text-xs font-mono whitespace-pre-wrap break-all">{JSON.stringify(formattedResponse(), null, 2)}</pre>
+            {hasResponse ? (
+              <pre className="text-xs font-mono whitespace-pre-wrap break-all">{JSON.stringify(formattedResponse(), null, 2)}</pre>
+            ) : (
+              <div className="text-gray-500 text-sm italic text-center py-4">Response data not available</div>
+            )}
           </div>
         </div>
       </div>
 
-
       {/* Error Card - Only show for failures */}
       {hasError && errorInfo && <ErrorViewer errorInfo={errorInfo} />}
-
 
       {/* Tags Card - Only show if there are tags */}
       {row.original.request_tags && Object.keys(row.original.request_tags).length > 0 && (
