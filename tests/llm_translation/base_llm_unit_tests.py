@@ -281,7 +281,9 @@ class BaseLLMChatTest(ABC):
         )
 
         assert "tool_choice" not in translated_params
-        assert "tools" not in translated_params
+        assert (
+            "tools" not in translated_params
+        ), f"Got tools={translated_params['tools']}, expected no tools"
 
         print(f"translated_params={translated_params}")
 
