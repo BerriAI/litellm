@@ -10,7 +10,7 @@ import {
   InputNumber,
   Select as Select2,
 } from "antd";
-import { Button as Button2, Text, TextInput, SelectItem } from "@tremor/react";
+import { Button as Button2, Text, TextInput, SelectItem, Accordion, AccordionHeader, AccordionBody, Title, } from "@tremor/react";
 import OnboardingModal from "./onboarding_link";
 import { InvitationLink } from "./onboarding_link";
 import {
@@ -228,6 +228,7 @@ const Createuser: React.FC<CreateuserProps> = ({
         <Form.Item label="Metadata" name="metadata">
           <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
         </Form.Item>
+        
         <div style={{ textAlign: "right", marginTop: "10px" }}>
           <Button htmlType="submit">Create User</Button>
         </div>
@@ -293,32 +294,7 @@ const Createuser: React.FC<CreateuserProps> = ({
                 )}
             </Select2>
           </Form.Item>
-          <Form.Item className="gap-2" label={
-              <span>
-                Default Models{' '}
-                <Tooltip title="Models user has access to, outside of team scope.">
-                  <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                </Tooltip>
-              </span>
-            } name="models" help="Models user has access to, outside of team scope.">
-            <Select2
-              mode="multiple"
-              placeholder="Select models"
-              style={{ width: "100%" }}
-            >
-              <Select2.Option
-                key="all-proxy-models"
-                value="all-proxy-models"
-              >
-                All Proxy Models
-              </Select2.Option>
-              {userModels.map((model) => (
-                <Select2.Option key={model} value={model}>
-                  {getModelDisplayName(model)}
-                </Select2.Option>
-              ))}
-            </Select2>
-          </Form.Item>
+          
           <Form.Item label="Team ID" className="gap-2" name="team_id" help="If selected, user will be added as a 'user' role to the team.">
             <Select placeholder="Select Team ID" style={{ width: "100%" }}>
               {teams ? (
@@ -338,6 +314,39 @@ const Createuser: React.FC<CreateuserProps> = ({
           <Form.Item label="Metadata" name="metadata">
             <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
           </Form.Item>
+          <Accordion>
+          <AccordionHeader>
+            <Title>Personal Key Creation</Title>
+          </AccordionHeader>
+          <AccordionBody>
+            <Form.Item className="gap-2" label={
+                <span>
+                  Models{' '}
+                  <Tooltip title="Models user has access to, outside of team scope.">
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              } name="models" help="Models user has access to, outside of team scope.">
+              <Select2
+                mode="multiple"
+                placeholder="Select models"
+                style={{ width: "100%" }}
+              >
+                <Select2.Option
+                  key="all-proxy-models"
+                  value="all-proxy-models"
+                >
+                  All Proxy Models
+                </Select2.Option>
+                {userModels.map((model) => (
+                  <Select2.Option key={model} value={model}>
+                    {getModelDisplayName(model)}
+                  </Select2.Option>
+                ))}
+              </Select2>
+            </Form.Item>
+          </AccordionBody>
+        </Accordion>
           <div style={{ textAlign: "right", marginTop: "10px" }}>
             <Button htmlType="submit">Create User</Button>
           </div>
