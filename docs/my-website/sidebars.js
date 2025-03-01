@@ -41,6 +41,7 @@ const sidebars = {
             "proxy/deploy",
             "proxy/prod",
             "proxy/cli",
+            "proxy/release_cycle",
             "proxy/model_management",
             "proxy/health",
             "proxy/debugging",
