@@ -35,6 +35,11 @@ class NullTracer:
         return NullSpan()
 
     def wrap(self, name=None, **kwargs):
+        # If called with no arguments (as @tracer.wrap())
+        if callable(name):
+            return name
+
+        # If called with arguments (as @tracer.wrap(name="something"))
         def decorator(f):
             return f
 
