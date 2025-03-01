@@ -98,6 +98,13 @@ export default function SpendLogsTable({
       document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+
+  useEffect(() => {
+    if (userRole && internalUserRoles.includes(userRole)) {
+      setFilterByCurrentUser(true);
+    }
+  }, [userRole]);
+
   const logs = useQuery<PaginatedResponse>({
     queryKey: [
       "logs",
