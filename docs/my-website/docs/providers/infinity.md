@@ -80,6 +80,43 @@ curl http://0.0.0.0:4000/rerank \
 | `top_n` | `int` | The number of documents to return |
 | `return_documents` | `bool` | Whether to return the documents in the response |
 
+### Usage - Return Documents
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+response = rerank(
+    model="infinity/rerank",
+    query="What is the capital of France?",
+    documents=["Paris", "London", "Berlin", "Madrid"],
+    return_documents=True,
+)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/rerank \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "custom-infinity-rerank",
+    "query": "What is the capital of France?",
+    "documents": [
+        "Paris",
+        "London",
+        "Berlin",
+        "Madrid"
+    ],
+    "return_documents": True,
+  }'
+```
+
+</TabItem>
+</Tabs>
 
 ## Pass Provider-specific Params
 
