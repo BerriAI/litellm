@@ -1857,6 +1857,7 @@ class SpendLogsMetadata(TypedDict):
     requester_ip_address: Optional[str]
     applied_guardrails: Optional[List[str]]
     status: StandardLoggingPayloadStatus
+    proxy_server_request: Optional[str]
     error_information: Optional[StandardLoggingPayloadErrorInformation]
 
 
