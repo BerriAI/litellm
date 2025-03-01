@@ -88,7 +88,7 @@ def test_aaaaaschema_compatibility():
     print("Current directory:", os.getcwd())
 
     # Get schemas
-    old_schema = get_schema_from_branch("main")
+    old_schema = get_schema_from_branch("litellm_stable_release_branch")
     with open("./schema.prisma", "r") as f:
         new_schema = f.read()
 
