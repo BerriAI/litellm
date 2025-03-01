@@ -5,7 +5,6 @@ If the ddtrace package is not installed, the tracer will be a no-op.
 """
 
 from contextlib import contextmanager
-from typing import Any
 
 from litellm.secret_managers.main import get_secret_bool
 
@@ -61,8 +60,8 @@ if should_use_dd_tracer:
         from ddtrace import tracer as dd_tracer
 
         # Define the type to match what's expected by the code using this module
-        tracer = dd_tracer  # type: Any
+        tracer = dd_tracer
     except ImportError:
-        tracer = NullTracer()  # type: Any
+        tracer = NullTracer()
 else:
-    tracer = NullTracer()  # type: Any
+    tracer = NullTracer()
