@@ -293,18 +293,6 @@ class AnthropicConfig(BaseConfig):
                 new_stop = new_v
         return new_stop
 
-    def _add_tools_to_optional_params(
-        self, optional_params: dict, tools: List[AllAnthropicToolsValues]
-    ) -> dict:
-        if "tools" not in optional_params:
-            optional_params["tools"] = tools
-        else:
-            optional_params["tools"] = [
-                *optional_params["tools"],
-                *tools,
-            ]
-        return optional_params
-
     def map_openai_params(
         self,
         non_default_params: dict,
