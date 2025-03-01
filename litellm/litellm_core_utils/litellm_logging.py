@@ -59,7 +59,6 @@ from litellm.types.utils import (
     StandardLoggingMetadata,
     StandardLoggingModelCostFailureDebugInformation,
     StandardLoggingModelInformation,
-    StandardLoggingModelParameters,
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
     StandardLoggingPayloadStatus,

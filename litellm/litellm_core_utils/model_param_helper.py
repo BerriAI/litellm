@@ -1,4 +1,4 @@
-from typing import Set, TypedDict
+from typing import Set
 
 from openai.types.audio.transcription_create_params import TranscriptionCreateParams
 from openai.types.chat.completion_create_params import (
