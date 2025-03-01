@@ -14,7 +14,6 @@ from openai.types.completion_create_params import (
 from openai.types.embedding_create_params import EmbeddingCreateParams
 
 from litellm.types.rerank import RerankRequest
-from litellm.types.utils import StandardLoggingModelParameters
 
 
 class ModelParamHelper:
@@ -22,14 +21,13 @@ class ModelParamHelper:
     @staticmethod
     def get_standard_logging_model_parameters(
         model_parameters: dict,
-    ) -> StandardLoggingModelParameters:
+    ) -> dict:
         """ """
-        standard_logging_model_parameters: StandardLoggingModelParameters = (
-            StandardLoggingModelParameters()
-        )
+        standard_logging_model_parameters: dict = {}
         supported_model_parameters = (
             ModelParamHelper._get_relevant_args_to_use_for_logging()
         )
+
         for key, value in model_parameters.items():
             if key in supported_model_parameters:
                 standard_logging_model_parameters[key] = value
