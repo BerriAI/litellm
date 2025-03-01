@@ -114,6 +114,7 @@ from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.proxy._types import *
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
@@ -178,7 +179,7 @@ from litellm.proxy.hooks.prompt_injection_detection import (
     _OPTIONAL_PromptInjectionDetection,
 )
 from litellm.proxy.hooks.proxy_failure_handler import _PROXY_failure_handler
-from litellm.proxy.hooks.proxy_track_cost_callback import _PROXY_track_cost_callback
+from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     router as budget_management_router,
@@ -937,10 +938,7 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
 def cost_tracking():
     global prisma_client
     if prisma_client is not None:
-        if isinstance(litellm._async_success_callback, list):
-            verbose_proxy_logger.debug("setting litellm success callback to track cost")
-            if (_PROXY_track_cost_callback) not in litellm._async_success_callback:  # type: ignore
-                litellm.logging_callback_manager.add_litellm_async_success_callback(_PROXY_track_cost_callback)  # type: ignore
+        litellm.logging_callback_manager.add_litellm_callback(_ProxyDBLogger())
 
 
 def error_tracking():
@@ -3727,9 +3725,14 @@ async def chat_completion(  # noqa: PLR0915
         timeout = getattr(
             e, "timeout", None
         )  # returns the timeout set by the wrapper. Used for testing if model-specific timeout are set correctly
-
+        _litellm_logging_obj: Optional[LiteLLMLoggingObj] = data.get(
+            "litellm_logging_obj", None
+        )
         custom_headers = get_custom_headers(
             user_api_key_dict=user_api_key_dict,
+            call_id=(
+                _litellm_logging_obj.litellm_call_id if _litellm_logging_obj else None
+            ),
             version=version,
             response_cost=0,
             model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
