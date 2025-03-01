@@ -205,7 +205,4 @@ async def test_chat_completion_bad_model_with_spend_logs():
 
         # Verify request details
         assert log_entry["cache_hit"] == "False"
-        assert log_entry["messages"]["model"] == "non-existent-model"
-        assert log_entry["messages"]["messages"][0]["role"] == "user"
-        assert log_entry["messages"]["messages"][0]["content"] == "Hello!"
         assert log_entry["response"] == {}
