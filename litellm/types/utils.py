@@ -1654,7 +1654,7 @@ class StandardLoggingPayload(TypedDict):
     response: Optional[Union[str, list, dict]]
     error_str: Optional[str]
     error_information: Optional[StandardLoggingPayloadErrorInformation]
-    model_parameters: StandardLoggingModelParameters
+    model_parameters: dict
     hidden_params: StandardLoggingHiddenParams
     guardrail_information: Optional[StandardLoggingGuardrailInformation]
 
