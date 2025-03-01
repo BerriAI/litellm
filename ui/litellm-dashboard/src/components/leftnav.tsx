@@ -20,6 +20,7 @@ import {
   SafetyOutlined,
   ExperimentOutlined
 } from '@ant-design/icons';
+import { old_admin_roles, v2_admin_role_names, all_admin_roles, rolesAllowedToSeeUsage } from '../utils/roles';
 
 const { Sider } = Layout;
 
@@ -39,12 +40,6 @@ interface MenuItem {
   children?: MenuItem[];  // Add children property for submenus
   icon?: React.ReactNode;
 }
-
-const old_admin_roles = ["Admin", "Admin Viewer"];
-const v2_admin_role_names = ["proxy_admin", "proxy_admin_viewer", "org_admin"];
-const all_admin_roles = [...old_admin_roles, ...v2_admin_role_names];
-const rolesAllowedToSeeUsage = ["Admin", "Admin Viewer", "Internal User", "Internal Viewer"];
-
 
 // Note: If a menu item does not have a role, it is visible to all roles.
 const menuItems: MenuItem[] = [
