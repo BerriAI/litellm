@@ -1533,6 +1533,18 @@ class AdapterCompletionStreamWrapper:
             raise StopAsyncIteration
 
 
+class StandardLoggingModelParameters(TypedDict):
+    """
+    Standard logging model parameters
+
+    This is a stubbed type, see model_param_helper.py for more details
+
+    We need to programmatically generate this type based on the OpenAI API spec
+    """
+
+    pass
+
+
 class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_hash: Optional[str]  # hash of the litellm virtual key used
     user_api_key_alias: Optional[str]
@@ -1654,7 +1666,7 @@ class StandardLoggingPayload(TypedDict):
     response: Optional[Union[str, list, dict]]
     error_str: Optional[str]
     error_information: Optional[StandardLoggingPayloadErrorInformation]
-    model_parameters: dict
+    model_parameters: StandardLoggingModelParameters
     hidden_params: StandardLoggingHiddenParams
     guardrail_information: Optional[StandardLoggingGuardrailInformation]
 

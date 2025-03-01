@@ -33,6 +33,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.pagerduty.pagerduty import PagerDutyAlerting
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
@@ -58,6 +59,7 @@ from litellm.types.utils import (
     StandardLoggingMetadata,
     StandardLoggingModelCostFailureDebugInformation,
     StandardLoggingModelInformation,
+    StandardLoggingModelParameters,
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
     StandardLoggingPayloadStatus,
@@ -3330,7 +3332,9 @@ def get_standard_logging_object_payload(
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             messages=kwargs.get("messages"),
             response=final_response_obj,
-            model_parameters=kwargs.get("optional_params", None),
+            model_parameters=ModelParamHelper.get_standard_logging_model_parameters(
+                kwargs.get("optional_params", None) or {}
+            ),
             hidden_params=clean_hidden_params,
             model_map_information=model_cost_information,
             error_str=error_str,

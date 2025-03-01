@@ -14,10 +14,7 @@ from openai.types.completion_create_params import (
 from openai.types.embedding_create_params import EmbeddingCreateParams
 
 from litellm.types.rerank import RerankRequest
-
-
-class StandardLoggingModelParameters(TypedDict):
-    pass
+from litellm.types.utils import StandardLoggingModelParameters
 
 
 class ModelParamHelper:
