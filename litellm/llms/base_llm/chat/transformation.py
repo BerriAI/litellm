@@ -111,6 +111,19 @@ class BaseConfig(ABC):
         """
         return False
 
+    def _add_tools_to_optional_params(self, optional_params: dict, tools: List) -> dict:
+        """
+        Helper util to add tools to optional_params.
+        """
+        if "tools" not in optional_params:
+            optional_params["tools"] = tools
+        else:
+            optional_params["tools"] = [
+                *optional_params["tools"],
+                *tools,
+            ]
+        return optional_params
+
     def translate_developer_role_to_system_role(
         self,
         messages: List[AllMessageValues],
@@ -158,6 +171,7 @@ class BaseConfig(ABC):
         optional_params: dict,
         value: dict,
         is_response_format_supported: bool,
+        enforce_tool_choice: bool = True,
     ) -> dict:
         """
         Follow similar approach to anthropic - translate to a single tool call.
@@ -195,9 +209,11 @@ class BaseConfig(ABC):
 
             optional_params.setdefault("tools", [])
             optional_params["tools"].append(_tool)
-            optional_params["tool_choice"] = _tool_choice
+            if enforce_tool_choice:
+                optional_params["tool_choice"] = _tool_choice
+
             optional_params["json_mode"] = True
-        else:
+        elif is_response_format_supported:
             optional_params["response_format"] = value
         return optional_params
 
