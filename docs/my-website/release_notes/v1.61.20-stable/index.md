@@ -51,7 +51,7 @@ This release is primarily focused on:
 2. Amazon Deepseek - `<think>` param extraction into ‘reasoning_content’ [Start here](https://docs.litellm.ai/docs/providers/bedrock#bedrock-imported-models-deepseek-deepseek-r1)
 3. Amazon Titan Embeddings - filter out ‘aws_’ params from request body [Start here](https://docs.litellm.ai/docs/providers/bedrock#bedrock-embedding)
 4. Anthropic ‘thinking’ + ‘reasoning_content’ translation support (Anthropic API, Bedrock, Vertex AI)  [Start here](https://docs.litellm.ai/docs/reasoning_content) [ADD MISSING DOCS for DEEPSEEK R1 ON BEDROCK]
-5. VLLM - support ‘video_url’ [ADD MISSING DOCS] 
+5. VLLM - support ‘video_url’ [Start here](../../docs/providers/vllm#send-video-url-to-vllm)
 6. Call proxy via litellm SDK: Support `litellm_proxy/` for embedding, image_generation, transcription, speech, rerank [Start here](https://docs.litellm.ai/docs/providers/litellm_proxy)
 7. OpenAI Pass-through - allow using Assistants GET, DELETE on /openai pass through routes [Start here](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
 8. Message Translation - fix openai message for assistant msg if role is missing - openai allows this
