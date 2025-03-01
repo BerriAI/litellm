@@ -1,7 +1,7 @@
 ---
 title: v1.61.20-stable
 slug: v1.61.20-stable
-date: 2025-03-02T10:00:00
+date: 2025-03-01T10:00:00
 authors:
   - name: Krrish Dholakia
     title: CEO, LiteLLM
@@ -22,7 +22,7 @@ import Image from '@theme/IdealImage';
 
 :::info
 
-`v1.61.20-stable` will be live on 2025-03-04. 
+`v1.61.20-stable` will be live on 2025-02-04. 
 
 :::
 
