@@ -57,7 +57,7 @@ const menuItems: MenuItem[] = [
   { key: "5", page: "users", label: "Internal Users", icon: <UserOutlined />, roles: all_admin_roles },
   { key: "14", page: "api_ref", label: "API Reference", icon: <ApiOutlined /> },
   { key: "16", page: "model-hub", label: "Model Hub", icon: <AppstoreOutlined /> },
-  { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined />, roles: all_admin_roles },
+  { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined />},
 
   
   { 
