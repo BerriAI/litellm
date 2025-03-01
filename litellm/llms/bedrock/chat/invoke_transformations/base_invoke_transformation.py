@@ -3,7 +3,7 @@ import json
 import time
 import urllib.parse
 from functools import partial
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast, get_args
 
 import httpx
 
@@ -584,7 +584,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             if provider in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
                 return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, provider)
         return None
-
 
     def get_bedrock_model_id(
         self,
