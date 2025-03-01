@@ -5,8 +5,14 @@ If the ddtrace package is not installed, the tracer will be a no-op.
 """
 
 from contextlib import contextmanager
+from typing import TYPE_CHECKING, Any, Union
 
 from litellm.secret_managers.main import get_secret_bool
+
+if TYPE_CHECKING:
+    from ddtrace.tracer import Tracer as DD_TRACER
+else:
+    DD_TRACER = Any
 
 
 class NullSpan:
@@ -53,7 +59,7 @@ def _should_use_dd_tracer():
 
 # Initialize tracer
 should_use_dd_tracer = _should_use_dd_tracer()
-tracer = NullTracer()
+tracer: Union[NullTracer, DD_TRACER] = NullTracer()
 # We need to ensure tracer is never None and always has the required methods
 if should_use_dd_tracer:
     try:
