@@ -1961,3 +1961,14 @@ class ProviderSpecificHeader(TypedDict):
 class SelectTokenizerResponse(TypedDict):
     type: Literal["openai_tokenizer", "huggingface_tokenizer"]
     tokenizer: Any
+
+
+class FieldsWithMessageContent(str, Enum):
+    MESSAGES = "messages"
+    INPUT = "input"
+    PROMPT = "prompt"
+    QUERY = "query"
+
+    @classmethod
+    def get_all_fields(cls) -> List[str]:
+        return [field.value for field in cls]
