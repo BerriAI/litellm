@@ -588,7 +588,7 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
         error: {
           message: errorInfo.error_message || "An error occurred",
           type: errorInfo.error_class || "error",
-          code: errorInfo.error_code || errorInfo.status_code || "unknown",
+          code: errorInfo.error_code  || "unknown",
           param: null
         }
       };
@@ -688,7 +688,7 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
               Response
               {hasError && (
                 <span className="ml-2 text-sm text-red-600">
-                  • HTTP code {errorInfo?.status_code || 400}
+                  • HTTP code {errorInfo?.error_code || 400}
                 </span>
               )}
             </h3>

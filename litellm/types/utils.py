@@ -1607,7 +1607,6 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     error_class: Optional[str]
     llm_provider: Optional[str]
     traceback: Optional[str]
-    status_code: Optional[int]
     error_message: Optional[str]
 
 

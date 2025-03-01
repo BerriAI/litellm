@@ -4,10 +4,9 @@ interface ErrorViewerProps {
   errorInfo: {
     error_class?: string;
     error_message?: string;
-    status_code?: string | number;
     traceback?: string;
     llm_provider?: string;
-    error_code?: string;
+    error_code?: string | number;
   };
 }
 

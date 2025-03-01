@@ -3133,7 +3133,6 @@ class StandardLoggingPayloadSetup:
             error_class=error_class,
             llm_provider=_llm_provider_in_exception,
             traceback=traceback_info,
-            status_code=getattr(original_exception, "status_code", None),
             error_message=error_message if original_exception else "",
         )
 
