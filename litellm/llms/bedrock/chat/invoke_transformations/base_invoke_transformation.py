@@ -3,7 +3,7 @@ import json
 import time
 import urllib.parse
 from functools import partial
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast, get_args
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 
 import httpx
 
@@ -461,6 +461,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         data: dict,
         messages: list,
         client: Optional[AsyncHTTPHandler] = None,
+        json_mode: Optional[bool] = None,
     ) -> CustomStreamWrapper:
         streaming_response = CustomStreamWrapper(
             completion_stream=None,
@@ -475,6 +476,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 logging_obj=logging_obj,
                 fake_stream=True if "ai21" in api_base else False,
                 bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
+                json_mode=json_mode,
             ),
             model=model,
             custom_llm_provider="bedrock",
@@ -493,6 +495,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         data: dict,
         messages: list,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        json_mode: Optional[bool] = None,
     ) -> CustomStreamWrapper:
         if client is None or isinstance(client, AsyncHTTPHandler):
             client = _get_httpx_client(params={})
@@ -509,6 +512,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 logging_obj=logging_obj,
                 fake_stream=True if "ai21" in api_base else False,
                 bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
+                json_mode=json_mode,
             ),
             model=model,
             custom_llm_provider="bedrock",
@@ -526,56 +530,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         Bedrock invoke does not allow passing `stream` in the request body.
         """
         return False
-
-    @staticmethod
-    def get_bedrock_invoke_provider(
-        model: str,
-    ) -> Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL]:
-        """
-        Helper function to get the bedrock provider from the model
-
-        handles 3 scenarions:
-        1. model=invoke/anthropic.claude-3-5-sonnet-20240620-v1:0 -> Returns `anthropic`
-        2. model=anthropic.claude-3-5-sonnet-20240620-v1:0 -> Returns `anthropic`
-        3. model=llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n -> Returns `llama`
-        4. model=us.amazon.nova-pro-v1:0 -> Returns `nova`
-        """
-        if model.startswith("invoke/"):
-            model = model.replace("invoke/", "", 1)
-
-        _split_model = model.split(".")[0]
-        if _split_model in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
-            return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, _split_model)
-
-        # If not a known provider, check for pattern with two slashes
-        provider = AmazonInvokeConfig._get_provider_from_model_path(model)
-        if provider is not None:
-            return provider
-
-        # check if provider == "nova"
-        if "nova" in model:
-            return "nova"
-        return None
-
-    @staticmethod
-    def _get_provider_from_model_path(
-        model_path: str,
-    ) -> Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL]:
-        """
-        Helper function to get the provider from a model path with format: provider/model-name
-
-        Args:
-            model_path (str): The model path (e.g., 'llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n' or 'anthropic/model-name')
-
-        Returns:
-            Optional[str]: The provider name, or None if no valid provider found
-        """
-        parts = model_path.split("/")
-        if len(parts) >= 1:
-            provider = parts[0]
-            if provider in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
-                return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, provider)
-        return None
 
     def get_bedrock_model_id(
         self,
