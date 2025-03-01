@@ -113,7 +113,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     const fetchModelInfo = async () => {
       try {
         const fetchedAvailableModels = await modelAvailableCall(
-          useApiKey,
+          useApiKey ?? '', // Use empty string if useApiKey is null,
           userID,
           userRole
         );
