@@ -2717,6 +2717,33 @@ def test_bedrock_top_k_param(model, expected_params):
             assert data["additionalModelRequestFields"] == expected_params
 
 
+
+def test_bedrock_invoke_provider():
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "bedrock/invoke/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+        )
+        == "anthropic"
+    )
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+        )
+        == "anthropic"
+    )
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "bedrock/llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n"
+        )
+        == "llama"
+    )
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "us.amazon.nova-pro-v1:0"
+        )
+        == "nova"
+    )
+
 def test_bedrock_description_param():
     from litellm import completion
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -2754,3 +2781,4 @@ def test_bedrock_description_param():
         assert (
             "Find the meaning inside a poem" in request_body_str
         )  # assert description is passed
+
