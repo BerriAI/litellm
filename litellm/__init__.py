@@ -53,6 +53,7 @@ from litellm.constants import (
     cohere_embedding_models,
     bedrock_embedding_models,
     known_tokenizer_config,
+    BEDROCK_INVOKE_PROVIDERS_LITERAL,
 )
 from litellm.types.guardrails import GuardrailItem
 from litellm.proxy._types import (
@@ -361,17 +362,7 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-2-11b-instruct-v1:0",
     "meta.llama3-2-90b-instruct-v1:0",
 ]
-BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
-    "cohere",
-    "anthropic",
-    "mistral",
-    "amazon",
-    "meta",
-    "llama",
-    "ai21",
-    "nova",
-    "deepseek_r1",
-]
+
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models: List = []
 open_ai_text_completion_models: List = []
