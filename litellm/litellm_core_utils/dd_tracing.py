@@ -56,6 +56,6 @@ if should_use_dd_tracer:
 
         tracer = dd_tracer
     except ImportError:
-        tracer = null_tracer
+        tracer = NullTracer()
 else:
-    tracer = null_tracer
+    tracer = NullTracer()
