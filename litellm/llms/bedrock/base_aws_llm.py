@@ -13,8 +13,6 @@ from litellm.constants import BEDROCK_INVOKE_PROVIDERS_LITERAL
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.secret_managers.main import get_secret
 
-from .common_utils import BedrockModelInfo
-
 if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
     from botocore.credentials import Credentials

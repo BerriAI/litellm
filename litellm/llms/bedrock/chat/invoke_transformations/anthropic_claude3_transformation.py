@@ -2,7 +2,6 @@ from typing import TYPE_CHECKING, Any, List, Optional
 
 import httpx
 
-import litellm
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
