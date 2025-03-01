@@ -18,7 +18,7 @@ import ViewUserTeam from "./view_user_team";
 import DashboardTeam from "./dashboard_default_team";
 import Onboarding from "../app/onboarding/page";
 import { useSearchParams, useRouter } from "next/navigation";
-import { Team } from "./key_team_helpers/key_list";
+import useKeyList, { Team } from "./key_team_helpers/key_list";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
 const isLocal = process.env.NODE_ENV === "development";
@@ -57,7 +57,7 @@ interface UserDashboardProps {
   userRole: string | null;
   userEmail: string | null;
   teams: Team[] | null;
-  keys: any[] | null;
+  // keys: any[] | null;
   setUserRole: React.Dispatch<React.SetStateAction<string>>;
   setUserEmail: React.Dispatch<React.SetStateAction<string | null>>;
   setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
@@ -76,7 +76,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   userID,
   userRole,
   teams,
-  keys,
   setUserRole,
   userEmail,
   setUserEmail,
@@ -142,6 +141,12 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     }
   }
 
+  // Pass filters into the hook so the API call includes these query parameters.
+  const { keys, isLoading, error, pagination, refresh } = useKeyList({
+    selectedTeam,
+    currentOrg,
+    accessToken: accessToken || "",
+  });
   // console.log(`selectedTeam: ${Object.entries(selectedTeam)}`);
   // Moved useEffect inside the component and used a condition to run fetch only if the params are available
   useEffect(() => {
@@ -171,7 +176,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
         }
       }
     }
-    if (userID && accessToken && userRole && !keys && !userSpendData) {
+    if (userID && accessToken && userRole  && !userSpendData) {
       const cachedUserModels = sessionStorage.getItem("userModels" + userID);
       if (cachedUserModels) {
         setUserModels(JSON.parse(cachedUserModels));
@@ -193,8 +198,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
             setUserSpendData(response["user_info"]);
             console.log(`userSpendData: ${JSON.stringify(userSpendData)}`)
-            
-
             // set keys for admin and users
             if (!response?.teams[0].keys) {
               setKeys(response["keys"]); 
@@ -325,6 +328,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     );
   }
 
+
   console.log("inside user dashboard, selected team", selectedTeam);
   return (
     <div className="w-full mx-4 h-[75vh]">
@@ -339,6 +343,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             accessToken={accessToken}
             data={keys}
             setData={setKeys}
+            refresh={refresh}
           />
 
           <ViewKeyTable
@@ -348,12 +353,17 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             selectedTeam={selectedTeam ? selectedTeam : null}
             setSelectedTeam={setSelectedTeam}
             data={keys}
+            isLoading={isLoading}
+            error={error}
+            pagination={pagination}
+            refresh={refresh}
             setData={setKeys}
             premiumUser={premiumUser}
             teams={teams}
             currentOrg={currentOrg}
             setCurrentOrg={setCurrentOrg}
             organizations={organizations}
+          
           />
         </Col>
       </Grid>
