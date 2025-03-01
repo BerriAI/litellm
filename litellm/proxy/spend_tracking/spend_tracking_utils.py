@@ -47,6 +47,8 @@ def _get_spend_logs_metadata(
             requester_ip_address=None,
             additional_usage_values=None,
             applied_guardrails=None,
+            status=None or "success",
+            error_information=None,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -161,7 +163,6 @@ def get_logging_payload(  # noqa: PLR0915
         import time
 
         id = f"{id}_cache_hit{time.time()}"  # SpendLogs does not allow duplicate request_id
-
     try:
         payload: SpendLogsPayload = SpendLogsPayload(
             request_id=str(id),
@@ -193,7 +194,9 @@ def get_logging_payload(  # noqa: PLR0915
             model_id=_model_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             custom_llm_provider=kwargs.get("custom_llm_provider", ""),
-            messages=_get_messages_for_spend_logs_payload(standard_logging_payload),
+            messages=_get_messages_for_spend_logs_payload(
+                standard_logging_payload=standard_logging_payload, metadata=metadata
+            ),
             response=_get_response_for_spend_logs_payload(standard_logging_payload),
         )
 
@@ -293,12 +296,19 @@ async def get_spend_by_team_and_customer(
 
 
 def _get_messages_for_spend_logs_payload(
-    payload: Optional[StandardLoggingPayload],
+    standard_logging_payload: Optional[StandardLoggingPayload],
+    metadata: Optional[dict] = None,
 ) -> str:
-    if payload is None:
-        return "{}"
     if _should_store_prompts_and_responses_in_spend_logs():
-        return json.dumps(payload.get("messages", {}))
+        metadata = metadata or {}
+        if metadata.get("status", None) == "failure":
+            _proxy_server_request = metadata.get("proxy_server_request", {})
+            _request_body = _proxy_server_request.get("body", {}) or {}
+            return json.dumps(_request_body, default=str)
+        else:
+            if standard_logging_payload is None:
+                return "{}"
+            return json.dumps(standard_logging_payload.get("messages", {}))
     return "{}"
 
 
