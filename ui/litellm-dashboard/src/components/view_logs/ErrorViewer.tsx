@@ -42,7 +42,7 @@ export const ErrorViewer: React.FC<ErrorViewerProps> = ({ errorInfo }) => {
     
     // Extract file paths, line numbers and code from traceback
     const fileLineRegex = /File "([^"]+)", line (\d+)/g;
-    const matches = [...traceback.matchAll(fileLineRegex)];
+    const matches = Array.from(traceback.matchAll(fileLineRegex));
     
     // Create simplified frames
     return matches.map(match => {
