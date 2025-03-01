@@ -190,11 +190,15 @@ class AmazonConverseConfig(BaseConfig):
         else:
             _input_schema = json_schema
 
+        tool_param_function_chunk = ChatCompletionToolParamFunctionChunk(
+            name=schema_name, parameters=_input_schema
+        )
+        if description:
+            tool_param_function_chunk["description"] = description
+
         _tool = ChatCompletionToolParam(
             type="function",
-            function=ChatCompletionToolParamFunctionChunk(
-                name=schema_name, parameters=_input_schema
-            ),
+            function=tool_param_function_chunk,
         )
         return _tool
 
@@ -210,12 +214,14 @@ class AmazonConverseConfig(BaseConfig):
             if param == "response_format":
                 json_schema: Optional[dict] = None
                 schema_name: str = ""
+                description: Optional[str] = None
                 if "response_schema" in value:
                     json_schema = value["response_schema"]
                     schema_name = "json_tool_call"
                 elif "json_schema" in value:
                     json_schema = value["json_schema"]["schema"]
                     schema_name = value["json_schema"]["name"]
+                    description = value["json_schema"].get("description")
                 """
                 Follow similar approach to anthropic - translate to a single tool call. 
 
@@ -224,10 +230,10 @@ class AmazonConverseConfig(BaseConfig):
                 - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
                 - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
                 """
-                _tool_choice = {"name": schema_name, "type": "tool"}
                 _tool = self._create_json_tool_call_for_response_format(
                     json_schema=json_schema,
                     schema_name=schema_name if schema_name != "" else "json_tool_call",
+                    description=description,
                 )
                 optional_params["tools"] = [_tool]
                 if litellm.utils.supports_tool_choice(
