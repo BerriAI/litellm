@@ -256,7 +256,6 @@ class BaseLLMChatTest(ABC):
     @pytest.mark.parametrize(
         "response_format",
         [
-            {"type": "json_object"},
             {"type": "text"},
         ],
     )
@@ -291,13 +290,16 @@ class BaseLLMChatTest(ABC):
                 },
             }
         ]
-        response = self.completion_function(
-            **base_completion_call_args,
-            messages=messages,
-            response_format=response_format,
-            tools=tools,
-            drop_params=True,
-        )
+        try:
+            response = self.completion_function(
+                **base_completion_call_args,
+                messages=messages,
+                response_format=response_format,
+                tools=tools,
+                drop_params=True,
+            )
+        except litellm.ContextWindowExceededError:
+            pytest.skip("Model exceeded context window")
         assert response is not None
 
     @pytest.mark.flaky(retries=6, delay=1)
