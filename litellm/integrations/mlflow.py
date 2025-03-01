@@ -122,7 +122,11 @@ class MlflowLogger(CustomLogger):
 
         # If this is the final chunk, end the span. The final chunk
         # has complete_streaming_response that gathers the full response.
-        if final_response := kwargs.get("complete_streaming_response"):
+        final_response = (
+            kwargs.get("complete_streaming_response")
+            or kwargs.get("async_complete_streaming_response")
+        )
+        if final_response:
             end_time_ns = int(end_time.timestamp() * 1e9)
 
             self._extract_and_set_chat_attributes(span, kwargs, final_response)
