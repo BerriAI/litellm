@@ -379,11 +379,20 @@ print(f"\nResponse: {resp}")
 
 ## Usage - 'thinking' / 'reasoning content'
 
-This is currently only supported for Anthropic's Claude 3.7 Sonnet.
+This is currently only supported for Anthropic's Claude 3.7 Sonnet + Deepseek R1.
 
-Works for:
-- sync completion calls (SDK) - v1.61.19+
-- async completion calls (SDK + PROXY) - v1.61.20+
+Works on v1.61.20+.
+
+Returns 2 new fields in `message` and `delta` object:
+- `reasoning_content` - string - The reasoning content of the response
+- `thinking_blocks` - list of objects (Anthropic only) - The thinking blocks of the response
+
+Each object has the following fields:
+- `type` - Literal["thinking"] - The type of thinking block
+- `thinking` - string - The thinking of the response. Also returned in `reasoning_content`
+- `signature_delta` - string - A base64 encoded string, returned by Anthropic.
+
+The `signature_delta` is required by Anthropic on subsequent calls, if 'thinking' content is passed in (only required to use `thinking` with tool calling). [Learn more](https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking#understanding-thinking-blocks)
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
