@@ -461,6 +461,7 @@ const sidebars = {
             "projects/YiVal",
             "projects/LiteLLM Proxy",
             "projects/llm_cord",
+            "projects/PDL",
           ],
         },
         "contributing",
