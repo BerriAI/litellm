@@ -100,15 +100,20 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!accessToken || !token || !userRole || !userID) {
+    let useApiKey = apiKeySource === 'session' ? accessToken : apiKey;
+    console.log("useApiKey:", useApiKey);
+    if (!useApiKey || !token || !userRole || !userID) {
+      console.log("useApiKey or token or userRole or userID is missing = ", useApiKey, token, userRole, userID);
       return;
     }
+
+    
 
     // Fetch model info and set the default selected model
     const fetchModelInfo = async () => {
       try {
         const fetchedAvailableModels = await modelAvailableCall(
-          accessToken,
+          useApiKey,
           userID,
           userRole
         );
@@ -141,7 +146,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     };
   
     fetchModelInfo();
-  }, [accessToken, userID, userRole]);
+  }, [accessToken, userID, userRole, apiKeySource, apiKey]);
   
 
   useEffect(() => {
