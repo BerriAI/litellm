@@ -171,6 +171,7 @@ class BaseConfig(ABC):
         optional_params: dict,
         value: dict,
         is_response_format_supported: bool,
+        enforce_tool_choice: bool = True,
     ) -> dict:
         """
         Follow similar approach to anthropic - translate to a single tool call.
@@ -208,9 +209,11 @@ class BaseConfig(ABC):
 
             optional_params.setdefault("tools", [])
             optional_params["tools"].append(_tool)
-            optional_params["tool_choice"] = _tool_choice
+            if enforce_tool_choice:
+                optional_params["tool_choice"] = _tool_choice
+
             optional_params["json_mode"] = True
-        else:
+        elif is_response_format_supported:
             optional_params["response_format"] = value
         return optional_params
 
