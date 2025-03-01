@@ -26,6 +26,8 @@ from litellm.types.utils import (
     ModelResponse,
     ProviderField,
     StandardCallbackDynamicParams,
+    StandardLoggingPayloadErrorInformation,
+    StandardLoggingPayloadStatus,
     StandardPassThroughResponseObject,
     TextCompletionResponse,
 )
@@ -1855,6 +1857,8 @@ class SpendLogsMetadata(TypedDict):
     ]  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: Optional[str]
     applied_guardrails: Optional[List[str]]
+    status: StandardLoggingPayloadStatus
+    error_information: Optional[StandardLoggingPayloadErrorInformation]
 
 
 class SpendLogsPayload(TypedDict):
