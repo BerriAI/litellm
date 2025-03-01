@@ -32,6 +32,14 @@ This release is primarily focused on:
 - LLM Translation improvements (claude-3-7-sonnet + 'thinking'/'reasoning_content' support)
 - UI improvements (add model flow, user management, etc)
 
+## Demo Instance
+
+Here's a Demo Instance to test changes:
+- Instance: https://demo.litellm.ai/
+- Login Credentials:
+    - Username: admin
+    - Password: sk-1234
+
 ## New Models / Updated Models
 
 1. Anthropic 3-7 sonnet support + cost tracking (Anthropic API + Bedrock + Vertex AI + OpenRouter) 
@@ -95,3 +103,7 @@ This release is primarily focused on:
 1. Hypercorn - fix reading / parsing request body 
 2. Windows - fix running proxy in windows 
 3. DD-Trace - fix dd-trace enablement on proxy
+
+## Complete Git Diff
+
+View the complete git diff [here](https://github.com/BerriAI/litellm/compare/v1.61.13-stable...v1.61.20-stable).
