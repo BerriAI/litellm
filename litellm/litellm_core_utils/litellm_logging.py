@@ -48,6 +48,7 @@ from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
 from litellm.types.utils import (
     CallTypes,
     EmbeddingResponse,
+    FieldsWithMessageContent,
     ImageResponse,
     LiteLLMLoggingBaseClass,
     ModelResponse,
@@ -3160,6 +3161,32 @@ class StandardLoggingPayloadSetup:
         else:
             return end_time_float - start_time_float
 
+    @staticmethod
+    def _remove_message_content_from_dict(original_dict: Optional[dict]) -> dict:
+        """
+        Filters out any params with message content `messages`, `input`, `prompt`
+
+        eg. We don't want to log the prompt in the model parameters
+        """
+        if original_dict is None:
+            return {}
+        sensitive_keys = FieldsWithMessageContent.get_all_fields()
+        cleaned_optional_params = {}
+        for key in original_dict:
+            if key not in sensitive_keys:
+                cleaned_optional_params[key] = original_dict[key]
+        return cleaned_optional_params
+
+    @staticmethod
+    def _get_model_parameters(kwargs: dict) -> dict:
+        """
+        Get the model parameters from the kwargs
+        """
+        optional_params = kwargs.get("optional_params", {}) or {}
+        return StandardLoggingPayloadSetup._remove_message_content_from_dict(
+            optional_params
+        )
+
 
 def get_standard_logging_object_payload(
     kwargs: Optional[dict],
@@ -3330,7 +3357,7 @@ def get_standard_logging_object_payload(
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             messages=kwargs.get("messages"),
             response=final_response_obj,
-            model_parameters=kwargs.get("optional_params", None),
+            model_parameters=StandardLoggingPayloadSetup._get_model_parameters(kwargs),
             hidden_params=clean_hidden_params,
             model_map_information=model_cost_information,
             error_str=error_str,
