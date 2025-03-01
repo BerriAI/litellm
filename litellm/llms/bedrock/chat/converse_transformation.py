@@ -206,7 +206,12 @@ class AmazonConverseConfig(BaseConfig):
         messages: Optional[List[AllMessageValues]] = None,
     ) -> dict:
         for param, value in non_default_params.items():
-            if param == "response_format":
+            if param == "response_format" and isinstance(value, dict):
+
+                ignore_response_format_types = ["text"]
+                if value["type"] in ignore_response_format_types:  # value is a no-op
+                    continue
+
                 json_schema: Optional[dict] = None
                 schema_name: str = ""
                 if "response_schema" in value:

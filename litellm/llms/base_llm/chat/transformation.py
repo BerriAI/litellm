@@ -333,6 +333,7 @@ class BaseConfig(ABC):
         data: dict,
         messages: list,
         client: Optional[AsyncHTTPHandler] = None,
+        json_mode: Optional[bool] = None,
     ) -> CustomStreamWrapper:
         raise NotImplementedError
 
@@ -346,6 +347,7 @@ class BaseConfig(ABC):
         data: dict,
         messages: list,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        json_mode: Optional[bool] = None,
     ) -> CustomStreamWrapper:
         raise NotImplementedError
 
