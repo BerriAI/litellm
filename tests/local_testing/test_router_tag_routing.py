@@ -94,6 +94,69 @@ async def test_router_free_paid_tier():
 
 
 @pytest.mark.asyncio()
+async def test_router_free_paid_tier_embeddings():
+    """
+    Pass list of orgs in 1 model definition,
+    expect a unique deployment for each to be created
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["free"],
+                    "mock_response": ["1", "2", "3"],
+                },
+                "model_info": {"id": "very-cheap-model"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["paid"],
+                    "mock_response": ["1", "2", "3"],
+                },
+                "model_info": {"id": "very-expensive-model"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    for _ in range(5):
+        # this should pick model with id == very-cheap-model
+        response = await router.aembedding(
+            model="gpt-4",
+            input="Tell me a joke.",
+            metadata={"tags": ["free"]},
+        )
+
+        print("Response: ", response)
+
+        response_extra_info = response._hidden_params
+        print("response_extra_info: ", response_extra_info)
+
+        assert response_extra_info["model_id"] == "very-cheap-model"
+
+    for _ in range(5):
+        # this should pick model with id == very-cheap-model
+        response = await router.aembedding(
+            model="gpt-4",
+            input="Tell me a joke.",
+            metadata={"tags": ["paid"]},
+        )
+
+        print("Response: ", response)
+
+        response_extra_info = response._hidden_params
+        print("response_extra_info: ", response_extra_info)
+
+        assert response_extra_info["model_id"] == "very-expensive-model"
+
+
+@pytest.mark.asyncio()
 async def test_default_tagged_deployments():
     """
     - only use default deployment for untagged requests
