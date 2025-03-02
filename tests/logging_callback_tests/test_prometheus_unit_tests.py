@@ -302,7 +302,7 @@ async def test_increment_remaining_budget_metrics(prometheus_logger):
 
         # Test remaining budget metrics
         prometheus_logger.litellm_remaining_team_budget_metric.labels.assert_called_once_with(
-            "team1", "team_alias1"
+            team="team1", team_alias="team_alias1"
         )
         prometheus_logger.litellm_remaining_team_budget_metric.labels().set.assert_called_once_with(
             40  # 100 - (50 + 10)
@@ -317,7 +317,7 @@ async def test_increment_remaining_budget_metrics(prometheus_logger):
 
         # Test max budget metrics
         prometheus_logger.litellm_team_max_budget_metric.labels.assert_called_once_with(
-            "team1", "team_alias1"
+            team="team1", team_alias="team_alias1"
         )
         prometheus_logger.litellm_team_max_budget_metric.labels().set.assert_called_once_with(
             100
@@ -332,7 +332,7 @@ async def test_increment_remaining_budget_metrics(prometheus_logger):
 
         # Test remaining hours metrics
         prometheus_logger.litellm_team_budget_remaining_hours_metric.labels.assert_called_once_with(
-            "team1", "team_alias1"
+            team="team1", team_alias="team_alias1"
         )
         # The remaining hours should be approximately 10 (with some small difference due to test execution time)
         remaining_hours_call = prometheus_logger.litellm_team_budget_remaining_hours_metric.labels().set.call_args[
@@ -1159,9 +1159,9 @@ async def test_initialize_remaining_budget_metrics(prometheus_logger):
 
         # Verify the labels were called with correct team information
         label_calls = [
-            call.labels("team1", "alias1"),
-            call.labels("team2", "alias2"),
-            call.labels("team3", ""),
+            call.labels(team="team1", team_alias="alias1"),
+            call.labels(team="team2", team_alias="alias2"),
+            call.labels(team="team3", team_alias=""),
         ]
         prometheus_logger.litellm_team_budget_remaining_hours_metric.assert_has_calls(
             label_calls, any_order=True
