@@ -18,7 +18,6 @@ from typing import (
 import httpx
 from pydantic import BaseModel
 
-from litellm._logging import verbose_logger
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
@@ -112,6 +111,19 @@ class BaseConfig(ABC):
         """
         return False
 
+    def _add_tools_to_optional_params(self, optional_params: dict, tools: List) -> dict:
+        """
+        Helper util to add tools to optional_params.
+        """
+        if "tools" not in optional_params:
+            optional_params["tools"] = tools
+        else:
+            optional_params["tools"] = [
+                *optional_params["tools"],
+                *tools,
+            ]
+        return optional_params
+
     def translate_developer_role_to_system_role(
         self,
         messages: List[AllMessageValues],
@@ -121,9 +133,6 @@ class BaseConfig(ABC):
 
         Overriden by OpenAI/Azure
         """
-        verbose_logger.debug(
-            "Translating developer role to system role for non-OpenAI providers."
-        )  # ensure user knows what's happening with their input.
         return map_developer_role_to_system_role(messages=messages)
 
     def should_retry_llm_api_inside_llm_translation_on_http_error(
@@ -162,6 +171,7 @@ class BaseConfig(ABC):
         optional_params: dict,
         value: dict,
         is_response_format_supported: bool,
+        enforce_tool_choice: bool = True,
     ) -> dict:
         """
         Follow similar approach to anthropic - translate to a single tool call.
@@ -199,9 +209,11 @@ class BaseConfig(ABC):
 
             optional_params.setdefault("tools", [])
             optional_params["tools"].append(_tool)
-            optional_params["tool_choice"] = _tool_choice
+            if enforce_tool_choice:
+                optional_params["tool_choice"] = _tool_choice
+
             optional_params["json_mode"] = True
-        else:
+        elif is_response_format_supported:
             optional_params["response_format"] = value
         return optional_params
 
@@ -233,6 +245,7 @@ class BaseConfig(ABC):
         optional_params: dict,
         request_data: dict,
         api_base: str,
+        model: Optional[str] = None,
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
     ) -> dict:
@@ -252,7 +265,7 @@ class BaseConfig(ABC):
 
     def get_complete_url(
         self,
-        api_base: str,
+        api_base: Optional[str],
         model: str,
         optional_params: dict,
         stream: Optional[bool] = None,
@@ -264,6 +277,8 @@ class BaseConfig(ABC):
 
         Some providers need `model` in `api_base`
         """
+        if api_base is None:
+            raise ValueError("api_base is required")
         return api_base
 
     @abstractmethod
@@ -318,6 +333,7 @@ class BaseConfig(ABC):
         data: dict,
         messages: list,
         client: Optional[AsyncHTTPHandler] = None,
+        json_mode: Optional[bool] = None,
     ) -> CustomStreamWrapper:
         raise NotImplementedError
 
@@ -331,6 +347,7 @@ class BaseConfig(ABC):
         data: dict,
         messages: list,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        json_mode: Optional[bool] = None,
     ) -> CustomStreamWrapper:
         raise NotImplementedError
 

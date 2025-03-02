@@ -18,6 +18,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from ..exceptions import RateLimitError
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
+from .llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from .utils import ModelResponse, ProviderSpecificModelInfo
 
 
@@ -107,7 +108,15 @@ class ModelInfo(BaseModel):
         None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
     )
     tier: Optional[Literal["free", "paid"]] = None
-    team_id: Optional[str] = None  # the team id that this model belongs to
+
+    """
+    Team Model Specific Fields
+    """
+    # the team id that this model belongs to
+    team_id: Optional[str] = None
+
+    # the model_name that can be used by the team when making LLM calls
+    team_public_model_name: Optional[str] = None
 
     def __init__(self, id: Optional[Union[str, int]] = None, **params):
         if id is None:
@@ -163,7 +172,7 @@ class GenericLiteLLMParams(BaseModel):
     ## VERTEX AI ##
     vertex_project: Optional[str] = None
     vertex_location: Optional[str] = None
-    vertex_credentials: Optional[str] = None
+    vertex_credentials: Optional[Union[str, dict]] = None
     ## AWS BEDROCK / SAGEMAKER ##
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None
@@ -205,7 +214,7 @@ class GenericLiteLLMParams(BaseModel):
         ## VERTEX AI ##
         vertex_project: Optional[str] = None,
         vertex_location: Optional[str] = None,
-        vertex_credentials: Optional[str] = None,
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES] = None,
         ## AWS BEDROCK / SAGEMAKER ##
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,

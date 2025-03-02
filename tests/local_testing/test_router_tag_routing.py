@@ -217,3 +217,16 @@ async def test_error_from_tag_routing():
         assert RouterErrors.no_deployments_with_tag_routing.value in str(e)
         print("got expected exception = ", e)
         pass
+
+
+def test_tag_routing_with_list_of_tags():
+    """
+    Test that the router can handle a list of tags
+    """
+    from litellm.router_strategy.tag_based_routing import is_valid_deployment_tag
+
+    assert is_valid_deployment_tag(["teamA", "teamB"], ["teamA"])
+    assert is_valid_deployment_tag(["teamA", "teamB"], ["teamA", "teamB"])
+    assert is_valid_deployment_tag(["teamA", "teamB"], ["teamA", "teamC"])
+    assert not is_valid_deployment_tag(["teamA", "teamB"], ["teamC"])
+    assert not is_valid_deployment_tag(["teamA", "teamB"], [])

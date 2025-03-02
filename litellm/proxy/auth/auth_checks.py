@@ -38,6 +38,7 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
     RoleBasedPermissions,
+    SpecialModelNames,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -1082,6 +1083,14 @@ async def can_user_call_model(
 
     if user_object is None:
         return True
+
+    if SpecialModelNames.no_default_models.value in user_object.models:
+        raise ProxyException(
+            message=f"User not allowed to access model. No default model access, only team models allowed. Tried to access {model}",
+            type=ProxyErrorTypes.key_model_access_denied,
+            param="model",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
 
     return await _can_object_call_model(
         model=model,

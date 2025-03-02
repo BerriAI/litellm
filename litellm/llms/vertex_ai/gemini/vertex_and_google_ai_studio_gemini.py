@@ -40,6 +40,7 @@ from litellm.types.llms.openai import (
     ChatCompletionUsageBlock,
 )
 from litellm.types.llms.vertex_ai import (
+    VERTEX_CREDENTIALS_TYPES,
     Candidates,
     ContentType,
     FunctionCallingConfig,
@@ -930,7 +931,7 @@ class VertexLLM(VertexBase):
         client: Optional[AsyncHTTPHandler] = None,
         vertex_project: Optional[str] = None,
         vertex_location: Optional[str] = None,
-        vertex_credentials: Optional[str] = None,
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES] = None,
         gemini_api_key: Optional[str] = None,
         extra_headers: Optional[dict] = None,
     ) -> CustomStreamWrapper:
@@ -1018,7 +1019,7 @@ class VertexLLM(VertexBase):
         client: Optional[AsyncHTTPHandler] = None,
         vertex_project: Optional[str] = None,
         vertex_location: Optional[str] = None,
-        vertex_credentials: Optional[str] = None,
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES] = None,
         gemini_api_key: Optional[str] = None,
         extra_headers: Optional[dict] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
@@ -1123,7 +1124,7 @@ class VertexLLM(VertexBase):
         timeout: Optional[Union[float, httpx.Timeout]],
         vertex_project: Optional[str],
         vertex_location: Optional[str],
-        vertex_credentials: Optional[str],
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
         gemini_api_key: Optional[str],
         litellm_params: dict,
         logger_fn=None,

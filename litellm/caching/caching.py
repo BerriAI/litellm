@@ -13,26 +13,14 @@ import json
 import time
 import traceback
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Dict, List, Optional, Union
 
-from openai.types.audio.transcription_create_params import TranscriptionCreateParams
-from openai.types.chat.completion_create_params import (
-    CompletionCreateParamsNonStreaming,
-    CompletionCreateParamsStreaming,
-)
-from openai.types.completion_create_params import (
-    CompletionCreateParamsNonStreaming as TextCompletionCreateParamsNonStreaming,
-)
-from openai.types.completion_create_params import (
-    CompletionCreateParamsStreaming as TextCompletionCreateParamsStreaming,
-)
-from openai.types.embedding_create_params import EmbeddingCreateParams
 from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.types.caching import *
-from litellm.types.rerank import RerankRequest
 from litellm.types.utils import all_litellm_params
 
 from .base_cache import BaseCache
@@ -257,7 +245,7 @@ class Cache:
             verbose_logger.debug("\nReturning preset cache key: %s", preset_cache_key)
             return preset_cache_key
 
-        combined_kwargs = self._get_relevant_args_to_use_for_cache_key()
+        combined_kwargs = ModelParamHelper._get_all_llm_api_params()
         litellm_param_kwargs = all_litellm_params
         for param in kwargs:
             if param in combined_kwargs:
@@ -277,9 +265,7 @@ class Cache:
 
         verbose_logger.debug("\nCreated cache key: %s", cache_key)
         hashed_cache_key = Cache._get_hashed_cache_key(cache_key)
-        hashed_cache_key = self._add_redis_namespace_to_cache_key(
-            hashed_cache_key, **kwargs
-        )
+        hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
         self._set_preset_cache_key_in_kwargs(
             preset_cache_key=hashed_cache_key, **kwargs
         )
@@ -366,76 +352,6 @@ class Cache:
             if "litellm_params" in kwargs:
                 kwargs["litellm_params"]["preset_cache_key"] = preset_cache_key
 
-    def _get_relevant_args_to_use_for_cache_key(self) -> Set[str]:
-        """
-        Gets the supported kwargs for each call type and combines them
-        """
-        chat_completion_kwargs = self._get_litellm_supported_chat_completion_kwargs()
-        text_completion_kwargs = self._get_litellm_supported_text_completion_kwargs()
-        embedding_kwargs = self._get_litellm_supported_embedding_kwargs()
-        transcription_kwargs = self._get_litellm_supported_transcription_kwargs()
-        rerank_kwargs = self._get_litellm_supported_rerank_kwargs()
-        exclude_kwargs = self._get_kwargs_to_exclude_from_cache_key()
-
-        combined_kwargs = chat_completion_kwargs.union(
-            text_completion_kwargs,
-            embedding_kwargs,
-            transcription_kwargs,
-            rerank_kwargs,
-        )
-        combined_kwargs = combined_kwargs.difference(exclude_kwargs)
-        return combined_kwargs
-
-    def _get_litellm_supported_chat_completion_kwargs(self) -> Set[str]:
-        """
-        Get the litellm supported chat completion kwargs
-
-        This follows the OpenAI API Spec
-        """
-        all_chat_completion_kwargs = set(
-            CompletionCreateParamsNonStreaming.__annotations__.keys()
-        ).union(set(CompletionCreateParamsStreaming.__annotations__.keys()))
-        return all_chat_completion_kwargs
-
-    def _get_litellm_supported_text_completion_kwargs(self) -> Set[str]:
-        """
-        Get the litellm supported text completion kwargs
-
-        This follows the OpenAI API Spec
-        """
-        all_text_completion_kwargs = set(
-            TextCompletionCreateParamsNonStreaming.__annotations__.keys()
-        ).union(set(TextCompletionCreateParamsStreaming.__annotations__.keys()))
-        return all_text_completion_kwargs
-
-    def _get_litellm_supported_rerank_kwargs(self) -> Set[str]:
-        """
-        Get the litellm supported rerank kwargs
-        """
-        return set(RerankRequest.model_fields.keys())
-
-    def _get_litellm_supported_embedding_kwargs(self) -> Set[str]:
-        """
-        Get the litellm supported embedding kwargs
-
-        This follows the OpenAI API Spec
-        """
-        return set(EmbeddingCreateParams.__annotations__.keys())
-
-    def _get_litellm_supported_transcription_kwargs(self) -> Set[str]:
-        """
-        Get the litellm supported transcription kwargs
-
-        This follows the OpenAI API Spec
-        """
-        return set(TranscriptionCreateParams.__annotations__.keys())
-
-    def _get_kwargs_to_exclude_from_cache_key(self) -> Set[str]:
-        """
-        Get the kwargs to exclude from the cache key
-        """
-        return set(["metadata"])
-
     @staticmethod
     def _get_hashed_cache_key(cache_key: str) -> str:
         """
@@ -455,7 +371,7 @@ class Cache:
         verbose_logger.debug("Hashed cache key (SHA-256): %s", hash_hex)
         return hash_hex
 
-    def _add_redis_namespace_to_cache_key(self, hash_hex: str, **kwargs) -> str:
+    def _add_namespace_to_cache_key(self, hash_hex: str, **kwargs) -> str:
         """
         If a redis namespace is provided, add it to the cache key
 
@@ -466,7 +382,12 @@ class Cache:
         Returns:
             str: The final hashed cache key with the redis namespace.
         """
-        namespace = kwargs.get("metadata", {}).get("redis_namespace") or self.namespace
+        dynamic_cache_control: DynamicCacheControl = kwargs.get("cache", {})
+        namespace = (
+            dynamic_cache_control.get("namespace")
+            or kwargs.get("metadata", {}).get("redis_namespace")
+            or self.namespace
+        )
         if namespace:
             hash_hex = f"{namespace}:{hash_hex}"
         verbose_logger.debug("Final hashed key: %s", hash_hex)
@@ -546,10 +467,13 @@ class Cache:
             else:
                 cache_key = self.get_cache_key(**kwargs)
             if cache_key is not None:
-                cache_control_args = kwargs.get("cache", {})
-                max_age = cache_control_args.get(
-                    "s-max-age", cache_control_args.get("s-maxage", float("inf"))
+                cache_control_args: DynamicCacheControl = kwargs.get("cache", {})
+                max_age = (
+                    cache_control_args.get("s-maxage")
+                    or cache_control_args.get("s-max-age")
+                    or float("inf")
                 )
+                cached_result = self.cache.get_cache(cache_key, messages=messages)
                 cached_result = self.cache.get_cache(cache_key, messages=messages)
                 return self._get_cache_logic(
                     cached_result=cached_result, max_age=max_age

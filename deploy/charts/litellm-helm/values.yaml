@@ -187,6 +187,7 @@ migrationJob:
   backoffLimit: 4 # Backoff limit for Job restarts
   disableSchemaUpdate: false # Skip schema migrations for specific environments. When True, the job will exit with code 0.
   annotations: {}
+  ttlSecondsAfterFinished: 120
 
 # Additional environment variables to be added to the deployment
 envVars: {

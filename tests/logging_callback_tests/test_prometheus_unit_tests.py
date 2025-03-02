@@ -436,6 +436,100 @@ def test_set_latency_metrics(prometheus_logger):
     )
 
 
+def test_set_latency_metrics_missing_timestamps(prometheus_logger):
+    """
+    Test that _set_latency_metrics handles missing timestamp values gracefully
+    """
+    # Mock all metrics used in the method
+    prometheus_logger.litellm_llm_api_time_to_first_token_metric = MagicMock()
+    prometheus_logger.litellm_llm_api_latency_metric = MagicMock()
+    prometheus_logger.litellm_request_total_latency_metric = MagicMock()
+
+    standard_logging_payload = create_standard_logging_payload()
+    enum_values = UserAPIKeyLabelValues(
+        litellm_model_name=standard_logging_payload["model"],
+        api_provider=standard_logging_payload["custom_llm_provider"],
+        hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
+        api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
+        team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+        team_alias=standard_logging_payload["metadata"]["user_api_key_team_alias"],
+    )
+
+    # Test case where completion_start_time is None
+    kwargs = {
+        "end_time": datetime.now(),
+        "start_time": datetime.now() - timedelta(seconds=2),
+        "api_call_start_time": datetime.now() - timedelta(seconds=1.5),
+        "completion_start_time": None,  # Missing completion start time
+        "stream": True,
+    }
+
+    # This should not raise an exception
+    prometheus_logger._set_latency_metrics(
+        kwargs=kwargs,
+        model="gpt-3.5-turbo",
+        user_api_key="key1",
+        user_api_key_alias="alias1",
+        user_api_team="team1",
+        user_api_team_alias="team_alias1",
+        enum_values=enum_values,
+    )
+
+    # Verify time to first token metric was not called due to missing completion_start_time
+    prometheus_logger.litellm_llm_api_time_to_first_token_metric.labels.assert_not_called()
+
+    # Other metrics should still be called
+    prometheus_logger.litellm_llm_api_latency_metric.labels.assert_called_once()
+    prometheus_logger.litellm_request_total_latency_metric.labels.assert_called_once()
+
+
+def test_set_latency_metrics_missing_api_call_start(prometheus_logger):
+    """
+    Test that _set_latency_metrics handles missing api_call_start_time gracefully
+    """
+    # Mock all metrics used in the method
+    prometheus_logger.litellm_llm_api_time_to_first_token_metric = MagicMock()
+    prometheus_logger.litellm_llm_api_latency_metric = MagicMock()
+    prometheus_logger.litellm_request_total_latency_metric = MagicMock()
+
+    standard_logging_payload = create_standard_logging_payload()
+    enum_values = UserAPIKeyLabelValues(
+        litellm_model_name=standard_logging_payload["model"],
+        api_provider=standard_logging_payload["custom_llm_provider"],
+        hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
+        api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
+        team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+        team_alias=standard_logging_payload["metadata"]["user_api_key_team_alias"],
+    )
+
+    # Test case where api_call_start_time is None
+    kwargs = {
+        "end_time": datetime.now(),
+        "start_time": datetime.now() - timedelta(seconds=2),
+        "api_call_start_time": None,  # Missing API call start time
+        "completion_start_time": datetime.now() - timedelta(seconds=1),
+        "stream": True,
+    }
+
+    # This should not raise an exception
+    prometheus_logger._set_latency_metrics(
+        kwargs=kwargs,
+        model="gpt-3.5-turbo",
+        user_api_key="key1",
+        user_api_key_alias="alias1",
+        user_api_team="team1",
+        user_api_team_alias="team_alias1",
+        enum_values=enum_values,
+    )
+
+    # Verify API latency metrics were not called due to missing api_call_start_time
+    prometheus_logger.litellm_llm_api_time_to_first_token_metric.labels.assert_not_called()
+    prometheus_logger.litellm_llm_api_latency_metric.labels.assert_not_called()
+
+    # Total request latency should still be called
+    prometheus_logger.litellm_request_total_latency_metric.labels.assert_called_once()
+
+
 def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
     """
     Test the increment_top_level_request_and_spend_metrics method

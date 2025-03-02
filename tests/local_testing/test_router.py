@@ -2601,6 +2601,66 @@ def test_model_group_alias(hidden):
         assert len(model_names) == len(_model_list) + 1
 
 
+def test_get_team_specific_model():
+    """
+    Test that _get_team_specific_model returns:
+    - team_public_model_name when team_id matches
+    - None when team_id doesn't match
+    - None when no team_id in model_info
+    """
+    router = Router(model_list=[])
+
+    # Test 1: Matching team_id
+    deployment = DeploymentTypedDict(
+        model_name="model-x",
+        litellm_params={},
+        model_info=ModelInfo(team_id="team1", team_public_model_name="public-model-x"),
+    )
+    assert router._get_team_specific_model(deployment, "team1") == "public-model-x"
+
+    # Test 2: Non-matching team_id
+    assert router._get_team_specific_model(deployment, "team2") is None
+
+    # Test 3: No team_id in model_info
+    deployment = DeploymentTypedDict(
+        model_name="model-y",
+        litellm_params={},
+        model_info=ModelInfo(team_public_model_name="public-model-y"),
+    )
+    assert router._get_team_specific_model(deployment, "team1") is None
+
+    # Test 4: No model_info
+    deployment = DeploymentTypedDict(
+        model_name="model-z", litellm_params={}, model_info=ModelInfo()
+    )
+    assert router._get_team_specific_model(deployment, "team1") is None
+
+
+def test_is_team_specific_model():
+    """
+    Test that _is_team_specific_model returns:
+    - True when model_info contains team_id
+    - False when model_info doesn't contain team_id
+    - False when model_info is None
+    """
+    router = Router(model_list=[])
+
+    # Test 1: With team_id
+    model_info = ModelInfo(team_id="team1", team_public_model_name="public-model-x")
+    assert router._is_team_specific_model(model_info) is True
+
+    # Test 2: Without team_id
+    model_info = ModelInfo(team_public_model_name="public-model-y")
+    assert router._is_team_specific_model(model_info) is False
+
+    # Test 3: Empty model_info
+    model_info = ModelInfo()
+    assert router._is_team_specific_model(model_info) is False
+
+    # Test 4: None model_info
+    assert router._is_team_specific_model(None) is False
+
+
 # @pytest.mark.parametrize("on_error", [True, False])
 # @pytest.mark.asyncio
 # async def test_router_response_headers(on_error):

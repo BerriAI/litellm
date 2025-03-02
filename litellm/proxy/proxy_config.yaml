@@ -8,8 +8,5 @@ model_list:
 
 general_settings:
   store_model_in_db: true
-
-
-litellm_settings:
-  callbacks: ["gcs_bucket"]
+  store_prompts_in_spend_logs: true
 

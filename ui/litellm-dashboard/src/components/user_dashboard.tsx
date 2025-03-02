@@ -5,7 +5,6 @@ import {
   modelAvailableCall,
   getTotalSpendCall,
   getProxyUISettings,
-  teamListCall,
   Organization,
   organizationListCall,
   DEFAULT_ORGANIZATION
@@ -63,9 +62,8 @@ interface UserDashboardProps {
   setUserEmail: React.Dispatch<React.SetStateAction<string | null>>;
   setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
   setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
-  setOrganizations: React.Dispatch<React.SetStateAction<Organization[]>>;
   premiumUser: boolean;
-  currentOrg: Organization | null;
+  organizations: Organization[] | null;
 }
 
 type TeamInterface = {
@@ -84,14 +82,13 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   setUserEmail,
   setTeams,
   setKeys,
-  setOrganizations,
   premiumUser,
-  currentOrg
+  organizations
 }) => {
-  console.log(`currentOrg in user dashboard: ${JSON.stringify(currentOrg)}`)
   const [userSpendData, setUserSpendData] = useState<UserInfo | null>(
     null
   );
+  const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
 
   // Assuming useSearchParams() hook exists and works in your setup
   const searchParams = useSearchParams()!;
@@ -244,13 +241,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             // Optionally, update your UI to reflect the error state here as well
           }
         };
-        const fetchOrganizations = async () => {
-          const organizations = await organizationListCall(accessToken);
-          setOrganizations(organizations);
-        }
         fetchData();
         fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
-        fetchOrganizations();
       }
     }
   }, [userID, token, accessToken, keys, userRole]);
@@ -335,7 +327,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
   console.log("inside user dashboard, selected team", selectedTeam);
   return (
-    <div className="w-full mx-4 overflow-hidden h-[75vh]">
+    <div className="w-full mx-4 h-[75vh]">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
         <CreateKey
@@ -360,6 +352,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             premiumUser={premiumUser}
             teams={teams}
             currentOrg={currentOrg}
+            setCurrentOrg={setCurrentOrg}
+            organizations={organizations}
           />
         </Col>
       </Grid>

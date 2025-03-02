@@ -1,5 +1,5 @@
 "use client";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { ColumnDef, Row } from "@tanstack/react-table";
 import { DataTable } from "./view_logs/table";
 import { Select, SelectItem } from "@tremor/react"
@@ -7,7 +7,11 @@ import { Button } from "@tremor/react"
 import KeyInfoView from "./key_info_view";
 import { Tooltip } from "antd";
 import { Team, KeyResponse } from "./key_team_helpers/key_list";
-
+import FilterComponent from "./common_components/filter";
+import { FilterOption } from "./common_components/filter";
+import { Organization, userListCall } from "./networking";
+import { createTeamSearchFunction } from "./key_team_helpers/team_search_fn";
+import { createOrgSearchFunction } from "./key_team_helpers/organization_search_fn";
 interface AllKeysTableProps {
   keys: KeyResponse[];
   isLoading?: boolean;
@@ -24,73 +28,16 @@ interface AllKeysTableProps {
   accessToken: string | null;
   userID: string | null;
   userRole: string | null;
+  organizations: Organization[] | null;
+  setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>;
 }
 
 // Define columns similar to our logs table
 
-function KeyViewer({ row }: { row: Row<KeyResponse> }) {
-  return (
-    <div className="p-4 bg-gray-50">
-      <div className="bg-white rounded-lg shadow p-4">
-        <h3 className="text-lg font-medium">Key Details</h3>
-        <div className="mt-2 space-y-1">
-          <p>
-            <strong>Key Alias:</strong> {row.original.key_alias || "Not Set"}
-          </p>
-          <p>
-            <strong>Secret Key:</strong> {row.original.key_name}
-          </p>
-          <p>
-            <strong>Created:</strong>{" "}
-            {new Date(row.original.created_at).toLocaleString()}
-          </p>
-          <p>
-            <strong>Expires:</strong>{" "}
-            {row.original.expires
-              ? new Date(row.original.expires).toLocaleString()
-              : "Never"}
-          </p>
-          <p>
-            <strong>Spend:</strong> {Number(row.original.spend).toFixed(4)}
-          </p>
-          <p>
-            <strong>Budget:</strong>{" "}
-            {row.original.max_budget !== null
-              ? row.original.max_budget
-              : "Unlimited"}
-          </p>
-          <p>
-            <strong>Budget Reset:</strong>{" "}
-            {row.original.budget_reset_at
-              ? new Date(row.original.budget_reset_at).toLocaleString()
-              : "Never"}
-          </p>
-          <p>
-            <strong>Models:</strong>{" "}
-            {row.original.models && row.original.models.length > 0
-              ? row.original.models.join(", ")
-              : "-"}
-          </p>
-          <p>
-            <strong>Rate Limits:</strong> TPM:{" "}
-            {row.original.tpm_limit !== null
-              ? row.original.tpm_limit
-              : "Unlimited"}
-            , RPM:{" "}
-            {row.original.rpm_limit !== null
-              ? row.original.rpm_limit
-              : "Unlimited"}
-          </p>
-          <p>
-            <strong>Metadata:</strong>
-          </p>
-          <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto">
-            {JSON.stringify(row.original.metadata, null, 2)}
-          </pre>
-        </div>
-      </div>
-    </div>
-  );
+interface UserResponse {
+  user_id: string;
+  user_email: string;
+  user_role: string;
 }
 
 const TeamFilter = ({ 
@@ -146,9 +93,67 @@ export function AllKeysTable({
   setSelectedTeam,
   accessToken,
   userID,
-  userRole
+  userRole,
+  organizations,
+  setCurrentOrg
 }: AllKeysTableProps) {
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
+  const [filters, setFilters] = useState<{
+    'Team ID': string;
+    'Organization ID': string;
+  }>({
+    'Team ID': '',
+    'Organization ID': ''
+  });
+  const [userList, setUserList] = useState<UserResponse[]>([]);
+
+  useEffect(() => {
+    if (accessToken) {
+      const user_IDs = keys.map(key => key.user_id).filter(id => id !== null);
+      const fetchUserList = async () => {
+        const userListData = await userListCall(accessToken, user_IDs, 1, 100);
+        setUserList(userListData.users);
+      };
+      fetchUserList();
+    }
+  }, [accessToken, keys]);
+
+  const handleFilterChange = (newFilters: Record<string, string>) => {
+    // Update filters state
+    setFilters({
+      'Team ID': newFilters['Team ID'] || '',
+      'Organization ID': newFilters['Organization ID'] || ''
+    });
+  
+    // Handle Team change
+    if (newFilters['Team ID']) {
+      const selectedTeamData = teams?.find(team => team.team_id === newFilters['Team ID']);
+      if (selectedTeamData) {
+        setSelectedTeam(selectedTeamData);
+      }
+    }
+  
+    // Handle Org change
+    if (newFilters['Organization ID']) {
+      const selectedOrg = organizations?.find(org => org.organization_id === newFilters['Organization ID']);
+      if (selectedOrg) {
+        setCurrentOrg(selectedOrg);
+      }
+    }
+  };
+
+  const handleFilterReset = () => {
+    // Reset filters state
+    setFilters({
+      'Team ID': '',
+      'Organization ID': ''
+    });
+    
+    // Reset team and org selections
+    setSelectedTeam(null); // or whatever your default value should be
+    setCurrentOrg(null); // or whatever your default value should be
+  };
+  
 
   const columns: ColumnDef<KeyResponse>[] = [
     {
@@ -176,26 +181,11 @@ export function AllKeysTable({
               className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
               onClick={() => setSelectedKeyId(info.getValue() as string)}
             >
-              {info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "Not Set"}
+              {info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}
             </Button>
           </Tooltip>
         </div>
       ),
-    },
-    {
-      header: "Organization",
-      accessorKey: "organization_id",
-      cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
-    },
-    {
-      header: "Team ID",
-      accessorKey: "team_id",
-      cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
-    },
-    {
-      header: "Key Alias",
-      accessorKey: "key_alias",
-      cell: (info) => info.getValue() ? info.renderValue() : "Not Set",
     },
     {
       header: "Secret Key",
@@ -203,11 +193,65 @@ export function AllKeysTable({
       cell: (info) => <span className="font-mono text-xs">{info.getValue() as string}</span>,
     },
     {
-      header: "Created",
+      header: "Team Alias",
+      accessorKey: "team_id", // Change to access the team_id
+      cell: ({ row, getValue }) => {
+        const teamId = getValue() as string;
+        const team = teams?.find(t => t.team_id === teamId);
+        return team?.team_alias || "Unknown";
+      },
+    },
+    {
+      header: "Team ID",
+      accessorKey: "team_id",
+      cell: (info) => <Tooltip title={info.getValue() as string}>{info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}</Tooltip>
+    },
+
+    {
+      header: "Key Alias",
+      accessorKey: "key_alias",
+      cell: (info) => <Tooltip title={info.getValue() as string}>{info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}</Tooltip>
+    },
+    {
+      header: "Organization ID",
+      accessorKey: "organization_id",
+      cell: (info) => info.getValue() ? info.renderValue() : "-",
+    },
+    {
+      header: "User Email",
+      accessorKey: "user_id",
+      cell: (info) => {
+        const userId = info.getValue() as string;
+        const user = userList.find(u => u.user_id === userId);
+        return user?.user_email ? user.user_email : "-";
+      },
+    },
+    {
+      header: "User ID",
+      accessorKey: "user_id",
+      cell: (info) => {
+        const userId = info.getValue() as string;
+        return userId ? (
+          <Tooltip title={userId}>
+            <span>{userId.slice(0, 7)}...</span>
+          </Tooltip>
+        ) : "-";
+      },
+    },
+    {
+      header: "Created At",
       accessorKey: "created_at",
       cell: (info) => {
         const value = info.getValue();
         return value ? new Date(value as string).toLocaleDateString() : "-";
+      },
+    },
+    {
+      header: "Created By",
+      accessorKey: "created_by",
+      cell: (info) => {
+        const value = info.getValue();
+        return value ? value : "Unknown";
       },
     },
     {
@@ -275,6 +319,12 @@ export function AllKeysTable({
       },
     },
   ];
+
+  const filterOptions: FilterOption[] = [
+    { name: 'Team ID', label: 'Team ID', isSearchable: true, searchFn: createTeamSearchFunction(teams) },
+    { name: 'Organization ID', label: 'Organization ID', isSearchable: true, searchFn: createOrgSearchFunction(organizations) }
+  ];
+  
   
   return (
     <div className="w-full h-full overflow-hidden">
@@ -290,12 +340,8 @@ export function AllKeysTable({
         />
       ) : (
         <div className="border-b py-4 flex-1 overflow-hidden">
-          <div className="flex items-center justify-between w-full">
-            <TeamFilter 
-              teams={teams} 
-              selectedTeam={selectedTeam} 
-              setSelectedTeam={setSelectedTeam} 
-            />
+          <div className="flex items-center justify-between w-full mb-2">
+            <FilterComponent options={filterOptions} onApplyFilters={handleFilterChange} initialValues={filters} onResetFilters={handleFilterReset}/>
             <div className="flex items-center gap-4">
               <span className="inline-flex text-sm text-gray-700">
                 Showing {isLoading ? "..." : `${(pagination.currentPage - 1) * pageSize + 1} - ${Math.min(pagination.currentPage * pageSize, pagination.totalCount)}`} of {isLoading ? "..." : pagination.totalCount} results
@@ -325,6 +371,7 @@ export function AllKeysTable({
             </div>
           </div>
           <div className="h-[32rem] overflow-auto">
+            
             <DataTable
               columns={columns.filter(col => col.id !== 'expander')}
               data={keys}

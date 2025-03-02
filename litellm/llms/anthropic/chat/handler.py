@@ -30,10 +30,16 @@ from litellm.types.llms.anthropic import (
     UsageDelta,
 )
 from litellm.types.llms.openai import (
+    ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
 )
-from litellm.types.utils import GenericStreamingChunk
+from litellm.types.utils import (
+    Delta,
+    GenericStreamingChunk,
+    ModelResponseStream,
+    StreamingChoices,
+)
 from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
 
 from ...base import BaseLLM
@@ -506,11 +512,21 @@ class ModelResponseIterator:
 
         return usage_block
 
-    def _content_block_delta_helper(self, chunk: dict):
+    def _content_block_delta_helper(self, chunk: dict) -> Tuple[
+        str,
+        Optional[ChatCompletionToolCallChunk],
+        List[ChatCompletionThinkingBlock],
+        Dict[str, Any],
+    ]:
+        """
+        Helper function to handle the content block delta
+        """
+
         text = ""
         tool_use: Optional[ChatCompletionToolCallChunk] = None
         provider_specific_fields = {}
         content_block = ContentBlockDelta(**chunk)  # type: ignore
+        thinking_blocks: List[ChatCompletionThinkingBlock] = []
         self.content_blocks.append(content_block)
         if "text" in content_block["delta"]:
             text = content_block["delta"]["text"]
@@ -526,19 +542,45 @@ class ModelResponseIterator:
             }
         elif "citation" in content_block["delta"]:
             provider_specific_fields["citation"] = content_block["delta"]["citation"]
+        elif (
+            "thinking" in content_block["delta"]
+            or "signature_delta" == content_block["delta"]
+        ):
+            thinking_blocks = [
+                ChatCompletionThinkingBlock(
+                    type="thinking",
+                    thinking=content_block["delta"].get("thinking"),
+                    signature_delta=content_block["delta"].get("signature"),
+                )
+            ]
+            provider_specific_fields["thinking_blocks"] = thinking_blocks
+        return text, tool_use, thinking_blocks, provider_specific_fields
 
-        return text, tool_use, provider_specific_fields
+    def _handle_reasoning_content(
+        self, thinking_blocks: List[ChatCompletionThinkingBlock]
+    ) -> Optional[str]:
+        """
+        Handle the reasoning content
+        """
+        reasoning_content = None
+        for block in thinking_blocks:
+            if reasoning_content is None:
+                reasoning_content = ""
+            if "thinking" in block:
+                reasoning_content += block["thinking"]
+        return reasoning_content
 
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
             type_chunk = chunk.get("type", "") or ""
 
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
-            is_finished = False
             finish_reason = ""
             usage: Optional[ChatCompletionUsageBlock] = None
             provider_specific_fields: Dict[str, Any] = {}
+            reasoning_content: Optional[str] = None
+            thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
 
             index = int(chunk.get("index", 0))
             if type_chunk == "content_block_delta":
@@ -546,9 +588,13 @@ class ModelResponseIterator:
                 Anthropic content chunk
                 chunk = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': 'Hello'}}
                 """
-                text, tool_use, provider_specific_fields = (
+                text, tool_use, thinking_blocks, provider_specific_fields = (
                     self._content_block_delta_helper(chunk=chunk)
                 )
+                if thinking_blocks:
+                    reasoning_content = self._handle_reasoning_content(
+                        thinking_blocks=thinking_blocks
+                    )
             elif type_chunk == "content_block_start":
                 """
                 event: content_block_start
@@ -595,7 +641,6 @@ class ModelResponseIterator:
                     or "stop"
                 )
                 usage = self._handle_usage(anthropic_usage_chunk=message_delta["usage"])
-                is_finished = True
             elif type_chunk == "message_start":
                 """
                 Anthropic
@@ -634,16 +679,27 @@ class ModelResponseIterator:
 
             text, tool_use = self._handle_json_mode_chunk(text=text, tool_use=tool_use)
 
-            returned_chunk = GenericStreamingChunk(
-                text=text,
-                tool_use=tool_use,
-                is_finished=is_finished,
-                finish_reason=finish_reason,
+            returned_chunk = ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        index=index,
+                        delta=Delta(
+                            content=text,
+                            tool_calls=[tool_use] if tool_use is not None else None,
+                            provider_specific_fields=(
+                                provider_specific_fields
+                                if provider_specific_fields
+                                else None
+                            ),
+                            thinking_blocks=(
+                                thinking_blocks if thinking_blocks else None
+                            ),
+                            reasoning_content=reasoning_content,
+                        ),
+                        finish_reason=finish_reason,
+                    )
+                ],
                 usage=usage,
-                index=index,
-                provider_specific_fields=(
-                    provider_specific_fields if provider_specific_fields else None
-                ),
             )
 
             return returned_chunk
@@ -754,7 +810,7 @@ class ModelResponseIterator:
         except ValueError as e:
             raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
-    def convert_str_chunk_to_generic_chunk(self, chunk: str) -> GenericStreamingChunk:
+    def convert_str_chunk_to_generic_chunk(self, chunk: str) -> ModelResponseStream:
         """
         Convert a string chunk to a GenericStreamingChunk
 
@@ -774,11 +830,4 @@ class ModelResponseIterator:
             data_json = json.loads(str_line[5:])
             return self.chunk_parser(chunk=data_json)
         else:
-            return GenericStreamingChunk(
-                text="",
-                is_finished=False,
-                finish_reason="",
-                usage=None,
-                index=0,
-                tool_use=None,
-            )
+            return ModelResponseStream()
