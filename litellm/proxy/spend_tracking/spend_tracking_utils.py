@@ -49,6 +49,7 @@ def _get_spend_logs_metadata(
             applied_guardrails=None,
             status=None or "success",
             error_information=None,
+            proxy_server_request=None,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -84,6 +85,9 @@ def get_logging_payload(  # noqa: PLR0915
     metadata = (
         litellm_params.get("metadata", {}) or {}
     )  # if litellm_params['metadata'] == None
+    metadata = _add_proxy_server_request_to_metadata(
+        metadata=metadata, litellm_params=litellm_params
+    )
     completion_start_time = kwargs.get("completion_start_time", end_time)
     call_type = kwargs.get("call_type")
     cache_hit = kwargs.get("cache_hit", False)
@@ -299,17 +303,22 @@ def _get_messages_for_spend_logs_payload(
     standard_logging_payload: Optional[StandardLoggingPayload],
     metadata: Optional[dict] = None,
 ) -> str:
-    if _should_store_prompts_and_responses_in_spend_logs():
-        metadata = metadata or {}
-        if metadata.get("status", None) == "failure":
-            _proxy_server_request = metadata.get("proxy_server_request", {})
-            _request_body = _proxy_server_request.get("body", {}) or {}
-            return json.dumps(_request_body, default=str)
-        else:
-            if standard_logging_payload is None:
-                return "{}"
-            return json.dumps(standard_logging_payload.get("messages", {}))
     return "{}"
+
+
+def _add_proxy_server_request_to_metadata(
+    metadata: dict,
+    litellm_params: dict,
+) -> dict:
+    """
+    Only store if _should_store_prompts_and_responses_in_spend_logs() is True
+    """
+    if _should_store_prompts_and_responses_in_spend_logs():
+        _proxy_server_request = litellm_params.get("proxy_server_request", {})
+        _request_body = _proxy_server_request.get("body", {}) or {}
+        _request_body_json_str = json.dumps(_request_body, default=str)
+        metadata["proxy_server_request"] = _request_body_json_str
+    return metadata
 
 
 def _get_response_for_spend_logs_payload(
