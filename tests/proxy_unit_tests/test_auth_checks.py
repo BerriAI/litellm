@@ -394,7 +394,7 @@ async def test_virtual_key_max_budget_check(
 
 
 @pytest.mark.parametrize(
-    "model, team_models, expected_result",
+    "model, team_models, expect_to_work",
     [
         ("gpt-4", ["gpt-4"], True),  # exact match
         ("gpt-4", ["all-proxy-models"], True),  # all-proxy-models access
@@ -427,7 +427,7 @@ async def test_virtual_key_max_budget_check(
     ],
 )
 @pytest.mark.asyncio
-async def test_can_team_access_model(model, team_models, expected_result):
+async def test_can_team_access_model(model, team_models, expect_to_work):
     """
     Test cases for can_team_access_model:
     1. Exact model match
@@ -438,18 +438,26 @@ async def test_can_team_access_model(model, team_models, expected_result):
     6. Empty model list
     7. None model list
     """
-    team_object = LiteLLM_TeamTable(
-        team_id="test-team",
-        models=team_models,
-    )
-
-    result = await can_team_access_model(
-        model=model,
-        team_object=team_object,
-        llm_router=None,
-        team_model_aliases=None,
-    )
-    assert result == expected_result
+    try:
+        team_object = LiteLLM_TeamTable(
+            team_id="test-team",
+            models=team_models,
+        )
+        result = await can_team_access_model(
+            model=model,
+            team_object=team_object,
+            llm_router=None,
+            team_model_aliases=None,
+        )
+        if not expect_to_work:
+            pytest.fail(
+                f"Expected model access check to fail for model={model}, team_models={team_models}"
+            )
+    except Exception as e:
+        if expect_to_work:
+            pytest.fail(
+                f"Expected model access check to work for model={model}, team_models={team_models}. Got error: {str(e)}"
+            )
 
 
 @pytest.mark.parametrize(
