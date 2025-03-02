@@ -126,13 +126,13 @@ class AnthropicConfig(BaseConfig):
         user_anthropic_beta_headers: Optional[List[str]] = None,
     ) -> dict:
 
-        betas = []
+        betas = set()
         if prompt_caching_set:
-            betas.append("prompt-caching-2024-07-31")
+            betas.add("prompt-caching-2024-07-31")
         if computer_tool_used:
-            betas.append("computer-use-2024-10-22")
+            betas.add("computer-use-2024-10-22")
         if pdf_used:
-            betas.append("pdfs-2024-09-25")
+            betas.add("pdfs-2024-09-25")
         headers = {
             "anthropic-version": anthropic_version or "2023-06-01",
             "x-api-key": api_key,
@@ -141,7 +141,7 @@ class AnthropicConfig(BaseConfig):
         }
 
         if user_anthropic_beta_headers is not None:
-            betas.extend(user_anthropic_beta_headers)
+            betas.update(user_anthropic_beta_headers)
 
         # Don't send any beta headers to Vertex, Vertex has failed requests when they are sent
         if is_vertex_request is True:
