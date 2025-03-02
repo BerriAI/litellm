@@ -164,6 +164,7 @@ from .llms.deprecated_providers import aleph_alpha, palm
 from .llms.gemini.common_utils import get_api_key_from_env
 from .llms.groq.chat.handler import GroqChatCompletion
 from .llms.sap.chat.handler import GenAIHubOrchestration
+from .llms.sap.embed.handler import GenAIHubEmbeddingHandler
 from .llms.huggingface.chat.handler import Huggingface
 from .llms.heroku.chat.transformation import HerokuChatConfig
 from .llms.huggingface.embedding.handler import HuggingFaceEmbedding
@@ -245,6 +246,7 @@ openai_audio_transcriptions = OpenAIAudioTranscription()
 openai_image_variations = OpenAIImageVariationsHandler()
 groq_chat_completions = GroqChatCompletion()
 sap_gen_ai_hub_chat_completions = GenAIHubOrchestration()
+sap_gen_ai_hub_emb = GenAIHubOrchestration()
 azure_ai_embedding = AzureAIEmbedding()
 anthropic_chat_completions = AnthropicChatCompletion()
 azure_chat_completions = AzureChatCompletion()
@@ -3522,6 +3524,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
                 return response
             response = model_response
+<<<<<<< HEAD
         elif custom_llm_provider == "sap" or model in litellm.sap_gen_ai_hub:
             api_base = api_base or litellm.api_base
 
@@ -3699,6 +3702,8 @@ def completion(  # type: ignore # noqa: PLR0915
 
             pass
 
+=======
+>>>>>>> 32ff632a00 (add embedding model support)
         elif custom_llm_provider == "custom":
             url = litellm.api_base or api_base or ""
             if url is None or url == "":
@@ -4711,6 +4716,21 @@ def embedding(  # noqa: PLR0915
                 timeout=timeout,
                 model_response=EmbeddingResponse(),
                 optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+            )
+        elif custom_llm_provider == "sap":
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                litellm_params={},
                 client=client,
                 aembedding=aembedding,
             )
