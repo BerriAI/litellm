@@ -15,6 +15,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm import DualCache
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
+    log_guardrail_information,
 )
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -57,6 +58,7 @@ class LassoGuardrail(CustomGuardrail):
         self.api_base = api_base or "https://server.lasso.security/gateway/v2/classify"
         super().__init__(**kwargs)
 
+    @log_guardrail_information
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -123,6 +125,7 @@ class LassoGuardrail(CustomGuardrail):
             # Instead of allowing the request to proceed, raise an exception
             raise LassoGuardrailAPIError(f"Failed to verify request safety with Lasso API: {str(e)}")
 
+    @log_guardrail_information
     async def async_moderation_hook(
         self,
         data: dict,

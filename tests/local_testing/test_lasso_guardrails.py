@@ -101,9 +101,7 @@ async def test_callback(mode: str):
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
             return_value=Response(
                 json={
-                    "results": [
-                        {
-                            "deputies": {
+                        "deputies": {
                                 "jailbreak": True,
                                 "custom-policies": False,
                                 "sexual": False,
@@ -111,20 +109,18 @@ async def test_callback(mode: str):
                                 "illegality": False,
                                 "violence": False,
                                 "pattern-detection": False
-                            },
-                            "deputies_predictions": {
-                                "jailbreak": 0.923,
-                                "custom-policies": 0.234,
-                                "sexual": 0.145,
-                                "hate": 0.156,
-                                "illegality": 0.167,
-                                "violence": 0.178,
-                                "pattern-detection": 0.189
-                            },
-                            "violations_detected": True
-                        }
-                    ]
-                },
+                        },
+                        "deputies_predictions": {
+                            "jailbreak": 0.923,
+                            "custom-policies": 0.234,
+                            "sexual": 0.145,
+                            "hate": 0.156,
+                            "illegality": 0.167,
+                            "violence": 0.178,
+                            "pattern-detection": 0.189
+                        },
+                        "violations_detected": True
+                    },
                 status_code=200,
                 request=Request(method="POST", url="https://server.lasso.security/gateway/v1/chat"),
             ),
@@ -146,30 +142,26 @@ async def test_callback(mode: str):
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         return_value=Response(
             json={
-                "results": [
-                    {
-                        "deputies": {
-                            "jailbreak": False,
-                            "custom-policies": False,
-                            "sexual": False,
-                            "hate": False,
-                            "illegality": False,
-                            "violence": False,
-                            "pattern-detection": False
-                        },
-                        "deputies_predictions": {
-                            "jailbreak": 0.123,
-                            "custom-policies": 0.234,
-                            "sexual": 0.145,
-                            "hate": 0.156,
-                            "illegality": 0.167,
-                            "violence": 0.178,
-                            "pattern-detection": 0.189
-                        },
-                        "violations_detected": False
-                    }
-                ]
-            },
+                    "deputies": {
+                        "jailbreak": False,
+                        "custom-policies": False,
+                        "sexual": False,
+                        "hate": False,
+                        "illegality": False,
+                        "violence": False,
+                        "pattern-detection": False
+                    },
+                    "deputies_predictions": {
+                        "jailbreak": 0.123,
+                        "custom-policies": 0.234,
+                        "sexual": 0.145,
+                        "hate": 0.156,
+                        "illegality": 0.167,
+                        "violence": 0.178,
+                        "pattern-detection": 0.189
+                    },
+                    "violations_detected": False
+                },
             status_code=200,
             request=Request(method="POST", url="https://server.lasso.security/gateway/v1/chat"),
         ),
