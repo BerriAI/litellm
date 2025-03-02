@@ -213,7 +213,7 @@ class SagemakerLLM(BaseAWSLLM):
                 sync_response = sync_handler.post(
                     url=prepared_request.url,
                     headers=prepared_request.headers,  # type: ignore
-                    json=data,
+                    data=json.dumps(data),
                     stream=stream,
                 )
 
@@ -308,7 +308,7 @@ class SagemakerLLM(BaseAWSLLM):
                 sync_response = sync_handler.post(
                     url=prepared_request.url,
                     headers=prepared_request.headers,  # type: ignore
-                    json=_data,
+                    data=json.dumps(_data),
                     timeout=timeout,
                 )
 
@@ -368,7 +368,7 @@ class SagemakerLLM(BaseAWSLLM):
             response = await client.post(
                 api_base,
                 headers=headers,
-                json=data,
+                data=json.dumps(data),
                 stream=True,
             )
 
@@ -433,10 +433,6 @@ class SagemakerLLM(BaseAWSLLM):
             "messages": messages,
         }
         prepared_request = await asyncified_prepare_request(**prepared_request_args)
-        if model_id is not None:  # Fixes https://github.com/BerriAI/litellm/issues/8889
-            prepared_request.headers.update(
-                {"X-Amzn-SageMaker-Inference-Component": model_id}
-            )
         completion_stream = await self.make_async_call(
             api_base=prepared_request.url,
             headers=prepared_request.headers,  # type: ignore
@@ -522,7 +518,7 @@ class SagemakerLLM(BaseAWSLLM):
                 response = await async_handler.post(
                     url=prepared_request.url,
                     headers=prepared_request.headers,  # type: ignore
-                    json=data,
+                    data=json.dumps(data),
                     timeout=timeout,
                 )
 
