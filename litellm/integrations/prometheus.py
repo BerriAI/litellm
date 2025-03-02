@@ -1560,10 +1560,18 @@ class PrometheusLogger(CustomLogger):
         - Max Budget
         - Budget Reset At
         """
-        self.litellm_remaining_team_budget_metric.labels(
-            team.team_id,
-            team.team_alias or "",
-        ).set(
+        enum_values = UserAPIKeyLabelValues(
+            team=team.team_id,
+            team_alias=team.team_alias or "",
+        )
+
+        _labels = prometheus_label_factory(
+            supported_enum_labels=PrometheusMetricLabels.get_labels(
+                label_name="litellm_remaining_team_budget_metric"
+            ),
+            enum_values=enum_values,
+        )
+        self.litellm_remaining_team_budget_metric.labels(**_labels).set(
             self._safe_get_remaining_budget(
                 max_budget=team.max_budget,
                 spend=team.spend,
