@@ -27,6 +27,12 @@ class LassoGuardrailMissingSecrets(Exception):
     pass
 
 
+class LassoGuardrailAPIError(Exception):
+    """Exception raised when there's an error calling the Lasso API."""
+
+    pass
+
+
 class LassoGuardrail(CustomGuardrail):
     def __init__(
         self,
@@ -48,7 +54,7 @@ class LassoGuardrail(CustomGuardrail):
             )
             raise LassoGuardrailMissingSecrets(msg)
 
-        self.api_base = api_base or "https://server.lasso.security/gateway/v1/chat"
+        self.api_base = api_base or "https://server.lasso.security/gateway/v2/classify"
         super().__init__(**kwargs)
 
     async def async_pre_call_hook(
@@ -91,33 +97,31 @@ class LassoGuardrail(CustomGuardrail):
 
             verbose_proxy_logger.debug(f"Lasso API response: {res}")
 
-            # Check for violations in the new response format
-            if res and "results" in res:
-                for result in res["results"]:
-                    if result.get("violations_detected") is True:
-                        # Find which deputies detected violations
-                        violated_deputies = []
-                        if "deputies" in result:
-                            for deputy, is_violated in result["deputies"].items():
-                                if is_violated:
-                                    violated_deputies.append(deputy)
+            # Check for violations directly in the response
+            if res and res.get("violations_detected") is True:
+                # Find which deputies detected violations
+                violated_deputies = []
+                if "deputies" in res:
+                    for deputy, is_violated in res["deputies"].items():
+                        if is_violated:
+                            violated_deputies.append(deputy)
 
-                        verbose_proxy_logger.warning(f"Lasso guardrail detected violations: {violated_deputies}")
-                        raise HTTPException(
-                            status_code=400,
-                            detail={
-                                "error": "Violated guardrail policy",
-                                "detection_message": f"Guardrail violations detected: {', '.join(violated_deputies)}",
-                                "lasso_response": res,
-                            },
-                        )
+                verbose_proxy_logger.warning(f"Lasso guardrail detected violations: {violated_deputies}")
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Violated Lasso guardrail policy",
+                        "detection_message": f"Guardrail violations detected: {', '.join(violated_deputies)}",
+                        "lasso_response": res,
+                    },
+                )
             return data
         except Exception as e:
             if isinstance(e, HTTPException):
                 raise e
             verbose_proxy_logger.error(f"Error calling Lasso API: {str(e)}")
-            # In case of API error, we allow the request to proceed
-            return data
+            # Instead of allowing the request to proceed, raise an exception
+            raise LassoGuardrailAPIError(f"Failed to verify request safety with Lasso API: {str(e)}")
 
     async def async_moderation_hook(
         self,
@@ -128,9 +132,12 @@ class LassoGuardrail(CustomGuardrail):
         """
         This is used for during_call moderation
         """
+        # Use a cache instance from the parent class or create a new one if needed
+        cache = getattr(self, "cache", DualCache())
+
         return await self.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
-            cache=DualCache(),
+            cache=cache,
             data=data,
             call_type=call_type,
         )
