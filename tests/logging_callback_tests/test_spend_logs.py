@@ -98,6 +98,7 @@ def test_spend_logs_payload(model_id: Optional[str]):
                     "caching_groups": None,
                     "error_information": None,
                     "status": "success",
+                    "proxy_server_request": "{}",
                     "raw_request": "\n\nPOST Request Sent from LiteLLM:\ncurl -X POST \\\nhttps://openai-gpt-4-test-v-1.openai.azure.com//openai/ \\\n-H 'Authorization: *****' \\\n-d '{'model': 'chatgpt-v-2', 'messages': [{'role': 'system', 'content': 'you are a helpful assistant.\\n'}, {'role': 'user', 'content': 'bom dia'}], 'stream': False, 'max_tokens': 10, 'user': '116544810872468347480', 'extra_body': {}}'\n",
                 },
                 "model_info": {
@@ -357,16 +358,28 @@ def test_spend_logs_payload_with_prompts_enabled(monkeypatch):
         },
         "request_tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"],
     }
+    litellm_params = {
+        "proxy_server_request": {
+            "body": {
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "Hello!"}],
+            }
+        }
+    }
     input_args["kwargs"]["standard_logging_object"] = standard_logging_payload
+    input_args["kwargs"]["litellm_params"] = litellm_params
 
     payload: SpendLogsPayload = get_logging_payload(**input_args)
 
     print("json payload: ", json.dumps(payload, indent=4, default=str))
 
     # Verify messages and response are included in payload
-    assert payload["messages"] == json.dumps([{"role": "user", "content": "Hello!"}])
     assert payload["response"] == json.dumps(
         {"role": "assistant", "content": "Hi there!"}
+    )
+    parsed_metadata = json.loads(payload["metadata"])
+    assert parsed_metadata["proxy_server_request"] == json.dumps(
+        {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello!"}]}
     )
 
     # Clean up - reset general_settings
