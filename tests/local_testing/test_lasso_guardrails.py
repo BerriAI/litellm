@@ -8,7 +8,7 @@ import pytest
 
 from litellm import DualCache
 from litellm.proxy.proxy_server import UserAPIKeyAuth
-from litellm.proxy.guardrails.guardrail_hooks.lasso import LassoGuardrailMissingSecrets, LassoGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.lasso import LassoGuardrailMissingSecrets, LassoGuardrail, LassoGuardrailAPIError
 
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
@@ -228,12 +228,14 @@ async def test_api_error_handling():
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         side_effect=Exception("Connection error")
     ):
-        result = await lasso_guardrail.async_pre_call_hook(
-            data=data, cache=DualCache(), user_api_key_dict=UserAPIKeyAuth(), call_type="completion"
-        )
+        # Expect the guardrail to raise a LassoGuardrailAPIError
+        with pytest.raises(LassoGuardrailAPIError) as excinfo:
+            await lasso_guardrail.async_pre_call_hook(
+                data=data, cache=DualCache(), user_api_key_dict=UserAPIKeyAuth(), call_type="completion"
+            )
     
-    # Should allow the request to proceed despite API error
-    assert result == data
+    # Verify the error message
+    assert "Connection error" in str(excinfo.value)
     
     # Clean up
     del os.environ["LASSO_API_KEY"]
