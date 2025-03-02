@@ -1116,6 +1116,14 @@ async def can_user_call_model(
     if user_object is None:
         return True
 
+    if SpecialModelNames.no_default_models.value in user_object.models:
+        raise ProxyException(
+            message=f"User not allowed to access model. No default model access, only team models allowed. Tried to access {model}",
+            type=ProxyErrorTypes.key_model_access_denied,
+            param="model",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
+
     return await _can_object_call_model(
         model=model,
         llm_router=llm_router,

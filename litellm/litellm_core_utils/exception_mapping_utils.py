@@ -278,6 +278,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     "This model's maximum context length is" in error_str
                     or "string too long. Expected a string with maximum length"
                     in error_str
+                    or "model's maximum context limit" in error_str
                 ):
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
@@ -691,6 +692,13 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         response=getattr(original_exception, "response", None),
                         litellm_debug_info=extra_information,
+                    )
+                elif "model's maximum context limit" in error_str:
+                    exception_mapping_worked = True
+                    raise ContextWindowExceededError(
+                        message=f"{custom_llm_provider}Exception: Context Window Error - {error_str}",
+                        model=model,
+                        llm_provider=custom_llm_provider,
                     )
                 elif "token_quota_reached" in error_str:
                     exception_mapping_worked = True

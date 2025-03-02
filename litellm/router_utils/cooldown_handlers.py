@@ -216,7 +216,7 @@ def _should_cooldown_deployment(
             return True
 
         return False
-    elif not is_single_deployment_model_group:
+    else:
         return should_cooldown_based_on_allowed_fails_policy(
             litellm_router_instance=litellm_router_instance,
             deployment=deployment,
