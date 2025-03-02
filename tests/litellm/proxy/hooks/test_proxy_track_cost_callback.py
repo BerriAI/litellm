@@ -61,6 +61,7 @@ async def test_async_post_call_failure_hook():
 
         # Check the arguments passed to update_database
         call_args = mock_update_database.call_args[1]
+        print("call_args", json.dumps(call_args, indent=4, default=str))
         assert call_args["token"] == "test_api_key"
         assert call_args["response_cost"] == 0.0
         assert call_args["user_id"] == "test_user_id"
@@ -71,10 +72,11 @@ async def test_async_post_call_failure_hook():
 
         # Check that metadata was properly updated
         assert "litellm_params" in call_args["kwargs"]
+        assert call_args["kwargs"]["litellm_params"]["proxy_server_request"] == {
+            "request_id": "test_request_id"
+        }
         metadata = call_args["kwargs"]["litellm_params"]["metadata"]
         assert metadata["user_api_key"] == "test_api_key"
         assert metadata["status"] == "failure"
         assert "error_information" in metadata
         assert metadata["original_key"] == "original_value"
-        assert "proxy_server_request" in metadata
-        assert metadata["proxy_server_request"]["request_id"] == "test_request_id"
