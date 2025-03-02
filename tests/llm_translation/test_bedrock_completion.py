@@ -2715,3 +2715,70 @@ def test_bedrock_top_k_param(model, expected_params):
             assert data["top_k"] == 2
         else:
             assert data["additionalModelRequestFields"] == expected_params
+
+
+
+def test_bedrock_invoke_provider():
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "bedrock/invoke/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+        )
+        == "anthropic"
+    )
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+        )
+        == "anthropic"
+    )
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "bedrock/llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n"
+        )
+        == "llama"
+    )
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "us.amazon.nova-pro-v1:0"
+        )
+        == "nova"
+    )
+
+def test_bedrock_description_param():
+    from litellm import completion
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            response = completion(
+                model="bedrock/us.amazon.nova-pro-v1:0",
+                messages=[
+                    {"role": "user", "content": "What is the meaning of this poem?"}
+                ],
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "meaning_reasoning",
+                        "description": "Find the meaning inside a poem",
+                        "schema": {
+                            "type": "object",
+                            "properties": {"meaning": {"type": "string"}},
+                        },
+                    },
+                },
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+        mock_post.assert_called_once()
+
+        request_body = json.loads(mock_post.call_args.kwargs["data"])
+        request_body_str = json.dumps(request_body, indent=4, default=str)
+        print("request_body=", request_body_str)
+
+        assert (
+            "Find the meaning inside a poem" in request_body_str
+        )  # assert description is passed
+
