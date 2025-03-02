@@ -163,7 +163,7 @@ class BedrockImageGeneration(BaseAWSLLM):
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         boto3_credentials_info = self._get_boto_credentials_from_optional_params(
-            optional_params
+            optional_params, model
         )
 
         ### SET RUNTIME ENDPOINT ###

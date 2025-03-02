@@ -19,13 +19,15 @@ import {
   TabPanels,
   TabPanel,
 } from "@tremor/react";
+import { Input } from "antd";
 import { Modal, Form, InputNumber, Tooltip, Select as Select2 } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { PencilAltIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
 import { TextInput } from "@tremor/react";
 import { getModelDisplayName } from './key_team_helpers/fetch_available_models_team_key';
+import { message } from 'antd';
 import OrganizationInfoView from './organization/organization_view';
-import { Organization, organizationListCall, organizationCreateCall } from './networking';
+import { Organization, organizationListCall, organizationCreateCall, organizationDeleteCall } from './networking';
 interface OrganizationsTableProps {
   organizations: Organization[];
   userRole: string;
@@ -39,7 +41,7 @@ interface OrganizationsTableProps {
   premiumUser: boolean;
 }
 
-const fetchOrganizations = async (accessToken: string, setOrganizations: (organizations: Organization[]) => void) => {
+export const fetchOrganizations = async (accessToken: string, setOrganizations: (organizations: Organization[]) => void) => {
   const organizations = await organizationListCall(accessToken);
   setOrganizations(organizations);
 };
@@ -80,18 +82,13 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
     if (!orgToDelete || !accessToken) return;
 
     try {
-      const response = await fetch(`/organization/delete?organization_id=${orgToDelete}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`
-        }
-      });
+      await organizationDeleteCall(accessToken, orgToDelete);
+      message.success('Organization deleted successfully');
 
-      if (!response.ok) throw new Error('Failed to delete organization');
-      
       setIsDeleteModalOpen(false);
       setOrgToDelete(null);
       // Refresh organizations list
+      fetchOrganizations(accessToken, setOrganizations);
     } catch (error) {
       console.error('Error deleting organization:', error);
     }
@@ -105,6 +102,8 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
   const handleCreate = async (values: any) => {
     try {
       if (!accessToken) return;
+
+      console.log(`values in organizations new create call: ${JSON.stringify(values)}`);
 
       await organizationCreateCall(accessToken, values);
       setIsOrgModalVisible(false);
@@ -336,6 +335,10 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                     </Form.Item>
                     <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
                       <InputNumber step={1} width={400} />
+                    </Form.Item>
+
+                    <Form.Item label="Metadata" name="metadata">  
+                      <Input.TextArea rows={4} />
                     </Form.Item>
 
                     <div style={{ textAlign: "right", marginTop: "10px" }}>

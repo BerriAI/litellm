@@ -26,10 +26,9 @@ import {
   Select as Select2,
 } from "antd";
 import { PencilAltIcon, PlusIcon, TrashIcon } from "@heroicons/react/outline";
-import TeamMemberModal from "./edit_membership";
+import MemberModal from "./edit_membership";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
-import ModelAliasesCard from "./model_aliases_card";
 
 
 interface TeamData {
@@ -349,7 +348,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     rpm_limit: info.rpm_limit,
                     max_budget: info.max_budget,
                     budget_duration: info.budget_duration,
-                    guardrails: info.metadata?.guardrails || []
+                    guardrails: info.metadata?.guardrails || [],
+                    metadata: info.metadata ? JSON.stringify(info.metadata, null, 2) : "",
                   }}
                   layout="vertical"
                 >
@@ -421,6 +421,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       placeholder="Select or enter guardrails"
                     />
                   </Form.Item>
+                  <Form.Item label="Metadata" name="metadata">
+                    <Input.TextArea rows={10} />
+                  </Form.Item>
+
 
                   <div className="flex justify-end gap-2 mt-6">
                     <Button onClick={() => setIsEditing(false)}>
@@ -474,24 +478,25 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 </div>
               )}
             </Card>
-
-            <ModelAliasesCard
-              teamId={teamId}
-              accessToken={accessToken}
-              currentAliases={teamData?.team_info?.litellm_model_table?.model_aliases || {}}
-              availableModels={userModels}
-              onUpdate={fetchTeamInfo}
-            />
           </TabPanel>
         </TabPanels>
       </TabGroup>
 
-      <TeamMemberModal
+      <MemberModal
         visible={isEditMemberModalVisible}
         onCancel={() => setIsEditMemberModalVisible(false)}
         onSubmit={handleMemberUpdate}
         initialData={selectedEditMember}
         mode="edit"
+        config={{
+          title: "Edit Member",
+          showEmail: true,
+          showUserId: true,
+          roleOptions: [
+            { label: "Admin", value: "admin" },
+            { label: "User", value: "user" }
+          ]
+        }}
       />
 
       <UserSearchModal

@@ -15,17 +15,17 @@ import asyncio
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Any, List, Optional, Union
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.key_management_endpoints import (
-    duration_in_seconds,
     generate_key_helper_fn,
     prepare_metadata_fields,
 )
@@ -71,6 +71,35 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
     return data_json
 
 
+async def _check_duplicate_user_email(
+    user_email: Optional[str], prisma_client: Any
+) -> None:
+    """
+    Helper function to check if a user email already exists in the database.
+
+    Args:
+        user_email (Optional[str]): Email to check
+        prisma_client (Any): Database client instance
+
+    Raises:
+        Exception: If database is not connected
+        HTTPException: If user with email already exists
+    """
+    if user_email:
+        if prisma_client is None:
+            raise Exception("Database not connected")
+
+        existing_user = await prisma_client.db.litellm_usertable.find_first(
+            where={"user_email": user_email}
+        )
+
+        if existing_user is not None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"User with email {user_email} already exists"},
+            )
+
+
 @router.post(
     "/user/new",
     tags=["Internal User management"],
@@ -98,7 +127,7 @@ async def new_user(
     - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
     - max_budget: Optional[float] - Specify max budget for a given user.
     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
-    - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
+    - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models). Set to ['no-default-models'] to block all model access. Restricting user to only team-based model access.
     - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
     - rpm_limit: Optional[int] - Specify rpm limit for a given user (Requests per minute)
     - auto_create_key: bool - Default=True. Flag used for returning a key as part of the /user/new response
@@ -137,101 +166,116 @@ async def new_user(
      }'
     ```
     """
-    from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
+    try:
+        from litellm.proxy.proxy_server import (
+            general_settings,
+            prisma_client,
+            proxy_logging_obj,
+        )
 
-    data_json = data.json()  # type: ignore
-    data_json = _update_internal_new_user_params(data_json, data)
-    response = await generate_key_helper_fn(request_type="user", **data_json)
-    # Admin UI Logic
-    # Add User to Team and Organization
-    # if team_id passed add this user to the team
-    if data_json.get("team_id", None) is not None:
-        from litellm.proxy.management_endpoints.team_endpoints import team_member_add
+        # Check for duplicate email
+        await _check_duplicate_user_email(data.user_email, prisma_client)
 
-        try:
-            await team_member_add(
-                data=TeamMemberAddRequest(
-                    team_id=data_json.get("team_id", None),
-                    member=Member(
-                        user_id=data_json.get("user_id", None),
-                        role="user",
-                        user_email=data_json.get("user_email", None),
+        data_json = data.json()  # type: ignore
+        data_json = _update_internal_new_user_params(data_json, data)
+        response = await generate_key_helper_fn(request_type="user", **data_json)
+        # Admin UI Logic
+        # Add User to Team and Organization
+        # if team_id passed add this user to the team
+        if data_json.get("team_id", None) is not None:
+            from litellm.proxy.management_endpoints.team_endpoints import (
+                team_member_add,
+            )
+
+            try:
+                await team_member_add(
+                    data=TeamMemberAddRequest(
+                        team_id=data_json.get("team_id", None),
+                        member=Member(
+                            user_id=data_json.get("user_id", None),
+                            role="user",
+                            user_email=data_json.get("user_email", None),
+                        ),
                     ),
-                ),
-                http_request=Request(
-                    scope={"type": "http", "path": "/user/new"},
-                ),
-                user_api_key_dict=user_api_key_dict,
-            )
-        except HTTPException as e:
-            if e.status_code == 400 and (
-                "already exists" in str(e) or "doesn't exist" in str(e)
-            ):
-                verbose_proxy_logger.debug(
-                    "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
-                        str(e)
-                    )
+                    http_request=Request(
+                        scope={"type": "http", "path": "/user/new"},
+                    ),
+                    user_api_key_dict=user_api_key_dict,
                 )
-            else:
-                verbose_proxy_logger.debug(
-                    "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): Exception occured - {}".format(
-                        str(e)
+            except HTTPException as e:
+                if e.status_code == 400 and (
+                    "already exists" in str(e) or "doesn't exist" in str(e)
+                ):
+                    verbose_proxy_logger.debug(
+                        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
+                            str(e)
+                        )
                     )
-                )
-        except Exception as e:
-            if "already exists" in str(e) or "doesn't exist" in str(e):
-                verbose_proxy_logger.debug(
-                    "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
-                        str(e)
+                else:
+                    verbose_proxy_logger.debug(
+                        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): Exception occured - {}".format(
+                            str(e)
+                        )
                     )
-                )
-            else:
-                raise e
+            except Exception as e:
+                if "already exists" in str(e) or "doesn't exist" in str(e):
+                    verbose_proxy_logger.debug(
+                        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
+                            str(e)
+                        )
+                    )
+                else:
+                    raise e
 
-    if data.send_invite_email is True:
-        # check if user has setup email alerting
-        if "email" not in general_settings.get("alerting", []):
-            raise ValueError(
-                "Email alerting not setup on config.yaml. Please set `alerting=['email']. \nDocs: https://docs.litellm.ai/docs/proxy/email`"
+        if data.send_invite_email is True:
+            # check if user has setup email alerting
+            if "email" not in general_settings.get("alerting", []):
+                raise ValueError(
+                    "Email alerting not setup on config.yaml. Please set `alerting=['email']. \nDocs: https://docs.litellm.ai/docs/proxy/email`"
+                )
+
+            event = WebhookEvent(
+                event="internal_user_created",
+                event_group="internal_user",
+                event_message="Welcome to LiteLLM Proxy",
+                token=response.get("token", ""),
+                spend=response.get("spend", 0.0),
+                max_budget=response.get("max_budget", 0.0),
+                user_id=response.get("user_id", None),
+                user_email=response.get("user_email", None),
+                team_id=response.get("team_id", "Default Team"),
+                key_alias=response.get("key_alias", None),
             )
 
-        event = WebhookEvent(
-            event="internal_user_created",
-            event_group="internal_user",
-            event_message="Welcome to LiteLLM Proxy",
-            token=response.get("token", ""),
-            spend=response.get("spend", 0.0),
-            max_budget=response.get("max_budget", 0.0),
-            user_id=response.get("user_id", None),
+            # If user configured email alerting - send an Email letting their end-user know the key was created
+            asyncio.create_task(
+                proxy_logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email(
+                    webhook_event=event,
+                )
+            )
+
+        return NewUserResponse(
+            key=response.get("token", ""),
+            expires=response.get("expires", None),
+            max_budget=response["max_budget"],
+            user_id=response["user_id"],
+            user_role=response.get("user_role", None),
             user_email=response.get("user_email", None),
-            team_id=response.get("team_id", "Default Team"),
-            key_alias=response.get("key_alias", None),
+            user_alias=response.get("user_alias", None),
+            teams=response.get("teams", None),
+            team_id=response.get("team_id", None),
+            metadata=response.get("metadata", None),
+            models=response.get("models", None),
+            tpm_limit=response.get("tpm_limit", None),
+            rpm_limit=response.get("rpm_limit", None),
+            budget_duration=response.get("budget_duration", None),
+            model_max_budget=response.get("model_max_budget", None),
         )
-
-        # If user configured email alerting - send an Email letting their end-user know the key was created
-        asyncio.create_task(
-            proxy_logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email(
-                webhook_event=event,
-            )
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "/user/new: Exception occured - {}".format(str(e))
         )
-
-    return NewUserResponse(
-        key=response.get("token", ""),
-        expires=response.get("expires", None),
-        max_budget=response["max_budget"],
-        user_id=response["user_id"],
-        user_role=response.get("user_role", None),
-        user_email=response.get("user_email", None),
-        user_alias=response.get("user_alias", None),
-        teams=response.get("teams", None),
-        team_id=response.get("team_id", None),
-        metadata=response.get("metadata", None),
-        models=response.get("models", None),
-        tpm_limit=response.get("tpm_limit", None),
-        rpm_limit=response.get("rpm_limit", None),
-        budget_duration=response.get("budget_duration", None),
-        model_max_budget=response.get("model_max_budget", None),
-    )
+        raise handle_exception_on_proxy(e)
 
 
 @router.get(
@@ -709,6 +753,9 @@ async def get_users(
     role: Optional[str] = fastapi.Query(
         default=None, description="Filter users by role"
     ),
+    user_ids: Optional[str] = fastapi.Query(
+        default=None, description="Get list of users by user_ids"
+    ),
     page: int = fastapi.Query(default=1, ge=1, description="Page number"),
     page_size: int = fastapi.Query(
         default=25, ge=1, le=100, description="Number of items per page"
@@ -726,12 +773,19 @@ async def get_users(
             - proxy_admin_viewer
             - internal_user
             - internal_user_viewer
+        user_ids: Optional[str]
+            Get list of users by user_ids. Comma separated list of user_ids.
         page: int
             The page number to return
         page_size: int
             The number of items per page
 
     Currently - admin-only endpoint.
+
+    Example curl:
+    ```
+    http://0.0.0.0:4000/user/list?user_ids=default_user_id,693c1a4a-1cc0-4c7c-afe8-b5d2c8d52e17
+    ```
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -743,49 +797,69 @@ async def get_users(
 
     # Calculate skip and take for pagination
     skip = (page - 1) * page_size
-    take = page_size
 
     # Prepare the query conditions
-    where_clause = ""
+    # Build where conditions based on provided parameters
+    where_conditions: Dict[str, Any] = {}
+
     if role:
-        where_clause = f"""WHERE "user_role" = '{role}'"""
+        where_conditions["user_role"] = {
+            "contains": role,
+            "mode": "insensitive",  # Case-insensitive search
+        }
 
-    # Single optimized SQL query that gets both users and total count
-    sql_query = f"""
-    WITH total_users AS (
-        SELECT COUNT(*) AS total_number_internal_users
-        FROM "LiteLLM_UserTable"
-    ),
-    paginated_users AS (
-        SELECT 
-            u.*,
-            (
-                SELECT COUNT(*) 
-                FROM "LiteLLM_VerificationToken" vt 
-                WHERE vt."user_id" = u."user_id"
-            ) AS key_count
-        FROM "LiteLLM_UserTable" u
-        {where_clause}
-        LIMIT {take} OFFSET {skip}
+    if user_ids and isinstance(user_ids, str):
+        user_id_list = [uid.strip() for uid in user_ids.split(",") if uid.strip()]
+        where_conditions["user_id"] = {
+            "in": user_id_list,  # Now passing a list of strings as required by Prisma
+        }
+
+    users: Optional[List[LiteLLM_UserTable]] = (
+        await prisma_client.db.litellm_usertable.find_many(
+            where=where_conditions,
+            skip=skip,
+            take=page_size,
+            order={"created_at": "desc"},
+        )
     )
-    SELECT 
-        (SELECT total_number_internal_users FROM total_users),
-        *
-    FROM paginated_users;
-    """
 
-    # Execute the query
-    results = await prisma_client.db.query_raw(sql_query)
-    # Get total count from the first row (if results exist)
-    total_count = 0
-    if len(results) > 0:
-        total_count = results[0].get("total_number_internal_users")
+    # Get total count of user rows
+    total_count = await prisma_client.db.litellm_usertable.count(
+        where=where_conditions  # type: ignore
+    )
+
+    # Get key count for each user
+    if users is not None:
+        user_keys = await prisma_client.db.litellm_verificationtoken.group_by(
+            by=["user_id"],
+            count={"user_id": True},
+            where={"user_id": {"in": [user.user_id for user in users]}},
+        )
+        user_key_counts = {
+            item["user_id"]: item["_count"]["user_id"] for item in user_keys
+        }
+    else:
+        user_key_counts = {}
+
+    verbose_proxy_logger.debug(f"Total count of users: {total_count}")
 
     # Calculate total pages
     total_pages = -(-total_count // page_size)  # Ceiling division
 
+    # Prepare response
+    user_list: List[LiteLLM_UserTableWithKeyCount] = []
+    if users is not None:
+        for user in users:
+            user_list.append(
+                LiteLLM_UserTableWithKeyCount(
+                    **user.model_dump(), key_count=user_key_counts.get(user.user_id, 0)
+                )
+            )  # Return full key object
+    else:
+        user_list = []
+
     return {
-        "users": results,
+        "users": user_list,
         "total": total_count,
         "page": page,
         "page_size": page_size,
@@ -950,7 +1024,7 @@ async def add_internal_user_to_organization(
     dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
     responses={
-        200: {"model": List[LiteLLM_UserTable]},
+        200: {"model": List[LiteLLM_UserTableFiltered]},
     },
 )
 async def ui_view_users(
@@ -1006,17 +1080,19 @@ async def ui_view_users(
             }
 
         # Query users with pagination and filters
-        users = await prisma_client.db.litellm_usertable.find_many(
-            where=where_conditions,
-            skip=skip,
-            take=page_size,
-            order={"created_at": "desc"},
+        users: Optional[List[BaseModel]] = (
+            await prisma_client.db.litellm_usertable.find_many(
+                where=where_conditions,
+                skip=skip,
+                take=page_size,
+                order={"created_at": "desc"},
+            )
         )
 
         if not users:
             return []
 
-        return users
+        return [LiteLLM_UserTableFiltered(**user.model_dump()) for user in users]
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error searching users: {str(e)}")
