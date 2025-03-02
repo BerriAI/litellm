@@ -580,6 +580,15 @@ export default function SpendLogsTable({
 }
 
 function RequestViewer({ row }: { row: Row<LogEntry> }) {
+  // Helper function to clean metadata by removing specific fields
+  const getCleanedMetadata = (metadata: any) => {
+    const cleanedMetadata = {...metadata};
+    if ('proxy_server_request' in cleanedMetadata) {
+      delete cleanedMetadata.proxy_server_request;
+    }
+    return cleanedMetadata;
+  };
+
   const formatData = (input: any) => {
     if (typeof input === "string") {
       try {
@@ -589,6 +598,16 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
       }
     }
     return input;
+  };
+
+  // New helper function to get raw request
+  const getRawRequest = () => {
+    // First check if proxy_server_request exists in metadata
+    if (row.original.metadata?.proxy_server_request) {
+      return formatData(row.original.metadata.proxy_server_request);
+    }
+    // Fall back to messages if proxy_server_request is empty
+    return formatData(row.original.messages);
   };
 
   // Extract error information from metadata if available
@@ -689,7 +708,7 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
           <div className="flex justify-between items-center p-4 border-b">
             <h3 className="text-lg font-medium">Request</h3>
             <button 
-              onClick={() => navigator.clipboard.writeText(JSON.stringify(formatData(row.original.messages), null, 2))}
+              onClick={() => navigator.clipboard.writeText(JSON.stringify(getRawRequest(), null, 2))}
               className="p-1 hover:bg-gray-200 rounded"
               title="Copy request"
               disabled={!hasMessages}
@@ -701,11 +720,7 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
             </button>
           </div>
           <div className="p-4 overflow-auto max-h-96">
-            {hasMessages ? (
-              <pre className="text-xs font-mono whitespace-pre-wrap break-all">{JSON.stringify(formatData(row.original.messages), null, 2)}</pre>
-            ) : (
-              <div className="text-gray-500 text-sm italic text-center py-4">Request data not available</div>
-            )}
+            <pre className="text-xs font-mono whitespace-pre-wrap break-all">{JSON.stringify(getRawRequest(), null, 2)}</pre>
           </div>
         </div>
 
@@ -769,7 +784,10 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
           <div className="flex justify-between items-center p-4 border-b">
             <h3 className="text-lg font-medium">Metadata</h3>
             <button 
-              onClick={() => navigator.clipboard.writeText(JSON.stringify(row.original.metadata, null, 2))}
+              onClick={() => {
+                const cleanedMetadata = getCleanedMetadata(row.original.metadata);
+                navigator.clipboard.writeText(JSON.stringify(cleanedMetadata, null, 2));
+              }}
               className="p-1 hover:bg-gray-200 rounded"
               title="Copy metadata"
             >
@@ -780,7 +798,9 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
             </button>
           </div>
           <div className="p-4 overflow-auto max-h-64">
-            <pre className="text-xs font-mono whitespace-pre-wrap break-all">{JSON.stringify(row.original.metadata, null, 2)}</pre>
+            <pre className="text-xs font-mono whitespace-pre-wrap break-all">
+              {JSON.stringify(getCleanedMetadata(row.original.metadata), null, 2)}
+            </pre>
           </div>
         </div>
       )}
