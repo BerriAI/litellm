@@ -152,4 +152,5 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
                 )
                 messages[i] = new_message  # Replace the old message with the new one
 
+        messages = super()._transform_messages(messages, model)
         return messages
