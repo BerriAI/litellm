@@ -1003,6 +1003,7 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
 class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
     success_callback: Optional[List[str]] = []
     failure_callback: Optional[List[str]] = []
+    callbacks: Optional[List[str]] = []
     # for now - only supported for langfuse
     callback_vars: Optional[Dict[str, str]] = {}
 
@@ -1015,6 +1016,9 @@ class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
         failure_callback = values.get("failure_callback", [])
         if failure_callback is None:
             values.pop("failure_callback", None)
+        callbacks = values.get("callbacks", [])
+        if callbacks is None:
+            values.pop("callbacks", None)
 
         callback_vars = values.get("callback_vars", {})
         if callback_vars is None:
@@ -1023,6 +1027,7 @@ class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
             return {
                 "success_callback": [],
                 "failure_callback": [],
+                "callbacks": [],
                 "callback_vars": {},
             }
         valid_keys = set(StandardCallbackDynamicParams.__annotations__.keys())
