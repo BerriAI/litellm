@@ -80,6 +80,11 @@ def get_supported_openai_params(  # noqa: PLR0915
         return litellm.MaritalkConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "openai":
         return litellm.OpenAIConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "sap":
+        if request_type == "chat_completion":
+            return litellm.GenAIHubOrchestrationConfig().get_supported_openai_params(model=model)
+        elif request_type == "embeddings":
+            return litellm.GenAIHubEmbeddingConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "azure":
         if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
             return litellm.AzureOpenAIO1Config().get_supported_openai_params(

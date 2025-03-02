@@ -47,8 +47,10 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         return GenAIHubOrchestrationError(status_code, error_message)
     
     def get_supported_openai_params(self, model: str) -> list:
-        return []
-
+        if "text-embedding-3" in model:
+            return ["encoding_format", "dimensions"]
+        else:
+            return ["encoding_format", ]
 
     def map_openai_params(
         self,
