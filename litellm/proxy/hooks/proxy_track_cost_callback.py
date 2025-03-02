@@ -56,12 +56,13 @@ class _ProxyDBLogger(CustomLogger):
 
         existing_metadata: dict = request_data.get("metadata", None) or {}
         existing_metadata.update(_metadata)
-        existing_metadata["proxy_server_request"] = (
-            request_data.get("proxy_server_request", {}) or {}
-        )
-        request_data["litellm_params"] = {}
-        request_data["litellm_params"]["metadata"] = existing_metadata
 
+        if "litellm_params" not in request_data:
+            request_data["litellm_params"] = {}
+        request_data["litellm_params"]["proxy_server_request"] = (
+            request_data.get("proxy_server_request") or {}
+        )
+        request_data["litellm_params"]["metadata"] = existing_metadata
         await update_database(
             token=user_api_key_dict.api_key,
             response_cost=0.0,
