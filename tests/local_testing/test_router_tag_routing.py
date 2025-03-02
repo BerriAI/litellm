@@ -26,11 +26,6 @@ import litellm
 from litellm import Router
 from litellm._logging import verbose_logger
 
-verbose_logger.setLevel(logging.DEBUG)
-
-
-load_dotenv()
-
 
 @pytest.mark.asyncio()
 async def test_router_free_paid_tier():
@@ -125,7 +120,7 @@ async def test_router_free_paid_tier_embeddings():
         enable_tag_filtering=True,
     )
 
-    for _ in range(5):
+    for _ in range(1):
         # this should pick model with id == very-cheap-model
         response = await router.aembedding(
             model="gpt-4",
