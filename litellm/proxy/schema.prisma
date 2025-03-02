@@ -161,7 +161,9 @@ model LiteLLM_VerificationToken {
     budget_id String?
     organization_id String?
     created_at      DateTime?               @default(now()) @map("created_at")
+    created_by String?
     updated_at      DateTime?               @default(now()) @updatedAt @map("updated_at")
+    updated_by String?
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
 }

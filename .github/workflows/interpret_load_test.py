@@ -54,27 +54,29 @@ def interpret_results(csv_file):
 
 def _get_docker_run_command_stable_release(release_version):
     return f"""
-    \n\n
-    ## Docker Run LiteLLM Proxy
+\n\n
+## Docker Run LiteLLM Proxy
 
-    ```
-    docker run \\
-    -e STORE_MODEL_IN_DB=True \\
-    -p 4000:4000 \\
-    ghcr.io/berriai/litellm_stable_release_branch-{release_version}
+```
+docker run \\
+-e STORE_MODEL_IN_DB=True \\
+-p 4000:4000 \\
+ghcr.io/berriai/litellm:litellm_stable_release_branch-{release_version}
+```
     """
 
 
 def _get_docker_run_command(release_version):
     return f"""
-    \n\n
-    ## Docker Run LiteLLM Proxy
+\n\n
+## Docker Run LiteLLM Proxy
 
-    ```
-    docker run \\
-    -e STORE_MODEL_IN_DB=True \\
-    -p 4000:4000 \\
-    ghcr.io/berriai/litellm:main-{release_version}
+```
+docker run \\
+-e STORE_MODEL_IN_DB=True \\
+-p 4000:4000 \\
+ghcr.io/berriai/litellm:main-{release_version}
+```
     """
 
 

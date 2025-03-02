@@ -359,3 +359,8 @@ ANTHROPIC_API_HEADERS = {
 ANTHROPIC_API_ONLY_HEADERS = {  # fails if calling anthropic on vertex ai / bedrock
     "anthropic-beta",
 }
+
+
+class AnthropicThinkingParam(TypedDict, total=False):
+    type: Literal["enabled"]
+    budget_tokens: int

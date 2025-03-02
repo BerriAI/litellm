@@ -159,6 +159,7 @@ class BaseLLMHTTPHandler:
         encoding: Any,
         api_key: Optional[str] = None,
         client: Optional[AsyncHTTPHandler] = None,
+        json_mode: bool = False,
     ):
         if client is None:
             async_httpx_client = get_async_httpx_client(
@@ -190,6 +191,7 @@ class BaseLLMHTTPHandler:
             optional_params=optional_params,
             litellm_params=litellm_params,
             encoding=encoding,
+            json_mode=json_mode,
         )
 
     def completion(
@@ -211,6 +213,7 @@ class BaseLLMHTTPHandler:
         headers: Optional[dict] = {},
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ):
+        json_mode: bool = optional_params.pop("json_mode", False)
 
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
@@ -286,6 +289,7 @@ class BaseLLMHTTPHandler:
                         else None
                     ),
                     litellm_params=litellm_params,
+                    json_mode=json_mode,
                 )
 
             else:
@@ -309,6 +313,7 @@ class BaseLLMHTTPHandler:
                         if client is not None and isinstance(client, AsyncHTTPHandler)
                         else None
                     ),
+                    json_mode=json_mode,
                 )
 
         if stream is True:
@@ -327,6 +332,7 @@ class BaseLLMHTTPHandler:
                     data=data,
                     messages=messages,
                     client=client,
+                    json_mode=json_mode,
                 )
             completion_stream, headers = self.make_sync_call(
                 provider_config=provider_config,
@@ -380,6 +386,7 @@ class BaseLLMHTTPHandler:
             optional_params=optional_params,
             litellm_params=litellm_params,
             encoding=encoding,
+            json_mode=json_mode,
         )
 
     def make_sync_call(
@@ -453,6 +460,7 @@ class BaseLLMHTTPHandler:
         litellm_params: dict,
         fake_stream: bool = False,
         client: Optional[AsyncHTTPHandler] = None,
+        json_mode: Optional[bool] = None,
     ):
         if provider_config.has_custom_stream_wrapper is True:
             return provider_config.get_async_custom_stream_wrapper(
@@ -464,6 +472,7 @@ class BaseLLMHTTPHandler:
                 data=data,
                 messages=messages,
                 client=client,
+                json_mode=json_mode,
             )
 
         completion_stream, _response_headers = await self.make_async_call_stream_helper(
@@ -720,7 +729,7 @@ class BaseLLMHTTPHandler:
         api_base: Optional[str] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ) -> RerankResponse:
-        
+
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
             api_key=api_key,
