@@ -1163,19 +1163,25 @@ def test_anthropic_citations_api_streaming():
     assert has_citations
 
 
-def test_anthropic_thinking_output():
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic/claude-3-7-sonnet-20250219",
+        "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    ],
+)
+def test_anthropic_thinking_output(model):
     from litellm import completion
 
+    litellm._turn_on_debug()
+
     resp = completion(
-        model="anthropic/claude-3-7-sonnet-20250219",
+        model=model,
         messages=[{"role": "user", "content": "What is the capital of France?"}],
         thinking={"type": "enabled", "budget_tokens": 1024},
     )
 
     print(resp)
-    assert (
-        resp.choices[0].message.provider_specific_fields["thinking_blocks"] is not None
-    )
     assert resp.choices[0].message.reasoning_content is not None
     assert isinstance(resp.choices[0].message.reasoning_content, str)
     assert resp.choices[0].message.thinking_blocks is not None
@@ -1183,12 +1189,19 @@ def test_anthropic_thinking_output():
     assert len(resp.choices[0].message.thinking_blocks) > 0
 
 
-def test_anthropic_thinking_output_stream():
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic/claude-3-7-sonnet-20250219",
+        "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    ],
+)
+def test_anthropic_thinking_output_stream(model):
     # litellm.set_verbose = True
     try:
-        # litellm._turn_on_debug()
+        litellm._turn_on_debug()
         resp = litellm.completion(
-            model="anthropic/claude-3-7-sonnet-20250219",
+            model=model,
             messages=[{"role": "user", "content": "Tell me a joke."}],
             stream=True,
             thinking={"type": "enabled", "budget_tokens": 1024},
@@ -1211,3 +1224,42 @@ def test_anthropic_thinking_output_stream():
         assert reasoning_content_exists
     except litellm.Timeout:
         pytest.skip("Model is timing out")
+
+
+def test_anthropic_custom_headers():
+    from litellm import completion
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    tools = [
+        {
+            "type": "computer_20241022",
+            "function": {
+                "name": "get_current_weather",
+                "parameters": {
+                    "display_height_px": 100,
+                    "display_width_px": 100,
+                    "display_number": 1,
+                },
+            },
+        }
+    ]
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            resp = completion(
+                model="claude-3-5-sonnet-20240620",
+                headers={"anthropic-beta": "structured-output-2024-03-01"},
+                messages=[
+                    {"role": "user", "content": "What is the capital of France?"}
+                ],
+                client=client,
+                tools=tools,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_post.assert_called_once()
+        headers = mock_post.call_args[1]["headers"]
+        assert "structured-output-2024-03-01" in headers["anthropic-beta"]

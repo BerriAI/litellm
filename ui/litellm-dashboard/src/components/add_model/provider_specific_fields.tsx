@@ -86,6 +86,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
       )}
 
       {(selectedProviderEnum === Providers.Azure ||
+        selectedProviderEnum === Providers.Azure_AI_Studio ||
         selectedProviderEnum === Providers.OpenAI_Compatible
       ) && (
         <Form.Item

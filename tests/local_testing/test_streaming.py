@@ -1621,7 +1621,7 @@ def test_completion_replicate_stream_bad_key():
 
 def test_completion_bedrock_claude_stream():
     try:
-        litellm.set_verbose = False
+        litellm.set_verbose = True
         response = completion(
             model="bedrock/anthropic.claude-instant-v1",
             messages=[
@@ -4072,7 +4072,7 @@ def test_mock_response_iterator_tool_use():
         "anthropic/claude-3-7-sonnet-20250219",
     ],
 )
-def test_deepseek_reasoning_content_completion(model):
+def test_reasoning_content_completion(model):
     # litellm.set_verbose = True
     try:
         # litellm._turn_on_debug()
@@ -4081,7 +4081,6 @@ def test_deepseek_reasoning_content_completion(model):
             messages=[{"role": "user", "content": "Tell me a joke."}],
             stream=True,
             thinking={"type": "enabled", "budget_tokens": 1024},
-            timeout=5,
         )
 
         reasoning_content_exists = False
@@ -4096,3 +4095,26 @@ def test_deepseek_reasoning_content_completion(model):
         assert reasoning_content_exists
     except litellm.Timeout:
         pytest.skip("Model is timing out")
+
+
+def test_is_delta_empty():
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.types.utils import Delta
+
+    custom_stream_wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model=None,
+        logging_obj=MagicMock(),
+        custom_llm_provider=None,
+        stream_options=None,
+    )
+
+    assert custom_stream_wrapper.is_delta_empty(
+        delta=Delta(
+            content="",
+            role="assistant",
+            function_call=None,
+            tool_calls=None,
+            audio=None,
+        )
+    )
