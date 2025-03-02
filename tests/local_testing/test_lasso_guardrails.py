@@ -134,7 +134,8 @@ async def test_callback(mode: str):
                     data=data, user_api_key_dict=UserAPIKeyAuth(), call_type="completion"
                 )
     
-    assert "Violated guardrail policy" in str(excinfo.value.detail)
+    # Check for the correct error message
+    assert "Violated Lasso guardrail policy" in str(excinfo.value.detail)
     assert "jailbreak" in str(excinfo.value.detail)
     
     # Test no violation
@@ -235,7 +236,23 @@ async def test_api_error_handling():
             )
     
     # Verify the error message
+    assert "Failed to verify request safety with Lasso API" in str(excinfo.value)
     assert "Connection error" in str(excinfo.value)
+    
+    # Test with a different error message
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        side_effect=Exception("API timeout")
+    ):
+        # Expect the guardrail to raise a LassoGuardrailAPIError
+        with pytest.raises(LassoGuardrailAPIError) as excinfo:
+            await lasso_guardrail.async_pre_call_hook(
+                data=data, cache=DualCache(), user_api_key_dict=UserAPIKeyAuth(), call_type="completion"
+            )
+    
+    # Verify the error message for the second test
+    assert "Failed to verify request safety with Lasso API" in str(excinfo.value)
+    assert "API timeout" in str(excinfo.value)
     
     # Clean up
     del os.environ["LASSO_API_KEY"]
