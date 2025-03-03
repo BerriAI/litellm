@@ -84,27 +84,3 @@ class SnowflakeConfig(OpenAILikeChatConfig):
             if param in supported_openai_params:
                 optional_params[param] = value
         return optional_params
-    
-    # def _transform_messages(
-    #     self,
-    #     model: str,
-    #     messages: List[AllMessageValues],
-    #     optional_params: dict,
-    #     litellm_params: dict,
-    #     headers: dict,
-    # ) -> dict:
-    #     config = litellm.SnowflakeConfig.get_config()
-    #     for k, v in config.items():
-    #         if (
-    #             k not in optional_params
-    #         ):  
-    #             optional_params[k] = v
-            
-    #     text = " ".join(convert_content_list_to_str(message) for message in messages)
-
-    #     data = {
-    #         "text": text,
-    #         **optional_params,
-    #     }
-
-    #     return data
