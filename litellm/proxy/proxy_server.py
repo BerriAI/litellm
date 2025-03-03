@@ -7488,7 +7488,6 @@ async def login(request: Request):  # noqa: PLR0915
             master_key,
             algorithm="HS256",
         )
-        litellm_dashboard_ui += "?userID=" + user_id
         redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
         redirect_response.set_cookie(key="token", value=jwt_token)
         return redirect_response
