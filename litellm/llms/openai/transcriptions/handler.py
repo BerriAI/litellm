@@ -112,6 +112,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             api_base=api_base,
             timeout=timeout,
             max_retries=max_retries,
+            client=client,
         )
 
         ## LOGGING
