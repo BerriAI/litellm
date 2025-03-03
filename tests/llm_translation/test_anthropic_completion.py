@@ -693,8 +693,7 @@ class TestAnthropicCompletion(BaseLLMChatTest):
         from pydantic import BaseModel
         from litellm.utils import supports_response_schema
 
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.model_cost = litellm.get_locally_cached_model_cost_map()
 
         class RFormat(BaseModel):
             question: str
