@@ -8,9 +8,21 @@ export LITELLM_LOCAL_MODEL_COST_MAP=True
 ```
 """
 
+from functools import cache
 import os
 
 import httpx
+
+@cache
+def get_locally_cached_model_cost_map():
+    import importlib.resources
+    import json
+
+    with importlib.resources.open_text(
+        "litellm", "model_prices_and_context_window_backup.json"
+    ) as f:
+        content = json.load(f)
+        return content
 
 
 def get_model_cost_map(url: str):
@@ -18,14 +30,7 @@ def get_model_cost_map(url: str):
         os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False)
         or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == "True"
     ):
-        import importlib.resources
-        import json
-
-        with importlib.resources.open_text(
-            "litellm", "model_prices_and_context_window_backup.json"
-        ) as f:
-            content = json.load(f)
-            return content
+        return get_locally_cached_model_cost_map()
 
     try:
         response = httpx.get(
