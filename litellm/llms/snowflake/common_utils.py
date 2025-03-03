@@ -1,8 +1,6 @@
 import httpx
 from typing import List, Optional
 
-
-
 class SnowflakeBase:
     def validate_environment(
         self,
