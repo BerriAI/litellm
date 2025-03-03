@@ -308,7 +308,7 @@ _key_management_settings: KeyManagementSettings = KeyManagementSettings()
 #### PII MASKING ####
 output_parse_pii: bool = False
 #############################################
-from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map, get_locally_cached_model_cost_map
 
 model_cost = get_model_cost_map(url=model_cost_map_url)
 custom_prompt_dict: Dict[str, dict] = {}

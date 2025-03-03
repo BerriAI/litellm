@@ -115,8 +115,7 @@ def test_openai_embedding_3():
 @pytest.mark.asyncio
 async def test_openai_azure_embedding_simple(model, api_base, api_key, sync_mode):
     try:
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.model_cost = litellm.get_locally_cached_model_cost_map()
         # litellm.set_verbose = True
         if sync_mode:
             response = embedding(
@@ -198,8 +197,7 @@ def _azure_ai_image_mock_response(*args, **kwargs):
 @pytest.mark.asyncio
 async def test_azure_ai_embedding_image(model, api_base, api_key, sync_mode):
     try:
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.model_cost = litellm.get_locally_cached_model_cost_map()
         input = base64_image
         if sync_mode:
             client = HTTPHandler()

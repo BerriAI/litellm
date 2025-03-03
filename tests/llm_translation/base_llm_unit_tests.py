@@ -342,8 +342,7 @@ class BaseLLMChatTest(ABC):
         from pydantic import BaseModel
         from litellm.utils import supports_response_schema
 
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.model_cost = litellm.get_locally_cached_model_cost_map()
 
         class TestModel(BaseModel):
             first_response: str
@@ -382,16 +381,14 @@ class BaseLLMChatTest(ABC):
         from pydantic import BaseModel
         from litellm.utils import supports_response_schema
 
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.model_cost = litellm.get_locally_cached_model_cost_map()
 
     @pytest.mark.flaky(retries=6, delay=1)
     def test_json_response_nested_pydantic_obj(self):
         from pydantic import BaseModel
         from litellm.utils import supports_response_schema
 
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.model_cost = litellm.get_locally_cached_model_cost_map()
 
         class CalendarEvent(BaseModel):
             name: str
@@ -438,8 +435,7 @@ class BaseLLMChatTest(ABC):
         from litellm.utils import supports_response_schema
         from litellm.llms.base_llm.base_utils import type_to_response_format_param
 
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.model_cost = litellm.get_locally_cached_model_cost_map()
 
         class CalendarEvent(BaseModel):
             name: str
@@ -560,8 +556,7 @@ class BaseLLMChatTest(ABC):
         litellm.set_verbose = True
         from litellm.utils import supports_vision
 
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.model_cost = litellm.get_locally_cached_model_cost_map()
 
         base_completion_call_args = self.get_base_completion_call_args()
         if not supports_vision(base_completion_call_args["model"], None):
@@ -615,8 +610,7 @@ class BaseLLMChatTest(ABC):
         litellm.set_verbose = True
         from litellm.utils import supports_vision
 
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.model_cost = litellm.get_locally_cached_model_cost_map()
 
         image_url = "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
 
@@ -656,8 +650,7 @@ class BaseLLMChatTest(ABC):
         litellm.set_verbose = True
         from litellm.utils import supports_prompt_caching
 
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.model_cost = litellm.get_locally_cached_model_cost_map()
 
         base_completion_call_args = self.get_base_completion_call_args()
         if not supports_prompt_caching(base_completion_call_args["model"], None):
@@ -773,8 +766,7 @@ class BaseLLMChatTest(ABC):
             litellm._turn_on_debug()
             from litellm.utils import supports_function_calling
 
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-            litellm.model_cost = litellm.get_model_cost_map(url="")
+            litellm.model_cost = litellm.get_locally_cached_model_cost_map()
 
             base_completion_call_args = self.get_base_completion_call_args()
             if not supports_function_calling(base_completion_call_args["model"], None):
@@ -872,8 +864,7 @@ class BaseLLMChatTest(ABC):
     async def test_completion_cost(self):
         from litellm import completion_cost
 
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.model_cost = litellm.get_locally_cached_model_cost_map()
 
         litellm.set_verbose = True
         response = await self.async_completion_function(
