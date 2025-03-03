@@ -19,7 +19,7 @@ class SnowflakeChatCompletion(OpenAILikeChatHandler,SnowflakeBase):
         model: str,
         messages: List[Dict[str, Any]],
         api_base: str,
-        acompletion: str,
+        acompletion: bool,
         custom_prompt_dict: Dict[str, Any],
         model_response: ModelResponse,
         print_verbose: Callable,
