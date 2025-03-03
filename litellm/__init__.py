@@ -600,7 +600,6 @@ ollama_models = ["llama2"]
 
 maritalk_models = ["maritalk"]
 
-# Probably shouldn't hard code this, change later
 snowflake_models = [
     "snowflake/deepseek-r1",
     "snowflake/claude-3-5-sonnet",
