@@ -6,11 +6,27 @@
  * Clears the token cookie from both root and /ui paths
  */
 export function clearTokenCookies() {
-  // Clear token cookie on root path
-  document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+  // Get the current domain
+  const domain = window.location.hostname;
   
-  // Clear token cookie on /ui path
-  document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/ui;";
+  // Clear with various combinations of path and SameSite
+  const paths = ['/', '/ui'];
+  const sameSiteValues = ['Lax', 'Strict', 'None'];
+  
+  paths.forEach(path => {
+    // Basic clearing
+    document.cookie = `token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=${path};`;
+    
+    // With domain
+    document.cookie = `token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=${path}; domain=${domain};`;
+    
+    // Try different SameSite values
+    sameSiteValues.forEach(sameSite => {
+      const secureFlag = sameSite === 'None' ? ' Secure;' : '';
+      document.cookie = `token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=${path}; SameSite=${sameSite};${secureFlag}`;
+      document.cookie = `token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=${path}; domain=${domain}; SameSite=${sameSite};${secureFlag}`;
+    });
+  });
   
   console.log("After clearing cookies:", document.cookie);
 }
