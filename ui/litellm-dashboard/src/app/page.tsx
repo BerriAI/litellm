@@ -80,6 +80,7 @@ export default function CreateKeyPage() {
   const [disabledPersonalKeyCreation, setDisabledPersonalKeyCreation] =
     useState(false);
   const [userEmail, setUserEmail] = useState<null | string>(null);
+  const [userID, setUserID] = useState<null | string>(null);
   const [teams, setTeams] = useState<Team[] | null>(null);
   const [keys, setKeys] = useState<null | any[]>(null);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
@@ -94,7 +95,6 @@ export default function CreateKeyPage() {
   const [modelData, setModelData] = useState<any>({ data: [] });
   const [token, setToken] = useState<string | null>(null);
 
-  const userID = searchParams.get("userID");
   const invitation_id = searchParams.get("invitation_id");
 
   // Get page from URL, default to 'api-keys' if not present
@@ -134,6 +134,14 @@ export default function CreateKeyPage() {
       console.log("Decoded key:", decoded.key);
       // set accessToken
       setAccessToken(decoded.key);
+
+      // Get userID from token instead of search params
+      if (decoded.user_id) {
+        setUserID(decoded.user_id);
+        console.log("User ID from token:", decoded.user_id);
+      } else {
+        console.log("User ID not found in token");
+      }
 
       setDisabledPersonalKeyCreation(
         decoded.disabled_non_admin_personal_key_creation,
