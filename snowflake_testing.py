@@ -1,0 +1,9 @@
+import os
+from litellm import completion 
+
+os.environ["SNOWFLAKE_ACCOUNT_ID"] = "EBSRFJH-BI29448"
+os.environ["SNOWFLAKE_JWT"] = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJFQlNSRkpILkJJMjk0NDguU0hBMjU2OjZXdVlwazZPSTBUNHhMb0VGaVVWRWN0R3V2cWsrOC9oVmJibzcwcUIrOFk9Iiwic3ViIjoiRUJTUkZKSC5CSTI5NDQ4IiwiaWF0IjoxNzQwOTc5NzEwLCJleHAiOjE3NDEwNjYxMTB9.XpI50hT1O6SbnNCeAfz2TFke_V4y3fBoaNaS230lg2eTTzhfVKoda0azCQDeYf8BTLSJjAjtjPuXbEgnoB1J0keQW9H8hJUItvRhfYnqN3ci_Ln4IoiLvwYM2BneoQ7pZdYrC3nxz0PBRxuMpkNTSp4FFoFwtbPhvzgHH5TMBJA3Kyt7Usr1RpNxJIIcR43M9wjCpovj_9wJlG2ry1dpqrB_aZTssnynLFnE9533V8WgLbtiX-balobjpZcPNUMZB_fv-aHGUT6wq5SOP2G0opbVBGq_NpW5R1ZF-oYVIXiaKxzfN_PK9RhbjHVVxZU-As4llKKlAYmC8ArFMOVsrA"
+
+messages = [{"role": "user", "content": "Write me a poem about the blue sky"}]
+
+completion(model="snowflake/mistral-7b", messages=messages)
