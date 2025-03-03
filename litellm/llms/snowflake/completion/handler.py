@@ -1,11 +1,11 @@
 from litellm.llms.base import BaseLLM
 from typing import Any, List, Optional
-from typing import List, Dict, Callable, Optional, Any,cast
+from typing import List, Dict, Callable, Optional, Any, cast, Union
 
 import litellm
 from litellm.utils import ModelResponse
 from litellm.types.llms.openai import AllMessageValues
-
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai_like.chat.handler import OpenAILikeChatHandler
 from ..common_utils import SnowflakeBase
 
@@ -19,18 +19,18 @@ class SnowflakeChatCompletion(OpenAILikeChatHandler,SnowflakeBase):
         model: str,
         messages: List[Dict[str, Any]],
         api_base: str,
-        acompletion: bool,
-        custom_prompt_dict: Dict[str, Any],
+        custom_prompt_dict: dict,
         model_response: ModelResponse,
         print_verbose: Callable,
-        encoding: Any,
+        encoding,
         JWT: str,
-        logging_obj: Any,
-        optional_params: Optional[Dict[str, Any]] = None,
-        litellm_params: Optional[Dict[str, Any]] = None,
-        logger_fn: Optional[Callable] = None,
-        headers: Optional[Dict[str, str]] = None,
-        client: Optional[Any] = None,
+        logging_obj,
+        optional_params: dict,
+        acompletion=None,
+        litellm_params=None,
+        logger_fn=None,
+        headers: Optional[dict] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ) -> None:
         
         messages = litellm.SnowflakeConfig()._transform_messages(
