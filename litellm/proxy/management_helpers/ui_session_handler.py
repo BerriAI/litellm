@@ -13,6 +13,8 @@ class UISessionHandler:
             key=UISessionHandler._generate_token_name(),
             value=jwt_token,
             secure=True,
+            httponly=True,
+            samesite="strict",
         )
         return redirect_response
 
