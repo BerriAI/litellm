@@ -108,6 +108,7 @@ def test_build_vertex_schema():
 
     schema = {
         "type": "object",
+        "my-random-key": "my-random-value",
         "properties": {
             "recipes": {
                 "type": "array",
@@ -126,6 +127,7 @@ def test_build_vertex_schema():
     assert new_schema["type"] == schema["type"]
     assert new_schema["properties"] == schema["properties"]
     assert "required" in new_schema and new_schema["required"] == schema["required"]
+    assert "my-random-key" not in new_schema
 
 
 @pytest.mark.parametrize(
