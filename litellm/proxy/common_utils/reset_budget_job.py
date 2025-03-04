@@ -319,7 +319,7 @@ class ResetBudgetJob:
         item: Union[LiteLLM_TeamTable, LiteLLM_UserTable, LiteLLM_VerificationToken],
         current_time: datetime,
         item_type: str,
-    ) -> Union[LiteLLM_TeamTable, LiteLLM_UserTable, LiteLLM_VerificationToken]:
+    ) -> Union[LiteLLM_TeamTable, LiteLLM_UserTable, LiteLLM_VerificationToken, None]:
         """
         Common logic for resetting budget for a team, user, or key
         """
@@ -333,7 +333,7 @@ class ResetBudgetJob:
             verbose_proxy_logger.exception(
                 "Error resetting budget for %s: %s. Item: %s", item_type, e, item
             )
-            raise e
+            return None
 
     @staticmethod
     async def _reset_budget_for_team(
