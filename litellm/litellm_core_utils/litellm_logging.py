@@ -89,6 +89,7 @@ from ..integrations.langfuse.langfuse import LangFuseLogger
 from ..integrations.langfuse.langfuse_handler import LangFuseHandler
 from ..integrations.langfuse.langfuse_prompt_management import LangfusePromptManagement
 from ..integrations.langsmith import LangsmithLogger
+from ..integrations.posthog import PosthogLogger
 from ..integrations.literal_ai import LiteralAILogger
 from ..integrations.logfire_logger import LogfireLevel, LogfireLogger
 from ..integrations.lunary import LunaryLogger
@@ -131,6 +132,7 @@ athinaLogger = None
 promptLayerLogger = None
 logfireLogger = None
 weightsBiasesLogger = None
+posthogLogger = None
 customLogger = None
 langFuseLogger = None
 openMeterLogger = None
@@ -2412,6 +2414,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _langsmith_logger = LangsmithLogger()
             _in_memory_loggers.append(_langsmith_logger)
             return _langsmith_logger  # type: ignore
+        elif logging_integration == "posthog":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, PosthogLogger):
+                    return callback  # type: ignore
+
+            _posthog_logger = PosthogLogger()
+            _in_memory_loggers.append(_posthog_logger)
+            return _posthog_logger  # type: ignore
         elif logging_integration == "argilla":
             for callback in _in_memory_loggers:
                 if isinstance(callback, ArgillaLogger):
