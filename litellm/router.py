@@ -67,6 +67,10 @@ from litellm.router_utils.batch_utils import (
     replace_model_in_jsonl,
 )
 from litellm.router_utils.client_initalization_utils import InitalizeOpenAISDKClient
+from litellm.router_utils.clientside_credential_handler import (
+    get_dynamic_litellm_params,
+    is_clientside_credential,
+)
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_handlers import (
     DEFAULT_COOLDOWN_TIME_SECONDS,
@@ -1073,14 +1077,30 @@ class Router:
         - Adds selected deployment, model_info and api_base to kwargs["metadata"] (used for logging)
         - Adds default litellm params to kwargs, if set.
         """
+        model_info = deployment.get("model_info", {}).copy()
+        if is_clientside_credential(request_kwargs=kwargs):
+            litellm_params = deployment["litellm_params"].copy()
+            dynamic_litellm_params = get_dynamic_litellm_params(
+                litellm_params=litellm_params, request_kwargs=kwargs
+            )
+            metadata = kwargs.get("metadata", {})
+            model_group = cast(str, metadata.get("model_group"))
+            _model_id = self._generate_model_id(
+                model_group=model_group, litellm_params=dynamic_litellm_params
+            )
+            original_model_id = model_info.get("id")
+            model_info["id"] = _model_id
+            model_info["original_model_id"] = original_model_id
+
         kwargs.setdefault("metadata", {}).update(
             {
                 "deployment": deployment["litellm_params"]["model"],
-                "model_info": deployment.get("model_info", {}),
+                "model_info": model_info,
                 "api_base": deployment.get("litellm_params", {}).get("api_base"),
             }
         )
-        kwargs["model_info"] = deployment.get("model_info", {})
+        kwargs["model_info"] = model_info
+
         kwargs["timeout"] = self._get_timeout(
             kwargs=kwargs, data=deployment["litellm_params"]
         )

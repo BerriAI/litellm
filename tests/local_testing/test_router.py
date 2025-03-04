@@ -2777,3 +2777,35 @@ def test_router_get_model_list_from_model_alias():
         model_name="gpt-3.5-turbo"
     )
     assert len(model_alias_list) == 0
+
+
+def test_router_dynamic_credentials():
+    """
+    Assert model id for dynamic api key 1 != model id for dynamic api key 2
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo",
+                    "api_key": "my-bad-key",
+                    "mock_response": "fake_response",
+                },
+            }
+        ]
+    )
+
+    response = router.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="my-bad-key-2",
+    )
+
+    response_2 = router.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="my-bad-key-3",
+    )
+
+    assert response_2._hidden_params["model_id"] != response._hidden_params["model_id"]
