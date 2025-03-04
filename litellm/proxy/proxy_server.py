@@ -7444,29 +7444,13 @@ async def login(request: Request):  # noqa: PLR0915
                 user_role=user_role,
             )
         )
-        if os.getenv("DATABASE_URL") is not None:
-            response = await generate_key_helper_fn(
-                request_type="key",
-                **{
-                    "user_role": LitellmUserRoles.PROXY_ADMIN,
-                    "duration": "24hr",
-                    "key_max_budget": litellm.max_ui_session_budget,
-                    "models": [],
-                    "aliases": {},
-                    "config": {},
-                    "spend": 0,
-                    "user_id": key_user_id,
-                    "team_id": "litellm-dashboard",
-                },  # type: ignore
-            )
-        else:
+        if os.getenv("DATABASE_URL") is None:
             raise ProxyException(
                 message="No Database connected. Set DATABASE_URL in .env. If set, use `--detailed_debug` to debug issue.",
                 type=ProxyErrorTypes.auth_error,
                 param="DATABASE_URL",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-        key = response["token"]  # type: ignore
         litellm_dashboard_ui = os.getenv("PROXY_BASE_URL", "")
         if litellm_dashboard_ui.endswith("/"):
             litellm_dashboard_ui += "ui/"
@@ -7477,7 +7461,6 @@ async def login(request: Request):  # noqa: PLR0915
         jwt_token = jwt.encode(  # type: ignore
             {
                 "user_id": user_id,
-                "key": key,
                 "user_email": None,
                 "user_role": user_role,  # this is the path without sso - we can assume only admins will use this
                 "login_method": "username_password",
