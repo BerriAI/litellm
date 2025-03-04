@@ -755,16 +755,12 @@ class CustomStreamWrapper:
                 setattr(model_response, k, v)
         return model_response
 
-    def return_processed_chunk_logic(  # noqa
+    def is_chunk_non_empty(
         self,
         completion_obj: Dict[str, Any],
         model_response: ModelResponseStream,
         response_obj: Dict[str, Any],
-    ):
-
-        print_verbose(
-            f"completion_obj: {completion_obj}, model_response.choices[0]: {model_response.choices[0]}, response_obj: {response_obj}"
-        )
+    ) -> bool:
         if (
             "content" in completion_obj
             and (
@@ -780,6 +776,10 @@ class CustomStreamWrapper:
                 "function_call" in completion_obj
                 and completion_obj["function_call"] is not None
             )
+            or (
+                "reasoning_content" in model_response.choices[0].delta
+                and model_response.choices[0].delta.reasoning_content is not None
+            )
             or (model_response.choices[0].delta.provider_specific_fields is not None)
             or (
                 "provider_specific_fields" in model_response
@@ -789,8 +789,27 @@ class CustomStreamWrapper:
                 "provider_specific_fields" in response_obj
                 and response_obj["provider_specific_fields"] is not None
             )
-        ):  # cannot set content of an OpenAI Object to be an empty string
+        ):
+            return True
+        else:
+            return False
 
+    def return_processed_chunk_logic(  # noqa
+        self,
+        completion_obj: Dict[str, Any],
+        model_response: ModelResponseStream,
+        response_obj: Dict[str, Any],
+    ):
+
+        print_verbose(
+            f"completion_obj: {completion_obj}, model_response.choices[0]: {model_response.choices[0]}, response_obj: {response_obj}"
+        )
+        is_chunk_non_empty = self.is_chunk_non_empty(
+            completion_obj, model_response, response_obj
+        )
+        if (
+            is_chunk_non_empty
+        ):  # cannot set content of an OpenAI Object to be an empty string
             self.safety_checker()
             hold, model_response_str = self.check_special_tokens(
                 chunk=completion_obj["content"],
@@ -806,7 +825,7 @@ class CustomStreamWrapper:
                         for choice in original_chunk.choices:
                             try:
                                 if isinstance(choice, BaseModel):
-                                    choice_json = choice.model_dump()
+                                    choice_json = choice.model_dump()  # type: ignore
                                     choice_json.pop(
                                         "finish_reason", None
                                     )  # for mistral etc. which return a value in their last chunk (not-openai compatible).

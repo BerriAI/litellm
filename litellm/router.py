@@ -67,6 +67,10 @@ from litellm.router_utils.batch_utils import (
     replace_model_in_jsonl,
 )
 from litellm.router_utils.client_initalization_utils import InitalizeOpenAISDKClient
+from litellm.router_utils.clientside_credential_handler import (
+    get_dynamic_litellm_params,
+    is_clientside_credential,
+)
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_handlers import (
     DEFAULT_COOLDOWN_TIME_SECONDS,
@@ -629,37 +633,6 @@ class Router:
         self.aget_messages = self.factory_function(litellm.aget_messages)
         self.arun_thread = self.factory_function(litellm.arun_thread)
 
-    def validate_fallbacks(self, fallback_param: Optional[List]):
-        """
-        Validate the fallbacks parameter.
-        """
-        if fallback_param is None:
-            return
-        for fallback_dict in fallback_param:
-            if not isinstance(fallback_dict, dict):
-                raise ValueError(f"Item '{fallback_dict}' is not a dictionary.")
-            if len(fallback_dict) != 1:
-                raise ValueError(
-                    f"Dictionary '{fallback_dict}' must have exactly one key, but has {len(fallback_dict)} keys."
-                )
-
-    def add_optional_pre_call_checks(
-        self, optional_pre_call_checks: Optional[OptionalPreCallChecks]
-    ):
-        if optional_pre_call_checks is not None:
-            for pre_call_check in optional_pre_call_checks:
-                _callback: Optional[CustomLogger] = None
-                if pre_call_check == "prompt_caching":
-                    _callback = PromptCachingDeploymentCheck(cache=self.cache)
-                elif pre_call_check == "router_budget_limiting":
-                    _callback = RouterBudgetLimiting(
-                        dual_cache=self.cache,
-                        provider_budget_config=self.provider_budget_config,
-                        model_list=self.model_list,
-                    )
-                if _callback is not None:
-                    litellm.logging_callback_manager.add_litellm_callback(_callback)
-
     def routing_strategy_init(
         self, routing_strategy: Union[RoutingStrategy, str], routing_strategy_args: dict
     ):
@@ -724,6 +697,37 @@ class Router:
                 litellm.logging_callback_manager.add_litellm_callback(self.lowestcost_logger)  # type: ignore
         else:
             pass
+
+    def validate_fallbacks(self, fallback_param: Optional[List]):
+        """
+        Validate the fallbacks parameter.
+        """
+        if fallback_param is None:
+            return
+        for fallback_dict in fallback_param:
+            if not isinstance(fallback_dict, dict):
+                raise ValueError(f"Item '{fallback_dict}' is not a dictionary.")
+            if len(fallback_dict) != 1:
+                raise ValueError(
+                    f"Dictionary '{fallback_dict}' must have exactly one key, but has {len(fallback_dict)} keys."
+                )
+
+    def add_optional_pre_call_checks(
+        self, optional_pre_call_checks: Optional[OptionalPreCallChecks]
+    ):
+        if optional_pre_call_checks is not None:
+            for pre_call_check in optional_pre_call_checks:
+                _callback: Optional[CustomLogger] = None
+                if pre_call_check == "prompt_caching":
+                    _callback = PromptCachingDeploymentCheck(cache=self.cache)
+                elif pre_call_check == "router_budget_limiting":
+                    _callback = RouterBudgetLimiting(
+                        dual_cache=self.cache,
+                        provider_budget_config=self.provider_budget_config,
+                        model_list=self.model_list,
+                    )
+                if _callback is not None:
+                    litellm.logging_callback_manager.add_litellm_callback(_callback)
 
     def print_deployment(self, deployment: dict):
         """
@@ -1067,20 +1071,61 @@ class Router:
             elif k == "metadata":
                 kwargs[k].update(v)
 
+    def _handle_clientside_credential(
+        self, deployment: dict, kwargs: dict
+    ) -> Deployment:
+        """
+        Handle clientside credential
+        """
+        model_info = deployment.get("model_info", {}).copy()
+        litellm_params = deployment["litellm_params"].copy()
+        dynamic_litellm_params = get_dynamic_litellm_params(
+            litellm_params=litellm_params, request_kwargs=kwargs
+        )
+        metadata = kwargs.get("metadata", {})
+        model_group = cast(str, metadata.get("model_group"))
+        _model_id = self._generate_model_id(
+            model_group=model_group, litellm_params=dynamic_litellm_params
+        )
+        original_model_id = model_info.get("id")
+        model_info["id"] = _model_id
+        model_info["original_model_id"] = original_model_id
+        deployment_pydantic_obj = Deployment(
+            model_name=model_group,
+            litellm_params=LiteLLM_Params(**dynamic_litellm_params),
+            model_info=model_info,
+        )
+        self.upsert_deployment(
+            deployment=deployment_pydantic_obj
+        )  # add new deployment to router
+        return deployment_pydantic_obj
+
     def _update_kwargs_with_deployment(self, deployment: dict, kwargs: dict) -> None:
         """
         2 jobs:
         - Adds selected deployment, model_info and api_base to kwargs["metadata"] (used for logging)
         - Adds default litellm params to kwargs, if set.
         """
+        model_info = deployment.get("model_info", {}).copy()
+        deployment_model_name = deployment["litellm_params"]["model"]
+        deployment_api_base = deployment["litellm_params"].get("api_base")
+        if is_clientside_credential(request_kwargs=kwargs):
+            deployment_pydantic_obj = self._handle_clientside_credential(
+                deployment=deployment, kwargs=kwargs
+            )
+            model_info = deployment_pydantic_obj.model_info.model_dump()
+            deployment_model_name = deployment_pydantic_obj.litellm_params.model
+            deployment_api_base = deployment_pydantic_obj.litellm_params.api_base
+
         kwargs.setdefault("metadata", {}).update(
             {
-                "deployment": deployment["litellm_params"]["model"],
-                "model_info": deployment.get("model_info", {}),
-                "api_base": deployment.get("litellm_params", {}).get("api_base"),
+                "deployment": deployment_model_name,
+                "model_info": model_info,
+                "api_base": deployment_api_base,
             }
         )
-        kwargs["model_info"] = deployment.get("model_info", {})
+        kwargs["model_info"] = model_info
+
         kwargs["timeout"] = self._get_timeout(
             kwargs=kwargs, data=deployment["litellm_params"]
         )
@@ -3612,6 +3657,7 @@ class Router:
         - True if the deployment should be put in cooldown
         - False if the deployment should not be put in cooldown
         """
+        verbose_router_logger.debug("Router: Entering 'deployment_callback_on_failure'")
         try:
             exception = kwargs.get("exception", None)
             exception_status = getattr(exception, "status_code", "")
@@ -3653,6 +3699,9 @@ class Router:
 
                 return result
             else:
+                verbose_router_logger.debug(
+                    "Router: Exiting 'deployment_callback_on_failure' without cooldown. No model_info found."
+                )
                 return False
 
         except Exception as e:

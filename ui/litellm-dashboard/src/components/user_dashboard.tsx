@@ -21,6 +21,8 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { Team } from "./key_team_helpers/key_list";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
+import { getAuthToken } from "@/utils/cookieUtils";
+import { clearTokenCookies } from "@/utils/cookieUtils";
 const isLocal = process.env.NODE_ENV === "development";
 if (isLocal != true) {
   console.log = function() {};
@@ -42,14 +44,6 @@ export type UserInfo = {
   models: string[];
   max_budget?: number | null;
   spend: number;
-}
-
-function getCookie(name: string) {
-  console.log("COOKIES", document.cookie)
-  const cookieValue = document.cookie
-      .split('; ')
-      .find(row => row.startsWith(name + '='));
-  return cookieValue ? cookieValue.split('=')[1] : null;
 }
 
 interface UserDashboardProps {
@@ -93,7 +87,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   // Assuming useSearchParams() hook exists and works in your setup
   const searchParams = useSearchParams()!;
 
-  const token = getCookie('token');
+  const token = getAuthToken();
 
   const invitation_id = searchParams.get("invitation_id");
 
@@ -295,14 +289,15 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
   if (userID == null || token == null) {
     // user is not logged in as yet 
+    console.log("All cookies before redirect:", document.cookie);
+    
+    // Clear token cookies using the utility function
+    clearTokenCookies();
+    
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/sso/key/generate`
       : `/sso/key/generate`;
     
-
-    // clear cookie called "token" since user will be logging in again
-    document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-
     console.log("Full URL:", url);
     window.location.href = url;
 
@@ -326,6 +321,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   }
 
   console.log("inside user dashboard, selected team", selectedTeam);
+  console.log("All cookies after redirect:", document.cookie);
   return (
     <div className="w-full mx-4 h-[75vh]">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
