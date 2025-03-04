@@ -211,6 +211,7 @@ export default function CreateKeyPage() {
               userID={userID}
               userRole={userRole}
               premiumUser={premiumUser}
+              userEmail={userEmail}
               setProxySettings={setProxySettings}
               proxySettings={proxySettings}
             />
