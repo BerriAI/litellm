@@ -20,7 +20,7 @@ import {
 } from "@/components/networking";
 import { jwtDecode } from "jwt-decode";
 import { Form, Button as Button2, message } from "antd";
-import { getAuthToken } from "@/utils/cookieUtils";
+import { getAuthToken, setAuthToken } from "@/utils/cookieUtils";
 
 export default function Onboarding() {
   const [form] = Form.useForm();
@@ -88,7 +88,7 @@ export default function Onboarding() {
       litellm_dashboard_ui += "?userID=" + user_id;
 
       // set cookie "token" to jwtToken
-      document.cookie = "token=" + jwtToken;
+      setAuthToken(jwtToken);
       console.log("redirecting to:", litellm_dashboard_ui);
 
       window.location.href = litellm_dashboard_ui;
