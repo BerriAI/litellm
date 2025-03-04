@@ -2,7 +2,6 @@
 Call Hook for LiteLLM Proxy which allows Langfuse prompt management.
 """
 
-import json
 import os
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union, cast
