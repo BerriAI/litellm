@@ -2783,18 +2783,25 @@ def test_router_dynamic_credentials():
     """
     Assert model id for dynamic api key 1 != model id for dynamic api key 2
     """
+    original_model_id = "123"
+    original_api_key = "my-bad-key"
     router = Router(
         model_list=[
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "openai/gpt-3.5-turbo",
-                    "api_key": "my-bad-key",
+                    "api_key": original_api_key,
                     "mock_response": "fake_response",
                 },
+                "model_info": {"id": original_model_id},
             }
         ]
     )
+
+    deployment = router.get_deployment(model_id=original_model_id)
+    assert deployment is not None
+    assert deployment.litellm_params.api_key == original_api_key
 
     response = router.completion(
         model="gpt-3.5-turbo",
@@ -2809,3 +2816,7 @@ def test_router_dynamic_credentials():
     )
 
     assert response_2._hidden_params["model_id"] != response._hidden_params["model_id"]
+
+    deployment = router.get_deployment(model_id=original_model_id)
+    assert deployment is not None
+    assert deployment.litellm_params.api_key == original_api_key
