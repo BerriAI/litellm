@@ -17,6 +17,7 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.router import Router
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
@@ -59,7 +60,7 @@ def _get_metadata_variable_name(request: Request) -> str:
 
     For ALL other endpoints we call this "metadata
     """
-    if "thread" in request.url.path or "assistant" in request.url.path:
+    if RouteChecks._is_assistants_api_request(request):
         return "litellm_metadata"
     if "batches" in request.url.path:
         return "litellm_metadata"
@@ -101,17 +102,24 @@ def convert_key_logging_metadata_to_callback(
 
         if data.callback_name not in team_callback_settings_obj.failure_callback:
             team_callback_settings_obj.failure_callback.append(data.callback_name)
-    elif data.callback_type == "success_and_failure":
+    elif (
+        not data.callback_type or data.callback_type == "success_and_failure"
+    ):  # assume 'success_and_failure' = litellm.callbacks
         if team_callback_settings_obj.success_callback is None:
             team_callback_settings_obj.success_callback = []
         if team_callback_settings_obj.failure_callback is None:
             team_callback_settings_obj.failure_callback = []
+        if team_callback_settings_obj.callbacks is None:
+            team_callback_settings_obj.callbacks = []
 
         if data.callback_name not in team_callback_settings_obj.success_callback:
             team_callback_settings_obj.success_callback.append(data.callback_name)
 
         if data.callback_name not in team_callback_settings_obj.failure_callback:
             team_callback_settings_obj.failure_callback.append(data.callback_name)
+
+        if data.callback_name not in team_callback_settings_obj.callbacks:
+            team_callback_settings_obj.callbacks.append(data.callback_name)
 
     for var, value in data.callback_vars.items():
         if team_callback_settings_obj.callback_vars is None:
@@ -424,9 +432,9 @@ class LiteLLMProxyRequestSetup:
                     tags = [tag.strip() for tag in _tags]
                 elif isinstance(headers["x-litellm-tags"], list):
                     tags = headers["x-litellm-tags"]
-            # Check request body for tags
-            if "tags" in data and isinstance(data["tags"], list):
-                tags = data["tags"]
+        # Check request body for tags
+        if "tags" in data and isinstance(data["tags"], list):
+            tags = data["tags"]
 
         return tags
 

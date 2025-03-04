@@ -1982,11 +1982,44 @@ jobs:
       - run:
           name: Wait for app to be ready
           command: dockerize -wait http://localhost:4000 -timeout 5m
+      # Add Ruby installation and testing before the existing Node.js and Python tests
+      - run:
+          name: Install Ruby and Bundler
+          command: |
+            # Import GPG keys first
+            gpg --keyserver hkp://keyserver.ubuntu.com --recv-keys 409B6B1796C275462A1703113804BB82D39DC0E3 7D2BAF1CF37B13E2069D6956105BD0E739499BDB || {
+              curl -sSL https://rvm.io/mpapis.asc | gpg --import -
+              curl -sSL https://rvm.io/pkuczynski.asc | gpg --import -
+            }
+            
+            # Install Ruby version manager (RVM)
+            curl -sSL https://get.rvm.io | bash -s stable
+            
+            # Source RVM from the correct location
+            source $HOME/.rvm/scripts/rvm
+            
+            # Install Ruby 3.2.2
+            rvm install 3.2.2
+            rvm use 3.2.2 --default
+            
+            # Install latest Bundler
+            gem install bundler
+
+      - run:
+          name: Run Ruby tests
+          command: |
+            source $HOME/.rvm/scripts/rvm
+            cd tests/pass_through_tests/ruby_passthrough_tests
+            bundle install
+            bundle exec rspec
+          no_output_timeout: 30m
       # New steps to run Node.js test
       - run:
           name: Install Node.js
           command: |
+            export DEBIAN_FRONTEND=noninteractive
             curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+            sudo apt-get update
             sudo apt-get install -y nodejs
             node --version
             npm --version
