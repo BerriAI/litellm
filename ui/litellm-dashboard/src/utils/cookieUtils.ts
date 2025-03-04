@@ -43,6 +43,15 @@ export function clearTokenCookies() {
   console.log("After clearing cookies:", document.cookie);
 }
 
+export function setAuthToken(token: string) {
+  // Generate a token name with current timestamp
+  const currentTimestamp = Math.floor(Date.now() / 1000);
+  const tokenName = `token_${currentTimestamp}`;
+  
+  // Set the cookie with the timestamp-based name
+  document.cookie = `${tokenName}=${token}; path=/; domain=${window.location.hostname};`;
+}
+
 export function getAuthToken() {
     // Check if we're in a browser environment
     if (typeof window === 'undefined' || typeof document === 'undefined') {
@@ -56,6 +65,13 @@ export function getAuthToken() {
       .map(cookie => {
         const parts = cookie.split("=");
         const name = parts[0];
+        
+        // Explicitly skip cookies named just "token"
+        if (name === "token") {
+          return null;
+        }
+        
+        // Only match cookies with the token_{timestamp} format
         const match = name.match(tokenPattern);
         if (match) {
           return {
