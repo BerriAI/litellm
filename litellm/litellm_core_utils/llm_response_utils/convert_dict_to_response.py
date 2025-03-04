@@ -129,12 +129,7 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
     model_response_object = ModelResponse(stream=True)
     choice_list = []
     for idx, choice in enumerate(response_object["choices"]):
-        delta = Delta(
-            content=choice["message"].get("content", None),
-            role=choice["message"]["role"],
-            function_call=choice["message"].get("function_call", None),
-            tool_calls=choice["message"].get("tool_calls", None),
-        )
+        delta = Delta(**choice["message"])
         finish_reason = choice.get("finish_reason", None)
         if finish_reason is None:
             # gpt-4 vision can return 'finish_reason' or 'finish_details'

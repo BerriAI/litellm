@@ -247,7 +247,6 @@ class LLMCachingHandler:
                     pass
                 else:
                     call_type = original_function.__name__
-
                     cached_result = self._convert_cached_result_to_model_response(
                         cached_result=cached_result,
                         call_type=call_type,
