@@ -164,7 +164,6 @@ from .llms.deprecated_providers import aleph_alpha, palm
 from .llms.gemini.common_utils import get_api_key_from_env
 from .llms.groq.chat.handler import GroqChatCompletion
 from .llms.sap.chat.handler import GenAIHubOrchestration
-from .llms.sap.embed.handler import GenAIHubEmbeddingHandler
 from .llms.huggingface.chat.handler import Huggingface
 from .llms.heroku.chat.transformation import HerokuChatConfig
 from .llms.huggingface.embedding.handler import HuggingFaceEmbedding
