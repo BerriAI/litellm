@@ -40,7 +40,7 @@ LiteLLM manages:
 [**Jump to LiteLLM Proxy (LLM Gateway) Docs**](https://github.com/BerriAI/litellm?tab=readme-ov-file#openai-proxy---docs) <br>
 [**Jump to Supported LLM Providers**](https://github.com/BerriAI/litellm?tab=readme-ov-file#supported-providers-docs)
 
-🚨 **Stable Release:** Use docker images with the `-stable` tag. These have undergone 12 hour load tests, before being published. 
+🚨 **Stable Release:** Use docker images with the `-stable` tag. These have undergone 12 hour load tests, before being published. [More information about the release cycle here](https://docs.litellm.ai/docs/proxy/release_cycle)
 
 Support for more providers. Missing a provider or LLM Platform, raise a [feature request](https://github.com/BerriAI/litellm/issues/new?assignees=&labels=enhancement&projects=&template=feature_request.yml&title=%5BFeature%5D%3A+).
 
@@ -64,7 +64,7 @@ import os
 
 ## set ENV variables
 os.environ["OPENAI_API_KEY"] = "your-openai-key"
-os.environ["ANTHROPIC_API_KEY"] = "your-cohere-key"
+os.environ["ANTHROPIC_API_KEY"] = "your-anthropic-key"
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
@@ -187,13 +187,13 @@ os.environ["LANGFUSE_PUBLIC_KEY"] = ""
 os.environ["LANGFUSE_SECRET_KEY"] = ""
 os.environ["ATHINA_API_KEY"] = "your-athina-api-key"
 
-os.environ["OPENAI_API_KEY"]
+os.environ["OPENAI_API_KEY"] = "your-openai-key"
 
 # set callbacks
 litellm.success_callback = ["lunary", "mlflow", "langfuse", "athina", "helicone"] # log input/output to lunary, langfuse, supabase, athina, helicone etc
 
 #openai call
-response = completion(model="anthropic/claude-3-sonnet-20240229", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
+response = completion(model="openai/gpt-4o", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
 ```
 
 # LiteLLM Proxy Server (LLM Gateway) - ([Docs](https://docs.litellm.ai/docs/simple_proxy))
@@ -343,25 +343,32 @@ curl 'http://0.0.0.0:4000/key/generate' \
 To contribute: Clone the repo locally -> Make a change -> Submit a PR with the change.
 
 Here's how to modify the repo locally:
+
 Step 1: Clone the repo
 
 ```
 git clone https://github.com/BerriAI/litellm.git
 ```
 
-Step 2: Navigate into the project, and install dependencies:
+Step 2: Install dependencies:
 
 ```
-cd litellm
-poetry install -E extra_proxy -E proxy
+pip install -r requirements.txt
 ```
 
 Step 3: Test your change:
 
+a. Add a pytest test within `tests/litellm/`
+
+This folder follows the same directory structure as `litellm/`.
+
+If a corresponding test file does not exist, create one.
+
+b. Run the test
+
 ```
-cd tests # pwd: Documents/litellm/litellm/tests
-poetry run flake8
-poetry run pytest .
+cd tests/litellm # pwd: Documents/litellm/litellm/tests/litellm
+pytest /path/to/test_file.py
 ```
 
 Step 4: Submit a PR with your changes! 🚀

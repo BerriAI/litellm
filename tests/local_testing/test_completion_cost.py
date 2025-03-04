@@ -1574,7 +1574,11 @@ def test_completion_cost_azure_ai_rerank(model):
                 "relevance_score": 0.990732,
             },
         ],
-        meta={},
+        meta={
+            "billed_units": {
+                "search_units": 1,
+            }
+        },
     )
     print("response", response)
     model = model
@@ -2771,6 +2775,8 @@ def test_bedrock_cost_calc_with_region():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
+    litellm.add_known_models()
+
     hidden_params = {
         "custom_llm_provider": "bedrock",
         "region_name": "us-east-1",
@@ -2961,3 +2967,18 @@ async def test_cost_calculator_with_custom_pricing_router(model_item, custom_pri
     )
     # assert resp.model == "random-model"
     assert resp._hidden_params["response_cost"] > 0
+
+
+def test_json_valid_model_cost_map():
+    import json
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+
+    model_cost = litellm.get_model_cost_map(url="")
+
+    try:
+        # Attempt to serialize and deserialize the JSON
+        json_str = json.dumps(model_cost)
+        json.loads(json_str)
+    except json.JSONDecodeError as e:
+        assert False, f"Invalid JSON format: {str(e)}"

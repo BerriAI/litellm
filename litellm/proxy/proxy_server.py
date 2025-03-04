@@ -107,12 +107,14 @@ import litellm
 from litellm import Router
 from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
+from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.proxy._types import *
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
@@ -177,7 +179,7 @@ from litellm.proxy.hooks.prompt_injection_detection import (
     _OPTIONAL_PromptInjectionDetection,
 )
 from litellm.proxy.hooks.proxy_failure_handler import _PROXY_failure_handler
-from litellm.proxy.hooks.proxy_track_cost_callback import _PROXY_track_cost_callback
+from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     router as budget_management_router,
@@ -196,6 +198,11 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     router as key_management_router,
+)
+from litellm.proxy.management_endpoints.model_management_endpoints import (
+    _add_model_to_db,
+    _add_team_model_to_db,
+    check_if_team_id_matches_key,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     router as model_management_router,
@@ -232,6 +239,7 @@ from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     router as ui_crud_endpoints_router,
 )
@@ -245,7 +253,6 @@ from litellm.proxy.utils import (
     _is_projected_spend_over_limit,
     _is_valid_team_configs,
     get_error_message_str,
-    get_instance_fn,
     hash_token,
     update_spend,
 )
@@ -750,7 +757,7 @@ health_check_details = None
 health_check_results = {}
 queue: List = []
 litellm_proxy_budget_name = "litellm-proxy-budget"
-litellm_proxy_admin_name = "default_user_id"
+litellm_proxy_admin_name = LITELLM_PROXY_ADMIN_NAME
 ui_access_mode: Literal["admin", "all"] = "all"
 proxy_budget_rescheduler_min_time = 597
 proxy_budget_rescheduler_max_time = 605
@@ -931,10 +938,7 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
 def cost_tracking():
     global prisma_client
     if prisma_client is not None:
-        if isinstance(litellm._async_success_callback, list):
-            verbose_proxy_logger.debug("setting litellm success callback to track cost")
-            if (_PROXY_track_cost_callback) not in litellm._async_success_callback:  # type: ignore
-                litellm.logging_callback_manager.add_litellm_async_success_callback(_PROXY_track_cost_callback)  # type: ignore
+        litellm.logging_callback_manager.add_litellm_callback(_ProxyDBLogger())
 
 
 def error_tracking():
@@ -1649,10 +1653,6 @@ class ProxyConfig:
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
 
-            ## INIT ROUTER REDIS CACHE ##
-            if llm_router is not None:
-                llm_router._update_redis_cache(cache=redis_usage_cache)
-
     async def get_config(self, config_file_path: Optional[str] = None) -> dict:
         """
         Load config file
@@ -2178,6 +2178,9 @@ class ProxyConfig:
                 async_only_mode=True  # only init async clients
             ),
         )  # type:ignore
+
+        if redis_usage_cache is not None and router.cache.redis_cache is None:
+            router._update_redis_cache(cache=redis_usage_cache)
 
         # Guardrail settings
         guardrails_v2: Optional[List[Dict]] = None
@@ -3382,7 +3385,9 @@ class ProxyStartupEvent:
         DD tracer is used to trace Python applications.
         Doc: https://docs.datadoghq.com/tracing/trace_collection/automatic_instrumentation/dd_libraries/python/
         """
-        if get_secret_bool("USE_DDTRACE", False) is True:
+        from litellm.litellm_core_utils.dd_tracing import _should_use_dd_tracer
+
+        if _should_use_dd_tracer():
             import ddtrace
 
             ddtrace.patch_all(logging=True, openai=False)
@@ -3527,7 +3532,7 @@ async def chat_completion(  # noqa: PLR0915
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args
             or model  # for azure deployments
-            or data["model"]  # default passed in http request
+            or data.get("model", None)  # default passed in http request
         )
 
         global user_temperature, user_request_timeout, user_max_tokens, user_api_base
@@ -3719,9 +3724,14 @@ async def chat_completion(  # noqa: PLR0915
         timeout = getattr(
             e, "timeout", None
         )  # returns the timeout set by the wrapper. Used for testing if model-specific timeout are set correctly
-
+        _litellm_logging_obj: Optional[LiteLLMLoggingObj] = data.get(
+            "litellm_logging_obj", None
+        )
         custom_headers = get_custom_headers(
             user_api_key_dict=user_api_key_dict,
+            call_id=(
+                _litellm_logging_obj.litellm_call_id if _litellm_logging_obj else None
+            ),
             version=version,
             response_cost=0,
             model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
@@ -3798,7 +3808,7 @@ async def completion(  # noqa: PLR0915
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args
             or model  # for azure deployments
-            or data["model"]  # default passed in http request
+            or data.get("model", None)
         )
         if user_model:
             data["model"] = user_model
@@ -4034,7 +4044,7 @@ async def embeddings(  # noqa: PLR0915
             general_settings.get("embedding_model", None)  # server default
             or user_model  # model name passed via cli args
             or model  # for azure deployments
-            or data["model"]  # default passed in http request
+            or data.get("model", None)  # default passed in http request
         )
         if user_model:
             data["model"] = user_model
@@ -4207,7 +4217,7 @@ async def image_generation(
         data["model"] = (
             general_settings.get("image_generation_model", None)  # server default
             or user_model  # model name passed via cli args
-            or data["model"]  # default passed in http request
+            or data.get("model", None)  # default passed in http request
         )
         if user_model:
             data["model"] = user_model
@@ -4444,7 +4454,7 @@ async def audio_transcriptions(
         data["model"] = (
             general_settings.get("moderation_model", None)  # server default
             or user_model  # model name passed via cli args
-            or data["model"]  # default passed in http request
+            or data.get("model", None)  # default passed in http request
         )
         if user_model:
             data["model"] = user_model
@@ -5547,7 +5557,7 @@ async def anthropic_response(  # noqa: PLR0915
         data["model"] = (
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args
-            or data["model"]  # default passed in http request
+            or data.get("model", None)  # default passed in http request
         )
         if user_model:
             data["model"] = user_model
@@ -5835,97 +5845,6 @@ async def supported_openai_params(model: str):
         raise HTTPException(
             status_code=400, detail={"error": "Could not map model={}".format(model)}
         )
-
-
-#### MODEL MANAGEMENT ####
-
-
-async def _add_model_to_db(
-    model_params: Deployment,
-    user_api_key_dict: UserAPIKeyAuth,
-    prisma_client: PrismaClient,
-):
-    # encrypt litellm params #
-    _litellm_params_dict = model_params.litellm_params.dict(exclude_none=True)
-    _orignal_litellm_model_name = model_params.litellm_params.model
-    for k, v in _litellm_params_dict.items():
-        encrypted_value = encrypt_value_helper(value=v)
-        model_params.litellm_params[k] = encrypted_value
-    _data: dict = {
-        "model_id": model_params.model_info.id,
-        "model_name": model_params.model_name,
-        "litellm_params": model_params.litellm_params.model_dump_json(exclude_none=True),  # type: ignore
-        "model_info": model_params.model_info.model_dump_json(  # type: ignore
-            exclude_none=True
-        ),
-        "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-        "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-    }
-    if model_params.model_info.id is not None:
-        _data["model_id"] = model_params.model_info.id
-    model_response = await prisma_client.db.litellm_proxymodeltable.create(
-        data=_data  # type: ignore
-    )
-    return model_response
-
-
-async def _add_team_model_to_db(
-    model_params: Deployment,
-    user_api_key_dict: UserAPIKeyAuth,
-    prisma_client: PrismaClient,
-):
-    """
-    If 'team_id' is provided,
-
-    - generate a unique 'model_name' for the model (e.g. 'model_name_{team_id}_{uuid})
-    - store the model in the db with the unique 'model_name'
-    - store a team model alias mapping {"model_name": "model_name_{team_id}_{uuid}"}
-    """
-    _team_id = model_params.model_info.team_id
-    original_model_name = model_params.model_name
-    if _team_id is None:
-        return None
-
-    unique_model_name = f"model_name_{_team_id}_{uuid.uuid4()}"
-
-    model_params.model_name = unique_model_name
-
-    ## CREATE MODEL IN DB ##
-    model_response = await _add_model_to_db(
-        model_params=model_params,
-        user_api_key_dict=user_api_key_dict,
-        prisma_client=prisma_client,
-    )
-
-    ## CREATE MODEL ALIAS IN DB ##
-    await update_team(
-        data=UpdateTeamRequest(
-            team_id=_team_id,
-            model_aliases={original_model_name: unique_model_name},
-        ),
-        user_api_key_dict=user_api_key_dict,
-        http_request=Request(scope={"type": "http"}),
-    )
-
-    return model_response
-
-
-def check_if_team_id_matches_key(
-    team_id: Optional[str], user_api_key_dict: UserAPIKeyAuth
-) -> bool:
-    can_make_call = True
-    if (
-        user_api_key_dict.user_role
-        and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
-    ):
-        return True
-    if team_id is None:
-        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-            can_make_call = False
-    else:
-        if user_api_key_dict.team_id != team_id:
-            can_make_call = False
-    return can_make_call
 
 
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
@@ -6472,9 +6391,9 @@ async def model_metrics(
             if _day not in _daily_entries:
                 _daily_entries[_day] = {}
             _combined_model_name = str(_model)
-            if "https://" in _api_base:
+            if _api_base is not None and "https://" in _api_base:
                 _combined_model_name = str(_api_base)
-            if "/openai/" in _combined_model_name:
+            if _combined_model_name is not None and "/openai/" in _combined_model_name:
                 _combined_model_name = _combined_model_name.split("/openai/")[0]
 
             _all_api_bases.add(_combined_model_name)
@@ -7338,7 +7257,7 @@ async def async_queue_request(
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args
             or model  # for azure deployments
-            or data["model"]  # default passed in http request
+            or data.get("model", None)  # default passed in http request
         )
 
         # users can pass in 'user' param to /chat/completions. Don't override it

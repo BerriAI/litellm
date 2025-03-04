@@ -466,6 +466,9 @@ router_settings:
 | OTEL_SERVICE_NAME | Service name identifier for OpenTelemetry
 | OTEL_TRACER_NAME | Tracer name for OpenTelemetry tracing
 | PAGERDUTY_API_KEY | API key for PagerDuty Alerting
+| PHOENIX_API_KEY | API key for Arize Phoenix
+| PHOENIX_COLLECTOR_ENDPOINT | API endpoint for Arize Phoenix
+| PHOENIX_COLLECTOR_HTTP_ENDPOINT | API http endpoint for Arize Phoenix
 | POD_NAME | Pod name for the server, this will be [emitted to `datadog` logs](https://docs.litellm.ai/docs/proxy/logging#datadog) as `POD_NAME` 
 | PREDIBASE_API_BASE | Base URL for Predibase API
 | PRESIDIO_ANALYZER_API_BASE | Base URL for Presidio Analyzer service

@@ -66,6 +66,22 @@ class ToolUseBlock(TypedDict):
     toolUseId: str
 
 
+class BedrockConverseReasoningTextBlock(TypedDict, total=False):
+    text: Required[str]
+    signature: str
+
+
+class BedrockConverseReasoningContentBlock(TypedDict, total=False):
+    reasoningText: BedrockConverseReasoningTextBlock
+    redactedContent: str
+
+
+class BedrockConverseReasoningContentBlockDelta(TypedDict, total=False):
+    signature: str
+    redactedContent: str
+    text: str
+
+
 class ContentBlock(TypedDict, total=False):
     text: str
     image: ImageBlock
@@ -73,6 +89,7 @@ class ContentBlock(TypedDict, total=False):
     toolResult: ToolResultBlock
     toolUse: ToolUseBlock
     cachePoint: CachePointBlock
+    reasoningContent: BedrockConverseReasoningContentBlock
 
 
 class MessageBlock(TypedDict):
@@ -167,6 +184,7 @@ class ContentBlockDeltaEvent(TypedDict, total=False):
 
     text: str
     toolUse: ToolBlockDeltaEvent
+    reasoningContent: BedrockConverseReasoningContentBlockDelta
 
 
 class CommonRequestObject(
@@ -413,3 +431,10 @@ class BedrockRerankRequest(TypedDict):
     queries: List[BedrockRerankQuery]
     rerankingConfiguration: BedrockRerankConfiguration
     sources: List[BedrockRerankSource]
+
+
+class AmazonDeepSeekR1StreamingResponse(TypedDict):
+    generation: str
+    generation_token_count: int
+    stop_reason: Optional[str]
+    prompt_token_count: int

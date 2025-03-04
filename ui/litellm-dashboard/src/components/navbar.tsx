@@ -4,6 +4,10 @@ import type { MenuProps } from "antd";
 import { Dropdown } from "antd";
 import { Organization } from "@/components/networking";
 import { defaultOrg } from "@/components/common_components/default_org";
+import { 
+  UserOutlined,
+  LogoutOutlined
+} from '@ant-design/icons';
 interface NavbarProps {
   userID: string | null;
   userRole: string | null;
@@ -31,16 +35,16 @@ const Navbar: React.FC<NavbarProps> = ({
     {
       key: "1",
       label: (
-        <div className="px-1 py-1">
+        <div className="py-1">
           <p className="text-sm text-gray-600">Role: {userRole}</p>
-          <p className="text-sm text-gray-600">ID: {userID}</p>
+          <p className="text-sm text-gray-600"><UserOutlined /> {userID}</p>
           <p className="text-sm text-gray-600">Premium User: {String(premiumUser)}</p>
         </div>
       ),
     },
     {
       key: "2",
-      label: <p className="text-sm hover:text-gray-900" onClick={handleLogout}>Logout</p>,
+      label: <p className="text-sm hover:text-gray-900" onClick={handleLogout}><LogoutOutlined /> Logout</p>,
     }
   ];
 

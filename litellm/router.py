@@ -48,6 +48,7 @@ from litellm.caching.caching import DualCache, InMemoryCache, RedisCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
@@ -628,38 +629,6 @@ class Router:
         self.aget_messages = self.factory_function(litellm.aget_messages)
         self.arun_thread = self.factory_function(litellm.arun_thread)
 
-    def validate_fallbacks(self, fallback_param: Optional[List]):
-        """
-        Validate the fallbacks parameter.
-        """
-        if fallback_param is None:
-            return
-
-        for fallback_dict in fallback_param:
-            if not isinstance(fallback_dict, dict):
-                raise ValueError(f"Item '{fallback_dict}' is not a dictionary.")
-            if len(fallback_dict) != 1:
-                raise ValueError(
-                    f"Dictionary '{fallback_dict}' must have exactly one key, but has {len(fallback_dict)} keys."
-                )
-
-    def add_optional_pre_call_checks(
-        self, optional_pre_call_checks: Optional[OptionalPreCallChecks]
-    ):
-        if optional_pre_call_checks is not None:
-            for pre_call_check in optional_pre_call_checks:
-                _callback: Optional[CustomLogger] = None
-                if pre_call_check == "prompt_caching":
-                    _callback = PromptCachingDeploymentCheck(cache=self.cache)
-                elif pre_call_check == "router_budget_limiting":
-                    _callback = RouterBudgetLimiting(
-                        dual_cache=self.cache,
-                        provider_budget_config=self.provider_budget_config,
-                        model_list=self.model_list,
-                    )
-                if _callback is not None:
-                    litellm.logging_callback_manager.add_litellm_callback(_callback)
-
     def routing_strategy_init(
         self, routing_strategy: Union[RoutingStrategy, str], routing_strategy_args: dict
     ):
@@ -724,6 +693,37 @@ class Router:
                 litellm.logging_callback_manager.add_litellm_callback(self.lowestcost_logger)  # type: ignore
         else:
             pass
+
+    def validate_fallbacks(self, fallback_param: Optional[List]):
+        """
+        Validate the fallbacks parameter.
+        """
+        if fallback_param is None:
+            return
+        for fallback_dict in fallback_param:
+            if not isinstance(fallback_dict, dict):
+                raise ValueError(f"Item '{fallback_dict}' is not a dictionary.")
+            if len(fallback_dict) != 1:
+                raise ValueError(
+                    f"Dictionary '{fallback_dict}' must have exactly one key, but has {len(fallback_dict)} keys."
+                )
+
+    def add_optional_pre_call_checks(
+        self, optional_pre_call_checks: Optional[OptionalPreCallChecks]
+    ):
+        if optional_pre_call_checks is not None:
+            for pre_call_check in optional_pre_call_checks:
+                _callback: Optional[CustomLogger] = None
+                if pre_call_check == "prompt_caching":
+                    _callback = PromptCachingDeploymentCheck(cache=self.cache)
+                elif pre_call_check == "router_budget_limiting":
+                    _callback = RouterBudgetLimiting(
+                        dual_cache=self.cache,
+                        provider_budget_config=self.provider_budget_config,
+                        model_list=self.model_list,
+                    )
+                if _callback is not None:
+                    litellm.logging_callback_manager.add_litellm_callback(_callback)
 
     def print_deployment(self, deployment: dict):
         """
@@ -2858,6 +2858,7 @@ class Router:
 
     #### [END] ASSISTANTS API ####
 
+    @tracer.wrap()
     async def async_function_with_fallbacks(self, *args, **kwargs):  # noqa: PLR0915
         """
         Try calling the function_with_retries
@@ -3128,6 +3129,7 @@ class Router:
                     Context_Policy_Fallbacks={content_policy_fallbacks}",
             )
 
+    @tracer.wrap()
     async def async_function_with_retries(self, *args, **kwargs):  # noqa: PLR0915
         verbose_router_logger.debug("Inside async function with retries.")
         original_function = kwargs.pop("original_function")
@@ -4898,20 +4900,61 @@ class Router:
 
         return returned_models
 
-    def get_model_names(self) -> List[str]:
+    def get_model_names(self, team_id: Optional[str] = None) -> List[str]:
         """
-        Returns all possible model names for router.
+        Returns all possible model names for the router, including models defined via model_group_alias.
 
-        Includes model_group_alias models too.
+        If a team_id is provided, only deployments configured with that team_id (i.e. team‐specific models)
+        will yield their team public name.
         """
-        model_list = self.get_model_list()
-        if model_list is None:
-            return []
-
+        deployments = self.get_model_list() or []
         model_names = []
-        for m in model_list:
-            model_names.append(m["model_name"])
+
+        for deployment in deployments:
+            model_info = deployment.get("model_info")
+            if self._is_team_specific_model(model_info):
+                team_model_name = self._get_team_specific_model(
+                    deployment=deployment, team_id=team_id
+                )
+                if team_model_name:
+                    model_names.append(team_model_name)
+            else:
+                model_names.append(deployment.get("model_name", ""))
+
         return model_names
+
+    def _get_team_specific_model(
+        self, deployment: DeploymentTypedDict, team_id: Optional[str] = None
+    ) -> Optional[str]:
+        """
+        Get the team-specific model name if team_id matches the deployment.
+
+        Args:
+            deployment: DeploymentTypedDict - The model deployment
+            team_id: Optional[str] - If passed, will return router models set with a `team_id` matching the passed `team_id`.
+
+        Returns:
+            str: The `team_public_model_name` if team_id matches
+            None: If team_id doesn't match or no team info exists
+        """
+        model_info: Optional[Dict] = deployment.get("model_info") or {}
+        if model_info is None:
+            return None
+        if team_id == model_info.get("team_id"):
+            return model_info.get("team_public_model_name")
+        return None
+
+    def _is_team_specific_model(self, model_info: Optional[Dict]) -> bool:
+        """
+        Check if model info contains team-specific configuration.
+
+        Args:
+            model_info: Model information dictionary
+
+        Returns:
+            bool: True if model has team-specific configuration
+        """
+        return bool(model_info and model_info.get("team_id"))
 
     def get_model_list_from_model_alias(
         self, model_name: Optional[str] = None
@@ -4993,14 +5036,16 @@ class Router:
         model_list = self.get_model_list(model_name=model_name)
         if model_list:
             for m in model_list:
-                for group in m.get("model_info", {}).get("access_groups", []):
-                    if model_access_group is not None:
-                        if group == model_access_group:
+                _model_info = m.get("model_info")
+                if _model_info:
+                    for group in _model_info.get("access_groups", []) or []:
+                        if model_access_group is not None:
+                            if group == model_access_group:
+                                model_name = m["model_name"]
+                                access_groups[group].append(model_name)
+                        else:
                             model_name = m["model_name"]
                             access_groups[group].append(model_name)
-                    else:
-                        model_name = m["model_name"]
-                        access_groups[group].append(model_name)
 
         return access_groups
 

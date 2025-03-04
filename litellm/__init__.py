@@ -2,7 +2,7 @@
 import warnings
 
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
-### INIT VARIABLES ########
+### INIT VARIABLES #########
 import threading
 import os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
@@ -53,6 +53,7 @@ from litellm.constants import (
     cohere_embedding_models,
     bedrock_embedding_models,
     known_tokenizer_config,
+    BEDROCK_INVOKE_PROVIDERS_LITERAL,
 )
 from litellm.types.guardrails import GuardrailItem
 from litellm.proxy._types import (
@@ -95,6 +96,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "galileo",
     "braintrust",
     "arize",
+    "arize_phoenix",
     "langtrace",
     "gcs_bucket",
     "azure_storage",
@@ -360,17 +362,7 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-2-11b-instruct-v1:0",
     "meta.llama3-2-90b-instruct-v1:0",
 ]
-BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
-    "cohere",
-    "anthropic",
-    "mistral",
-    "amazon",
-    "meta",
-    "llama",
-    "ai21",
-    "nova",
-    "deepseek_r1",
-]
+
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models: List = []
 open_ai_text_completion_models: List = []
@@ -407,6 +399,7 @@ gemini_models: List = []
 xai_models: List = []
 deepseek_models: List = []
 azure_ai_models: List = []
+jina_ai_models: List = []
 voyage_models: List = []
 databricks_models: List = []
 cloudflare_models: List = []
@@ -572,6 +565,8 @@ def add_known_models():
             sambanova_models.append(key)
         elif value.get("litellm_provider") == "assemblyai":
             assemblyai_models.append(key)
+        elif value.get("litellm_provider") == "jina_ai":
+            jina_ai_models.append(key)
 
 
 add_known_models()
@@ -644,6 +639,7 @@ model_list = (
     + sambanova_models
     + azure_text_models
     + assemblyai_models
+    + jina_ai_models
 )
 
 model_list_set = set(model_list)
@@ -698,6 +694,7 @@ models_by_provider: dict = {
     "galadriel": galadriel_models,
     "sambanova": sambanova_models,
     "assemblyai": assemblyai_models,
+    "jina_ai": jina_ai_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -818,8 +815,10 @@ from .llms.predibase.chat.transformation import PredibaseConfig
 from .llms.replicate.chat.transformation import ReplicateConfig
 from .llms.cohere.completion.transformation import CohereTextConfig as CohereConfig
 from .llms.cohere.rerank.transformation import CohereRerankConfig
+from .llms.cohere.rerank_v2.transformation import CohereRerankV2Config
 from .llms.azure_ai.rerank.transformation import AzureAIRerankConfig
 from .llms.infinity.rerank.transformation import InfinityRerankConfig
+from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
 from .llms.together_ai.chat import TogetherAIConfig
@@ -886,6 +885,9 @@ from .llms.bedrock.chat.invoke_transformations.amazon_cohere_transformation impo
 )
 from .llms.bedrock.chat.invoke_transformations.amazon_llama_transformation import (
     AmazonLlamaConfig,
+)
+from .llms.bedrock.chat.invoke_transformations.amazon_deepseek_transformation import (
+    AmazonDeepSeekR1Config,
 )
 from .llms.bedrock.chat.invoke_transformations.amazon_mistral_transformation import (
     AmazonMistralConfig,

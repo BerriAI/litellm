@@ -154,10 +154,6 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
         visible={isRegenerateModalOpen}
         onClose={() => setIsRegenerateModalOpen(false)}
         accessToken={accessToken}
-        onSuccess={(newKeyData) => {
-          // Handle the updated key data here if needed
-          setIsRegenerateModalOpen(false);
-        }}
       />
 
       {/* Delete Confirmation Modal */}
@@ -336,6 +332,9 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
                     <Text className="font-medium">Rate Limits</Text>
                     <Text>TPM: {keyData.tpm_limit !== null ? keyData.tpm_limit : "Unlimited"}</Text>
                     <Text>RPM: {keyData.rpm_limit !== null ? keyData.rpm_limit : "Unlimited"}</Text>
+                    <Text>Max Parallel Requests: {keyData.max_parallel_requests !== null ? keyData.max_parallel_requests : "Unlimited"}</Text>
+                    <Text>Model TPM Limits: {keyData.metadata?.model_tpm_limit ? JSON.stringify(keyData.metadata.model_tpm_limit) : "Unlimited"}</Text>
+                    <Text>Model RPM Limits: {keyData.metadata?.model_rpm_limit ? JSON.stringify(keyData.metadata.model_rpm_limit) : "Unlimited"}</Text>
                   </div>
 
                   <div>

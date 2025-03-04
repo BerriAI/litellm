@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING, Any, List, Optional
 
 import httpx
 
-import litellm
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
@@ -17,7 +17,7 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class AmazonAnthropicClaude3Config(AmazonInvokeConfig):
+class AmazonAnthropicClaude3Config(AmazonInvokeConfig, AnthropicConfig):
     """
     Reference:
         https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=claude
@@ -28,18 +28,8 @@ class AmazonAnthropicClaude3Config(AmazonInvokeConfig):
 
     anthropic_version: str = "bedrock-2023-05-31"
 
-    def get_supported_openai_params(self, model: str):
-        return [
-            "max_tokens",
-            "max_completion_tokens",
-            "tools",
-            "tool_choice",
-            "stream",
-            "stop",
-            "temperature",
-            "top_p",
-            "extra_headers",
-        ]
+    def get_supported_openai_params(self, model: str) -> List[str]:
+        return AnthropicConfig.get_supported_openai_params(self, model)
 
     def map_openai_params(
         self,
@@ -47,21 +37,14 @@ class AmazonAnthropicClaude3Config(AmazonInvokeConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
-    ):
-        for param, value in non_default_params.items():
-            if param == "max_tokens" or param == "max_completion_tokens":
-                optional_params["max_tokens"] = value
-            if param == "tools":
-                optional_params["tools"] = value
-            if param == "stream":
-                optional_params["stream"] = value
-            if param == "stop":
-                optional_params["stop_sequences"] = value
-            if param == "temperature":
-                optional_params["temperature"] = value
-            if param == "top_p":
-                optional_params["top_p"] = value
-        return optional_params
+    ) -> dict:
+        return AnthropicConfig.map_openai_params(
+            self,
+            non_default_params,
+            optional_params,
+            model,
+            drop_params,
+        )
 
     def transform_request(
         self,
@@ -71,7 +54,8 @@ class AmazonAnthropicClaude3Config(AmazonInvokeConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        _anthropic_request = litellm.AnthropicConfig().transform_request(
+        _anthropic_request = AnthropicConfig.transform_request(
+            self,
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -80,6 +64,7 @@ class AmazonAnthropicClaude3Config(AmazonInvokeConfig):
         )
 
         _anthropic_request.pop("model", None)
+        _anthropic_request.pop("stream", None)
         if "anthropic_version" not in _anthropic_request:
             _anthropic_request["anthropic_version"] = self.anthropic_version
 
@@ -99,7 +84,8 @@ class AmazonAnthropicClaude3Config(AmazonInvokeConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-        return litellm.AnthropicConfig().transform_response(
+        return AnthropicConfig.transform_response(
+            self,
             model=model,
             raw_response=raw_response,
             model_response=model_response,
