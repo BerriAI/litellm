@@ -20,12 +20,12 @@ import {
 } from "@/components/networking";
 import { jwtDecode } from "jwt-decode";
 import { Form, Button as Button2, message } from "antd";
-import { getCookie } from "@/utils/cookieUtils";
+import { getAuthToken } from "@/utils/cookieUtils";
 
 export default function Onboarding() {
   const [form] = Form.useForm();
   const searchParams = useSearchParams()!;
-  const token = getCookie('token');
+  const token = getAuthToken();
   const inviteID = searchParams.get("invitation_id");
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [defaultUserEmail, setDefaultUserEmail] = useState<string>("");

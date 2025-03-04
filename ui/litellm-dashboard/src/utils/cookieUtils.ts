@@ -31,14 +31,36 @@ export function clearTokenCookies() {
   console.log("After clearing cookies:", document.cookie);
 }
 
-/**
- * Gets a cookie value by name
- * @param name The name of the cookie to retrieve
- * @returns The cookie value or null if not found
- */
-export function getCookie(name: string) {
-  const cookieValue = document.cookie
-    .split('; ')
-    .find(row => row.startsWith(name + '='));
-  return cookieValue ? cookieValue.split('=')[1] : null;
-} 
+export function getAuthToken() {
+    // Check if we're in a browser environment
+    if (typeof window === 'undefined' || typeof document === 'undefined') {
+      return null;
+    }
+    
+    const tokenPattern = /^token_(\d+)$/;
+    const allCookies = document.cookie.split("; ");
+    
+    const tokenCookies = allCookies
+      .map(cookie => {
+        const parts = cookie.split("=");
+        const name = parts[0];
+        const match = name.match(tokenPattern);
+        if (match) {
+          return {
+            name,
+            timestamp: parseInt(match[1], 10),
+            value: parts.slice(1).join("=")
+          };
+        }
+        return null;
+      })
+      .filter(cookie => cookie !== null);
+    
+    if (tokenCookies.length > 0) {
+      // Sort by timestamp (newest first)
+      tokenCookies.sort((a, b) => b.timestamp - a.timestamp);
+      return tokenCookies[0].value;
+    }
+    
+    return null;
+}
