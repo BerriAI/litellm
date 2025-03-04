@@ -42,6 +42,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.management_helpers.ui_session_handler import UISessionHandler
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.router import Router
@@ -217,15 +218,24 @@ def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
 def allowed_routes_check(
     user_role: Literal[
         LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
         LitellmUserRoles.TEAM,
         LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
     ],
     user_route: str,
     litellm_proxy_roles: LiteLLM_JWTAuth,
+    jwt_valid_token: dict,
 ) -> bool:
     """
     Check if user -> not admin - allowed to access these routes
     """
+    if UISessionHandler.is_ui_session_token(jwt_valid_token):
+        is_allowed = _allowed_routes_check(
+            user_route=user_route,
+            allowed_routes=LiteLLMRoutes.ui_routes.value,
+        )
+        return is_allowed
 
     if user_role == LitellmUserRoles.PROXY_ADMIN:
         is_allowed = _allowed_routes_check(

@@ -33,6 +33,7 @@ from litellm.proxy._types import (
     ScopeMapping,
     Span,
 )
+from litellm.proxy.management_helpers.ui_session_handler import UISessionHandler
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 from .auth_checks import (
@@ -667,6 +668,7 @@ class JWTAuthManager:
         user_id: Optional[str],
         org_id: Optional[str],
         api_key: str,
+        jwt_valid_token: dict,
     ) -> Optional[JWTAuthBuilderResult]:
         """Check admin status and route access permissions"""
         if not jwt_handler.is_admin(scopes=scopes):
@@ -676,6 +678,7 @@ class JWTAuthManager:
             user_role=LitellmUserRoles.PROXY_ADMIN,
             user_route=route,
             litellm_proxy_roles=jwt_handler.litellm_jwtauth,
+            jwt_valid_token=jwt_valid_token,
         )
         if not is_allowed:
             allowed_routes: List[Any] = jwt_handler.litellm_jwtauth.admin_allowed_routes
@@ -749,6 +752,7 @@ class JWTAuthManager:
         user_api_key_cache: DualCache,
         parent_otel_span: Optional[Span],
         proxy_logging_obj: ProxyLogging,
+        jwt_valid_token: dict,
     ) -> Tuple[Optional[str], Optional[LiteLLM_TeamTable]]:
         """Find first team with access to the requested model"""
 
@@ -781,6 +785,7 @@ class JWTAuthManager:
                             user_role=LitellmUserRoles.TEAM,
                             user_route=route,
                             litellm_proxy_roles=jwt_handler.litellm_jwtauth,
+                            jwt_valid_token=jwt_valid_token,
                         )
                         if is_allowed:
                             return team_id, team_object
@@ -971,7 +976,13 @@ class JWTAuthManager:
 
         # Check admin access
         admin_result = await JWTAuthManager.check_admin_access(
-            jwt_handler, scopes, route, user_id, org_id, api_key
+            jwt_handler=jwt_handler,
+            scopes=scopes,
+            route=route,
+            user_id=user_id,
+            org_id=org_id,
+            api_key=api_key,
+            jwt_valid_token=jwt_valid_token,
         )
         if admin_result:
             return admin_result
@@ -1003,6 +1014,7 @@ class JWTAuthManager:
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
+                jwt_valid_token=jwt_valid_token,
             )
 
         # Get other objects
