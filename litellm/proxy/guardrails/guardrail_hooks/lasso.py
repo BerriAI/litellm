@@ -37,18 +37,18 @@ class LassoGuardrailAPIError(Exception):
 class LassoGuardrail(CustomGuardrail):
     def __init__(
         self,
-        api_key: Optional[str] = None,
+        lasso_api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         user_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
-        self.api_key = api_key or os.environ.get("LASSO_API_KEY")
+        self.lasso_api_key = lasso_api_key or os.environ.get("LASSO_API_KEY")
         self.user_id = user_id or os.environ.get("LASSO_USER_ID")
         self.conversation_id = conversation_id or os.environ.get("LASSO_CONVERSATION_ID")
 
-        if not self.api_key:
+        if not self.lasso_api_key:
             msg = (
                 "Couldn't get Lasso api key, either set the `LASSO_API_KEY` in the environment or "
                 "pass it as a parameter to the guardrail in the config file"
@@ -73,8 +73,24 @@ class LassoGuardrail(CustomGuardrail):
         if not messages:
             return data
 
-        # Prepare headers
-        headers = {"lasso-api-key": self.api_key, "Content-Type": "application/json"}
+        try:
+            headers = self._prepare_headers()
+            payload = self._prepare_payload(messages)
+
+            response = await self._call_lasso_api(headers, payload)
+            self._process_lasso_response(response)
+
+            return data
+        except Exception as e:
+            if isinstance(e, HTTPException):
+                raise e
+            verbose_proxy_logger.error(f"Error calling Lasso API: {str(e)}")
+            # Instead of allowing the request to proceed, raise an exception
+            raise LassoGuardrailAPIError(f"Failed to verify request safety with Lasso API: {str(e)}")
+
+    def _prepare_headers(self) -> Dict[str, str]:
+        """Prepare headers for the Lasso API request."""
+        headers = {"lasso-api-key": self.lasso_api_key, "Content-Type": "application/json"}
 
         # Add optional headers if provided
         if self.user_id:
@@ -83,47 +99,48 @@ class LassoGuardrail(CustomGuardrail):
         if self.conversation_id:
             headers["lasso-conversation-id"] = self.conversation_id
 
-        # Prepare request payload - send all messages
-        payload = {"messages": messages}
+        return headers
 
-        try:
-            verbose_proxy_logger.debug(f"Sending request to Lasso API: {payload}")
-            response = await self.async_handler.post(
-                url=self.api_base,
-                headers=headers,
-                json=payload,
-                timeout=10.0,
+    def _prepare_payload(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
+        """Prepare the payload for the Lasso API request."""
+        return {"messages": messages}
+
+    async def _call_lasso_api(self, headers: Dict[str, str], payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Call the Lasso API and return the response."""
+        verbose_proxy_logger.debug(f"Sending request to Lasso API: {payload}")
+        response = await self.async_handler.post(
+            url=self.api_base,
+            headers=headers,
+            json=payload,
+            timeout=10.0,
+        )
+        response.raise_for_status()
+        res = response.json()
+        verbose_proxy_logger.debug(f"Lasso API response: {res}")
+        return res
+
+    def _process_lasso_response(self, response: Dict[str, Any]) -> None:
+        """Process the Lasso API response and raise exceptions if violations are detected."""
+        if response and response.get("violations_detected") is True:
+            violated_deputies = self._parse_violated_deputies(response)
+            verbose_proxy_logger.warning(f"Lasso guardrail detected violations: {violated_deputies}")
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Violated Lasso guardrail policy",
+                    "detection_message": f"Guardrail violations detected: {', '.join(violated_deputies)}",
+                    "lasso_response": response,
+                },
             )
-            response.raise_for_status()
-            res = response.json()
 
-            verbose_proxy_logger.debug(f"Lasso API response: {res}")
-
-            # Check for violations directly in the response
-            if res and res.get("violations_detected") is True:
-                # Find which deputies detected violations
-                violated_deputies = []
-                if "deputies" in res:
-                    for deputy, is_violated in res["deputies"].items():
-                        if is_violated:
-                            violated_deputies.append(deputy)
-
-                verbose_proxy_logger.warning(f"Lasso guardrail detected violations: {violated_deputies}")
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "Violated Lasso guardrail policy",
-                        "detection_message": f"Guardrail violations detected: {', '.join(violated_deputies)}",
-                        "lasso_response": res,
-                    },
-                )
-            return data
-        except Exception as e:
-            if isinstance(e, HTTPException):
-                raise e
-            verbose_proxy_logger.error(f"Error calling Lasso API: {str(e)}")
-            # Instead of allowing the request to proceed, raise an exception
-            raise LassoGuardrailAPIError(f"Failed to verify request safety with Lasso API: {str(e)}")
+    def _parse_violated_deputies(self, response: Dict[str, Any]) -> List[str]:
+        """Parse the response to extract violated deputies."""
+        violated_deputies = []
+        if "deputies" in response:
+            for deputy, is_violated in response["deputies"].items():
+                if is_violated:
+                    violated_deputies.append(deputy)
+        return violated_deputies
 
     @log_guardrail_information
     async def async_moderation_hook(

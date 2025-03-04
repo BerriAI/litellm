@@ -121,7 +121,7 @@ def initialize_lasso(litellm_params, guardrail):
     # Only initialize Lasso guardrail for pre_call mode
     if litellm_params["mode"] == GuardrailEventHooks.pre_call.value:
         _lasso_callback = LassoGuardrail(
-            api_key=litellm_params.get("api_key"),
+            lasso_api_key=litellm_params.get("api_key"),
             api_base=litellm_params.get("api_base"),
             user_id=litellm_params.get("user_id"),
             conversation_id=litellm_params.get("conversation_id"),
