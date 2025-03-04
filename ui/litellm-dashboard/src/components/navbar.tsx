@@ -11,6 +11,7 @@ import {
 import { clearTokenCookies } from "@/utils/cookieUtils";
 interface NavbarProps {
   userID: string | null;
+  userEmail: string | null;
   userRole: string | null;
   premiumUser: boolean;
   setProxySettings: React.Dispatch<React.SetStateAction<any>>;
@@ -19,6 +20,7 @@ interface NavbarProps {
 
 const Navbar: React.FC<NavbarProps> = ({
   userID,
+  userEmail,
   userRole,
   premiumUser,
   proxySettings,
@@ -38,6 +40,7 @@ const Navbar: React.FC<NavbarProps> = ({
       label: (
         <div className="py-1">
           <p className="text-sm text-gray-600">Role: {userRole}</p>
+          <p className="text-sm text-gray-600">Email: {userEmail || "Unknown"}</p>
           <p className="text-sm text-gray-600"><UserOutlined /> {userID}</p>
           <p className="text-sm text-gray-600">Premium User: {String(premiumUser)}</p>
         </div>
