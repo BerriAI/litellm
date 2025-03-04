@@ -63,6 +63,40 @@ const handleError = async (errorData: string) => {
 // Global variable for the header name
 let globalLitellmHeaderName: string  = "Authorization";
 
+const fetchWithCredentials = async (url: string, options: RequestInit = {}) => {
+  const defaultOptions: RequestInit = {
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  };
+
+  // Merge the default options with the provided options
+  const mergedOptions = {
+    ...defaultOptions,
+    ...options,
+    headers: {
+      ...defaultOptions.headers,
+      ...(options.headers || {}),
+    },
+  };
+
+  // Remove the Authorization header if it exists
+  if (mergedOptions.headers && 'Authorization' in mergedOptions.headers) {
+    delete mergedOptions.headers['Authorization'];
+  }
+
+  const response = await fetch(url, mergedOptions);
+  
+  if (!response.ok) {
+    const errorData = await response.text();
+    handleError(errorData);
+    throw new Error(`Network response was not ok: ${errorData}`);
+  }
+  
+  return response.json();
+};
+
 // Function to set the global header name
 export function setGlobalLitellmHeaderName(headerName: string = "Authorization") {
   console.log(`setGlobalLitellmHeaderName: ${headerName}`);
@@ -464,10 +498,9 @@ export const keyCreateCall = async (
 
     console.log("Form Values after check:", formValues);
     const url = proxyBaseUrl ? `${proxyBaseUrl}/key/generate` : `/key/generate`;
-    const response = await fetch(url, {
+    const response = await fetchWithCredentials(url, {
       method: "POST",
       headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({

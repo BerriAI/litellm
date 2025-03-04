@@ -406,10 +406,61 @@ class JWTHandler:
         else:
             return False
 
+    def _validate_ui_token(self, token: str) -> Optional[dict]:
+        """
+        Helper function to validate tokens generated for the LiteLLM UI.
+        Returns the decoded payload if it's a valid UI token, None otherwise.
+        """
+        import jwt
+
+        from litellm.proxy.management_helpers.ui_session_handler import UISessionHandler
+        from litellm.proxy.proxy_server import master_key
+
+        try:
+            # Decode without verification to check if it's a UI token
+            unverified_payload = jwt.decode(token, options={"verify_signature": False})
+
+            # Check if this looks like a UI token (has specific claims that only UI tokens would have)
+            if UISessionHandler.is_ui_session_token(unverified_payload):
+
+                # This looks like a UI token, now verify it with the master key
+                if not master_key:
+                    verbose_proxy_logger.debug(
+                        "Missing LITELLM_MASTER_KEY for UI token validation"
+                    )
+                    return None
+
+                try:
+                    payload = jwt.decode(
+                        token,
+                        master_key,
+                        algorithms=["HS256"],
+                        audience="litellm-ui",
+                        leeway=self.leeway,
+                    )
+                    verbose_proxy_logger.debug(
+                        "Successfully validated UI token for payload: %s",
+                        json.dumps(payload, indent=4),
+                    )
+                    return payload
+                except jwt.InvalidTokenError as e:
+                    verbose_proxy_logger.debug(f"Invalid UI token: {str(e)}")
+                    raise ValueError(
+                        f"Invalid UI token, Unable to validate token signature {str(e)}"
+                    )
+
+            return None  # Not a UI token
+        except Exception as e:
+            raise e
+
     async def auth_jwt(self, token: str) -> dict:
         # Supported algos: https://pyjwt.readthedocs.io/en/stable/algorithms.html
         # "Warning: Make sure not to mix symmetric and asymmetric algorithms that interpret
         #   the key in different ways (e.g. HS* and RS*)."
+
+        ui_payload = self._validate_ui_token(token)
+        if ui_payload:
+            return ui_payload
         algorithms = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512"]
 
         audience = os.getenv("JWT_AUDIENCE")

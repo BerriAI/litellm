@@ -7458,25 +7458,11 @@ async def login(request: Request):  # noqa: PLR0915
             litellm_dashboard_ui += "/ui/"
         from datetime import timezone
 
-        import jwt
-
-        expiration = datetime.now(timezone.utc) + timedelta(hours=24)
-
-        jwt_token = jwt.encode(  # type: ignore
-            {
-                "user_id": user_id,
-                "user_email": None,
-                "user_role": user_role,  # this is the path without sso - we can assume only admins will use this
-                "login_method": "username_password",
-                "premium_user": premium_user,
-                "auth_header_name": general_settings.get(
-                    "litellm_key_header_name", "Authorization"
-                ),
-                "exp": expiration,
-                "disabled_non_admin_personal_key_creation": disabled_non_admin_personal_key_creation,
-            },
-            master_key,
-            algorithm="HS256",
+        jwt_token = UISessionHandler.build_authenticated_ui_jwt_token(
+            user_id=user_id,
+            user_role=user_role,
+            premium_user=premium_user,
+            disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
         )
         litellm_dashboard_ui += "?userID=" + user_id
         return UISessionHandler.generate_authenticated_redirect_response(
