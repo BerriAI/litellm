@@ -59,6 +59,7 @@ interface UserDashboardProps {
   userEmail: string | null;
   teams: Team[] | null;
   keys: any[] | null;
+  setUserID: React.Dispatch<React.SetStateAction<string | null>>;
   setUserRole: React.Dispatch<React.SetStateAction<string>>;
   setUserEmail: React.Dispatch<React.SetStateAction<string | null>>;
   setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
@@ -78,6 +79,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   userRole,
   teams,
   keys,
+  setUserID,
   setUserRole,
   userEmail,
   setUserEmail,
@@ -169,6 +171,12 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
           setUserEmail(decoded.user_email);
         } else {
           console.log(`User Email is not set ${decoded}`);
+        }
+
+        if (decoded.user_id) {
+          setUserID(decoded.user_id);
+        } else {
+          console.log("User ID not found in token");
         }
       }
     }
@@ -294,7 +302,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     )
   }
 
-  if (userID == null || token == null) {
+  if (token == null) {
     // user is not logged in as yet 
     console.log("All cookies before redirect:", document.cookie);
     
@@ -312,6 +320,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   } else if (accessToken == null) {
     return null;
   }
+  
 
   if (userRole == null) {
     setUserRole("App Owner");
