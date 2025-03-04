@@ -11,8 +11,6 @@ If given, generate a unique model_id for the deployment.
 Ensures cooldowns are applied correctly.
 """
 
-from typing import Tuple
-
 clientside_credential_keys = ["api_key", "api_base", "base_url"]
 
 
