@@ -13,18 +13,30 @@ export function clearTokenCookies() {
   const paths = ['/', '/ui'];
   const sameSiteValues = ['Lax', 'Strict', 'None'];
   
-  paths.forEach(path => {
-    // Basic clearing
-    document.cookie = `token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=${path};`;
-    
-    // With domain
-    document.cookie = `token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=${path}; domain=${domain};`;
-    
-    // Try different SameSite values
-    sameSiteValues.forEach(sameSite => {
-      const secureFlag = sameSite === 'None' ? ' Secure;' : '';
-      document.cookie = `token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=${path}; SameSite=${sameSite};${secureFlag}`;
-      document.cookie = `token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=${path}; domain=${domain}; SameSite=${sameSite};${secureFlag}`;
+  // Get all cookies
+  const allCookies = document.cookie.split("; ");
+  const tokenPattern = /^token_\d+$/;
+  
+  // Find all token cookies
+  const tokenCookieNames = allCookies
+    .map(cookie => cookie.split("=")[0])
+    .filter(name => name === "token" || tokenPattern.test(name));
+  
+  // Clear each token cookie with various combinations
+  tokenCookieNames.forEach(cookieName => {
+    paths.forEach(path => {
+      // Basic clearing
+      document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=${path};`;
+      
+      // With domain
+      document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=${path}; domain=${domain};`;
+      
+      // Try different SameSite values
+      sameSiteValues.forEach(sameSite => {
+        const secureFlag = sameSite === 'None' ? ' Secure;' : '';
+        document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=${path}; SameSite=${sameSite};${secureFlag}`;
+        document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=${path}; domain=${domain}; SameSite=${sameSite};${secureFlag}`;
+      });
     });
   });
   
