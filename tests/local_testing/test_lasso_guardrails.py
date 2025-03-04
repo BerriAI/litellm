@@ -65,7 +65,7 @@ def test_lasso_guard_config_no_api_key():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["pre_call", "during_call"])
+@pytest.mark.parametrize("mode", ["pre_call"])
 async def test_callback(mode: str):
     # Set environment variable for testing
     os.environ["LASSO_API_KEY"] = "test-key"
@@ -125,14 +125,9 @@ async def test_callback(mode: str):
                 request=Request(method="POST", url="https://server.lasso.security/gateway/v1/chat"),
             ),
         ):
-            if mode == "pre_call":
-                await lasso_guardrail.async_pre_call_hook(
-                    data=data, cache=DualCache(), user_api_key_dict=UserAPIKeyAuth(), call_type="completion"
-                )
-            else:
-                await lasso_guardrail.async_moderation_hook(
-                    data=data, user_api_key_dict=UserAPIKeyAuth(), call_type="completion"
-                )
+            await lasso_guardrail.async_pre_call_hook(
+                data=data, cache=DualCache(), user_api_key_dict=UserAPIKeyAuth(), call_type="completion"
+            )
     
     # Check for the correct error message
     assert "Violated Lasso guardrail policy" in str(excinfo.value.detail)
@@ -167,14 +162,9 @@ async def test_callback(mode: str):
             request=Request(method="POST", url="https://server.lasso.security/gateway/v1/chat"),
         ),
     ):
-        if mode == "pre_call":
-            result = await lasso_guardrail.async_pre_call_hook(
-                data=data, cache=DualCache(), user_api_key_dict=UserAPIKeyAuth(), call_type="completion"
-            )
-        else:
-            result = await lasso_guardrail.async_moderation_hook(
-                data=data, user_api_key_dict=UserAPIKeyAuth(), call_type="completion"
-            )
+        result = await lasso_guardrail.async_pre_call_hook(
+            data=data, cache=DualCache(), user_api_key_dict=UserAPIKeyAuth(), call_type="completion"
+        )
     
     assert result == data  # Should return the original data unchanged
     
@@ -256,3 +246,34 @@ async def test_api_error_handling():
     
     # Clean up
     del os.environ["LASSO_API_KEY"]
+
+
+@pytest.mark.parametrize("invalid_mode", ["post_call", "during_call", "logging_only"])
+def test_lasso_guard_invalid_mode(invalid_mode):
+    """Test that an error is raised when initializing Lasso guardrail with an invalid mode."""
+    # Set environment variable for testing
+    os.environ["LASSO_API_KEY"] = "test-key"
+    
+    # Attempt to initialize with an invalid mode
+    with pytest.raises(ValueError) as excinfo:
+        init_guardrails_v2(
+            all_guardrails=[
+                {
+                    "guardrail_name": "invalid-mode-guard",
+                    "litellm_params": {
+                        "guardrail": "lasso",
+                        "mode": invalid_mode,
+                        "default_on": True,
+                    },
+                }
+            ],
+            config_file_path="",
+        )
+    
+    # Check that the error message is correct
+    assert "Lasso guardrail only supports 'pre_call' mode" in str(excinfo.value)
+    assert f"Got '{invalid_mode}' instead" in str(excinfo.value)
+    
+    # Clean up
+    if "LASSO_API_KEY" in os.environ:
+        del os.environ["LASSO_API_KEY"]
