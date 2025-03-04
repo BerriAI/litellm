@@ -651,7 +651,7 @@ class Logging(LiteLLMLoggingBaseClass):
         curl_command += (
             f"{formatted_headers} \\\n" if formatted_headers.strip() != "" else ""
         )
-        curl_command += f"-d '{str(data)}'\n"
+        curl_command += f"-d '{json.dumps(data, indent=4)}'\n"
         if additional_args.get("request_str", None) is not None:
             # print the sagemaker / bedrock client request
             curl_command = "\nRequest Sent from LiteLLM:\n"

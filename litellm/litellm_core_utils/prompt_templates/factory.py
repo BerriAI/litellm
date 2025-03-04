@@ -1282,6 +1282,7 @@ def add_cache_control_to_content(
         AnthropicMessagesImageParam,
         AnthropicMessagesTextParam,
         AnthropicMessagesDocumentParam,
+        ChatCompletionThinkingBlock,
     ],
     orignal_content_element: Union[dict, AllMessageValues],
 ):
@@ -1454,12 +1455,23 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 assistant_content_block["content"], list
             ):
                 for m in assistant_content_block["content"]:
-                    # handle text
+                    # handle thinking blocks
+                    thinking_block = cast(str, m.get("thinking", ""))
+                    text_block = cast(str, m.get("text", ""))
                     if (
-                        m.get("type", "") == "text" and len(m.get("text", "")) > 0
+                        m.get("type", "") == "thinking" and len(thinking_block) > 0
+                    ):  # don't pass empty text blocks. anthropic api raises errors.
+                        anthropic_message: Union[
+                            ChatCompletionThinkingBlock,
+                            AnthropicMessagesTextParam,
+                        ] = cast(ChatCompletionThinkingBlock, m)
+                        assistant_content.append(anthropic_message)
+                    # handle text
+                    elif (
+                        m.get("type", "") == "text" and len(text_block) > 0
                     ):  # don't pass empty text blocks. anthropic api raises errors.
                         anthropic_message = AnthropicMessagesTextParam(
-                            type="text", text=m.get("text")
+                            type="text", text=text_block
                         )
                         _cached_message = add_cache_control_to_content(
                             anthropic_content_element=anthropic_message,
@@ -1512,6 +1524,7 @@ def anthropic_messages_pt(  # noqa: PLR0915
             msg_i += 1
 
         if assistant_content:
+
             new_messages.append({"role": "assistant", "content": assistant_content})
 
         if msg_i == init_msg_i:  # prevent infinite loops
