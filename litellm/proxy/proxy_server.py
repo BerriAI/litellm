@@ -7588,6 +7588,8 @@ async def onboarding(invite_link: str):
     - Pass in user_email if set
     """
     global prisma_client, master_key, general_settings
+    from litellm.proxy.management_helpers.ui_session_handler import UISessionHandler
+
     if master_key is None:
         raise ProxyException(
             message="Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
@@ -7688,11 +7690,9 @@ async def onboarding(invite_link: str):
     )
 
     litellm_dashboard_ui += "?token={}&user_email={}".format(jwt_token, user_email)
-    return {
-        "login_url": litellm_dashboard_ui,
-        "token": jwt_token,
-        "user_email": user_email,
-    }
+    return UISessionHandler.generate_authenticated_redirect_response(
+        redirect_url=litellm_dashboard_ui, jwt_token=jwt_token
+    )
 
 
 @app.post("/onboarding/claim_token", include_in_schema=False)

@@ -12,6 +12,7 @@ import {
   Col,
 } from "@tremor/react";
 import { RiAlarmWarningLine, RiCheckboxCircleLine } from "@remixicon/react";
+import { clearTokenCookies, getAuthToken } from "@/utils/cookieUtils";
 import {
   invitationClaimCall,
   userUpdateUserCall,
@@ -20,7 +21,6 @@ import {
 } from "@/components/networking";
 import { jwtDecode } from "jwt-decode";
 import { Form, Button as Button2, message } from "antd";
-import { getAuthToken } from "@/utils/cookieUtils";
 
 export default function Onboarding() {
   const [form] = Form.useForm();
@@ -38,15 +38,18 @@ export default function Onboarding() {
     if (!inviteID) {
       return;
     }
+    clearTokenCookies();
     getOnboardingCredentials(inviteID).then((data) => {
       const login_url = data.login_url;
       console.log("login_url:", login_url);
       setLoginUrl(login_url);
 
-      const token = data.token;
+      const token = getAuthToken();
+      if (!token) {
+        return;
+      }
       const decoded = jwtDecode(token) as { [key: string]: any };
       setJwtToken(token);
-
       console.log("decoded:", decoded);
       setAccessToken(decoded.key);
 
@@ -86,11 +89,7 @@ export default function Onboarding() {
       let litellm_dashboard_ui = "/ui/";
       const user_id = data.data?.user_id || data.user_id;
       litellm_dashboard_ui += "?userID=" + user_id;
-
-      // set cookie "token" to jwtToken
-      document.cookie = "token=" + jwtToken;
       console.log("redirecting to:", litellm_dashboard_ui);
-
       window.location.href = litellm_dashboard_ui;
     });
 
