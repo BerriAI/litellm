@@ -571,7 +571,7 @@ class OpenAIChatCompletion(BaseLLM):
                         headers=headers or {},
                     )
                 try:
-                    max_retries = data.pop("max_retries", 2)
+                    max_retries = data.pop("max_retries", 0) # Default to no retries
                     if acompletion is True:
                         if stream is True and fake_stream is False:
                             return self.async_streaming(
