@@ -3,6 +3,7 @@
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
 from .guardrail_initializers import (
+    initialize_acuvity,
     initialize_aim,
     initialize_aporia,
     initialize_bedrock,
@@ -20,4 +21,5 @@ guardrail_registry = {
     SupportedGuardrailIntegrations.PRESIDIO.value: initialize_presidio,
     SupportedGuardrailIntegrations.HIDE_SECRETS.value: initialize_hide_secrets,
     SupportedGuardrailIntegrations.GURDRAILS_AI.value: initialize_guardrails_ai,
+    SupportedGuardrailIntegrations.ACUVITY.value : initialize_acuvity,
 }
