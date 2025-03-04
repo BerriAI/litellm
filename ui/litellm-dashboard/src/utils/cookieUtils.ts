@@ -66,7 +66,7 @@ export function getAuthToken() {
         }
         return null;
       })
-      .filter(cookie => cookie !== null);
+      .filter((cookie): cookie is { name: string; timestamp: number; value: string } => cookie !== null);
     
     if (tokenCookies.length > 0) {
       // Sort by timestamp (newest first)
