@@ -2926,7 +2926,12 @@ class BedrockConverseMessagesProcessor:
                     assistants_parts: List[BedrockContentBlock] = []
                     for element in _assistant_content:
                         if isinstance(element, dict):
-                            if element["type"] == "text":
+                            if element["type"] == "thinking":
+                                thinking_block = BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
+                                    thinking_blocks=[element]
+                                )
+                                assistants_parts.extend(thinking_block)
+                            elif element["type"] == "text":
                                 assistants_part = BedrockContentBlock(
                                     text=element["text"]
                                 )
@@ -3159,7 +3164,12 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                 assistants_parts: List[BedrockContentBlock] = []
                 for element in _assistant_content:
                     if isinstance(element, dict):
-                        if element["type"] == "text":
+                        if element["type"] == "thinking":
+                            thinking_block = BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
+                                thinking_blocks=[element]
+                            )
+                            assistants_parts.extend(thinking_block)
+                        elif element["type"] == "text":
                             assistants_part = BedrockContentBlock(text=element["text"])
                             assistants_parts.append(assistants_part)
                         elif element["type"] == "image_url":
