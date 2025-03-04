@@ -21,7 +21,6 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { Team } from "./key_team_helpers/key_list";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
-import { getAuthToken } from "@/utils/cookieUtils";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 const isLocal = process.env.NODE_ENV === "development";
 if (isLocal != true) {
@@ -44,6 +43,14 @@ export type UserInfo = {
   models: string[];
   max_budget?: number | null;
   spend: number;
+}
+
+function getCookie(name: string) {
+  console.log("COOKIES", document.cookie)
+  const cookieValue = document.cookie
+      .split('; ')
+      .find(row => row.startsWith(name + '='));
+  return cookieValue ? cookieValue.split('=')[1] : null;
 }
 
 interface UserDashboardProps {
@@ -87,7 +94,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   // Assuming useSearchParams() hook exists and works in your setup
   const searchParams = useSearchParams()!;
 
-  const token = getAuthToken();
+  const token = getCookie('token');
 
   const invitation_id = searchParams.get("invitation_id");
 
