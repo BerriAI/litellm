@@ -87,14 +87,8 @@ const fetchWithCredentials = async (url: string, options: RequestInit = {}) => {
   }
 
   const response = await fetch(url, mergedOptions);
-  
-  if (!response.ok) {
-    const errorData = await response.text();
-    handleError(errorData);
-    throw new Error(`Network response was not ok: ${errorData}`);
-  }
-  
-  return response.json();
+
+  return response;
 };
 
 // Function to set the global header name
