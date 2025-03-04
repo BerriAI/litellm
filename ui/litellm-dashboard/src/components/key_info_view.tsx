@@ -30,9 +30,10 @@ interface KeyInfoViewProps {
   userID: string | null;
   userRole: string | null;
   teams: any[] | null;
+  refresh:any;
 }
 
-export default function KeyInfoView({ keyId, onClose, keyData, accessToken, userID, userRole, teams }: KeyInfoViewProps) {
+export default function KeyInfoView({ keyId, onClose, keyData, accessToken, userID, userRole, teams,refresh }: KeyInfoViewProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -106,6 +107,7 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
       if (!accessToken) return;
       await keyDeleteCall(accessToken as string, keyData.token);
       message.success("Key deleted successfully");
+      refresh()
       onClose();
     } catch (error) {
       console.error("Error deleting the key:", error);
