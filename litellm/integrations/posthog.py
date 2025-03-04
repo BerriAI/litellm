@@ -121,7 +121,7 @@ class PosthogLogger(CustomLogger):
             # Capture the event
             self.posthog.capture(
                 distinct_id=user_id,
-                event="$ai_generation",
+                event="$ai_generation" if call_type == "completion" else "$ai_embedding" if call_type == "embeddings" else "$ai_span",
                 properties=event_properties
             )
             
@@ -271,7 +271,6 @@ class PosthogLogger(CustomLogger):
             "$ai_input_tokens": input_tokens,
             "$ai_http_status": 200,
             "$ai_is_error": False,
-            "$ai_embedding_dimensions": len(response_obj.data[0].embedding) if hasattr(response_obj, "data") and len(response_obj.data) > 0 else 0,
         }
 
         if user_id is None:
