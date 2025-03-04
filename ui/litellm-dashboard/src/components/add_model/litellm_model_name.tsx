@@ -35,6 +35,25 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
     }
   };
 
+  // Handle custom model name changes
+  const handleCustomModelNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const customName = e.target.value;
+    
+    // Immediately update the model mappings
+    const currentMappings = form.getFieldValue('model_mappings') || [];
+    const updatedMappings = currentMappings.map((mapping: any) => {
+      if (mapping.public_name === 'custom' || mapping.litellm_model === 'custom') {
+        return {
+          public_name: customName,
+          litellm_model: customName
+        };
+      }
+      return mapping;
+    });
+    
+    form.setFieldsValue({ model_mappings: updatedMappings });
+  };
+
   return (
     <>
       <Form.Item
@@ -64,17 +83,17 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
               }
               options={[
                 {
+                  label: 'Custom Model Name (Enter below)',
+                  value: 'custom'
+                },
+                {
                   label: `All ${selectedProvider} Models (Wildcard)`,
                   value: 'all-wildcard'
                 },
                 ...providerModels.map(model => ({
                   label: model,
                   value: model
-                })),
-                {
-                  label: 'Custom Model Name (Enter below)',
-                  value: 'custom'
-                }
+                }))
               ]}
               style={{ width: '100%' }}
             />
@@ -92,13 +111,17 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
         >
           {({ getFieldValue }) => {
             const selectedModels = getFieldValue('model') || [];
-            return selectedModels.includes('custom') && (
+            const modelArray = Array.isArray(selectedModels) ? selectedModels : [selectedModels];
+            return modelArray.includes('custom') && (
               <Form.Item
                 name="custom_model_name"
                 rules={[{ required: true, message: "Please enter a custom model name." }]}
                 className="mt-2"
               >
-                <TextInput placeholder="Enter custom model name" />
+                <TextInput 
+                  placeholder="Enter custom model name" 
+                  onChange={handleCustomModelNameChange}
+                />
               </Form.Item>
             );
           }}

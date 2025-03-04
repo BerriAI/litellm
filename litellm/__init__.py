@@ -53,6 +53,7 @@ from litellm.constants import (
     cohere_embedding_models,
     bedrock_embedding_models,
     known_tokenizer_config,
+    BEDROCK_INVOKE_PROVIDERS_LITERAL,
 )
 from litellm.types.guardrails import GuardrailItem
 from litellm.proxy._types import (
@@ -95,6 +96,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "galileo",
     "braintrust",
     "arize",
+    "arize_phoenix",
     "langtrace",
     "gcs_bucket",
     "azure_storage",
@@ -360,17 +362,7 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-2-11b-instruct-v1:0",
     "meta.llama3-2-90b-instruct-v1:0",
 ]
-BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
-    "cohere",
-    "anthropic",
-    "mistral",
-    "amazon",
-    "meta",
-    "llama",
-    "ai21",
-    "nova",
-    "deepseek_r1",
-]
+
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models: List = []
 open_ai_text_completion_models: List = []
@@ -823,6 +815,7 @@ from .llms.predibase.chat.transformation import PredibaseConfig
 from .llms.replicate.chat.transformation import ReplicateConfig
 from .llms.cohere.completion.transformation import CohereTextConfig as CohereConfig
 from .llms.cohere.rerank.transformation import CohereRerankConfig
+from .llms.cohere.rerank_v2.transformation import CohereRerankV2Config
 from .llms.azure_ai.rerank.transformation import AzureAIRerankConfig
 from .llms.infinity.rerank.transformation import InfinityRerankConfig
 from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig

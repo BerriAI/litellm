@@ -26,6 +26,8 @@ from litellm.types.utils import (
     ModelResponse,
     ProviderField,
     StandardCallbackDynamicParams,
+    StandardLoggingPayloadErrorInformation,
+    StandardLoggingPayloadStatus,
     StandardPassThroughResponseObject,
     TextCompletionResponse,
 )
@@ -239,6 +241,7 @@ class LiteLLMRoutes(enum.Enum):
         # rerank
         "/rerank",
         "/v1/rerank",
+        "/v2/rerank"
         # realtime
         "/realtime",
         "/v1/realtime",
@@ -278,6 +281,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model_group/info",
         "/health",
         "/key/list",
+        "/user/filter/ui",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
@@ -354,7 +358,6 @@ class LiteLLMRoutes(enum.Enum):
         "/key/info",
         "/config",
         "/spend",
-        "/user",
         "/model/info",
         "/v2/model/info",
         "/v2/key/info",
@@ -609,6 +612,8 @@ class GenerateKeyResponse(KeyRequestBase):
     token_id: Optional[str] = None
     litellm_budget_table: Optional[Any] = None
     token: Optional[str] = None
+    created_by: Optional[str] = None
+    updated_by: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -998,6 +1003,7 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
 class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
     success_callback: Optional[List[str]] = []
     failure_callback: Optional[List[str]] = []
+    callbacks: Optional[List[str]] = []
     # for now - only supported for langfuse
     callback_vars: Optional[Dict[str, str]] = {}
 
@@ -1010,6 +1016,9 @@ class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
         failure_callback = values.get("failure_callback", [])
         if failure_callback is None:
             values.pop("failure_callback", None)
+        callbacks = values.get("callbacks", [])
+        if callbacks is None:
+            values.pop("callbacks", None)
 
         callback_vars = values.get("callback_vars", {})
         if callback_vars is None:
@@ -1018,6 +1027,7 @@ class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
             return {
                 "success_callback": [],
                 "failure_callback": [],
+                "callbacks": [],
                 "callback_vars": {},
             }
         valid_keys = set(StandardCallbackDynamicParams.__annotations__.keys())
@@ -1386,7 +1396,9 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     litellm_budget_table: Optional[dict] = None
     org_id: Optional[str] = None  # org id for a given key
     created_at: Optional[datetime] = None
+    created_by: Optional[str] = None
     updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1568,6 +1580,15 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(protected_namespaces=())
 
 
+class LiteLLM_UserTableFiltered(BaseModel):  # done to avoid exposing sensitive data
+    user_id: str
+    user_email: str
+
+
+class LiteLLM_UserTableWithKeyCount(LiteLLM_UserTable):
+    key_count: int = 0
+
+
 class LiteLLM_EndUserTable(LiteLLMPydanticObjectBase):
     user_id: str
     blocked: bool
@@ -1698,6 +1719,7 @@ class WebhookEvent(CallInfo):
 class SpecialModelNames(enum.Enum):
     all_team_models = "all-team-models"
     all_proxy_models = "all-proxy-models"
+    no_default_models = "no-default-models"
 
 
 class InvitationNew(LiteLLMPydanticObjectBase):
@@ -1840,6 +1862,9 @@ class SpendLogsMetadata(TypedDict):
     ]  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: Optional[str]
     applied_guardrails: Optional[List[str]]
+    status: StandardLoggingPayloadStatus
+    proxy_server_request: Optional[str]
+    error_information: Optional[StandardLoggingPayloadErrorInformation]
 
 
 class SpendLogsPayload(TypedDict):
