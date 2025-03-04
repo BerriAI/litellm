@@ -2928,7 +2928,9 @@ class BedrockConverseMessagesProcessor:
                         if isinstance(element, dict):
                             if element["type"] == "thinking":
                                 thinking_block = BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                                    thinking_blocks=[element]
+                                    thinking_blocks=[
+                                        cast(ChatCompletionThinkingBlock, element)
+                                    ]
                                 )
                                 assistants_parts.extend(thinking_block)
                             elif element["type"] == "text":
@@ -3166,7 +3168,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                     if isinstance(element, dict):
                         if element["type"] == "thinking":
                             thinking_block = BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                                thinking_blocks=[element]
+                                thinking_blocks=[
+                                    cast(ChatCompletionThinkingBlock, element)
+                                ]
                             )
                             assistants_parts.extend(thinking_block)
                         elif element["type"] == "text":
