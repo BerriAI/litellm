@@ -187,7 +187,7 @@ def test_cache_ping_health_check_includes_only_cache_attributes(mock_redis_succe
 
 
 def test_cache_ping_with_redis_version_float(mock_redis_success):
-    """Test cache ping when redis_version is a float"""
+    """Test cache ping works when redis_version is a float"""
     # Set redis_version as a float
     mock_redis_success.cache.redis_version = 7.2
 
