@@ -725,6 +725,7 @@ class LLMCachingHandler:
         """
         Sync internal method to add the result to the cache
         """
+
         new_kwargs = kwargs.copy()
         new_kwargs.update(
             convert_args_to_kwargs(
@@ -738,6 +739,7 @@ class LLMCachingHandler:
         if self._should_store_result_in_cache(
             original_function=self.original_function, kwargs=new_kwargs
         ):
+
             litellm.cache.add_cache(result, **new_kwargs)
 
         return
