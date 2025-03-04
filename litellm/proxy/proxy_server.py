@@ -7372,6 +7372,8 @@ async def login(request: Request):  # noqa: PLR0915
         import multipart
     except ImportError:
         subprocess.run(["pip", "install", "python-multipart"])
+    from litellm.proxy.management_helpers.ui_session_handler import UISessionHandler
+
     global master_key
     if master_key is None:
         raise ProxyException(
@@ -7489,9 +7491,9 @@ async def login(request: Request):  # noqa: PLR0915
             algorithm="HS256",
         )
         litellm_dashboard_ui += "?userID=" + user_id
-        redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
-        redirect_response.set_cookie(key="token", value=jwt_token)
-        return redirect_response
+        return UISessionHandler.generate_authenticated_redirect_response(
+            redirect_url=litellm_dashboard_ui, jwt_token=jwt_token
+        )
     elif _user_row is not None:
         """
         When sharing invite links
@@ -7557,11 +7559,9 @@ async def login(request: Request):  # noqa: PLR0915
                 algorithm="HS256",
             )
             litellm_dashboard_ui += "?userID=" + user_id
-            redirect_response = RedirectResponse(
-                url=litellm_dashboard_ui, status_code=303
+            return UISessionHandler.generate_authenticated_redirect_response(
+                redirect_url=litellm_dashboard_ui, jwt_token=jwt_token
             )
-            redirect_response.set_cookie(key="token", value=jwt_token)
-            return redirect_response
         else:
             raise ProxyException(
                 message=f"Invalid credentials used to access UI.\nNot valid credentials for {username}",

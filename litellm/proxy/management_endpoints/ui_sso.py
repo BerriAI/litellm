@@ -7,6 +7,7 @@ Has all /sso/* routes
 
 import asyncio
 import os
+import time
 import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
@@ -43,6 +44,7 @@ from litellm.proxy.management_endpoints.sso_helper_utils import (
 )
 from litellm.proxy.management_endpoints.team_endpoints import team_member_add
 from litellm.proxy.management_endpoints.types import CustomOpenID
+from litellm.proxy.management_helpers.ui_session_handler import UISessionHandler
 from litellm.secret_managers.main import str_to_bool
 
 if TYPE_CHECKING:
@@ -690,9 +692,10 @@ async def auth_callback(request: Request):  # noqa: PLR0915
     )
     if user_id is not None and isinstance(user_id, str):
         litellm_dashboard_ui += "?userID=" + user_id
-    redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
-    redirect_response.set_cookie(key="token", value=jwt_token, secure=True)
-    return redirect_response
+
+    return UISessionHandler.generate_authenticated_redirect_response(
+        redirect_url=litellm_dashboard_ui, jwt_token=jwt_token
+    )
 
 
 async def insert_sso_user(
