@@ -7456,7 +7456,11 @@ async def login(request: Request):  # noqa: PLR0915
             litellm_dashboard_ui += "ui/"
         else:
             litellm_dashboard_ui += "/ui/"
+        from datetime import timezone
+
         import jwt
+
+        expiration = datetime.now(timezone.utc) + timedelta(hours=24)
 
         jwt_token = jwt.encode(  # type: ignore
             {
@@ -7468,6 +7472,7 @@ async def login(request: Request):  # noqa: PLR0915
                 "auth_header_name": general_settings.get(
                     "litellm_key_header_name", "Authorization"
                 ),
+                "exp": expiration,
                 "disabled_non_admin_personal_key_creation": disabled_non_admin_personal_key_creation,
             },
             master_key,

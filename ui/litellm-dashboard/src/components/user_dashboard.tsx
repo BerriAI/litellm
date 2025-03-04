@@ -147,7 +147,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
         console.log("Decoded key:", decoded.key);
         // set accessToken
-        setAccessToken(decoded.key);
+        setAccessToken(token);
 
         // check if userRole is defined
         if (decoded.user_role) {
@@ -287,24 +287,24 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     )
   }
 
-  if (userID == null || token == null) {
-    // user is not logged in as yet 
-    console.log("All cookies before redirect:", document.cookie);
+  // if (userID == null || token == null) {
+  //   // user is not logged in as yet 
+  //   console.log("All cookies before redirect:", document.cookie);
     
-    // Clear token cookies using the utility function
-    clearTokenCookies();
+  //   // Clear token cookies using the utility function
+  //   clearTokenCookies();
     
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/sso/key/generate`
-      : `/sso/key/generate`;
+  //   const url = proxyBaseUrl
+  //     ? `${proxyBaseUrl}/sso/key/generate`
+  //     : `/sso/key/generate`;
     
-    console.log("Full URL:", url);
-    window.location.href = url;
+  //   console.log("Full URL:", url);
+  //   window.location.href = url;
 
-    return null;
-  } else if (accessToken == null) {
-    return null;
-  }
+  //   return null;
+  // } else if (accessToken == null) {
+  //   return null;
+  // }
 
   if (userRole == null) {
     setUserRole("App Owner");
