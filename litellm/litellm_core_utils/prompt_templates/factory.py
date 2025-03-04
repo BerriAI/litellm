@@ -1533,17 +1533,6 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 model=model,
                 llm_provider=llm_provider,
             )
-    if not new_messages or new_messages[0]["role"] != "user":
-        if litellm.modify_params:
-            new_messages.insert(
-                0, {"role": "user", "content": [{"type": "text", "text": "."}]}
-            )
-        else:
-            raise Exception(
-                "Invalid first message={}. Should always start with 'role'='user' for Anthropic. System prompt is sent separately for Anthropic. set 'litellm.modify_params = True' or 'litellm_settings:modify_params = True' on proxy, to insert a placeholder user message - '.' as the first message, ".format(
-                    new_messages
-                )
-            )
 
     if new_messages[-1]["role"] == "assistant":
         if isinstance(new_messages[-1]["content"], str):
