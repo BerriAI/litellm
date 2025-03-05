@@ -219,6 +219,38 @@ def test_router_azure_ai_client_init():
     assert not isinstance(_client, AsyncAzureOpenAI)
 
 
+def test_router_azure_ad_token_provider():
+    _deployment = {
+        "model_name": "gpt-4o_2024-05-13",
+        "litellm_params": {
+            "model": "azure/gpt-4o_2024-05-13",
+            "api_base": "my-fake-route",
+            "api_version": "2024-08-01-preview",
+        },
+        "model_info": {"id": "1234"},
+    }
+    for azure_cred in ["DefaultAzureCredential", "AzureCliCredential"]:
+        os.environ["AZURE_CREDENTIAL"] = azure_cred
+        litellm.enable_azure_ad_token_refresh = True
+        router = Router(model_list=[_deployment])
+
+        _client = router._get_client(
+            deployment=_deployment,
+            client_type="async",
+            kwargs={"stream": False},
+        )
+        print(_client)
+        import azure.identity as identity
+        from openai import AsyncAzureOpenAI, AsyncOpenAI
+
+        assert isinstance(_client, AsyncOpenAI)
+        assert isinstance(_client, AsyncAzureOpenAI)
+        assert _client._azure_ad_token_provider is not None
+        assert isinstance(_client._azure_ad_token_provider.__closure__, tuple)
+        assert isinstance(_client._azure_ad_token_provider.__closure__[0].cell_contents._credential,
+                        getattr(identity, os.environ["AZURE_CREDENTIAL"]))
+
+
 def test_router_sensitive_keys():
     try:
         router = Router(
