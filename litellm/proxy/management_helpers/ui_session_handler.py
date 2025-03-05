@@ -12,6 +12,32 @@ from litellm.proxy._types import LiteLLM_JWTAuth, LitellmUserRoles
 class UISessionHandler:
 
     @staticmethod
+    def _get_latest_ui_cookie_name(cookies: dict) -> Optional[str]:
+        """
+        Get the name of the most recent LiteLLM UI cookie
+        """
+        # Find all LiteLLM UI cookies (format: litellm_ui_token_{timestamp})
+        litellm_ui_cookies = [
+            k for k in cookies.keys() if k.startswith("litellm_ui_token_")
+        ]
+        if not litellm_ui_cookies:
+            return None
+
+        # Sort by timestamp (descending) to get the most recent one
+        try:
+            # Extract timestamps and sort numerically
+            sorted_cookies = sorted(
+                litellm_ui_cookies,
+                key=lambda x: int(x.split("_")[-1]),
+                reverse=True,
+            )
+            return sorted_cookies[0]
+        except (ValueError, IndexError):
+            # Fallback to simple string sort if timestamp extraction fails
+            litellm_ui_cookies.sort(reverse=True)
+            return litellm_ui_cookies[0]
+
+    @staticmethod
     # Add this function to extract auth token from cookies
     def _get_ui_session_token_from_cookies(request: Request) -> Optional[str]:
         """
@@ -20,24 +46,9 @@ class UISessionHandler:
         cookies = request.cookies
         verbose_proxy_logger.debug(f"AUTH COOKIES: {cookies}")
 
-        # First check for LiteLLM UI cookies (format: litellm_ui_token_{timestamp})
-        litellm_ui_cookies = [
-            k for k in cookies.keys() if k.startswith("litellm_ui_token_")
-        ]
-        if litellm_ui_cookies:
-            # Sort by timestamp (descending) to get the most recent one
-            try:
-                # Extract timestamps and sort numerically
-                sorted_cookies = sorted(
-                    litellm_ui_cookies,
-                    key=lambda x: int(x.split("_")[-1]),
-                    reverse=True,
-                )
-                return cookies[sorted_cookies[0]]
-            except (ValueError, IndexError):
-                # Fallback to simple string sort if timestamp extraction fails
-                litellm_ui_cookies.sort(reverse=True)
-                return cookies[litellm_ui_cookies[0]]
+        cookie_name = UISessionHandler._get_latest_ui_cookie_name(cookies)
+        if cookie_name:
+            return cookies[cookie_name]
 
         return None
 

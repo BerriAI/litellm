@@ -796,8 +796,10 @@ async def validate_session(
     from litellm.proxy.management_helpers.ui_session_handler import UISessionHandler
 
     ui_session_token = UISessionHandler._get_ui_session_token_from_cookies(request)
+    ui_session_id = UISessionHandler._get_latest_ui_cookie_name(request.cookies)
     if ui_session_token is None:
         raise HTTPException(status_code=401, detail="Unauthorized")
     jwt_handler = JWTHandler()
     validated_jwt_token = await jwt_handler.auth_jwt(token=ui_session_token)
+    validated_jwt_token["session_id"] = ui_session_id
     return {"valid": True, "data": validated_jwt_token}
