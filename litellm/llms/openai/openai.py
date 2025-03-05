@@ -1801,10 +1801,10 @@ class OpenAIBatchesAPI(BaseLLM):
         self,
         retrieve_batch_data: RetrieveBatchRequest,
         openai_client: AsyncOpenAI,
-    ) -> Batch:
+    ) -> LiteLLMBatch:
         verbose_logger.debug("retrieving batch, args= %s", retrieve_batch_data)
         response = await openai_client.batches.retrieve(**retrieve_batch_data)
-        return response
+        return LiteLLMBatch(**response.model_dump())
 
     def retrieve_batch(
         self,
@@ -1839,8 +1839,8 @@ class OpenAIBatchesAPI(BaseLLM):
             return self.aretrieve_batch(  # type: ignore
                 retrieve_batch_data=retrieve_batch_data, openai_client=openai_client
             )
-        response = openai_client.batches.retrieve(**retrieve_batch_data)
-        return response
+        response = cast(OpenAI, openai_client).batches.retrieve(**retrieve_batch_data)
+        return LiteLLMBatch(**response.model_dump())
 
     async def acancel_batch(
         self,

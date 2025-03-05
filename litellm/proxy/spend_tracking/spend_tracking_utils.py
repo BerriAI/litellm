@@ -74,8 +74,6 @@ def get_logging_payload(  # noqa: PLR0915
 ) -> SpendLogsPayload:
     from litellm.proxy.proxy_server import general_settings, master_key
 
-    verbose_proxy_logger.info("Writing spend log to db")
-
     if kwargs is None:
         kwargs = {}
     if response_obj is None or (

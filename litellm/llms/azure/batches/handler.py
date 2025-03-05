@@ -111,9 +111,9 @@ class AzureBatchesAPI:
         self,
         retrieve_batch_data: RetrieveBatchRequest,
         client: AsyncAzureOpenAI,
-    ) -> Batch:
+    ) -> LiteLLMBatch:
         response = await client.batches.retrieve(**retrieve_batch_data)
-        return response
+        return LiteLLMBatch(**response.model_dump())
 
     def retrieve_batch(
         self,
@@ -150,8 +150,10 @@ class AzureBatchesAPI:
             return self.aretrieve_batch(  # type: ignore
                 retrieve_batch_data=retrieve_batch_data, client=azure_client
             )
-        response = azure_client.batches.retrieve(**retrieve_batch_data)
-        return response
+        response = cast(AzureOpenAI, azure_client).batches.retrieve(
+            **retrieve_batch_data
+        )
+        return LiteLLMBatch(**response.model_dump())
 
     async def acancel_batch(
         self,
