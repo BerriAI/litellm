@@ -9461,5 +9461,173 @@
         "output_cost_per_token": 0.000000018,
         "litellm_provider": "jina_ai",
         "mode": "rerank"
+    },
+    "snowflake/deepseek-r1": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 8192,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/snowflake-arctic": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "max_output_tokens": 8192,
+        "litellm_provider": "snowflake",
+        "mode": "completion" 
+    },
+    "snowflake/claude-3-5-sonnet": {
+        "max_tokens": 18000,
+        "max_input_tokens": 18000,
+        "max_output_tokens": 8192,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/mistral-large": {
+        "max_tokens": 32000,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8192,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/mistral-large2": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/reka-flash": {
+        "max_tokens": 100000,
+        "max_input_tokens": 100000,
+        "max_output_tokens": 8192,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/reka-core": {
+        "max_tokens": 32000,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8192,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/jamba-instruct": {
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 8192,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/jamba-1.5-mini": {
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 8192,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/jamba-1.5-large": {
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 8192,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/mixtral-8x7b": {
+        "max_tokens": 32000,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8192,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/llama2-70b-chat": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "max_output_tokens": 8192,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/llama3-8b": {
+        "max_tokens": 8000,
+        "max_input_tokens": 8000,
+        "max_output_tokens": 8192,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/llama3-70b": {
+        "max_tokens": 8000,
+        "max_input_tokens": 8000,
+        "max_output_tokens": 8192,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/llama3.1-8b": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/llama3.1-70b": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/llama3.3-70b": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/snowflake-llama-3.3-70b": {
+        "max_tokens": 8000,
+        "max_input_tokens": 8000,
+        "max_output_tokens": 8192,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/llama3.1-405b": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/snowflake-llama-3.1-405b": {
+        "max_tokens": 8000,
+        "max_input_tokens": 8000,
+        "max_output_tokens": 8192,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/llama3.2-1b": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/llama3.2-3b": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/mistral-7b": {
+        "max_tokens": 32000,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8192,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/gemma-7b": {
+        "max_tokens": 8000,
+        "max_input_tokens": 8000,
+        "max_output_tokens": 8192,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
     }
 }
