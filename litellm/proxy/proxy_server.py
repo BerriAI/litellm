@@ -7399,14 +7399,7 @@ async def login(request: Request):  # noqa: PLR0915
 
     # check if we can find the `username` in the db. on the ui, users can enter username=their email
     _user_row = None
-    user_role: Optional[
-        Literal[
-            LitellmUserRoles.PROXY_ADMIN,
-            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-            LitellmUserRoles.INTERNAL_USER,
-            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-        ]
-    ] = None
+    user_role: Optional[LitellmUserRoles] = None
     if prisma_client is not None:
         _user_row = await prisma_client.db.litellm_usertable.find_first(
             where={"user_email": {"equals": username}}
@@ -7444,25 +7437,18 @@ async def login(request: Request):  # noqa: PLR0915
                 user_role=user_role,
             )
         )
-        if os.getenv("DATABASE_URL") is None:
-            raise ProxyException(
-                message="No Database connected. Set DATABASE_URL in .env. If set, use `--detailed_debug` to debug issue.",
-                type=ProxyErrorTypes.auth_error,
-                param="DATABASE_URL",
-                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
         litellm_dashboard_ui = os.getenv("PROXY_BASE_URL", "")
         if litellm_dashboard_ui.endswith("/"):
             litellm_dashboard_ui += "ui/"
         else:
             litellm_dashboard_ui += "/ui/"
-        from datetime import timezone
-
         jwt_token = UISessionHandler.build_authenticated_ui_jwt_token(
             user_id=user_id,
             user_role=user_role,
+            user_email=None,
             premium_user=premium_user,
             disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
+            login_method="username_password",
         )
         litellm_dashboard_ui += "?userID=" + user_id
         return UISessionHandler.generate_authenticated_redirect_response(
@@ -7486,51 +7472,18 @@ async def login(request: Request):  # noqa: PLR0915
         if secrets.compare_digest(password, _password) or secrets.compare_digest(
             hash_password, _password
         ):
-            if os.getenv("DATABASE_URL") is not None:
-                response = await generate_key_helper_fn(
-                    request_type="key",
-                    **{  # type: ignore
-                        "user_role": user_role,
-                        "duration": "24hr",
-                        "key_max_budget": litellm.max_ui_session_budget,
-                        "models": [],
-                        "aliases": {},
-                        "config": {},
-                        "spend": 0,
-                        "user_id": user_id,
-                        "team_id": "litellm-dashboard",
-                    },
-                )
-            else:
-                raise ProxyException(
-                    message="No Database connected. Set DATABASE_URL in .env. If set, use `--detailed_debug` to debug issue.",
-                    type=ProxyErrorTypes.auth_error,
-                    param="DATABASE_URL",
-                    code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                )
-            key = response["token"]  # type: ignore
             litellm_dashboard_ui = os.getenv("PROXY_BASE_URL", "")
             if litellm_dashboard_ui.endswith("/"):
                 litellm_dashboard_ui += "ui/"
             else:
                 litellm_dashboard_ui += "/ui/"
-            import jwt
-
-            jwt_token = jwt.encode(  # type: ignore
-                {
-                    "user_id": user_id,
-                    "key": key,
-                    "user_email": user_email,
-                    "user_role": user_role,
-                    "login_method": "username_password",
-                    "premium_user": premium_user,
-                    "auth_header_name": general_settings.get(
-                        "litellm_key_header_name", "Authorization"
-                    ),
-                    "disabled_non_admin_personal_key_creation": disabled_non_admin_personal_key_creation,
-                },
-                master_key,
-                algorithm="HS256",
+            jwt_token = UISessionHandler.build_authenticated_ui_jwt_token(
+                user_id=user_id,
+                user_role=user_role,
+                user_email=user_email,
+                premium_user=premium_user,
+                disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
+                login_method="username_password",
             )
             litellm_dashboard_ui += "?userID=" + user_id
             return UISessionHandler.generate_authenticated_redirect_response(

@@ -55,7 +55,8 @@ class UISessionHandler:
     @staticmethod
     def build_authenticated_ui_jwt_token(
         user_id: str,
-        user_role: LitellmUserRoles,
+        user_role: Optional[LitellmUserRoles],
+        user_email: Optional[str],
         premium_user: bool,
         disabled_non_admin_personal_key_creation: bool,
         login_method: Literal["username_password", "sso"],
@@ -75,7 +76,7 @@ class UISessionHandler:
         expiration = datetime.now(timezone.utc) + timedelta(hours=24)
         initial_payload = {
             "user_id": user_id,
-            "user_email": None,
+            "user_email": user_email,
             "user_role": user_role,  # this is the path without sso - we can assume only admins will use this
             "login_method": login_method,
             "premium_user": premium_user,
