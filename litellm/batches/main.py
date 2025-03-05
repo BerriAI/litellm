@@ -34,8 +34,6 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LiteLLMBatch
 from litellm.utils import client, get_litellm_params, supports_httpx_timeout
 
-from .batch_utils import batches_async_logging
-
 ####### ENVIRONMENT VARIABLES ###################
 openai_batches_instance = OpenAIBatchesAPI()
 azure_batches_instance = AzureBatchesAPI()
@@ -86,17 +84,6 @@ async def acreate_batch(
         else:
             response = init_response
 
-        # Start async logging job
-        if response is not None:
-            asyncio.create_task(
-                batches_async_logging(
-                    logging_obj=kwargs.get("litellm_logging_obj", None),
-                    batch_id=response.id,
-                    custom_llm_provider=custom_llm_provider,
-                    **kwargs,
-                )
-            )
-
         return response
     except Exception as e:
         raise e
@@ -120,21 +107,26 @@ def create_batch(
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
+        litellm_call_id = kwargs.get("litellm_call_id", None)
+        proxy_server_request = kwargs.get("proxy_server_request", None)
+        model_info = kwargs.get("model_info", None)
         _is_async = kwargs.pop("acreate_batch", False) is True
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj", None)
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
-        litellm_params = get_litellm_params(
-            custom_llm_provider=custom_llm_provider,
-            litellm_call_id=kwargs.get("litellm_call_id", None),
-            litellm_trace_id=kwargs.get("litellm_trace_id"),
-            litellm_metadata=kwargs.get("litellm_metadata"),
-        )
         litellm_logging_obj.update_environment_variables(
             model=None,
             user=None,
             optional_params=optional_params.model_dump(),
-            litellm_params=litellm_params,
+            litellm_params={
+                "litellm_call_id": litellm_call_id,
+                "proxy_server_request": proxy_server_request,
+                "model_info": model_info,
+                "metadata": metadata,
+                "preset_cache_key": None,
+                "stream_response": {},
+                **optional_params.model_dump(exclude_unset=True),
+            },
             custom_llm_provider=custom_llm_provider,
         )
 
@@ -328,9 +320,23 @@ def retrieve_batch(
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
+
+        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj", None)
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
-        # set timeout for 10 minutes by default
+        litellm_params = get_litellm_params(
+            custom_llm_provider=custom_llm_provider,
+            litellm_call_id=kwargs.get("litellm_call_id", None),
+            litellm_trace_id=kwargs.get("litellm_trace_id"),
+            litellm_metadata=kwargs.get("litellm_metadata"),
+        )
+        litellm_logging_obj.update_environment_variables(
+            model=None,
+            user=None,
+            optional_params=optional_params.model_dump(),
+            litellm_params=litellm_params,
+            custom_llm_provider=custom_llm_provider,
+        )
 
         if (
             timeout is not None
