@@ -5,7 +5,8 @@ Why separate file? Make it easy to see how transformation works
 """
 
 import os
-from typing import TYPE_CHECKING, List, Literal, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, List, Literal, Optional, Set, Tuple, Union, cast
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import BaseModel
@@ -20,9 +21,9 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.files import (
-    get_file_mime_type_for_file_type,
-    get_file_type_from_extension,
-    is_gemini_1_5_accepted_file_type,
+    FILE_MIME_TYPES,
+    FileType,
+    get_mime_type_from_url
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -55,68 +56,75 @@ else:
     LiteLLMLoggingObj = Any
 
 
-def _process_gemini_image(image_url: str) -> PartType:
+def _process_gemini_image(image_url: str, mime_type: str | None) -> PartType:
     """
-    Given an image URL, return the appropriate PartType for Gemini
+    Given an image URL and optional mime_type, return the appropriate PartType for Gemini
     """
+    # Validate URL starts with accepted protocols
+    class AcceptedProtocols(Enum):
+        GCS = "gs://"
+        HTTP = "http://"
+        HTTPS = "https://"
+        DATA = "data:"
+
+    protocol = next((p for p in AcceptedProtocols if image_url.startswith(p.value)), None)
+    if protocol is None:
+        raise ValueError(f"Image URL protocol is not supported - {image_url}")
+    
+    if protocol == AcceptedProtocols.GCS:
+        return _generate_part_type_for_google_storage_url(image_url, mime_type)
+    
+    elif protocol == AcceptedProtocols.DATA:
+        return _generate_part_type_for_data_url(image_url, mime_type)
+    
+    # handle http and https urls
+    return _generate_part_type_for_http_url(image_url, mime_type)
+
+def _generate_part_type_for_google_storage_url(url: str, mime_type: str | None) -> PartType:
+    """
+    Generate a PartType for a Google Storage URL.
+    """
+    if mime_type is None:
+        mime_type = get_mime_type_from_url(url)
+    if not _is_gemini_1_5_accepted_mime_type(mime_type):
+        raise ValueError(f"Mime type not supported by gemini - {mime_type}")
+    file_data = FileDataType(file_uri=url, mime_type=mime_type)
+    return PartType(file_data=file_data)
+
+def _generate_part_type_for_data_url(url: str, mime_type: str | None) -> PartType:
+    """
+    Generate a PartType for a data URL.
+    """
+    image = convert_to_anthropic_image_obj(url)
+    resolved_mime_type = mime_type or image["media_type"]
+    if mime_type is not None and mime_type != image["media_type"]:
+        raise ValueError(f"Mime type mismatch - provided mime_type: {mime_type} != image mime_type: {image['media_type']}")
+    if not _is_gemini_1_5_accepted_mime_type(resolved_mime_type):
+        raise ValueError(f"Mime type not supported by gemini - {resolved_mime_type}")
+    _blob = BlobType(data=image["data"], mime_type=resolved_mime_type)
+    return PartType(inline_data=_blob)
+
+def _generate_part_type_for_http_url(url: str, mime_type: str | None) -> PartType:
+    """
+    Generate a PartType for a HTTP or HTTPS URLS.
+    """
+    if mime_type is not None:
+        file_data = FileDataType(file_uri=url, mime_type=mime_type)
+        return PartType(file_data=file_data)
+    
+    # try to get mime_type from url and if it fails fallback to anthropic image obj
     try:
-        # GCS URIs
-        if "gs://" in image_url:
-            # Figure out file type
-            extension_with_dot = os.path.splitext(image_url)[-1]  # Ex: ".png"
-            extension = extension_with_dot[1:]  # Ex: "png"
-
-            file_type = get_file_type_from_extension(extension)
-
-            # Validate the file type is supported by Gemini
-            if not is_gemini_1_5_accepted_file_type(file_type):
-                raise Exception(f"File type not supported by gemini - {file_type}")
-
-            mime_type = get_file_mime_type_for_file_type(file_type)
-            file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
-
-            return PartType(file_data=file_data)
-        elif (
-            "https://" in image_url
-            and (image_type := _get_image_mime_type_from_url(image_url)) is not None
-        ):
-            file_data = FileDataType(file_uri=image_url, mime_type=image_type)
-            return PartType(file_data=file_data)
-        elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
-            # https links for unsupported mime types and base64 images
-            image = convert_to_anthropic_image_obj(image_url)
-            _blob = BlobType(data=image["data"], mime_type=image["media_type"])
-            return PartType(inline_data=_blob)
-        raise Exception("Invalid image received - {}".format(image_url))
+        mime_type = get_mime_type_from_url(url)
+        if not _is_gemini_1_5_accepted_mime_type(mime_type):
+            raise ValueError(f"Mime type not supported by gemini - {mime_type}")
+        file_data = FileDataType(file_uri=url, mime_type=mime_type)
+        return PartType(file_data=file_data)
     except Exception as e:
-        raise e
-
-
-def _get_image_mime_type_from_url(url: str) -> Optional[str]:
-    """
-    Get mime type for common image URLs
-    See gemini mime types: https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/image-understanding#image-requirements
-
-    Supported by Gemini:
-     - PNG (`image/png`)
-     - JPEG (`image/jpeg`)
-     - WebP (`image/webp`)
-    Example:
-        url = https://example.com/image.jpg
-        Returns: image/jpeg
-    """
-    url = url.lower()
-    if url.endswith((".jpg", ".jpeg")):
-        return "image/jpeg"
-    elif url.endswith(".png"):
-        return "image/png"
-    elif url.endswith(".webp"):
-        return "image/webp"
-    elif url.endswith(".mp4"):
-        return "video/mp4"
-    elif url.endswith(".pdf"):
-        return "application/pdf"
-    return None
+        image = convert_to_anthropic_image_obj(url)
+        if not _is_gemini_1_5_accepted_mime_type(image["media_type"]):
+            raise ValueError(f"Mime type not supported by gemini - {image['media_type']}")
+        _blob = BlobType(data=image["data"], mime_type=mime_type or image["media_type"])
+        return PartType(inline_data=_blob)
 
 
 def _gemini_convert_messages_with_history(  # noqa: PLR0915
@@ -159,11 +167,13 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                         elif element["type"] == "image_url":
                             element = cast(ChatCompletionImageObject, element)
                             img_element = element
+                            mime_type = None
                             if isinstance(img_element["image_url"], dict):
                                 image_url = img_element["image_url"]["url"]
+                                mime_type = img_element["image_url"]["mime_type"]
                             else:
                                 image_url = img_element["image_url"]
-                            _part = _process_gemini_image(image_url=image_url)
+                            _part = _process_gemini_image(image_url=image_url, mime_type=mime_type)
                             _parts.append(_part)
                     user_content.extend(_parts)
                 elif (
@@ -467,3 +477,62 @@ def _transform_system_message(
         return SystemInstructions(parts=system_content_blocks), messages
 
     return None, messages
+
+# https://ai.google.dev/gemini-api/docs/vision?lang=python#technical-details-image
+GEMINI_1_5_ACCEPTED_IMAGE_MIME_TYPES: Set[str] = {
+    FILE_MIME_TYPES[FileType.PNG],
+    FILE_MIME_TYPES[FileType.JPEG],
+    FILE_MIME_TYPES[FileType.WEBP],
+    FILE_MIME_TYPES[FileType.HEIC],
+    FILE_MIME_TYPES[FileType.HEIF]
+}
+
+# https://ai.google.dev/gemini-api/docs/vision?lang=python#technical-details-video
+GEMINI_1_5_ACCEPTED_VIDEO_MIME_TYPES: Set[str] = {
+    FILE_MIME_TYPES[FileType.FLV],
+    FILE_MIME_TYPES[FileType.MOV],
+    FILE_MIME_TYPES[FileType.AVI],
+    FILE_MIME_TYPES[FileType.MPEG],
+    FILE_MIME_TYPES[FileType.MPG],
+    FILE_MIME_TYPES[FileType.MP4],
+    FILE_MIME_TYPES[FileType.WEBM],
+    FILE_MIME_TYPES[FileType.WMV],
+    FILE_MIME_TYPES[FileType.THREE_GPP]
+}
+
+# https://ai.google.dev/gemini-api/docs/audio?lang=python#supported-formats
+GEMINI_1_5_ACCEPTED_AUDIO_MIME_TYPES: Set[str] = {
+    FILE_MIME_TYPES[FileType.AAC],
+    FILE_MIME_TYPES[FileType.AIFF],
+    FILE_MIME_TYPES[FileType.FLAC],
+    FILE_MIME_TYPES[FileType.MP3],
+    FILE_MIME_TYPES[FileType.OGG],
+    FILE_MIME_TYPES[FileType.WAV]
+}
+
+# https://ai.google.dev/gemini-api/docs/document-processing?lang=python#technical-details
+GEMINI_1_5_ACCEPTED_TEXT_MIME_TYPES: Set[str] = {
+    FILE_MIME_TYPES[FileType.CSS],
+    FILE_MIME_TYPES[FileType.CSV],
+    FILE_MIME_TYPES[FileType.HTML],
+    FILE_MIME_TYPES[FileType.JAVA_SCRIPT],
+    FILE_MIME_TYPES[FileType.MARKDOWN],
+    FILE_MIME_TYPES[FileType.PDF],
+    FILE_MIME_TYPES[FileType.PYTHON],
+    FILE_MIME_TYPES[FileType.RTF],
+    FILE_MIME_TYPES[FileType.TXT],
+    FILE_MIME_TYPES[FileType.XML],
+}
+
+# Accepted file types for GEMINI 1.5 through Vertex AI
+# https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/send-multimodal-prompts#gemini-send-multimodal-samples-images-nodejs
+GEMINI_1_5_ACCEPTED_FILE_MIME_TYPES: Set[str] = (
+    GEMINI_1_5_ACCEPTED_VIDEO_MIME_TYPES 
+    | GEMINI_1_5_ACCEPTED_IMAGE_MIME_TYPES 
+    | GEMINI_1_5_ACCEPTED_AUDIO_MIME_TYPES 
+    | GEMINI_1_5_ACCEPTED_TEXT_MIME_TYPES
+)
+
+def _is_gemini_1_5_accepted_mime_type(mime_type: str) -> bool:
+    return mime_type.lower() in {mime.lower() for mime in GEMINI_1_5_ACCEPTED_FILE_MIME_TYPES}
+
