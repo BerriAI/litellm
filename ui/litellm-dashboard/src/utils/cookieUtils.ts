@@ -20,6 +20,7 @@ export interface JWTTokenData {
   exp: number;
   disabled_non_admin_personal_key_creation: boolean;
   scopes: string[];
+  key: string | null;
 }
 
 export function clearTokenCookies() {
@@ -72,5 +73,9 @@ export function setAuthToken(token: string) {
 export async function getUISessionDetails(): Promise<JWTTokenData> {
   const validated_jwt_token = await validateSession();
   
-  return validated_jwt_token as JWTTokenData;
+  if (validated_jwt_token?.data) {
+    return validated_jwt_token.data as JWTTokenData;
+  } else {
+    throw new Error("Invalid JWT token");
+  }
 }
