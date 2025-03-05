@@ -286,6 +286,7 @@ class LiteLLMRoutes(enum.Enum):
         "/user/available_roles",
         "/guardrails/list",
         "/cache/ping",
+        "/get/config/callbacks",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
@@ -379,6 +380,7 @@ class LiteLLMRoutes(enum.Enum):
         "/spend",
         "/model/info",
         "/model/metrics",
+        "/model/metrics/{sub_path}",
         "/model/settings",
         "/get/litellm_model_cost_map",
         "/model/streaming_metrics",
@@ -394,6 +396,10 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/models",
         "/global/predict/spend/logs",
         "/global/activity",
+        "/global/activity/{sub_path}",
+        "/global/activity/exceptions",
+        "/global/activity/exceptions/{sub_path}",
+        "/global/all_end_users",
         "/health/services",
     ] + info_routes
 
