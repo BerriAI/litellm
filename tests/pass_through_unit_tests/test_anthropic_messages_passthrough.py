@@ -113,8 +113,7 @@ async def test_anthropic_messages_litellm_router_non_streaming():
     messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
 
     # Call the handler
-    response = await router.ageneric_api_call(
-        handler_function=anthropic_messages,
+    response = await router.aanthropic_messages(
         messages=messages,
         model="claude-special-alias",
         max_tokens=100,
@@ -168,8 +167,7 @@ async def test_anthropic_messages_litellm_router_non_streaming_with_logging():
     messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
 
     # Call the handler
-    response = await router.ageneric_api_call(
-        handler_function=anthropic_messages,
+    response = await router.aanthropic_messages(
         messages=messages,
         model="claude-special-alias",
         max_tokens=100,
@@ -226,8 +224,7 @@ async def test_anthropic_messages_litellm_router_streaming_with_logging():
     messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
 
     # Call the handler
-    response = await router.ageneric_api_call(
-        handler_function=anthropic_messages,
+    response = await router.aanthropic_messages(
         messages=messages,
         model="claude-special-alias",
         max_tokens=100,
