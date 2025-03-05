@@ -89,7 +89,8 @@ class ModelResponseIterator:
             raise RuntimeError(f"Error receiving chunk from stream: {e}")
 
         try:
-            chunk = chunk.replace("data:", "")
+            if chunk.startswith("data:"):
+                chunk = chunk[5:]
             chunk = chunk.strip()
             if len(chunk) > 0:
                 json_chunk = json.loads(chunk)
@@ -134,7 +135,8 @@ class ModelResponseIterator:
             raise RuntimeError(f"Error receiving chunk from stream: {e}")
 
         try:
-            chunk = chunk.replace("data:", "")
+            if chunk.startswith("data:"):
+                chunk = chunk[5:]
             chunk = chunk.strip()
             if chunk == "[DONE]":
                 raise StopAsyncIteration
