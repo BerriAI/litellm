@@ -2363,7 +2363,7 @@ class Router:
         This allows you to use retries/fallbacks with litellm router for a generic handler function
         Args:
             model: The model to use
-            handler_function: The handler function to call (e.g., litellm.anthropic_messages_handler)
+            handler_function: The handler function to call (e.g., litellm.anthropic_messages)
             **kwargs: Additional arguments to pass to the handler function
 
         Returns:
@@ -2398,7 +2398,7 @@ class Router:
 
         Args:
             model: The model to use
-            handler_function: The handler function to call (e.g., litellm.anthropic_messages_handler)
+            handler_function: The handler function to call (e.g., litellm.anthropic_messages)
             **kwargs: Additional arguments to pass to the handler function
 
         Returns:

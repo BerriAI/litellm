@@ -12,7 +12,7 @@ import litellm
 import pytest
 from dotenv import load_dotenv
 from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
-    anthropic_messages_handler,
+    anthropic_messages,
 )
 from typing import Optional
 from litellm.types.utils import StandardLoggingPayload
@@ -32,9 +32,9 @@ def _validate_anthropic_response(response: Dict[str, Any]):
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_handler_non_streaming():
+async def test_anthropic_messages_non_streaming():
     """
-    Test the anthropic_messages_handler with non-streaming request
+    Test the anthropic_messages with non-streaming request
     """
     # Get API key from environment
     api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -45,7 +45,7 @@ async def test_anthropic_messages_handler_non_streaming():
     messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
 
     # Call the handler
-    response = await anthropic_messages_handler(
+    response = await anthropic_messages(
         messages=messages,
         api_key=api_key,
         model="claude-3-haiku-20240307",
@@ -63,9 +63,9 @@ async def test_anthropic_messages_handler_non_streaming():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_handler_streaming():
+async def test_anthropic_messages_streaming():
     """
-    Test the anthropic_messages_handler with streaming request
+    Test the anthropic_messages with streaming request
     """
     # Get API key from environment
     api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -77,7 +77,7 @@ async def test_anthropic_messages_handler_streaming():
 
     # Call the handler
     async_httpx_client = AsyncHTTPHandler()
-    response = await anthropic_messages_handler(
+    response = await anthropic_messages(
         messages=messages,
         api_key=api_key,
         model="claude-3-haiku-20240307",
@@ -92,9 +92,9 @@ async def test_anthropic_messages_handler_streaming():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_handler_litellm_router_non_streaming():
+async def test_anthropic_messages_litellm_router_non_streaming():
     """
-    Test the anthropic_messages_handler with non-streaming request
+    Test the anthropic_messages with non-streaming request
     """
     litellm._turn_on_debug()
     router = Router(
@@ -114,7 +114,7 @@ async def test_anthropic_messages_handler_litellm_router_non_streaming():
 
     # Call the handler
     response = await router.ageneric_api_call(
-        handler_function=anthropic_messages_handler,
+        handler_function=anthropic_messages,
         messages=messages,
         model="claude-special-alias",
         max_tokens=100,
@@ -143,9 +143,9 @@ class TestCustomLogger(CustomLogger):
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_handler_litellm_router_non_streaming():
+async def test_anthropic_messages_litellm_router_non_streaming_with_logging():
     """
-    Test the anthropic_messages_handler with non-streaming request
+    Test the anthropic_messages with non-streaming request
 
     - Ensure Cost + Usage is tracked
     """
@@ -169,7 +169,7 @@ async def test_anthropic_messages_handler_litellm_router_non_streaming():
 
     # Call the handler
     response = await router.ageneric_api_call(
-        handler_function=anthropic_messages_handler,
+        handler_function=anthropic_messages,
         messages=messages,
         model="claude-special-alias",
         max_tokens=100,

@@ -10,10 +10,12 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
 )
+from litellm.utils import client
 
 DEFAULT_ANTHROPIC_API_BASE = "https://api.anthropic.com"
 
@@ -38,7 +40,8 @@ class AnthropicMessagesConfig:
         ]
 
 
-async def anthropic_messages_handler(
+@client
+async def anthropic_messages(
     api_key: str,
     stream: bool = False,
     api_base: Optional[str] = None,
@@ -56,6 +59,8 @@ async def anthropic_messages_handler(
     else:
         async_httpx_client = client
 
+    litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj", None)
+
     # Prepare headers
     headers = {
         "x-api-key": api_key,
@@ -71,6 +76,7 @@ async def anthropic_messages_handler(
         if k in AnthropicMessagesConfig.get_supported_passthrough_params()
     }
     request_body["stream"] = stream
+    litellm_logging_obj.model_call_details.update(request_body)
 
     # API base
     api_base = api_base or DEFAULT_ANTHROPIC_API_BASE
@@ -88,6 +94,9 @@ async def anthropic_messages_handler(
         stream=stream,
     )
     response.raise_for_status()
+
+    # used for logging + cost tracking
+    litellm_logging_obj.model_call_details["httpx_response"] = response
 
     if stream:
         return response.aiter_bytes()
