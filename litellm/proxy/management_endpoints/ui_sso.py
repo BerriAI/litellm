@@ -781,3 +781,23 @@ async def get_ui_settings(request: Request):
         ),
         "DISABLE_EXPENSIVE_DB_QUERIES": disable_expensive_db_queries,
     }
+
+
+@router.get(
+    "/sso/session/validate",
+    include_in_schema=False,
+    tags=["experimental"],
+)
+async def validate_session(
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+    from litellm.proxy.management_helpers.ui_session_handler import UISessionHandler
+
+    ui_session_token = UISessionHandler._get_ui_session_token_from_cookies(request)
+    if ui_session_token is None:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    jwt_handler = JWTHandler()
+    validated_jwt_token = await jwt_handler.auth_jwt(token=ui_session_token)
+    return {"valid": True, "session": validated_jwt_token}

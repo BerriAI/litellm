@@ -51,6 +51,7 @@ from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.service_account_checks import service_account_checks
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.management_helpers.ui_session_handler import UISessionHandler
 from litellm.proxy.utils import PrismaClient, ProxyLogging, _to_ns
 from litellm.types.services import ServiceTypes
 
@@ -295,34 +296,6 @@ def get_model_from_request(request_data: dict, route: str) -> Optional[str]:
     return model
 
 
-# Add this function to extract auth token from cookies
-def _get_token_from_cookies(request: Request) -> Optional[str]:
-    """
-    Extract authentication token from cookies if present
-    """
-    cookies = request.cookies
-    verbose_proxy_logger.debug(f"AUTH COOKIES: {cookies}")
-
-    # First check for LiteLLM UI cookies (format: litellm_ui_token_{timestamp})
-    litellm_ui_cookies = [
-        k for k in cookies.keys() if k.startswith("litellm_ui_token_")
-    ]
-    if litellm_ui_cookies:
-        # Sort by timestamp (descending) to get the most recent one
-        try:
-            # Extract timestamps and sort numerically
-            sorted_cookies = sorted(
-                litellm_ui_cookies, key=lambda x: int(x.split("_")[-1]), reverse=True
-            )
-            return cookies[sorted_cookies[0]]
-        except (ValueError, IndexError):
-            # Fallback to simple string sort if timestamp extraction fails
-            litellm_ui_cookies.sort(reverse=True)
-            return cookies[litellm_ui_cookies[0]]
-
-    return None
-
-
 async def _user_api_key_auth_builder(  # noqa: PLR0915
     request: Request,
     api_key: str,
@@ -373,7 +346,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             api_key = anthropic_api_key_header
         elif isinstance(google_ai_studio_api_key_header, str):
             api_key = google_ai_studio_api_key_header
-        elif cookie_token := _get_token_from_cookies(request):
+        elif cookie_token := UISessionHandler._get_ui_session_token_from_cookies(
+            request
+        ):
             api_key = cookie_token
         elif pass_through_endpoints is not None:
             for endpoint in pass_through_endpoints:

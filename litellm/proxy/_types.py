@@ -282,6 +282,10 @@ class LiteLLMRoutes(enum.Enum):
         "/health",
         "/key/list",
         "/user/filter/ui",
+        "/user/list",
+        "/user/available_roles",
+        "/guardrails/list",
+        "/cache/ping",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
@@ -355,6 +359,7 @@ class LiteLLMRoutes(enum.Enum):
         "/sso",
         "/sso/get/ui_settings",
         "/login",
+        "/sso/session/validate",
         "/key/info",
         "/config",
         "/spend",
