@@ -272,15 +272,16 @@ class Completions:
         self.router_obj = router_obj
 
     def create(self, messages, model=None, **kwargs):
+        new_params = deepcopy(self.params)
         for k, v in kwargs.items():
-            self.params[k] = v
-        model = model or self.params.get("model")
+            new_params[k] = v
+        model = model or new_params.get("model")
         if self.router_obj is not None:
             response = self.router_obj.completion(
-                model=model, messages=messages, **self.params
+                model=model, messages=messages, **new_params
             )
         else:
-            response = completion(model=model, messages=messages, **self.params)
+            response = completion(model=model, messages=messages, **new_params)
         return response
 
 
@@ -290,15 +291,16 @@ class AsyncCompletions:
         self.router_obj = router_obj
 
     async def create(self, messages, model=None, **kwargs):
+        new_params = deepcopy(self.params)
         for k, v in kwargs.items():
-            self.params[k] = v
-        model = model or self.params.get("model")
+            new_params[k] = v
+        model = model or new_params.get("model")
         if self.router_obj is not None:
             response = await self.router_obj.acompletion(
-                model=model, messages=messages, **self.params
+                model=model, messages=messages, **new_params
             )
         else:
-            response = await acompletion(model=model, messages=messages, **self.params)
+            response = await acompletion(model=model, messages=messages, **new_params)
         return response
 
 
