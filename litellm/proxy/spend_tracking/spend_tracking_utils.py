@@ -98,9 +98,11 @@ def get_spend_logs_id(
 ) -> Optional[str]:
     if call_type == "aretrieve_batch":
         # Generate a hash from the response object
-        id = generate_hash_from_response(response_obj)
+        id: Optional[str] = generate_hash_from_response(response_obj)
     else:
-        id = response_obj.get("id") or kwargs.get("litellm_call_id")
+        id = cast(Optional[str], response_obj.get("id")) or cast(
+            Optional[str], kwargs.get("litellm_call_id")
+        )
     return id
 
 
