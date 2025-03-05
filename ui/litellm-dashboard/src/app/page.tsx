@@ -30,12 +30,7 @@ import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
 import { fetchUserModels } from "@/components/create_key_button";
 import { fetchTeams } from "@/components/common_components/fetch_teams";
-function getCookie(name: string) {
-  const cookieValue = document.cookie
-    .split("; ")
-    .find((row) => row.startsWith(name + "="));
-  return cookieValue ? cookieValue.split("=")[1] : null;
-}
+import { getUISessionDetails } from "@/utils/cookieUtils";
 
 function formatUserRole(userRole: string) {
   if (!userRole) {
@@ -117,63 +112,59 @@ export default function CreateKeyPage() {
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
   useEffect(() => {
-    const token = getCookie("token");
-    setToken(token);
-  }, []);
-
-  useEffect(() => {
-    if (!token) {
-      return;
-    }
-
-    const decoded = jwtDecode(token) as { [key: string]: any };
-    if (decoded) {
-      // cast decoded to dictionary
-      console.log("Decoded token:", decoded);
-
-      console.log("Decoded key:", decoded.key);
-      // set accessToken
-      setAccessToken(decoded.key);
-
-      setDisabledPersonalKeyCreation(
-        decoded.disabled_non_admin_personal_key_creation,
-      );
-
-      // check if userRole is defined
-      if (decoded.user_role) {
-        const formattedUserRole = formatUserRole(decoded.user_role);
-        console.log("Decoded user_role:", formattedUserRole);
-        setUserRole(formattedUserRole);
-        if (formattedUserRole == "Admin Viewer") {
-          setPage("usage");
-        }
-      } else {
-        console.log("User role not defined");
-      }
-
-      if (decoded.user_email) {
-        setUserEmail(decoded.user_email);
-      } else {
-        console.log(`User Email is not set ${decoded}`);
-      }
-
-      if (decoded.login_method) {
-        setShowSSOBanner(
-          decoded.login_method == "username_password" ? true : false,
+    const fetchSessionDetails = async () => {
+      try {
+        const sessionDetails = await getUISessionDetails();
+        // sessionDetails is already decoded, no need for jwtDecode
+        console.log("Session details:", sessionDetails);
+        
+        // Set access token to the session_id
+        setAccessToken(sessionDetails.session_id);
+        
+        setDisabledPersonalKeyCreation(
+          sessionDetails.disabled_non_admin_personal_key_creation,
         );
-      } else {
-        console.log(`User Email is not set ${decoded}`);
+        
+        if (sessionDetails.user_role) {
+          const formattedUserRole = formatUserRole(sessionDetails.user_role);
+          console.log("User role:", formattedUserRole);
+          setUserRole(formattedUserRole);
+          if (formattedUserRole == "Admin Viewer") {
+            setPage("usage");
+          }
+        } else {
+          console.log("User role not defined");
+        }
+        
+        if (sessionDetails.user_email) {
+          setUserEmail(sessionDetails.user_email);
+        } else {
+          console.log("User Email is not set");
+        }
+        
+        if (sessionDetails.login_method) {
+          setShowSSOBanner(
+            sessionDetails.login_method == "username_password" ? true : false,
+          );
+        }
+        
+        if (sessionDetails.premium_user) {
+          setPremiumUser(sessionDetails.premium_user);
+        }
+        
+        if (sessionDetails.auth_header_name) {
+          setGlobalLitellmHeaderName(sessionDetails.auth_header_name);
+        }
+        
+        // Store the full session details as token for components that need it
+        setToken(JSON.stringify(sessionDetails));
+      } catch (error) {
+        console.error("Error fetching session details:", error);
       }
-
-      if (decoded.premium_user) {
-        setPremiumUser(decoded.premium_user);
-      }
-
-      if (decoded.auth_header_name) {
-        setGlobalLitellmHeaderName(decoded.auth_header_name);
-      }
-    }
-  }, [token]);
+    };
+    
+    fetchSessionDetails();
+  }, []);
   
   useEffect(() => {
     if (accessToken && userID && userRole) {

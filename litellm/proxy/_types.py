@@ -272,6 +272,7 @@ class LiteLLMRoutes(enum.Enum):
         "/key/health",
         "/team/info",
         "/team/list",
+        "/organization/info",
         "/organization/list",
         "/team/available",
         "/user/info",
@@ -282,6 +283,11 @@ class LiteLLMRoutes(enum.Enum):
         "/health",
         "/key/list",
         "/user/filter/ui",
+        "/user/list",
+        "/user/available_roles",
+        "/guardrails/list",
+        "/cache/ping",
+        "/get/config/callbacks",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
@@ -300,6 +306,8 @@ class LiteLLMRoutes(enum.Enum):
         "/user/update",
         "/user/delete",
         "/user/info",
+        # user invitation management
+        "/invitation/new",
         # team
         "/team/new",
         "/team/update",
@@ -309,6 +317,20 @@ class LiteLLMRoutes(enum.Enum):
         "/team/block",
         "/team/unblock",
         "/team/available",
+        # team member management
+        "/team/member_add",
+        "/team/member_update",
+        "/team/member_delete",
+        # organization management
+        "/organization/new",
+        "/organization/update",
+        "/organization/delete",
+        "/organization/info",
+        "/organization/list",
+        # organization member management
+        "/organization/member_add",
+        "/organization/member_update",
+        "/organization/member_delete",
         # model
         "/model/new",
         "/model/update",
@@ -355,20 +377,32 @@ class LiteLLMRoutes(enum.Enum):
         "/sso",
         "/sso/get/ui_settings",
         "/login",
+        "/sso/session/validate",
         "/key/info",
         "/config",
         "/spend",
         "/model/info",
+        "/model/metrics",
+        "/model/metrics/{sub_path}",
+        "/model/settings",
+        "/get/litellm_model_cost_map",
+        "/model/streaming_metrics",
         "/v2/model/info",
         "/v2/key/info",
         "/models",
         "/v1/models",
         "/global/spend",
         "/global/spend/logs",
+        "/spend/logs/ui",
+        "/spend/logs/ui/{id}",
         "/global/spend/keys",
         "/global/spend/models",
         "/global/predict/spend/logs",
         "/global/activity",
+        "/global/activity/{sub_path}",
+        "/global/activity/exceptions",
+        "/global/activity/exceptions/{sub_path}",
+        "/global/all_end_users",
         "/health/services",
     ] + info_routes
 
@@ -2459,6 +2493,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         "spend_tracking_routes",
         "global_spend_tracking_routes",
         "info_routes",
+        "ui_routes",
     ]
     team_id_jwt_field: Optional[str] = None
     team_id_upsert: bool = False

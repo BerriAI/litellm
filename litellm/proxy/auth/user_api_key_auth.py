@@ -51,6 +51,7 @@ from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.service_account_checks import service_account_checks
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.management_helpers.ui_session_handler import UISessionHandler
 from litellm.proxy.utils import PrismaClient, ProxyLogging, _to_ns
 from litellm.types.services import ServiceTypes
 
@@ -335,6 +336,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             "pass_through_endpoints", None
         )
         passed_in_key: Optional[str] = None
+        cookie_token: Optional[str] = None
         if isinstance(api_key, str):
             passed_in_key = api_key
             api_key = _get_bearer_token(api_key=api_key)
@@ -344,6 +346,10 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             api_key = anthropic_api_key_header
         elif isinstance(google_ai_studio_api_key_header, str):
             api_key = google_ai_studio_api_key_header
+        elif cookie_token := UISessionHandler._get_ui_session_token_from_cookies(
+            request
+        ):
+            api_key = cookie_token
         elif pass_through_endpoints is not None:
             for endpoint in pass_through_endpoints:
                 if endpoint.get("path", "") == route:
@@ -420,7 +426,10 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         if general_settings.get("enable_oauth2_proxy_auth", False) is True:
             return await handle_oauth2_proxy_request(request=request)
 
-        if general_settings.get("enable_jwt_auth", False) is True:
+        if (
+            general_settings.get("enable_jwt_auth", False) is True
+            or cookie_token is not None
+        ):
             from litellm.proxy.proxy_server import premium_user
 
             if premium_user is not True:
