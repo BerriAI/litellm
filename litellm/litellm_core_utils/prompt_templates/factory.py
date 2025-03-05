@@ -1282,6 +1282,7 @@ def add_cache_control_to_content(
         AnthropicMessagesImageParam,
         AnthropicMessagesTextParam,
         AnthropicMessagesDocumentParam,
+        ChatCompletionThinkingBlock,
     ],
     orignal_content_element: Union[dict, AllMessageValues],
 ):
@@ -1454,12 +1455,23 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 assistant_content_block["content"], list
             ):
                 for m in assistant_content_block["content"]:
-                    # handle text
+                    # handle thinking blocks
+                    thinking_block = cast(str, m.get("thinking", ""))
+                    text_block = cast(str, m.get("text", ""))
                     if (
-                        m.get("type", "") == "text" and len(m.get("text", "")) > 0
+                        m.get("type", "") == "thinking" and len(thinking_block) > 0
+                    ):  # don't pass empty text blocks. anthropic api raises errors.
+                        anthropic_message: Union[
+                            ChatCompletionThinkingBlock,
+                            AnthropicMessagesTextParam,
+                        ] = cast(ChatCompletionThinkingBlock, m)
+                        assistant_content.append(anthropic_message)
+                    # handle text
+                    elif (
+                        m.get("type", "") == "text" and len(text_block) > 0
                     ):  # don't pass empty text blocks. anthropic api raises errors.
                         anthropic_message = AnthropicMessagesTextParam(
-                            type="text", text=m.get("text")
+                            type="text", text=text_block
                         )
                         _cached_message = add_cache_control_to_content(
                             anthropic_content_element=anthropic_message,
@@ -1512,6 +1524,7 @@ def anthropic_messages_pt(  # noqa: PLR0915
             msg_i += 1
 
         if assistant_content:
+
             new_messages.append({"role": "assistant", "content": assistant_content})
 
         if msg_i == init_msg_i:  # prevent infinite loops
@@ -1519,17 +1532,6 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 message=BAD_MESSAGE_ERROR_STR + f"passed in {messages[msg_i]}",
                 model=model,
                 llm_provider=llm_provider,
-            )
-    if not new_messages or new_messages[0]["role"] != "user":
-        if litellm.modify_params:
-            new_messages.insert(
-                0, {"role": "user", "content": [{"type": "text", "text": "."}]}
-            )
-        else:
-            raise Exception(
-                "Invalid first message={}. Should always start with 'role'='user' for Anthropic. System prompt is sent separately for Anthropic. set 'litellm.modify_params = True' or 'litellm_settings:modify_params = True' on proxy, to insert a placeholder user message - '.' as the first message, ".format(
-                    new_messages
-                )
             )
 
     if new_messages[-1]["role"] == "assistant":
@@ -2924,7 +2926,14 @@ class BedrockConverseMessagesProcessor:
                     assistants_parts: List[BedrockContentBlock] = []
                     for element in _assistant_content:
                         if isinstance(element, dict):
-                            if element["type"] == "text":
+                            if element["type"] == "thinking":
+                                thinking_block = BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
+                                    thinking_blocks=[
+                                        cast(ChatCompletionThinkingBlock, element)
+                                    ]
+                                )
+                                assistants_parts.extend(thinking_block)
+                            elif element["type"] == "text":
                                 assistants_part = BedrockContentBlock(
                                     text=element["text"]
                                 )
@@ -3157,7 +3166,14 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                 assistants_parts: List[BedrockContentBlock] = []
                 for element in _assistant_content:
                     if isinstance(element, dict):
-                        if element["type"] == "text":
+                        if element["type"] == "thinking":
+                            thinking_block = BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
+                                thinking_blocks=[
+                                    cast(ChatCompletionThinkingBlock, element)
+                                ]
+                            )
+                            assistants_parts.extend(thinking_block)
+                        elif element["type"] == "text":
                             assistants_part = BedrockContentBlock(text=element["text"])
                             assistants_parts.append(assistants_part)
                         elif element["type"] == "image_url":
