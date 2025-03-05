@@ -322,6 +322,7 @@ router_settings:
 | AWS_SECRET_ACCESS_KEY | Secret Access Key for AWS services
 | AWS_SESSION_NAME | Name for AWS session
 | AWS_WEB_IDENTITY_TOKEN | Web identity token for AWS
+| AWS_EXTRA_HEADERS_AUTH_BEARER_TOKEN | Bearer token for custom API endpoints
 | AZURE_API_VERSION | Version of the Azure API being used
 | AZURE_AUTHORITY_HOST | Azure authority host URL
 | AZURE_CLIENT_ID | Client ID for Azure services

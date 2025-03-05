@@ -56,6 +56,7 @@ class BaseAWSLLM:
             "aws_sts_endpoint",
             "aws_bedrock_runtime_endpoint",
         ]
+        self.env_extra_headers = {}
 
     def get_cache_key(self, credential_args: Dict[str, Optional[str]]) -> str:
         """
@@ -199,6 +200,11 @@ class BaseAWSLLM:
             )
         else:
             credentials, _cache_ttl = self._auth_with_env_vars()
+
+        env_aws_extra_headers_auth_bearer_token = get_secret("AWS_EXTRA_HEADERS_AUTH_BEARER_TOKEN")
+        if env_aws_extra_headers_auth_bearer_token:
+            verbose_logger.debug("Using Bearer token form env")
+            self.env_extra_headers['Authorization'] = f"Bearer {env_aws_extra_headers_auth_bearer_token}"
 
         self.iam_cache.set_cache(cache_key, credentials, ttl=_cache_ttl)
         return credentials
@@ -618,6 +624,12 @@ class BaseAWSLLM:
             method="POST", url=endpoint_url, data=data, headers=headers
         )
         sigv4.add_auth(request)
+
+        if extra_headers is None and len(self.env_extra_headers) > 0:
+            extra_headers = self.env_extra_headers
+        elif extra_headers is not None:
+            extra_headers.update(self.env_extra_headers)
+
         if (
             extra_headers is not None and "Authorization" in extra_headers
         ):  # prevent sigv4 from overwriting the auth header
