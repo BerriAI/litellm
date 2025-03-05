@@ -4,7 +4,7 @@ from typing import Dict
 from litellm.llms.vertex_ai.common_utils import (
     _convert_vertex_datetime_to_openai_datetime,
 )
-from litellm.types.llms.openai import Batch, BatchJobStatus, CreateBatchRequest
+from litellm.types.llms.openai import BatchJobStatus, CreateBatchRequest
 from litellm.types.llms.vertex_ai import *
 from litellm.types.utils import LiteLLMBatch
 
