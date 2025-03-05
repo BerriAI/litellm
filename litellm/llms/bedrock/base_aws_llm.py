@@ -284,7 +284,7 @@ class BaseAWSLLM:
         """
         Get the AWS region name from the environment variables
         """
-        aws_region_name = optional_params.get("aws_region_name", None)
+        aws_region_name = optional_params.pop("aws_region_name", None)
         ### SET REGION NAME ###
         if aws_region_name is None:
             # check model arn #
