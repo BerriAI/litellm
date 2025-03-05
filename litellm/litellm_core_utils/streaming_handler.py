@@ -1634,6 +1634,8 @@ class CustomStreamWrapper:
                     if processed_chunk is None:
                         continue
 
+                    self.logging_obj.chunk_handler(processed_chunk)
+
                     if self.logging_obj._llm_caching_handler is not None:
                         asyncio.create_task(
                             self.logging_obj._llm_caching_handler._add_streaming_response_to_cache(
@@ -1684,6 +1686,8 @@ class CustomStreamWrapper:
                         )
                         if processed_chunk is None:
                             continue
+
+                        self.logging_obj.chunk_handler(processed_chunk)
 
                         choice = processed_chunk.choices[0]
                         if isinstance(choice, StreamingChoices):

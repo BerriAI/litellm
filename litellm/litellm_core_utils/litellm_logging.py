@@ -1032,6 +1032,13 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception as e:
             raise Exception(f"[Non-Blocking] LiteLLM.Success_Call Error: {str(e)}")
 
+    def chunk_handler(self, chunk: Any):
+        if self.completion_start_time is None:
+            self.completion_start_time = datetime.datetime.now()
+            self.model_call_details["completion_start_time"] = (
+                self.completion_start_time
+            )
+
     def success_handler(  # noqa: PLR0915
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
