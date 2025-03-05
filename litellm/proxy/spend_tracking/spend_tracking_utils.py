@@ -74,6 +74,8 @@ def get_logging_payload(  # noqa: PLR0915
 ) -> SpendLogsPayload:
     from litellm.proxy.proxy_server import general_settings, master_key
 
+    verbose_proxy_logger.info("Writing spend log to db")
+
     if kwargs is None:
         kwargs = {}
     if response_obj is None or (
@@ -177,14 +179,8 @@ def get_logging_payload(  # noqa: PLR0915
             endTime=_ensure_datetime_utc(end_time),
             completionStartTime=_ensure_datetime_utc(completion_start_time),
             model=kwargs.get("model", "") or "",
-            user=kwargs.get("litellm_params", {})
-            .get("metadata", {})
-            .get("user_api_key_user_id", "")
-            or "",
-            team_id=kwargs.get("litellm_params", {})
-            .get("metadata", {})
-            .get("user_api_key_team_id", "")
-            or "",
+            user=metadata.get("user_api_key_user_id", "") or "",
+            team_id=metadata.get("user_api_key_team_id", "") or "",
             metadata=json.dumps(clean_metadata),
             cache_key=cache_key,
             spend=kwargs.get("response_cost", 0),
