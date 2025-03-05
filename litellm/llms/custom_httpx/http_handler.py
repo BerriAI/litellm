@@ -665,7 +665,7 @@ def get_async_httpx_client(
     """
     try:
         current_loop = asyncio.get_running_loop()
-        loop_id = id(current_loop)
+        loop_id = str(id(current_loop))
     except RuntimeError:
         loop_id = "no_loop"
     _params_key_name = ""
@@ -676,7 +676,9 @@ def get_async_httpx_client(
             except Exception:
                 pass
 
-    _cache_key_name = "async_httpx_client" + _params_key_name + llm_provider + f"_loop_{loop_id}"
+    _cache_key_name = (
+        "async_httpx_client" + _params_key_name + llm_provider + f"_loop_{loop_id}"
+    )
     _cached_client = litellm.in_memory_llm_clients_cache.get_cache(_cache_key_name)
     if _cached_client:
         return _cached_client
