@@ -327,7 +327,6 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/tags",
         "/spend/calculate",
         "/spend/logs",
-        "/spend/logs/ui",
     ]
 
     global_spend_tracking_routes = [
@@ -371,6 +370,7 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/models",
         "/global/spend",
         "/global/spend/logs",
+        "/spend/logs/ui",
         "/global/spend/keys",
         "/global/spend/models",
         "/global/predict/spend/logs",

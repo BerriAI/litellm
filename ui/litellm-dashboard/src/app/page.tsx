@@ -30,7 +30,7 @@ import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
 import { fetchUserModels } from "@/components/create_key_button";
 import { fetchTeams } from "@/components/common_components/fetch_teams";
-import { validated_jwt_token } from "@/utils/cookieUtils";
+import { getUISessionDetails } from "@/utils/cookieUtils";
 
 function formatUserRole(userRole: string) {
   if (!userRole) {
