@@ -933,7 +933,10 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["end_time"] = end_time
             self.model_call_details["cache_hit"] = cache_hit
 
-            if self.call_type == CallTypes.anthropic_messages.value:
+            if (
+                self.call_type == CallTypes.anthropic_messages.value
+                and self.stream != True
+            ):
                 result = self._handle_anthropic_messages_response_logging()
             ## if model in model cost map - log the response cost
             ## else set cost to None

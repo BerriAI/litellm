@@ -109,6 +109,7 @@ async def anthropic_messages(
         if k in AnthropicMessagesConfig.get_supported_passthrough_params()
     }
     request_body["stream"] = stream
+    litellm_logging_obj.stream = stream
     litellm_logging_obj.model_call_details.update(request_body)
 
     # API base
