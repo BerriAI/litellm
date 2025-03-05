@@ -410,9 +410,7 @@ def get_disabled_non_admin_personal_key_creation():
 @router.get("/sso/callback", tags=["experimental"], include_in_schema=False)
 async def auth_callback(request: Request):  # noqa: PLR0915
     """Verify login"""
-    from litellm.proxy.management_endpoints.key_management_endpoints import (
-        generate_key_helper_fn,
-    )
+    from litellm.proxy.management_helpers.ui_session_handler import UISessionHandler
     from litellm.proxy.proxy_server import (
         general_settings,
         jwt_handler,
@@ -533,16 +531,7 @@ async def auth_callback(request: Request):  # noqa: PLR0915
     max_internal_user_budget = litellm.max_internal_user_budget
     internal_user_budget_duration = litellm.internal_user_budget_duration
 
-    # User might not be already created on first generation of key
     # But if it is, we want their models preferences
-    default_ui_key_values: Dict[str, Any] = {
-        "duration": "24hr",
-        "key_max_budget": litellm.max_ui_session_budget,
-        "aliases": {},
-        "config": {},
-        "spend": 0,
-        "team_id": "litellm-dashboard",
-    }
     user_defined_values: Optional[SSOUserDefinedValues] = None
 
     if user_custom_sso is not None:
@@ -561,7 +550,7 @@ async def auth_callback(request: Request):  # noqa: PLR0915
         )
 
     _user_id_from_sso = user_id
-    user_role = None
+    user_role: Optional[LitellmUserRoles] = None
     try:
         if prisma_client is not None:
             try:
@@ -634,24 +623,14 @@ async def auth_callback(request: Request):  # noqa: PLR0915
         f"user_defined_values for creating ui key: {user_defined_values}"
     )
 
-    default_ui_key_values.update(user_defined_values)
-    default_ui_key_values["request_type"] = "key"
-    response = await generate_key_helper_fn(
-        **default_ui_key_values,  # type: ignore
-        table_name="key",
-    )
-
-    key = response["token"]  # type: ignore
-    user_id = response["user_id"]  # type: ignore
-
     litellm_dashboard_ui = "/ui/"
-    user_role = user_role or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
+    user_role = user_role or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
     if (
         os.getenv("PROXY_ADMIN_ID", None) is not None
         and os.environ["PROXY_ADMIN_ID"] == user_id
     ):
         # checks if user is admin
-        user_role = LitellmUserRoles.PROXY_ADMIN.value
+        user_role = LitellmUserRoles.PROXY_ADMIN
 
     verbose_proxy_logger.debug(
         f"user_role: {user_role}; ui_access_mode: {ui_access_mode}"
@@ -671,24 +650,13 @@ async def auth_callback(request: Request):  # noqa: PLR0915
     disabled_non_admin_personal_key_creation = (
         get_disabled_non_admin_personal_key_creation()
     )
-
-    import jwt
-
-    jwt_token = jwt.encode(  # type: ignore
-        {
-            "user_id": user_id,
-            "key": key,
-            "user_email": user_email,
-            "user_role": user_role,
-            "login_method": "sso",
-            "premium_user": premium_user,
-            "auth_header_name": general_settings.get(
-                "litellm_key_header_name", "Authorization"
-            ),
-            "disabled_non_admin_personal_key_creation": disabled_non_admin_personal_key_creation,
-        },
-        master_key,
-        algorithm="HS256",
+    jwt_token = UISessionHandler.build_authenticated_ui_jwt_token(
+        user_id=user_defined_values.get("user_id", ""),
+        user_role=user_role,
+        user_email=user_defined_values.get("user_email", ""),
+        premium_user=premium_user,
+        disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
+        login_method="sso",
     )
     if user_id is not None and isinstance(user_id, str):
         litellm_dashboard_ui += "?userID=" + user_id
