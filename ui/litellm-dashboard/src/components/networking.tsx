@@ -3584,3 +3584,33 @@ export const uiSpendLogDetailsCall = async (
   }
 };
 
+
+/**
+ * Validates the current session token with the server
+ * @returns The validated session data or null if validation fails
+ */
+export const validateSession = async () => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/sso/session/validate` : `/sso/session/validate`;
+    
+    const response = await fetchWithCredentials(url, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Session validation failed");
+    }
+
+    const data = await response.json();
+    console.log("Session validation response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to validate session:", error);
+    throw error;
+  }
+};
