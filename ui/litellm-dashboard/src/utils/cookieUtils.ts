@@ -5,6 +5,23 @@
 /**
  * Clears the token cookie from both root and /ui paths
  */
+import { validateSession } from "../components/networking"
+
+// Define the interface for the JWT token data
+export interface JWTTokenData {
+  user_id: string;
+  user_email: string | null;
+  user_role: string;
+  login_method: string;
+  premium_user: boolean;
+  auth_header_name: string;
+  iss: string;
+  aud: string;
+  exp: number;
+  disabled_non_admin_personal_key_creation: boolean;
+  scopes: string[];
+}
+
 export function clearTokenCookies() {
   // Get the current domain
   const domain = window.location.hostname;
@@ -52,43 +69,8 @@ export function setAuthToken(token: string) {
   document.cookie = `${tokenName}=${token}; path=/; domain=${window.location.hostname};`;
 }
 
-export function getAuthToken() {
-    // Check if we're in a browser environment
-    if (typeof window === 'undefined' || typeof document === 'undefined') {
-      return null;
-    }
-    
-    const tokenPattern = /^token_(\d+)$/;
-    const allCookies = document.cookie.split("; ");
-    
-    const tokenCookies = allCookies
-      .map(cookie => {
-        const parts = cookie.split("=");
-        const name = parts[0];
-        
-        // Explicitly skip cookies named just "token"
-        if (name === "token") {
-          return null;
-        }
-        
-        // Only match cookies with the token_{timestamp} format
-        const match = name.match(tokenPattern);
-        if (match) {
-          return {
-            name,
-            timestamp: parseInt(match[1], 10),
-            value: parts.slice(1).join("=")
-          };
-        }
-        return null;
-      })
-      .filter((cookie): cookie is { name: string; timestamp: number; value: string } => cookie !== null);
-    
-    if (tokenCookies.length > 0) {
-      // Sort by timestamp (newest first)
-      tokenCookies.sort((a, b) => b.timestamp - a.timestamp);
-      return tokenCookies[0].value;
-    }
-    
-    return null;
+export async function getUISessionDetails(): Promise<JWTTokenData> {
+  const validated_jwt_token = await validateSession();
+  
+  return validated_jwt_token as JWTTokenData;
 }
