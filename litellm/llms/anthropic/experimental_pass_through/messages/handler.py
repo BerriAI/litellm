@@ -18,6 +18,7 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
 )
+from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import client
 
 DEFAULT_ANTHROPIC_API_BASE = "https://api.anthropic.com"
@@ -41,6 +42,15 @@ class AnthropicMessagesConfig:
             "tool_choice",
             "thinking",
         ]
+
+    @staticmethod
+    def get_complete_url(
+        api_base: Optional[str] = None,
+    ) -> str:
+        api_base = api_base or DEFAULT_ANTHROPIC_API_BASE
+        if not api_base.endswith("/v1/messages"):
+            api_base = f"{api_base}/v1/messages"
+        return api_base
 
     @staticmethod
     async def _handle_anthropic_streaming(
@@ -76,15 +86,27 @@ class AnthropicMessagesConfig:
 @client
 async def anthropic_messages(
     api_key: str,
+    model: str,
     stream: bool = False,
     api_base: Optional[str] = None,
     client: Optional[AsyncHTTPHandler] = None,
+    custom_llm_provider: Optional[str] = None,
     **kwargs,
 ) -> Union[Dict[str, Any], AsyncIterator]:
     """
     Handler for Anthropic Messages API
     """
     # Use provided client or create a new one
+    optional_params = GenericLiteLLMParams(**kwargs)
+    model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = (
+        litellm.get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=optional_params.api_base,
+            api_key=optional_params.api_key,
+        )
+    )
+
     if client is None:
         async_httpx_client = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.ANTHROPIC
@@ -109,11 +131,9 @@ async def anthropic_messages(
         if k in AnthropicMessagesConfig.get_supported_passthrough_params()
     }
     request_body["stream"] = stream
+    request_body["model"] = model
     litellm_logging_obj.stream = stream
     litellm_logging_obj.model_call_details.update(request_body)
-
-    # API base
-    api_base = api_base or DEFAULT_ANTHROPIC_API_BASE
 
     verbose_logger.debug(
         "request_body= %s", json.dumps(request_body, indent=4, default=str)
@@ -121,7 +141,7 @@ async def anthropic_messages(
 
     # Make the request
     response = await async_httpx_client.post(
-        url=f"{api_base}/v1/messages",
+        url=AnthropicMessagesConfig.get_complete_url(api_base=api_base),
         headers=headers,
         data=json.dumps(request_body),
         timeout=600,
