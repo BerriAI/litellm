@@ -6,15 +6,36 @@
 """
 
 import json
-from typing import Any, AsyncIterator, Dict, Optional, Union
+from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
 )
 
 DEFAULT_ANTHROPIC_API_BASE = "https://api.anthropic.com"
+
+
+class AnthropicMessagesConfig:
+
+    @staticmethod
+    def get_supported_passthrough_params() -> List[str]:
+        return [
+            "messages",
+            "model",
+            "system",
+            "max_tokens",
+            # "metadata",
+            "stop_sequences",
+            "temperature",
+            "top_p",
+            "top_k",
+            "tools",
+            "tool_choice",
+            "thinking",
+        ]
 
 
 async def anthropic_messages_handler(
@@ -44,10 +65,19 @@ async def anthropic_messages_handler(
 
     # Prepare request body
     request_body = kwargs.copy()
+    request_body = {
+        k: v
+        for k, v in request_body.items()
+        if k in AnthropicMessagesConfig.get_supported_passthrough_params()
+    }
     request_body["stream"] = stream
 
     # API base
     api_base = api_base or DEFAULT_ANTHROPIC_API_BASE
+
+    verbose_logger.debug(
+        "request_body= %s", json.dumps(request_body, indent=4, default=str)
+    )
 
     # Make the request
     response = await async_httpx_client.post(
