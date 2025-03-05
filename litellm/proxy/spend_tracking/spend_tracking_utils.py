@@ -1,9 +1,10 @@
+import hashlib
 import json
 import secrets
 from datetime import datetime
 from datetime import datetime as dt
 from datetime import timezone
-from typing import List, Optional, cast
+from typing import Any, List, Optional, cast
 
 from pydantic import BaseModel
 
@@ -69,6 +70,40 @@ def _get_spend_logs_metadata(
     return clean_metadata
 
 
+def generate_hash_from_response(response_obj: Any) -> str:
+    """
+    Generate a stable hash from a response object.
+
+    Args:
+        response_obj: The response object to hash (can be dict, list, etc.)
+
+    Returns:
+        A hex string representation of the MD5 hash
+    """
+    try:
+        # Create a stable JSON string of the entire response object
+        # Sort keys to ensure consistent ordering
+        json_str = json.dumps(response_obj, sort_keys=True)
+
+        # Generate a hash of the response object
+        unique_hash = hashlib.md5(json_str.encode()).hexdigest()
+        return unique_hash
+    except Exception:
+        # Return a fallback hash if serialization fails
+        return hashlib.md5(str(response_obj).encode()).hexdigest()
+
+
+def get_spend_logs_id(
+    call_type: str, response_obj: dict, kwargs: dict
+) -> Optional[str]:
+    if call_type == "aretrieve_batch":
+        # Generate a hash from the response object
+        id = generate_hash_from_response(response_obj)
+    else:
+        id = response_obj.get("id") or kwargs.get("litellm_call_id")
+    return id
+
+
 def get_logging_payload(  # noqa: PLR0915
     kwargs, response_obj, start_time, end_time
 ) -> SpendLogsPayload:
@@ -94,10 +129,15 @@ def get_logging_payload(  # noqa: PLR0915
     usage = cast(dict, response_obj).get("usage", None) or {}
     if isinstance(usage, litellm.Usage):
         usage = dict(usage)
-    if call_type == "aretrieve_batch":
-        id = kwargs.get("litellm_call_id")
+
+    if isinstance(response_obj, dict):
+        response_obj_dict = response_obj
+    elif isinstance(response_obj, BaseModel):
+        response_obj_dict = response_obj.model_dump()
     else:
-        id = cast(dict, response_obj).get("id") or kwargs.get("litellm_call_id")
+        response_obj_dict = {}
+
+    id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs)
     standard_logging_payload = cast(
         Optional[StandardLoggingPayload], kwargs.get("standard_logging_object", None)
     )
