@@ -462,6 +462,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
   useEffect(() => {
     if (!accessToken || !token || !userRole || !userID) {
+      console.log("exiting on model_dashboard.tsx because of missing accessToken, token, userRole, or userID", accessToken, token, userRole, userID);
       return;
     }
     const fetchData = async () => {

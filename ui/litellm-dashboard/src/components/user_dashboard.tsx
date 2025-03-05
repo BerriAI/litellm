@@ -21,7 +21,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { Team } from "./key_team_helpers/key_list";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
-import { getAuthToken } from "@/utils/cookieUtils";
+import { getUISessionDetails } from "@/utils/cookieUtils";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 const isLocal = process.env.NODE_ENV === "development";
 if (isLocal != true) {
@@ -87,7 +87,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   // Assuming useSearchParams() hook exists and works in your setup
   const searchParams = useSearchParams()!;
 
-  const token = getAuthToken();
+  const token = getUISessionDetails();
 
   const invitation_id = searchParams.get("invitation_id");
 

@@ -30,7 +30,7 @@ import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
 import { fetchUserModels } from "@/components/create_key_button";
 import { fetchTeams } from "@/components/common_components/fetch_teams";
-import { getAuthToken } from "@/utils/cookieUtils";
+import { getUISessionDetails } from "@/utils/cookieUtils";
 
 function formatUserRole(userRole: string) {
   if (!userRole) {
@@ -112,7 +112,7 @@ export default function CreateKeyPage() {
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
   useEffect(() => {
-    const token = getAuthToken();
+    const token = getUISessionDetails();
     setToken(token);
   }, []);
 
