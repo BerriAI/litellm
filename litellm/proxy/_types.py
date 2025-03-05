@@ -2465,6 +2465,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         "spend_tracking_routes",
         "global_spend_tracking_routes",
         "info_routes",
+        "ui_routes",
     ]
     team_id_jwt_field: Optional[str] = None
     team_id_upsert: bool = False

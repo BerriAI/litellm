@@ -230,13 +230,6 @@ def allowed_routes_check(
     """
     Check if user -> not admin - allowed to access these routes
     """
-    if UISessionHandler.is_ui_session_token(jwt_valid_token):
-        is_allowed = _allowed_routes_check(
-            user_route=user_route,
-            allowed_routes=LiteLLMRoutes.ui_routes.value,
-        )
-        return is_allowed
-
     if user_role == LitellmUserRoles.PROXY_ADMIN:
         is_allowed = _allowed_routes_check(
             user_route=user_route,
