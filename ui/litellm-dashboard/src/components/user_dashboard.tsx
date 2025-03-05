@@ -139,32 +139,37 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   // console.log(`selectedTeam: ${Object.entries(selectedTeam)}`);
   // Moved useEffect inside the component and used a condition to run fetch only if the params are available
   useEffect(() => {
-    if (token) {
-      const decoded = jwtDecode(token) as { [key: string]: any };
-      if (decoded) {
-        // cast decoded to dictionary
-        console.log("Decoded token:", decoded);
-
-        console.log("Decoded key:", decoded.key);
-        // set accessToken
-        setAccessToken(token);
-
+    const fetchSessionDetails = async () => {
+      try {
+        const sessionDetails = await getUISessionDetails();
+        console.log("Session details:", sessionDetails);
+        
+        // Set access token to the session_id
+        setAccessToken(sessionDetails.session_id);
+        
         // check if userRole is defined
-        if (decoded.user_role) {
-          const formattedUserRole = formatUserRole(decoded.user_role);
-          console.log("Decoded user_role:", formattedUserRole);
+        if (sessionDetails.user_role) {
+          const formattedUserRole = formatUserRole(sessionDetails.user_role);
+          console.log("User role:", formattedUserRole);
           setUserRole(formattedUserRole);
         } else {
           console.log("User role not defined");
         }
 
-        if (decoded.user_email) {
-          setUserEmail(decoded.user_email);
+        if (sessionDetails.user_email) {
+          setUserEmail(sessionDetails.user_email);
         } else {
-          console.log(`User Email is not set ${decoded}`);
+          console.log("User Email is not set");
         }
+      } catch (error) {
+        console.error("Error fetching session details:", error);
       }
-    }
+    };
+    
+    fetchSessionDetails();
+  }, []);
+
+  useEffect(() => {
     if (userID && accessToken && userRole && !keys && !userSpendData) {
       const cachedUserModels = sessionStorage.getItem("userModels" + userID);
       if (cachedUserModels) {
@@ -239,7 +244,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
         fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
       }
     }
-  }, [userID, token, accessToken, keys, userRole]);
+  }, [userID, accessToken, keys, userRole]);
 
   useEffect(() => {
     console.log(`currentOrg: ${JSON.stringify(currentOrg)}, accessToken: ${accessToken}, userID: ${userID}, userRole: ${userRole}`)
@@ -326,31 +331,35 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     <div className="w-full mx-4 h-[75vh]">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
-        <CreateKey
-            key={selectedTeam ? selectedTeam.team_id : null}
-            userID={userID}
-            team={selectedTeam as Team | null}
-            teams={teams as Team[]}
-            userRole={userRole}
-            accessToken={accessToken}
-            data={keys}
-            setData={setKeys}
-          />
+        {accessToken && (
+          <>
+            <CreateKey
+              key={selectedTeam ? selectedTeam.team_id : null}
+              userID={userID}
+              team={selectedTeam as Team | null}
+              teams={teams as Team[]}
+              userRole={userRole}
+              accessToken={accessToken}
+              data={keys}
+              setData={setKeys}
+            />
 
-          <ViewKeyTable
-            userID={userID}
-            userRole={userRole}
-            accessToken={accessToken}
-            selectedTeam={selectedTeam ? selectedTeam : null}
-            setSelectedTeam={setSelectedTeam}
-            data={keys}
-            setData={setKeys}
-            premiumUser={premiumUser}
-            teams={teams}
-            currentOrg={currentOrg}
-            setCurrentOrg={setCurrentOrg}
-            organizations={organizations}
-          />
+            <ViewKeyTable
+              userID={userID}
+              userRole={userRole}
+              accessToken={accessToken}
+              selectedTeam={selectedTeam ? selectedTeam : null}
+              setSelectedTeam={setSelectedTeam}
+              data={keys}
+              setData={setKeys}
+              premiumUser={premiumUser}
+              teams={teams}
+              currentOrg={currentOrg}
+              setCurrentOrg={setCurrentOrg}
+              organizations={organizations}
+            />
+          </>
+        )}
         </Col>
       </Grid>
     </div>

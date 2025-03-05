@@ -20,7 +20,7 @@ export interface JWTTokenData {
   exp: number;
   disabled_non_admin_personal_key_creation: boolean;
   scopes: string[];
-  key: string | null;
+  session_id: string; // ui session id currently in progress
 }
 
 export function clearTokenCookies() {
