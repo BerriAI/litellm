@@ -7059,6 +7059,9 @@ async def delete_model(model_info: ModelInfoDelete):
             )
 
     except Exception as e:
+        verbose_proxy_logger.exception(
+            f"Failed to delete model. Due to error - {str(e)}"
+        )
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
