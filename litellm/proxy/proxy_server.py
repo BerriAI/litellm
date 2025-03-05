@@ -955,6 +955,9 @@ def _set_spend_logs_payload(
     prisma_client: PrismaClient,
     spend_logs_url: Optional[str] = None,
 ):
+    verbose_proxy_logger.info(
+        "Writing spend log to db - request_id: {}".format(payload.get("request_id"))
+    )
     if prisma_client is not None and spend_logs_url is not None:
         if isinstance(payload["startTime"], datetime):
             payload["startTime"] = payload["startTime"].isoformat()
@@ -1056,7 +1059,6 @@ async def update_database(  # noqa: PLR0915
                         start_time=start_time,
                         end_time=end_time,
                     )
-
                     payload["spend"] = response_cost
                     prisma_client = _set_spend_logs_payload(
                         payload=payload,
