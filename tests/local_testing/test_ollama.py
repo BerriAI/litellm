@@ -228,9 +228,14 @@ async def test_async_ollama_ssl_verify(stream):
     except Exception as e:
         print(e)
 
-    client: AsyncHTTPHandler = litellm.in_memory_llm_clients_cache.get_cache(
-        "async_httpx_clientssl_verify_Falseollama"
-    )
+    try:
+        current_loop = asyncio.get_running_loop()
+        loop_id = id(current_loop)
+    except RuntimeError:
+        loop_id = "no_loop"
+    
+    cache_key = f"async_httpx_clientssl_verify_Falseollama_loop_{loop_id}"
+    client: AsyncHTTPHandler = litellm.in_memory_llm_clients_cache.get_cache(cache_key)
 
     test_client = httpx.AsyncClient(verify=False)
     print(client)
