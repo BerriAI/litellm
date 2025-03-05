@@ -202,7 +202,7 @@ def filter_schema_fields(
             result[key] = filter_schema_fields(value, valid_fields, processed)
         elif key == "anyOf" and isinstance(value, list):
             result[key] = [
-                filter_schema_fields(item, valid_fields, processed) for item in value
+                filter_schema_fields(item, valid_fields, processed) for item in value  # type: ignore
             ]
         else:
             result[key] = value
