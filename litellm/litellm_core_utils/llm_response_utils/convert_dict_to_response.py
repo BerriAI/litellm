@@ -9,6 +9,7 @@ from typing import Dict, Iterable, List, Literal, Optional, Tuple, Union
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.types.llms.openai import ChatCompletionThinkingBlock
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
@@ -128,12 +129,7 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
     model_response_object = ModelResponse(stream=True)
     choice_list = []
     for idx, choice in enumerate(response_object["choices"]):
-        delta = Delta(
-            content=choice["message"].get("content", None),
-            role=choice["message"]["role"],
-            function_call=choice["message"].get("function_call", None),
-            tool_calls=choice["message"].get("tool_calls", None),
-        )
+        delta = Delta(**choice["message"])
         finish_reason = choice.get("finish_reason", None)
         if finish_reason is None:
             # gpt-4 vision can return 'finish_reason' or 'finish_details'
@@ -456,10 +452,19 @@ def convert_to_model_response_object(  # noqa: PLR0915
                             provider_specific_fields[field] = choice["message"][field]
 
                     # Handle reasoning models that display `reasoning_content` within `content`
+                    if "reasoning_content" in choice["message"]:
+                        reasoning_content = choice["message"]["reasoning_content"]
+                        content = choice["message"]["content"]
+                    else:
+                        reasoning_content, content = _parse_content_for_reasoning(
+                            choice["message"].get("content")
+                        )
 
-                    reasoning_content, content = _parse_content_for_reasoning(
-                        choice["message"].get("content")
-                    )
+                    # Handle thinking models that display `thinking_blocks` within `content`
+                    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
+                    if "thinking_blocks" in choice["message"]:
+                        thinking_blocks = choice["message"]["thinking_blocks"]
+                        provider_specific_fields["thinking_blocks"] = thinking_blocks
 
                     if reasoning_content:
                         provider_specific_fields["reasoning_content"] = (
@@ -474,6 +479,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         audio=choice["message"].get("audio", None),
                         provider_specific_fields=provider_specific_fields,
                         reasoning_content=reasoning_content,
+                        thinking_blocks=thinking_blocks,
                     )
                     finish_reason = choice.get("finish_reason", None)
                 if finish_reason is None:

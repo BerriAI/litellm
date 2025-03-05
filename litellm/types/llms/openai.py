@@ -361,6 +361,7 @@ class ChatCompletionThinkingBlock(TypedDict, total=False):
     type: Required[Literal["thinking"]]
     thinking: str
     signature_delta: str
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
 class OpenAIChatCompletionTextObject(TypedDict):
@@ -449,7 +450,11 @@ class ChatCompletionUserMessage(OpenAIChatCompletionUserMessage, total=False):
 
 class OpenAIChatCompletionAssistantMessage(TypedDict, total=False):
     role: Required[Literal["assistant"]]
-    content: Optional[Union[str, Iterable[ChatCompletionTextObject]]]
+    content: Optional[
+        Union[
+            str, Iterable[Union[ChatCompletionTextObject, ChatCompletionThinkingBlock]]
+        ]
+    ]
     name: Optional[str]
     tool_calls: Optional[List[ChatCompletionAssistantToolCall]]
     function_call: Optional[ChatCompletionToolCallFunctionChunk]

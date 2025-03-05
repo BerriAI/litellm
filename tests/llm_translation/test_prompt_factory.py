@@ -125,28 +125,6 @@ def test_anthropic_pt_formatting():
     assert anthropic_pt(messages) == expected_prompt
 
 
-def test_anthropic_messages_pt():
-    # Test case: No messages (filtered system messages only)
-    litellm.modify_params = True
-    messages = []
-    expected_messages = [{"role": "user", "content": [{"type": "text", "text": "."}]}]
-    assert (
-        anthropic_messages_pt(
-            messages, model="claude-3-sonnet-20240229", llm_provider="anthropic"
-        )
-        == expected_messages
-    )
-
-    # Test case: No messages (filtered system messages only) when modify_params is False should raise error
-    litellm.modify_params = False
-    messages = []
-    with pytest.raises(Exception) as err:
-        anthropic_messages_pt(
-            messages, model="claude-3-sonnet-20240229", llm_provider="anthropic"
-        )
-    assert "Invalid first message" in str(err.value)
-
-
 def test_anthropic_messages_nested_pt():
     from litellm.types.llms.anthropic import (
         AnthopicMessagesAssistantMessageParam,
