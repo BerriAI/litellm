@@ -66,7 +66,7 @@ def _get_spend_logs_metadata(
         }
     )
     clean_metadata["applied_guardrails"] = applied_guardrails
-
+    clean_metadata["user_api_key"] = metadata.get("user_api_key_hash", "")
     return clean_metadata
 
 
