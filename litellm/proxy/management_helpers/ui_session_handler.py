@@ -43,14 +43,20 @@ class UISessionHandler:
         """
         Extract authentication token from cookies if present
         """
-        cookies = request.cookies
-        verbose_proxy_logger.debug(f"AUTH COOKIES: {cookies}")
+        try:
+            cookies = request.cookies
+            verbose_proxy_logger.debug(f"AUTH COOKIES: {cookies}")
 
-        cookie_name = UISessionHandler._get_latest_ui_cookie_name(cookies)
-        if cookie_name:
-            return cookies[cookie_name]
+            cookie_name = UISessionHandler._get_latest_ui_cookie_name(cookies)
+            if cookie_name:
+                return cookies[cookie_name]
 
-        return None
+            return None
+        except Exception as e:
+            verbose_proxy_logger.error(
+                f"Error getting UI session token from cookies: {e}"
+            )
+            return None
 
     @staticmethod
     def build_authenticated_ui_jwt_token(
