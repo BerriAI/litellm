@@ -35,7 +35,7 @@ class CooldownCache:
     ) -> Tuple[str, CooldownCacheValue]:
         try:
             current_time = time.time()
-            cooldown_key = f"deployment:{model_id}:cooldown"
+            cooldown_key = CooldownCache.get_cooldown_cache_key(model_id)
 
             # Store the cooldown information for the deployment separately
             cooldown_data = CooldownCacheValue(
@@ -121,7 +121,7 @@ class CooldownCache:
         self, model_ids: List[str], parent_otel_span: Optional[Span]
     ) -> List[Tuple[str, CooldownCacheValue]]:
         # Generate the keys for the deployments
-        keys = [f"deployment:{model_id}:cooldown" for model_id in model_ids]
+        keys = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
         # Retrieve the values for the keys using mget
         results = (
             self.cache.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span)
@@ -143,7 +143,7 @@ class CooldownCache:
         """Return min cooldown time required for a group of model id's."""
 
         # Generate the keys for the deployments
-        keys = [f"deployment:{model_id}:cooldown" for model_id in model_ids]
+        keys = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
 
         # Retrieve the values for the keys using mget
         results = (
