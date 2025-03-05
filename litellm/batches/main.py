@@ -270,6 +270,7 @@ def create_batch(
         raise e
 
 
+@client
 async def aretrieve_batch(
     batch_id: str,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
@@ -311,6 +312,7 @@ async def aretrieve_batch(
         raise e
 
 
+@client
 def retrieve_batch(
     batch_id: str,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
