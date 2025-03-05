@@ -186,6 +186,7 @@ class CallTypes(Enum):
     aretrieve_batch = "aretrieve_batch"
     retrieve_batch = "retrieve_batch"
     pass_through = "pass_through_endpoint"
+    anthropic_messages = "anthropic_messages"
 
 
 CallTypesLiteral = Literal[
@@ -209,6 +210,7 @@ CallTypesLiteral = Literal[
     "create_batch",
     "acreate_batch",
     "pass_through_endpoint",
+    "anthropic_messages",
 ]
 
 
