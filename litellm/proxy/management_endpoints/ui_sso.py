@@ -800,4 +800,4 @@ async def validate_session(
         raise HTTPException(status_code=401, detail="Unauthorized")
     jwt_handler = JWTHandler()
     validated_jwt_token = await jwt_handler.auth_jwt(token=ui_session_token)
-    return {"valid": True, "session": validated_jwt_token}
+    return {"valid": True, "data": validated_jwt_token}
