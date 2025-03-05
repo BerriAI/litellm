@@ -31,14 +31,12 @@ async def test_anthropic_messages_handler_non_streaming():
         pytest.skip("ANTHROPIC_API_KEY not found in environment")
 
     # Set up test parameters
-    api_base = "https://api.anthropic.com"
     messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
 
     # Call the handler
     async_httpx_client = AsyncHTTPHandler()
     response = await anthropic_messages_handler(
         messages=messages,
-        api_base=api_base,
         api_key=api_key,
         model="claude-3-haiku-20240307",
         max_tokens=100,
@@ -66,14 +64,12 @@ async def test_anthropic_messages_handler_streaming():
         pytest.skip("ANTHROPIC_API_KEY not found in environment")
 
     # Set up test parameters
-    api_base = "https://api.anthropic.com"
     messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
 
     # Call the handler
     async_httpx_client = AsyncHTTPHandler()
     response = await anthropic_messages_handler(
         messages=messages,
-        api_base=api_base,
         api_key=api_key,
         model="claude-3-haiku-20240307",
         max_tokens=100,

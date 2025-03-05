@@ -14,11 +14,13 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 
+DEFAULT_ANTHROPIC_API_BASE = "https://api.anthropic.com"
+
 
 async def anthropic_messages_handler(
-    api_base: str,
     api_key: str,
     stream: bool = False,
+    api_base: Optional[str] = None,
     client: Optional[AsyncHTTPHandler] = None,
     **kwargs,
 ) -> Union[Dict[str, Any], AsyncIterator]:
@@ -43,6 +45,9 @@ async def anthropic_messages_handler(
     # Prepare request body
     request_body = kwargs.copy()
     request_body["stream"] = stream
+
+    # API base
+    api_base = api_base or DEFAULT_ANTHROPIC_API_BASE
 
     # Make the request
     response = await async_httpx_client.post(
