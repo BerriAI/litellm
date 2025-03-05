@@ -423,6 +423,7 @@ async def auth_callback(request: Request):  # noqa: PLR0915
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
     generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
+    user_role: Optional[LitellmUserRoles] = None
     # get url from request
     if master_key is None:
         raise ProxyException(
@@ -547,7 +548,6 @@ async def auth_callback(request: Request):  # noqa: PLR0915
         )
 
     _user_id_from_sso = user_id
-    user_role: Optional[LitellmUserRoles] = None
     try:
         if prisma_client is not None:
             try:
