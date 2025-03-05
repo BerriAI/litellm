@@ -1,12 +1,45 @@
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
+from fastapi.requests import Request
 from fastapi.responses import RedirectResponse
 
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LiteLLM_JWTAuth, LitellmUserRoles
 
 
 class UISessionHandler:
+
+    @staticmethod
+    # Add this function to extract auth token from cookies
+    def _get_ui_session_token_from_cookies(request: Request) -> Optional[str]:
+        """
+        Extract authentication token from cookies if present
+        """
+        cookies = request.cookies
+        verbose_proxy_logger.debug(f"AUTH COOKIES: {cookies}")
+
+        # First check for LiteLLM UI cookies (format: litellm_ui_token_{timestamp})
+        litellm_ui_cookies = [
+            k for k in cookies.keys() if k.startswith("litellm_ui_token_")
+        ]
+        if litellm_ui_cookies:
+            # Sort by timestamp (descending) to get the most recent one
+            try:
+                # Extract timestamps and sort numerically
+                sorted_cookies = sorted(
+                    litellm_ui_cookies,
+                    key=lambda x: int(x.split("_")[-1]),
+                    reverse=True,
+                )
+                return cookies[sorted_cookies[0]]
+            except (ValueError, IndexError):
+                # Fallback to simple string sort if timestamp extraction fails
+                litellm_ui_cookies.sort(reverse=True)
+                return cookies[litellm_ui_cookies[0]]
+
+        return None
 
     @staticmethod
     def build_authenticated_ui_jwt_token(
