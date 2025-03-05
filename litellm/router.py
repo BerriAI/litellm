@@ -44,7 +44,7 @@ import litellm.litellm_core_utils
 import litellm.litellm_core_utils.exception_mapping_utils
 from litellm import get_secret_str
 from litellm._logging import verbose_router_logger
-from litellm.caching.caching import DualCache, InMemoryCache, RedisCache
+from litellm.caching.caching import DualCache, InMemoryCache, RedisCache, RedisClusterCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
@@ -351,7 +351,10 @@ class Router:
 
             # Add additional key-value pairs from cache_kwargs
             cache_config.update(cache_kwargs)
-            redis_cache = RedisCache(**cache_config)
+            if cache_config.get("startup_nodes"):
+                redis_cache = RedisClusterCache(**cache_config)
+            else:
+                redis_cache = RedisCache(**cache_config)
 
         if cache_responses:
             if litellm.cache is None:
