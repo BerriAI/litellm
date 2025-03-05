@@ -314,10 +314,13 @@ def _add_proxy_server_request_to_metadata(
     Only store if _should_store_prompts_and_responses_in_spend_logs() is True
     """
     if _should_store_prompts_and_responses_in_spend_logs():
-        _proxy_server_request = litellm_params.get("proxy_server_request", {})
-        _request_body = _proxy_server_request.get("body", {}) or {}
-        _request_body_json_str = json.dumps(_request_body, default=str)
-        metadata["proxy_server_request"] = _request_body_json_str
+        _proxy_server_request = cast(
+            Optional[dict], litellm_params.get("proxy_server_request", {})
+        )
+        if _proxy_server_request is not None:
+            _request_body = _proxy_server_request.get("body", {}) or {}
+            _request_body_json_str = json.dumps(_request_body, default=str)
+            metadata["proxy_server_request"] = _request_body_json_str
     return metadata
 
 
