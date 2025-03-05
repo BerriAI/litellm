@@ -460,7 +460,7 @@ class OpenAIChatCompletion(BaseLLM):
             else:
                 headers = {}
             response = raw_response.parse()
-            raw_response.http_response.close()
+            # raw_response.http_response.close()
             return headers, response
         except Exception as e:
             if raw_response is not None:
