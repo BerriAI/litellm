@@ -171,7 +171,7 @@ guardrails:
   - guardrail_name: "lasso-guard"
     litellm_params:
       guardrail: lasso
-      mode: "during_call"
+      mode: "pre_call"
       api_key: LASSO_API_KEY
       api_base: LASSO_API_BASE
       user_id: LASSO_USER_ID  # Optional: Track specific users
