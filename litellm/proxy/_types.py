@@ -305,6 +305,8 @@ class LiteLLMRoutes(enum.Enum):
         "/user/update",
         "/user/delete",
         "/user/info",
+        # user invitation management
+        "/invitation/new",
         # team
         "/team/new",
         "/team/update",
