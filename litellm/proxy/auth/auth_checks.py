@@ -42,7 +42,6 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.management_helpers.ui_session_handler import UISessionHandler
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.router import Router

@@ -7,9 +7,8 @@ Has all /sso/* routes
 
 import asyncio
 import os
-import time
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
+from typing import TYPE_CHECKING, List, Optional, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
@@ -410,9 +409,7 @@ def get_disabled_non_admin_personal_key_creation():
 @router.get("/sso/callback", tags=["experimental"], include_in_schema=False)
 async def auth_callback(request: Request):  # noqa: PLR0915
     """Verify login"""
-    from litellm.proxy.management_helpers.ui_session_handler import UISessionHandler
     from litellm.proxy.proxy_server import (
-        general_settings,
         jwt_handler,
         master_key,
         premium_user,

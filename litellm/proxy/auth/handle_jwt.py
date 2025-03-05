@@ -414,7 +414,6 @@ class JWTHandler:
         """
         import jwt
 
-        from litellm.proxy.management_helpers.ui_session_handler import UISessionHandler
         from litellm.proxy.proxy_server import master_key
 
         try:
