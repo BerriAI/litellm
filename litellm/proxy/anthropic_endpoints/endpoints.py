@@ -93,7 +93,6 @@ async def anthropic_response(  # noqa: PLR0915
         llm_router,
         proxy_config,
         proxy_logging_obj,
-        select_data_generator,
         user_api_base,
         user_max_tokens,
         user_model,
@@ -145,32 +144,28 @@ async def anthropic_response(  # noqa: PLR0915
 
         ### ROUTE THE REQUESTs ###
         router_model_names = llm_router.model_names if llm_router is not None else []
-        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
-            anthropic_messages,
-        )
 
-        data["handler_function"] = anthropic_messages
         # skip router if user passed their key
         if (
             llm_router is not None and data["model"] in router_model_names
         ):  # model in router model list
-            llm_response = asyncio.create_task(llm_router.ageneric_api_call(**data))
+            llm_response = asyncio.create_task(llm_router.aanthropic_messages(**data))
         elif (
             llm_router is not None
             and llm_router.model_group_alias is not None
             and data["model"] in llm_router.model_group_alias
         ):  # model set in model_group_alias
-            llm_response = asyncio.create_task(llm_router.ageneric_api_call(**data))
+            llm_response = asyncio.create_task(llm_router.aanthropic_messages(**data))
         elif (
             llm_router is not None and data["model"] in llm_router.deployment_names
         ):  # model in router deployments, calling a specific deployment on the router
             llm_response = asyncio.create_task(
-                llm_router.ageneric_api_call(**data, specific_deployment=True)
+                llm_router.aanthropic_messages(**data, specific_deployment=True)
             )
         elif (
             llm_router is not None and data["model"] in llm_router.get_model_ids()
         ):  # model in router model list
-            llm_response = asyncio.create_task(llm_router.ageneric_api_call(**data))
+            llm_response = asyncio.create_task(llm_router.aanthropic_messages(**data))
         elif (
             llm_router is not None
             and data["model"] not in router_model_names
@@ -179,9 +174,9 @@ async def anthropic_response(  # noqa: PLR0915
                 or len(llm_router.pattern_router.patterns) > 0
             )
         ):  # model in router deployments, calling a specific deployment on the router
-            llm_response = asyncio.create_task(llm_router.ageneric_api_call(**data))
+            llm_response = asyncio.create_task(llm_router.aanthropic_messages(**data))
         elif user_model is not None:  # `litellm --model <your-model-name>`
-            llm_response = asyncio.create_task(anthropic_messages(**data))
+            llm_response = asyncio.create_task(litellm.anthropic_messages(**data))
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

@@ -94,7 +94,7 @@ async def anthropic_messages(
     **kwargs,
 ) -> Union[Dict[str, Any], AsyncIterator]:
     """
-    Handler for Anthropic Messages API
+    Makes Anthropic `/v1/messages` API calls In the Anthropic API Spec
     """
     # Use provided client or create a new one
     optional_params = GenericLiteLLMParams(**kwargs)

@@ -580,6 +580,9 @@ class Router:
         self.amoderation = self.factory_function(
             litellm.amoderation, call_type="moderation"
         )
+        self.aanthropic_messages = self.factory_function(
+            litellm.anthropic_messages, call_type="anthropic_messages"
+        )
 
     def discard(self):
         """
@@ -2349,49 +2352,8 @@ class Router:
                 self.fail_calls[model] += 1
             raise e
 
-    async def ageneric_api_call(
-        self,
-        model: str,
-        handler_function: Callable,
-        is_retry: Optional[bool] = False,
-        is_fallback: Optional[bool] = False,
-        is_async: Optional[bool] = False,
-        **kwargs,
-    ):
-        """
-        Generic function to handle API calls through the router
-        This allows you to use retries/fallbacks with litellm router for a generic handler function
-        Args:
-            model: The model to use
-            handler_function: The handler function to call (e.g., litellm.anthropic_messages)
-            **kwargs: Additional arguments to pass to the handler function
-
-        Returns:
-            The response from the handler function
-        """
-        try:
-            kwargs["model"] = model
-            kwargs["original_function"] = lambda **kw: self._ageneric_api_call(
-                handler_function=handler_function, **kw
-            )
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
-            response = await self.async_function_with_fallbacks(**kwargs)
-
-            return response
-        except Exception as e:
-            asyncio.create_task(
-                send_llm_exception_alert(
-                    litellm_router_instance=self,
-                    request_kwargs=kwargs,
-                    error_traceback_str=traceback.format_exc(),
-                    original_exception=e,
-                )
-            )
-            raise e
-
-    async def _ageneric_api_call(
-        self, model: str, handler_function: Callable, **kwargs
+    async def _ageneric_api_call_with_fallbacks(
+        self, model: str, original_function: Callable, **kwargs
     ):
         """
         Make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router
@@ -2404,7 +2366,7 @@ class Router:
         Returns:
             The response from the handler function
         """
-        handler_name = handler_function.__name__
+        handler_name = original_function.__name__
         try:
             verbose_router_logger.debug(
                 f"Inside _ageneric_api_call() - handler: {handler_name}, model: {model}; kwargs: {kwargs}"
@@ -2427,7 +2389,7 @@ class Router:
             )
             self.total_calls[model_name] += 1
 
-            response = handler_function(
+            response = original_function(
                 **{
                     **data,
                     "caching": self.cache_responses,
@@ -2993,10 +2955,14 @@ class Router:
     def factory_function(
         self,
         original_function: Callable,
-        call_type: Literal["assistants", "moderation"] = "assistants",
+        call_type: Literal[
+            "assistants", "moderation", "anthropic_messages"
+        ] = "assistants",
     ):
         async def new_function(
-            custom_llm_provider: Optional[Literal["openai", "azure"]] = None,
+            custom_llm_provider: Optional[
+                Literal["openai", "azure", "anthropic"]
+            ] = None,
             client: Optional["AsyncOpenAI"] = None,
             **kwargs,
         ):
@@ -3013,13 +2979,18 @@ class Router:
                     original_function=original_function,
                     **kwargs,
                 )
+            elif call_type == "anthropic_messages":
+                return await self._ageneric_api_call_with_fallbacks(  # type: ignore
+                    original_function=original_function,
+                    **kwargs,
+                )
 
         return new_function
 
     async def _pass_through_assistants_endpoint_factory(
         self,
         original_function: Callable,
-        custom_llm_provider: Optional[Literal["openai", "azure"]] = None,
+        custom_llm_provider: Optional[Literal["openai", "azure", "anthropic"]] = None,
         client: Optional[AsyncOpenAI] = None,
         **kwargs,
     ):
