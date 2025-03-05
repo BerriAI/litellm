@@ -399,9 +399,12 @@ def _select_model_name_for_cost_calc(
     if base_model is not None:
         return_model = base_model
 
-    completion_response_model: Optional[str] = getattr(
-        completion_response, "model", None
-    )
+    completion_response_model: Optional[str] = None
+    if completion_response is not None:
+        if isinstance(completion_response, BaseModel):
+            completion_response_model = getattr(completion_response, "model", None)
+        elif isinstance(completion_response, dict):
+            completion_response_model = completion_response.get("model", None)
     hidden_params: Optional[dict] = getattr(completion_response, "_hidden_params", None)
     if completion_response_model is None and hidden_params is not None:
         if (
