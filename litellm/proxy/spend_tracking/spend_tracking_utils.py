@@ -113,15 +113,16 @@ def get_logging_payload(  # noqa: PLR0915
 
     if kwargs is None:
         kwargs = {}
+    standard_logging_payload: StandardLoggingPayload = kwargs.get(
+        "standard_logging_object", {}
+    )
     if response_obj is None or (
         not isinstance(response_obj, BaseModel) and not isinstance(response_obj, dict)
     ):
         response_obj = {}
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
     litellm_params = kwargs.get("litellm_params", {})
-    metadata = (
-        litellm_params.get("metadata", {}) or {}
-    )  # if litellm_params['metadata'] == None
+    metadata = dict(standard_logging_payload.get("metadata", {})) or {}
     metadata = _add_proxy_server_request_to_metadata(
         metadata=metadata, litellm_params=litellm_params
     )
@@ -140,9 +141,6 @@ def get_logging_payload(  # noqa: PLR0915
         response_obj_dict = {}
 
     id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs)
-    standard_logging_payload = cast(
-        Optional[StandardLoggingPayload], kwargs.get("standard_logging_object", None)
-    )
 
     end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
 

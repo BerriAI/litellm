@@ -107,6 +107,20 @@ async def anthropic_messages(
         model=model,
         api_key=api_key,
     )
+
+    litellm_logging_obj.update_environment_variables(
+        model=model,
+        optional_params=dict(optional_params),
+        litellm_params={
+            "metadata": kwargs.get("metadata", {}),
+            "preset_cache_key": None,
+            "stream_response": {},
+            **optional_params.model_dump(exclude_unset=True),
+        },
+        custom_llm_provider=_custom_llm_provider,
+    )
+    litellm_logging_obj.model_call_details.update(kwargs)
+
     # Prepare request body
     request_body = kwargs.copy()
     request_body = {
@@ -120,7 +134,6 @@ async def anthropic_messages(
     request_body["stream"] = stream
     request_body["model"] = model
     litellm_logging_obj.stream = stream
-    litellm_logging_obj.model_call_details.update(request_body)
 
     verbose_logger.debug(
         "request_body= %s", json.dumps(request_body, indent=4, default=str)
