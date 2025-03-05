@@ -5,7 +5,6 @@ import {
   modelAvailableCall,
   getTotalSpendCall,
   getProxyUISettings,
-  teamListCall,
   Organization,
   organizationListCall,
   DEFAULT_ORGANIZATION
@@ -19,8 +18,11 @@ import ViewUserTeam from "./view_user_team";
 import DashboardTeam from "./dashboard_default_team";
 import Onboarding from "../app/onboarding/page";
 import { useSearchParams, useRouter } from "next/navigation";
+import { Team } from "./key_team_helpers/key_list";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
+import { getUISessionDetails } from "@/utils/cookieUtils";
+import { clearTokenCookies } from "@/utils/cookieUtils";
 const isLocal = process.env.NODE_ENV === "development";
 if (isLocal != true) {
   console.log = function() {};
@@ -44,27 +46,18 @@ export type UserInfo = {
   spend: number;
 }
 
-function getCookie(name: string) {
-  console.log("COOKIES", document.cookie)
-  const cookieValue = document.cookie
-      .split('; ')
-      .find(row => row.startsWith(name + '='));
-  return cookieValue ? cookieValue.split('=')[1] : null;
-}
-
 interface UserDashboardProps {
   userID: string | null;
   userRole: string | null;
   userEmail: string | null;
-  teams: any[] | null;
+  teams: Team[] | null;
   keys: any[] | null;
   setUserRole: React.Dispatch<React.SetStateAction<string>>;
   setUserEmail: React.Dispatch<React.SetStateAction<string | null>>;
-  setTeams: React.Dispatch<React.SetStateAction<Object[] | null>>;
+  setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
   setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
-  setOrganizations: React.Dispatch<React.SetStateAction<Organization[]>>;
   premiumUser: boolean;
-  currentOrg: Organization | null;
+  organizations: Organization[] | null;
 }
 
 type TeamInterface = {
@@ -83,19 +76,18 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   setUserEmail,
   setTeams,
   setKeys,
-  setOrganizations,
   premiumUser,
-  currentOrg
+  organizations
 }) => {
-  console.log(`currentOrg in user dashboard: ${JSON.stringify(currentOrg)}`)
   const [userSpendData, setUserSpendData] = useState<UserInfo | null>(
     null
   );
+  const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
 
   // Assuming useSearchParams() hook exists and works in your setup
   const searchParams = useSearchParams()!;
 
-  const token = getCookie('token');
+  const token = getUISessionDetails();
 
   const invitation_id = searchParams.get("invitation_id");
 
@@ -108,9 +100,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     team_alias: "Default Team",
     team_id: null,
   };
-  const [selectedTeam, setSelectedTeam] = useState<any | null>(
-    teams ? teams[0] : defaultTeam
-  );
+  const [selectedTeam, setSelectedTeam] = useState<any | null>(null);
   // check if window is not undefined
   if (typeof window !== "undefined") {
     window.addEventListener("beforeunload", function () {
@@ -149,32 +139,37 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   // console.log(`selectedTeam: ${Object.entries(selectedTeam)}`);
   // Moved useEffect inside the component and used a condition to run fetch only if the params are available
   useEffect(() => {
-    if (token) {
-      const decoded = jwtDecode(token) as { [key: string]: any };
-      if (decoded) {
-        // cast decoded to dictionary
-        console.log("Decoded token:", decoded);
-
-        console.log("Decoded key:", decoded.key);
-        // set accessToken
-        setAccessToken(decoded.key);
-
+    const fetchSessionDetails = async () => {
+      try {
+        const sessionDetails = await getUISessionDetails();
+        console.log("Session details:", sessionDetails);
+        
+        // Set access token to the session_id
+        setAccessToken(sessionDetails.session_id);
+        
         // check if userRole is defined
-        if (decoded.user_role) {
-          const formattedUserRole = formatUserRole(decoded.user_role);
-          console.log("Decoded user_role:", formattedUserRole);
+        if (sessionDetails.user_role) {
+          const formattedUserRole = formatUserRole(sessionDetails.user_role);
+          console.log("User role:", formattedUserRole);
           setUserRole(formattedUserRole);
         } else {
           console.log("User role not defined");
         }
 
-        if (decoded.user_email) {
-          setUserEmail(decoded.user_email);
+        if (sessionDetails.user_email) {
+          setUserEmail(sessionDetails.user_email);
         } else {
-          console.log(`User Email is not set ${decoded}`);
+          console.log("User Email is not set");
         }
+      } catch (error) {
+        console.error("Error fetching session details:", error);
       }
-    }
+    };
+    
+    fetchSessionDetails();
+  }, []);
+
+  useEffect(() => {
     if (userID && accessToken && userRole && !keys && !userSpendData) {
       const cachedUserModels = sessionStorage.getItem("userModels" + userID);
       if (cachedUserModels) {
@@ -213,16 +208,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
               
             }
 
-            const teamsArray = [...response["teams"]];
-            if (teamsArray.length > 0) {
-              console.log(`response['teams']: ${JSON.stringify(teamsArray)}`);
-              setSelectedTeam(teamsArray[0]);
-            } else {
-              setSelectedTeam(defaultTeam);
-              
-            }
-
-            
             sessionStorage.setItem(
               "userData" + userID,
               JSON.stringify(response["keys"])
@@ -255,16 +240,11 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             // Optionally, update your UI to reflect the error state here as well
           }
         };
-        const fetchOrganizations = async () => {
-          const organizations = await organizationListCall(accessToken);
-          setOrganizations(organizations);
-        }
         fetchData();
         fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
-        fetchOrganizations();
       }
     }
-  }, [userID, token, accessToken, keys, userRole]);
+  }, [userID, accessToken, keys, userRole]);
 
   useEffect(() => {
     console.log(`currentOrg: ${JSON.stringify(currentOrg)}, accessToken: ${accessToken}, userID: ${userID}, userRole: ${userRole}`)
@@ -314,14 +294,15 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
   if (userID == null || token == null) {
     // user is not logged in as yet 
+    console.log("All cookies before redirect:", document.cookie);
+    
+    // Clear token cookies using the utility function
+    clearTokenCookies();
+    
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/sso/key/generate`
       : `/sso/key/generate`;
     
-
-    // clear cookie called "token" since user will be logging in again
-    document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-
     console.log("Full URL:", url);
     window.location.href = url;
 
@@ -345,55 +326,40 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   }
 
   console.log("inside user dashboard, selected team", selectedTeam);
+  console.log("All cookies after redirect:", document.cookie);
   return (
-    <div className="w-full mx-4">
-      <Grid numItems={1} className="gap-2 p-8 h-[75vh] w-full mt-2">
-        <Col numColSpan={1}>
-          <ViewUserTeam
-            userID={userID}
-            userRole={userRole}
-            selectedTeam={selectedTeam ? selectedTeam : null}
-            accessToken={accessToken}
-          />
-          <ViewUserSpend
-            userID={userID}
-            userRole={userRole}
-            userMaxBudget={userSpendData?.max_budget || null}
-            accessToken={accessToken}
-            userSpend={teamSpend}
-            selectedTeam={selectedTeam ? selectedTeam : null}
-          />
+    <div className="w-full mx-4 h-[75vh]">
+      <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
+        <Col numColSpan={1} className="flex flex-col gap-2">
+        {accessToken && (
+          <>
+            <CreateKey
+              key={selectedTeam ? selectedTeam.team_id : null}
+              userID={userID}
+              team={selectedTeam as Team | null}
+              teams={teams as Team[]}
+              userRole={userRole}
+              accessToken={accessToken}
+              data={keys}
+              setData={setKeys}
+            />
 
-          <ViewKeyTable
-            userID={userID}
-            userRole={userRole}
-            accessToken={accessToken}
-            selectedTeam={selectedTeam ? selectedTeam : null}
-            data={keys}
-            setData={setKeys}
-            premiumUser={premiumUser}
-            teams={teams}
-            currentOrg={currentOrg}
-          />
-          <CreateKey
-            key={selectedTeam ? selectedTeam.team_id : null}
-            userID={userID}
-            team={selectedTeam ? selectedTeam : null}
-            userRole={userRole}
-            accessToken={accessToken}
-            data={keys}
-            setData={setKeys}
-          />
-          <DashboardTeam
-            teams={teams}
-            setSelectedTeam={setSelectedTeam}
-            userRole={userRole}
-            proxySettings={proxySettings}
-            setProxySettings={setProxySettings}
-            userInfo={userSpendData}
-            accessToken={accessToken}
-            setKeys={setKeys}
-          />
+            <ViewKeyTable
+              userID={userID}
+              userRole={userRole}
+              accessToken={accessToken}
+              selectedTeam={selectedTeam ? selectedTeam : null}
+              setSelectedTeam={setSelectedTeam}
+              data={keys}
+              setData={setKeys}
+              premiumUser={premiumUser}
+              teams={teams}
+              currentOrg={currentOrg}
+              setCurrentOrg={setCurrentOrg}
+              organizations={organizations}
+            />
+          </>
+        )}
         </Col>
       </Grid>
     </div>

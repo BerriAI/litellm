@@ -1,5 +1,5 @@
 import re
-from typing import List, Optional
+from typing import List, Optional, Set, Union
 
 from fastapi import HTTPException, Request, status
 
@@ -225,7 +225,9 @@ class RouteChecks:
         return False
 
     @staticmethod
-    def check_route_access(route: str, allowed_routes: List[str]) -> bool:
+    def check_route_access(
+        route: str, allowed_routes: Union[List[str], Set[str]]
+    ) -> bool:
         """
         Check if a route has access by checking both exact matches and patterns
 
@@ -240,3 +242,18 @@ class RouteChecks:
             RouteChecks._route_matches_pattern(route=route, pattern=allowed_route)
             for allowed_route in allowed_routes
         )  # Check pattern match
+
+    @staticmethod
+    def _is_assistants_api_request(request: Request) -> bool:
+        """
+        Returns True if `thread` or `assistant` is in the request path
+
+        Args:
+            request (Request): The request object
+
+        Returns:
+            bool: True if `thread` or `assistant` is in the request path, False otherwise
+        """
+        if "thread" in request.url.path or "assistant" in request.url.path:
+            return True
+        return False

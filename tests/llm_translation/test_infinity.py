@@ -88,6 +88,39 @@ async def test_infinity_rerank():
 
 
 @pytest.mark.asyncio()
+async def test_infinity_rerank_with_return_documents():
+    mock_response = AsyncMock()
+
+    mock_response = AsyncMock()
+
+    def return_val():
+        return {
+            "id": "cmpl-mockid",
+            "results": [{"index": 0, "relevance_score": 0.95, "document": "hello"}],
+            "usage": {"prompt_tokens": 100, "total_tokens": 150},
+        }
+
+    mock_response.json = return_val
+    mock_response.headers = {"key": "value"}
+    mock_response.status_code = 200
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
+        response = await litellm.arerank(
+            model="infinity/rerank-model",
+            query="hello",
+            documents=["hello", "world"],
+            top_n=3,
+            return_documents=True,
+            api_base="https://api.infinity.ai",
+        )
+        assert response.results[0]["document"] == {"text": "hello"}
+        assert_response_shape(response, custom_llm_provider="infinity")
+
+
+@pytest.mark.asyncio()
 async def test_infinity_rerank_with_env(monkeypatch):
     # Set up mock response
     mock_response = AsyncMock()

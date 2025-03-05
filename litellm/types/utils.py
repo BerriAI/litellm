@@ -24,6 +24,8 @@ from typing_extensions import Callable, Dict, Required, TypedDict, override
 from ..litellm_core_utils.core_helpers import map_finish_reason
 from .guardrails import GuardrailEventHooks
 from .llms.openai import (
+    Batch,
+    ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
     OpenAIChatCompletionChunk,
@@ -59,6 +61,7 @@ class LiteLLMPydanticObjectBase(BaseModel):
 
 class LiteLLMCommonStrings(Enum):
     redacted_by_litellm = "redacted by litellm. 'litellm.turn_off_message_logging=True'"
+    llm_provider_not_provided = "Unmapped LLM provider for this endpoint. You passed model={model}, custom_llm_provider={custom_llm_provider}. Check supported provider and route: https://docs.litellm.ai/docs/providers"
 
 
 SupportedCacheControls = ["ttl", "s-maxage", "no-cache", "no-store"]
@@ -180,6 +183,8 @@ class CallTypes(Enum):
     arealtime = "_arealtime"
     create_batch = "create_batch"
     acreate_batch = "acreate_batch"
+    aretrieve_batch = "aretrieve_batch"
+    retrieve_batch = "retrieve_batch"
     pass_through = "pass_through_endpoint"
 
 
@@ -457,12 +462,22 @@ ChatCompletionMessage(content='This is a test', role='assistant', function_call=
 """
 
 
+def add_provider_specific_fields(
+    object: BaseModel, provider_specific_fields: Optional[Dict[str, Any]]
+):
+    if not provider_specific_fields:  # set if provider_specific_fields is not empty
+        return
+    setattr(object, "provider_specific_fields", provider_specific_fields)
+
+
 class Message(OpenAIObject):
     content: Optional[str]
     role: Literal["assistant", "user", "system", "tool", "function"]
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
     audio: Optional[ChatCompletionAudioResponse] = None
+    reasoning_content: Optional[str] = None
+    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
     provider_specific_fields: Optional[Dict[str, Any]] = Field(
         default=None, exclude=True
     )
@@ -475,6 +490,8 @@ class Message(OpenAIObject):
         tool_calls: Optional[list] = None,
         audio: Optional[ChatCompletionAudioResponse] = None,
         provider_specific_fields: Optional[Dict[str, Any]] = None,
+        reasoning_content: Optional[str] = None,
+        thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None,
         **params,
     ):
         init_values: Dict[str, Any] = {
@@ -500,6 +517,12 @@ class Message(OpenAIObject):
         if audio is not None:
             init_values["audio"] = audio
 
+        if thinking_blocks is not None:
+            init_values["thinking_blocks"] = thinking_blocks
+
+        if reasoning_content is not None:
+            init_values["reasoning_content"] = reasoning_content
+
         super(Message, self).__init__(
             **init_values,  # type: ignore
             **params,
@@ -510,10 +533,15 @@ class Message(OpenAIObject):
             # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
             del self.audio
 
-        if provider_specific_fields:  # set if provider_specific_fields is not empty
-            self.provider_specific_fields = provider_specific_fields
-            for k, v in provider_specific_fields.items():
-                setattr(self, k, v)
+        if reasoning_content is None:
+            # ensure default response matches OpenAI spec
+            del self.reasoning_content
+
+        if thinking_blocks is None:
+            # ensure default response matches OpenAI spec
+            del self.thinking_blocks
+
+        add_provider_specific_fields(self, provider_specific_fields)
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -536,9 +564,9 @@ class Message(OpenAIObject):
 
 
 class Delta(OpenAIObject):
-    provider_specific_fields: Optional[Dict[str, Any]] = Field(
-        default=None, exclude=True
-    )
+    reasoning_content: Optional[str] = None
+    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
+    provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
 
     def __init__(
         self,
@@ -547,14 +575,12 @@ class Delta(OpenAIObject):
         function_call=None,
         tool_calls=None,
         audio: Optional[ChatCompletionAudioResponse] = None,
+        reasoning_content: Optional[str] = None,
+        thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None,
         **params,
     ):
         super(Delta, self).__init__(**params)
-        provider_specific_fields: Dict[str, Any] = {}
-
-        if "reasoning_content" in params:
-            provider_specific_fields["reasoning_content"] = params["reasoning_content"]
-            setattr(self, "reasoning_content", params["reasoning_content"])
+        add_provider_specific_fields(self, params.get("provider_specific_fields", {}))
         self.content = content
         self.role = role
         # Set default values and correct types
@@ -562,8 +588,17 @@ class Delta(OpenAIObject):
         self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None
         self.audio: Optional[ChatCompletionAudioResponse] = None
 
-        if provider_specific_fields:  # set if provider_specific_fields is not empty
-            self.provider_specific_fields = provider_specific_fields
+        if reasoning_content is not None:
+            self.reasoning_content = reasoning_content
+        else:
+            # ensure default response matches OpenAI spec
+            del self.reasoning_content
+
+        if thinking_blocks is not None:
+            self.thinking_blocks = thinking_blocks
+        else:
+            # ensure default response matches OpenAI spec
+            del self.thinking_blocks
 
         if function_call is not None and isinstance(function_call, dict):
             self.function_call = FunctionCall(**function_call)
@@ -866,12 +901,14 @@ class ModelResponseBase(OpenAIObject):
 
 class ModelResponseStream(ModelResponseBase):
     choices: List[StreamingChoices]
+    provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
 
     def __init__(
         self,
         choices: Optional[List[Union[StreamingChoices, dict, BaseModel]]] = None,
         id: Optional[str] = None,
         created: Optional[int] = None,
+        provider_specific_fields: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
         if choices is not None and isinstance(choices, list):
@@ -908,6 +945,7 @@ class ModelResponseStream(ModelResponseBase):
         kwargs["id"] = id
         kwargs["created"] = created
         kwargs["object"] = "chat.completion.chunk"
+        kwargs["provider_specific_fields"] = provider_specific_fields
 
         super().__init__(**kwargs)
 
@@ -1571,6 +1609,8 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     error_code: Optional[str]
     error_class: Optional[str]
     llm_provider: Optional[str]
+    traceback: Optional[str]
+    error_message: Optional[str]
 
 
 class StandardLoggingGuardrailInformation(TypedDict, total=False):
@@ -1927,3 +1967,27 @@ class ProviderSpecificHeader(TypedDict):
 class SelectTokenizerResponse(TypedDict):
     type: Literal["openai_tokenizer", "huggingface_tokenizer"]
     tokenizer: Any
+
+
+class LiteLLMBatch(Batch):
+    _hidden_params: dict = {}
+    usage: Optional[Usage] = None
+
+    def __contains__(self, key):
+        # Define custom behavior for the 'in' operator
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
+
+    def json(self, **kwargs):  # type: ignore
+        try:
+            return self.model_dump()  # noqa
+        except Exception:
+            # if using pydantic v1
+            return self.dict()

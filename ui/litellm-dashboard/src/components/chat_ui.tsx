@@ -93,20 +93,27 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [selectedModel, setSelectedModel] = useState<string | undefined>(
     undefined
   );
+  const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<any[]>([]);
+  const customModelTimeout = useRef<NodeJS.Timeout | null>(null);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!accessToken || !token || !userRole || !userID) {
+    let useApiKey = apiKeySource === 'session' ? accessToken : apiKey;
+    console.log("useApiKey:", useApiKey);
+    if (!useApiKey || !token || !userRole || !userID) {
+      console.log("useApiKey or token or userRole or userID is missing = ", useApiKey, token, userRole, userID);
       return;
     }
+
+    
 
     // Fetch model info and set the default selected model
     const fetchModelInfo = async () => {
       try {
         const fetchedAvailableModels = await modelAvailableCall(
-          accessToken,
+          useApiKey ?? '', // Use empty string if useApiKey is null,
           userID,
           userRole
         );
@@ -139,7 +146,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     };
   
     fetchModelInfo();
-  }, [accessToken, userID, userRole]);
+  }, [accessToken, userID, userRole, apiKeySource, apiKey]);
   
 
   useEffect(() => {
@@ -234,6 +241,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const onChange = (value: string) => {
     console.log(`selected ${value}`);
     setSelectedModel(value);
+    setShowCustomModelInput(value === 'custom');
   };
 
   return (
@@ -276,10 +284,29 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       <Select
                         placeholder="Select a Model"
                         onChange={onChange}
-                        options={modelInfo}
+                        options={[
+                          ...modelInfo,
+                          { value: 'custom', label: 'Enter custom model' }
+                        ]}
                         style={{ width: "350px" }}
                         showSearch={true}
                       />
+                      {showCustomModelInput && (
+                        <TextInput
+                          className="mt-2"
+                          placeholder="Enter custom model name"
+                          onValueChange={(value) => {
+                            // Using setTimeout to create a simple debounce effect
+                            if (customModelTimeout.current) {
+                              clearTimeout(customModelTimeout.current);
+                            }
+                            
+                            customModelTimeout.current = setTimeout(() => {
+                              setSelectedModel(value);
+                            }, 500); // 500ms delay after typing stops
+                          }}
+                        />
+                      )}
                     </Col>
                   </Grid>
 

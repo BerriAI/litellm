@@ -33,6 +33,7 @@ from litellm.proxy._types import (
     ScopeMapping,
     Span,
 )
+from litellm.proxy.management_helpers.ui_session_handler import UISessionHandler
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 from .auth_checks import (
@@ -406,10 +407,60 @@ class JWTHandler:
         else:
             return False
 
+    def _validate_ui_token(self, token: str) -> Optional[dict]:
+        """
+        Helper function to validate tokens generated for the LiteLLM UI.
+        Returns the decoded payload if it's a valid UI token, None otherwise.
+        """
+        import jwt
+
+        from litellm.proxy.proxy_server import master_key
+
+        try:
+            # Decode without verification to check if it's a UI token
+            unverified_payload = jwt.decode(token, options={"verify_signature": False})
+
+            # Check if this looks like a UI token (has specific claims that only UI tokens would have)
+            if UISessionHandler.is_ui_session_token(unverified_payload):
+
+                # This looks like a UI token, now verify it with the master key
+                if not master_key:
+                    verbose_proxy_logger.debug(
+                        "Missing LITELLM_MASTER_KEY for UI token validation"
+                    )
+                    return None
+
+                try:
+                    payload = jwt.decode(
+                        token,
+                        master_key,
+                        algorithms=["HS256"],
+                        audience="litellm-ui",
+                        leeway=self.leeway,
+                    )
+                    verbose_proxy_logger.debug(
+                        "Successfully validated UI token for payload: %s",
+                        json.dumps(payload, indent=4),
+                    )
+                    return payload
+                except jwt.InvalidTokenError as e:
+                    verbose_proxy_logger.debug(f"Invalid UI token: {str(e)}")
+                    raise ValueError(
+                        f"Invalid UI token, Unable to validate token signature {str(e)}"
+                    )
+
+            return None  # Not a UI token
+        except Exception as e:
+            raise e
+
     async def auth_jwt(self, token: str) -> dict:
         # Supported algos: https://pyjwt.readthedocs.io/en/stable/algorithms.html
         # "Warning: Make sure not to mix symmetric and asymmetric algorithms that interpret
         #   the key in different ways (e.g. HS* and RS*)."
+
+        ui_payload = self._validate_ui_token(token)
+        if ui_payload:
+            return ui_payload
         algorithms = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512"]
 
         audience = os.getenv("JWT_AUDIENCE")
@@ -616,6 +667,7 @@ class JWTAuthManager:
         user_id: Optional[str],
         org_id: Optional[str],
         api_key: str,
+        jwt_valid_token: dict,
     ) -> Optional[JWTAuthBuilderResult]:
         """Check admin status and route access permissions"""
         if not jwt_handler.is_admin(scopes=scopes):
@@ -625,6 +677,7 @@ class JWTAuthManager:
             user_role=LitellmUserRoles.PROXY_ADMIN,
             user_route=route,
             litellm_proxy_roles=jwt_handler.litellm_jwtauth,
+            jwt_valid_token=jwt_valid_token,
         )
         if not is_allowed:
             allowed_routes: List[Any] = jwt_handler.litellm_jwtauth.admin_allowed_routes
@@ -698,6 +751,7 @@ class JWTAuthManager:
         user_api_key_cache: DualCache,
         parent_otel_span: Optional[Span],
         proxy_logging_obj: ProxyLogging,
+        jwt_valid_token: dict,
     ) -> Tuple[Optional[str], Optional[LiteLLM_TeamTable]]:
         """Find first team with access to the requested model"""
 
@@ -730,6 +784,7 @@ class JWTAuthManager:
                             user_role=LitellmUserRoles.TEAM,
                             user_route=route,
                             litellm_proxy_roles=jwt_handler.litellm_jwtauth,
+                            jwt_valid_token=jwt_valid_token,
                         )
                         if is_allowed:
                             return team_id, team_object
@@ -862,6 +917,14 @@ class JWTAuthManager:
         """Main authentication and authorization builder"""
         jwt_valid_token: dict = await jwt_handler.auth_jwt(token=api_key)
 
+        # Check custom validate
+        if jwt_handler.litellm_jwtauth.custom_validate:
+            if not jwt_handler.litellm_jwtauth.custom_validate(jwt_valid_token):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Invalid JWT token",
+                )
+
         # Check RBAC
         rbac_role = jwt_handler.get_rbac_role(token=jwt_valid_token)
         await JWTAuthManager.check_rbac_role(
@@ -912,7 +975,13 @@ class JWTAuthManager:
 
         # Check admin access
         admin_result = await JWTAuthManager.check_admin_access(
-            jwt_handler, scopes, route, user_id, org_id, api_key
+            jwt_handler=jwt_handler,
+            scopes=scopes,
+            route=route,
+            user_id=user_id,
+            org_id=org_id,
+            api_key=api_key,
+            jwt_valid_token=jwt_valid_token,
         )
         if admin_result:
             return admin_result
@@ -944,6 +1013,7 @@ class JWTAuthManager:
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
+                jwt_valid_token=jwt_valid_token,
             )
 
         # Get other objects

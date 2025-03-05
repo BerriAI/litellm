@@ -37,6 +37,7 @@ from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENT
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
+    LiteLLMBatch,
     ModelResponse,
     ModelResponseStream,
 )
@@ -1755,9 +1756,9 @@ class OpenAIBatchesAPI(BaseLLM):
         self,
         create_batch_data: CreateBatchRequest,
         openai_client: AsyncOpenAI,
-    ) -> Batch:
+    ) -> LiteLLMBatch:
         response = await openai_client.batches.create(**create_batch_data)
-        return response
+        return LiteLLMBatch(**response.model_dump())
 
     def create_batch(
         self,
@@ -1769,7 +1770,7 @@ class OpenAIBatchesAPI(BaseLLM):
         max_retries: Optional[int],
         organization: Optional[str],
         client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
-    ) -> Union[Batch, Coroutine[Any, Any, Batch]]:
+    ) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
         openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
@@ -1792,17 +1793,18 @@ class OpenAIBatchesAPI(BaseLLM):
             return self.acreate_batch(  # type: ignore
                 create_batch_data=create_batch_data, openai_client=openai_client
             )
-        response = openai_client.batches.create(**create_batch_data)
-        return response
+        response = cast(OpenAI, openai_client).batches.create(**create_batch_data)
+
+        return LiteLLMBatch(**response.model_dump())
 
     async def aretrieve_batch(
         self,
         retrieve_batch_data: RetrieveBatchRequest,
         openai_client: AsyncOpenAI,
-    ) -> Batch:
+    ) -> LiteLLMBatch:
         verbose_logger.debug("retrieving batch, args= %s", retrieve_batch_data)
         response = await openai_client.batches.retrieve(**retrieve_batch_data)
-        return response
+        return LiteLLMBatch(**response.model_dump())
 
     def retrieve_batch(
         self,
@@ -1837,8 +1839,8 @@ class OpenAIBatchesAPI(BaseLLM):
             return self.aretrieve_batch(  # type: ignore
                 retrieve_batch_data=retrieve_batch_data, openai_client=openai_client
             )
-        response = openai_client.batches.retrieve(**retrieve_batch_data)
-        return response
+        response = cast(OpenAI, openai_client).batches.retrieve(**retrieve_batch_data)
+        return LiteLLMBatch(**response.model_dump())
 
     async def acancel_batch(
         self,

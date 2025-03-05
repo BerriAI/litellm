@@ -826,6 +826,65 @@ asyncio.run(router_acompletion())
 
 ## Basic Reliability
 
+### Weighted Deployments 
+
+Set `weight` on a deployment to pick one deployment more often than others. 
+
+This works across **ALL** routing strategies. 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import Router 
+
+model_list = [
+	{
+		"model_name": "o1",
+		"litellm_params": {
+			"model": "o1-preview", 
+			"api_key": os.getenv("OPENAI_API_KEY"), 
+			"weight": 1
+		},
+	},
+	{
+		"model_name": "o1",
+		"litellm_params": {
+			"model": "o1-preview", 
+			"api_key": os.getenv("OPENAI_API_KEY"), 
+			"weight": 2 # 👈 PICK THIS DEPLOYMENT 2x MORE OFTEN THAN o1-preview
+		},
+	},
+]
+
+router = Router(model_list=model_list, routing_strategy="cost-based-routing")
+
+response = await router.acompletion(
+	model="gpt-3.5-turbo", 
+	messages=[{"role": "user", "content": "Hey, how's it going?"}]
+)
+print(response)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: o1
+  	litellm_params:
+		model: o1
+		api_key: os.environ/OPENAI_API_KEY
+		weight: 1	
+  - model_name: o1
+    litellm_params:
+		model: o1-preview
+		api_key: os.environ/OPENAI_API_KEY
+		weight: 2 # 👈 PICK THIS DEPLOYMENT 2x MORE OFTEN THAN o1-preview
+```
+
+</TabItem>
+</Tabs>
+
 ### Max Parallel Requests (ASYNC)
 
 Used in semaphore for async requests on router. Limit the max concurrent calls made to a deployment. Useful in high-traffic scenarios. 

@@ -207,6 +207,64 @@ OIDC Auth for API: [**See Walkthrough**](https://www.loom.com/share/00fe2deab59a
 - If all checks pass, allow the request
 
 
+## Advanced - Custom Validate
+
+Validate a JWT Token using custom logic, if you need an extra way to verify if tokens are valid for LiteLLM Proxy.
+
+### 1. Setup custom validate function
+
+```python
+from typing import Literal
+
+def my_custom_validate(token: str) -> Literal[True]:
+  """
+  Only allow tokens with tenant-id == "my-unique-tenant", and claims == ["proxy-admin"]
+  """
+  allowed_tenants = ["my-unique-tenant"]
+  allowed_claims = ["proxy-admin"]
+
+  if token["tenant_id"] not in allowed_tenants:
+    raise Exception("Invalid JWT token")
+  if token["claims"] not in allowed_claims:
+    raise Exception("Invalid JWT token")
+  return True
+```
+
+### 2. Setup config.yaml
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    user_id_jwt_field: "sub"
+    team_id_jwt_field: "tenant_id"
+    user_id_upsert: True
+    custom_validate: custom_validate.my_custom_validate # 👈 custom validate function
+```
+
+### 3. Test the flow
+
+**Expected JWT**
+
+```
+{
+  "sub": "my-unique-user",
+  "tenant_id": "INVALID_TENANT",
+  "claims": ["proxy-admin"]
+}
+```
+
+**Expected Response**
+
+```
+{
+  "error": "Invalid JWT token"
+}
+```
+
+
+
 ## Advanced - Allowed Routes 
 
 Configure which routes a JWT can access via the config.
@@ -354,11 +412,11 @@ environment_variables:
 
 ### Example Token 
 
-```
+```bash
 {
   "aud": "api://LiteLLM_Proxy",
   "oid": "eec236bd-0135-4b28-9354-8fc4032d543e",
-  "roles": ["litellm.api.consumer"]
+  "roles": ["litellm.api.consumer"] 
 }
 ```
 
@@ -415,9 +473,9 @@ general_settings:
 
 Expected Token:
 
-```
+```bash
 {
-  "scope": ["litellm.api.consumer", "litellm.api.gpt_3_5_turbo"]
+  "scope": ["litellm.api.consumer", "litellm.api.gpt_3_5_turbo"] # can be a list or a space-separated string
 }
 ```
 

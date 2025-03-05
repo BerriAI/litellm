@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
 import os
 import uuid
+import time
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -17,6 +18,7 @@ from litellm.utils import (
     CustomStreamWrapper,
     get_supported_openai_params,
     get_optional_params,
+    ProviderConfigManager,
 )
 from typing import Union
 
@@ -196,15 +198,18 @@ class BaseLLMChatTest(ABC):
         assert response is not None
 
     def test_message_with_name(self):
-        litellm.set_verbose = True
-        base_completion_call_args = self.get_base_completion_call_args()
-        messages = [
-            {"role": "user", "content": "Hello", "name": "test_name"},
-        ]
-        response = self.completion_function(
-            **base_completion_call_args, messages=messages
-        )
-        assert response is not None
+        try:
+            litellm.set_verbose = True
+            base_completion_call_args = self.get_base_completion_call_args()
+            messages = [
+                {"role": "user", "content": "Hello", "name": "test_name"},
+            ]
+            response = self.completion_function(
+                **base_completion_call_args, messages=messages
+            )
+            assert response is not None
+        except litellm.RateLimitError:
+            pass
 
     @pytest.mark.parametrize(
         "response_format",
@@ -243,11 +248,93 @@ class BaseLLMChatTest(ABC):
             response_format=response_format,
         )
 
-        print(response)
+        print(f"response={response}")
 
         # OpenAI guarantees that the JSON schema is returned in the content
         # relevant issue: https://github.com/BerriAI/litellm/issues/6741
         assert response.choices[0].message.content is not None
+
+    @pytest.mark.parametrize(
+        "response_format",
+        [
+            {"type": "text"},
+        ],
+    )
+    @pytest.mark.flaky(retries=6, delay=1)
+    def test_response_format_type_text_with_tool_calls_no_tool_choice(
+        self, response_format
+    ):
+        base_completion_call_args = self.get_base_completion_call_args()
+        messages = [
+            {"role": "user", "content": "What's the weather like in Boston today?"},
+        ]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "description": "Get the current weather in a given location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The city and state, e.g. San Francisco, CA",
+                            },
+                            "unit": {
+                                "type": "string",
+                                "enum": ["celsius", "fahrenheit"],
+                            },
+                        },
+                        "required": ["location"],
+                    },
+                },
+            }
+        ]
+        try:
+            response = self.completion_function(
+                **base_completion_call_args,
+                messages=messages,
+                response_format=response_format,
+                tools=tools,
+                drop_params=True,
+            )
+        except litellm.ContextWindowExceededError:
+            pytest.skip("Model exceeded context window")
+        assert response is not None
+
+    def test_response_format_type_text(self):
+        """
+        Test that the response format type text does not lead to tool calls
+        """
+        from litellm import LlmProviders
+
+        base_completion_call_args = self.get_base_completion_call_args()
+        litellm.set_verbose = True
+
+        _, provider, _, _ = litellm.get_llm_provider(
+            model=base_completion_call_args["model"]
+        )
+
+        provider_config = ProviderConfigManager.get_provider_chat_config(
+            base_completion_call_args["model"], LlmProviders(provider)
+        )
+
+        print(f"provider_config={provider_config}")
+
+        translated_params = provider_config.map_openai_params(
+            non_default_params={"response_format": {"type": "text"}},
+            optional_params={},
+            model=base_completion_call_args["model"],
+            drop_params=False,
+        )
+
+        assert "tool_choice" not in translated_params
+        assert (
+            "tools" not in translated_params
+        ), f"Got tools={translated_params['tools']}, expected no tools"
+
+        print(f"translated_params={translated_params}")
 
     @pytest.mark.flaky(retries=6, delay=1)
     def test_json_response_pydantic_obj(self):
@@ -524,6 +611,46 @@ class BaseLLMChatTest(ABC):
 
         assert response is not None
 
+    def test_image_url_string(self):
+        litellm.set_verbose = True
+        from litellm.utils import supports_vision
+
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        image_url = "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+
+        base_completion_call_args = self.get_base_completion_call_args()
+        if not supports_vision(base_completion_call_args["model"], None):
+            pytest.skip("Model does not support image input")
+        elif "http://" in image_url and "fireworks_ai" in base_completion_call_args.get(
+            "model"
+        ):
+            pytest.skip("Model does not support http:// input")
+
+        image_url_param = image_url
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What's in this image?"},
+                    {
+                        "type": "image_url",
+                        "image_url": image_url_param,
+                    },
+                ],
+            }
+        ]
+
+        try:
+            response = self.completion_function(
+                **base_completion_call_args, messages=messages
+            )
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
+
+        assert response is not None
+
     @pytest.mark.flaky(retries=4, delay=1)
     def test_prompt_caching(self):
         litellm.set_verbose = True
@@ -597,6 +724,8 @@ class BaseLLMChatTest(ABC):
                 max_tokens=10,
             )
 
+            time.sleep(1)
+
             cached_cost = response._hidden_params["response_cost"]
 
             assert (
@@ -613,7 +742,9 @@ class BaseLLMChatTest(ABC):
             _usage_format_tests(response.usage)
 
             assert "prompt_tokens_details" in response.usage
-            assert response.usage.prompt_tokens_details.cached_tokens > 0
+            assert (
+                response.usage.prompt_tokens_details.cached_tokens > 0
+            ), f"cached_tokens={response.usage.prompt_tokens_details.cached_tokens} should be greater than 0. Got usage={response.usage}"
         except litellm.InternalServerError:
             pass
 
@@ -633,6 +764,109 @@ class BaseLLMChatTest(ABC):
         url = f"data:application/pdf;base64,{encoded_file}"
 
         return url
+
+    def test_basic_tool_calling(self):
+        try:
+            from litellm import completion, ModelResponse
+
+            litellm.set_verbose = True
+            litellm._turn_on_debug()
+            from litellm.utils import supports_function_calling
+
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+            litellm.model_cost = litellm.get_model_cost_map(url="")
+
+            base_completion_call_args = self.get_base_completion_call_args()
+            if not supports_function_calling(base_completion_call_args["model"], None):
+                print("Model does not support function calling")
+                pytest.skip("Model does not support function calling")
+
+            tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_current_weather",
+                        "description": "Get the current weather in a given location",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "location": {
+                                    "type": "string",
+                                    "description": "The city and state, e.g. San Francisco, CA",
+                                },
+                                "unit": {
+                                    "type": "string",
+                                    "enum": ["celsius", "fahrenheit"],
+                                },
+                            },
+                            "required": ["location"],
+                        },
+                    },
+                }
+            ]
+            messages = [
+                {
+                    "role": "user",
+                    "content": "What's the weather like in Boston today in fahrenheit?",
+                }
+            ]
+            request_args = {
+                "messages": messages,
+                "tools": tools,
+            }
+            request_args.update(self.get_base_completion_call_args())
+            response: ModelResponse = completion(**request_args)  # type: ignore
+            print(f"response: {response}")
+
+            assert response is not None
+
+            # if the provider did not return any tool calls do not make a subsequent llm api call
+            if response.choices[0].message.tool_calls is None:
+                return
+            # Add any assertions here to check the response
+
+            assert isinstance(
+                response.choices[0].message.tool_calls[0].function.name, str
+            )
+            assert isinstance(
+                response.choices[0].message.tool_calls[0].function.arguments, str
+            )
+            messages.append(
+                response.choices[0].message.model_dump()
+            )  # Add assistant tool invokes
+            tool_result = (
+                '{"location": "Boston", "temperature": "72", "unit": "fahrenheit"}'
+            )
+            # Add user submitted tool results in the OpenAI format
+            messages.append(
+                {
+                    "tool_call_id": response.choices[0].message.tool_calls[0].id,
+                    "role": "tool",
+                    "name": response.choices[0].message.tool_calls[0].function.name,
+                    "content": tool_result,
+                }
+            )
+            # In the second response, Claude should deduce answer from tool results
+            request_2_args = {
+                "messages": messages,
+                "tools": tools,
+            }
+            request_2_args.update(self.get_base_completion_call_args())
+            second_response: ModelResponse = completion(**request_2_args)  # type: ignore
+            print(f"second response: {second_response}")
+            assert second_response is not None
+
+            # either content or tool calls should be present
+            assert (
+                second_response.choices[0].message.content is not None
+                or second_response.choices[0].message.tool_calls is not None
+            )
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
+        except litellm.RateLimitError:
+            pass
+        except Exception as e:
+            pytest.fail(f"Error occurred: {e}")
 
     @pytest.mark.asyncio
     async def test_completion_cost(self):

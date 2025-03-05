@@ -38,6 +38,7 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
     RoleBasedPermissions,
+    SpecialModelNames,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -203,9 +204,11 @@ def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
     """
 
     for allowed_route in allowed_routes:
-        if (
-            allowed_route in LiteLLMRoutes.__members__
-            and user_route in LiteLLMRoutes[allowed_route].value
+        if allowed_route in LiteLLMRoutes.__members__ and (
+            RouteChecks.check_route_access(
+                route=user_route,
+                allowed_routes=LiteLLMRoutes[allowed_route].value,
+            )
         ):
             return True
         elif allowed_route == user_route:
@@ -216,16 +219,18 @@ def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
 def allowed_routes_check(
     user_role: Literal[
         LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
         LitellmUserRoles.TEAM,
         LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
     ],
     user_route: str,
     litellm_proxy_roles: LiteLLM_JWTAuth,
+    jwt_valid_token: dict,
 ) -> bool:
     """
     Check if user -> not admin - allowed to access these routes
     """
-
     if user_role == LitellmUserRoles.PROXY_ADMIN:
         is_allowed = _allowed_routes_check(
             user_route=user_route,
@@ -1082,6 +1087,14 @@ async def can_user_call_model(
 
     if user_object is None:
         return True
+
+    if SpecialModelNames.no_default_models.value in user_object.models:
+        raise ProxyException(
+            message=f"User not allowed to access model. No default model access, only team models allowed. Tried to access {model}",
+            type=ProxyErrorTypes.key_model_access_denied,
+            param="model",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
 
     return await _can_object_call_model(
         model=model,

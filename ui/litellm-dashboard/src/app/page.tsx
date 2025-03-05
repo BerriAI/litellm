@@ -4,13 +4,15 @@ import React, { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-
+import { defaultOrg } from "@/components/common_components/default_org";
+import { Team } from "@/components/key_team_helpers/key_list";
 import Navbar from "@/components/navbar";
 import UserDashboard from "@/components/user_dashboard";
 import ModelDashboard from "@/components/model_dashboard";
 import ViewUserDashboard from "@/components/view_users";
 import Teams from "@/components/teams";
 import Organizations from "@/components/organizations";
+import { fetchOrganizations } from "@/components/organizations";
 import AdminPanel from "@/components/admins";
 import Settings from "@/components/settings";
 import GeneralSettings from "@/components/general_settings";
@@ -26,12 +28,9 @@ import CacheDashboard from "@/components/cache_dashboard";
 import { setGlobalLitellmHeaderName } from "@/components/networking";
 import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
-function getCookie(name: string) {
-  const cookieValue = document.cookie
-    .split("; ")
-    .find((row) => row.startsWith(name + "="));
-  return cookieValue ? cookieValue.split("=")[1] : null;
-}
+import { fetchUserModels } from "@/components/create_key_button";
+import { fetchTeams } from "@/components/common_components/fetch_teams";
+import { getUISessionDetails } from "@/utils/cookieUtils";
 
 function formatUserRole(userRole: string) {
   if (!userRole) {
@@ -76,10 +75,10 @@ export default function CreateKeyPage() {
   const [disabledPersonalKeyCreation, setDisabledPersonalKeyCreation] =
     useState(false);
   const [userEmail, setUserEmail] = useState<null | string>(null);
-  const [teams, setTeams] = useState<null | any[]>(null);
+  const [teams, setTeams] = useState<Team[] | null>(null);
   const [keys, setKeys] = useState<null | any[]>(null);
-  const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [userModels, setUserModels] = useState<string[]>([]);
   const [proxySettings, setProxySettings] = useState<ProxySettings>({
     PROXY_BASE_URL: "",
     PROXY_LOGOUT_URL: "",
@@ -113,78 +112,72 @@ export default function CreateKeyPage() {
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
   useEffect(() => {
-    const token = getCookie("token");
-    setToken(token);
-  }, []);
-
-  useEffect(() => {
-    if (!token) {
-      return;
-    }
-
-    const decoded = jwtDecode(token) as { [key: string]: any };
-    if (decoded) {
-      // cast decoded to dictionary
-      console.log("Decoded token:", decoded);
-
-      console.log("Decoded key:", decoded.key);
-      // set accessToken
-      setAccessToken(decoded.key);
-
-      setDisabledPersonalKeyCreation(
-        decoded.disabled_non_admin_personal_key_creation,
-      );
-
-      // check if userRole is defined
-      if (decoded.user_role) {
-        const formattedUserRole = formatUserRole(decoded.user_role);
-        console.log("Decoded user_role:", formattedUserRole);
-        setUserRole(formattedUserRole);
-        if (formattedUserRole == "Admin Viewer") {
-          setPage("usage");
-        }
-      } else {
-        console.log("User role not defined");
-      }
-
-      if (decoded.user_email) {
-        setUserEmail(decoded.user_email);
-      } else {
-        console.log(`User Email is not set ${decoded}`);
-      }
-
-      if (decoded.login_method) {
-        setShowSSOBanner(
-          decoded.login_method == "username_password" ? true : false,
+    const fetchSessionDetails = async () => {
+      try {
+        const sessionDetails = await getUISessionDetails();
+        // sessionDetails is already decoded, no need for jwtDecode
+        console.log("Session details:", sessionDetails);
+        
+        // Set access token to the session_id
+        setAccessToken(sessionDetails.session_id);
+        
+        setDisabledPersonalKeyCreation(
+          sessionDetails.disabled_non_admin_personal_key_creation,
         );
-      } else {
-        console.log(`User Email is not set ${decoded}`);
-      }
-
-      if (decoded.premium_user) {
-        setPremiumUser(decoded.premium_user);
-      }
-
-      if (decoded.auth_header_name) {
-        setGlobalLitellmHeaderName(decoded.auth_header_name);
-      }
-    }
-  }, [token]);
-
-  const handleOrgChange = (org: Organization) => {
-    setCurrentOrg(org);
-    console.log(`org: ${JSON.stringify(org)}`)
-    if (org.members && userRole != "Admin") { // don't change user role if user is admin
-      for (const member of org.members) {
-        console.log(`member: ${JSON.stringify(member)}`)
-        if (member.user_id == userID) {
-          console.log(`member.user_role: ${member.user_role}`)
-          setUserRole(formatUserRole(member.user_role));
+        
+        if (sessionDetails.user_role) {
+          const formattedUserRole = formatUserRole(sessionDetails.user_role);
+          console.log("User role:", formattedUserRole);
+          setUserRole(formattedUserRole);
+          if (formattedUserRole == "Admin Viewer") {
+            setPage("usage");
+          }
+        } else {
+          console.log("User role not defined");
         }
+        
+        if (sessionDetails.user_email) {
+          setUserEmail(sessionDetails.user_email);
+        } else {
+          console.log("User Email is not set");
+        }
+        
+        if (sessionDetails.login_method) {
+          setShowSSOBanner(
+            sessionDetails.login_method == "username_password" ? true : false,
+          );
+        }
+        
+        if (sessionDetails.premium_user) {
+          setPremiumUser(sessionDetails.premium_user);
+        }
+        
+        if (sessionDetails.auth_header_name) {
+          setGlobalLitellmHeaderName(sessionDetails.auth_header_name);
+        }
+        
+        // Store the full session details as token for components that need it
+        setToken(JSON.stringify(sessionDetails));
+      } catch (error) {
+        console.error("Error fetching session details:", error);
       }
+    };
+    
+    fetchSessionDetails();
+  }, []);
+  
+  useEffect(() => {
+    if (accessToken && userID && userRole) {
+      fetchUserModels(userID, userRole, accessToken, setUserModels);
     }
-    setTeams(null);
-  }
+    if (accessToken && userID && userRole) {
+      fetchTeams(accessToken, userID, userRole, null, setTeams);
+    }
+    if (accessToken) {
+      fetchOrganizations(accessToken, setOrganizations);
+    }
+  }, [accessToken, userID, userRole]);
+
 
   return (
     <Suspense fallback={<div>Loading...</div>}>
@@ -201,21 +194,17 @@ export default function CreateKeyPage() {
             setUserEmail={setUserEmail}
             setTeams={setTeams}
             setKeys={setKeys}
-            setOrganizations={setOrganizations}
-            currentOrg={currentOrg}
+            organizations={organizations}
           />
         ) : (
           <div className="flex flex-col min-h-screen">
             <Navbar
               userID={userID}
               userRole={userRole}
-              userEmail={userEmail}
               premiumUser={premiumUser}
+              userEmail={userEmail}
               setProxySettings={setProxySettings}
               proxySettings={proxySettings}
-              currentOrg={currentOrg}
-              organizations={organizations}
-              onOrgChange={handleOrgChange}
             />
             <div className="flex flex-1 overflow-auto">
               <div className="mt-8">
@@ -238,8 +227,7 @@ export default function CreateKeyPage() {
                   setUserEmail={setUserEmail}
                   setTeams={setTeams}
                   setKeys={setKeys}
-                  setOrganizations={setOrganizations}
-                  currentOrg={currentOrg}
+                  organizations={organizations}
                 />
               ) : page == "models" ? (
                 <ModelDashboard
@@ -251,6 +239,7 @@ export default function CreateKeyPage() {
                   modelData={modelData}
                   setModelData={setModelData}
                   premiumUser={premiumUser}
+                  teams={teams}
                 />
               ) : page == "llm-playground" ? (
                 <ChatUI
@@ -278,15 +267,14 @@ export default function CreateKeyPage() {
                   accessToken={accessToken}
                   userID={userID}
                   userRole={userRole}
-                  currentOrg={currentOrg}
+                  organizations={organizations}
                 />
               ) : page == "organizations" ? (
                 <Organizations
-                  teams={teams}
-                  setTeams={setTeams}
-                  searchParams={searchParams}
+                  organizations={organizations}
+                  setOrganizations={setOrganizations}
+                  userModels={userModels}
                   accessToken={accessToken}
-                  userID={userID}
                   userRole={userRole}
                   premiumUser={premiumUser}
                 />
