@@ -94,7 +94,10 @@ def get_logging_payload(  # noqa: PLR0915
     usage = cast(dict, response_obj).get("usage", None) or {}
     if isinstance(usage, litellm.Usage):
         usage = dict(usage)
-    id = cast(dict, response_obj).get("id") or kwargs.get("litellm_call_id")
+    if call_type == "aretrieve_batch":
+        id = kwargs.get("litellm_call_id")
+    else:
+        id = cast(dict, response_obj).get("id") or kwargs.get("litellm_call_id")
     standard_logging_payload = cast(
         Optional[StandardLoggingPayload], kwargs.get("standard_logging_object", None)
     )
