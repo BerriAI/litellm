@@ -413,6 +413,7 @@ anyscale_models: List = []
 cerebras_models: List = []
 galadriel_models: List = []
 sambanova_models: List = []
+nebius_models: List = []
 assemblyai_models: List = []
 
 
@@ -563,6 +564,8 @@ def add_known_models():
             galadriel_models.append(key)
         elif value.get("litellm_provider") == "sambanova_models":
             sambanova_models.append(key)
+        elif value.get("litellm_provider") == "nebius":
+            nebius_models.append(key)
         elif value.get("litellm_provider") == "assemblyai":
             assemblyai_models.append(key)
         elif value.get("litellm_provider") == "jina_ai":
@@ -638,6 +641,7 @@ model_list = (
     + galadriel_models
     + sambanova_models
     + azure_text_models
+    + nebius_models
     + assemblyai_models
     + jina_ai_models
 )
@@ -693,6 +697,7 @@ models_by_provider: dict = {
     "cerebras": cerebras_models,
     "galadriel": galadriel_models,
     "sambanova": sambanova_models,
+    "nebius": nebius_models,
     "assemblyai": assemblyai_models,
     "jina_ai": jina_ai_models,
 }
@@ -980,6 +985,8 @@ from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig
 from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
+from .llms.nebius.chat.transformation import NebiusConfig
+from .llms.nebius.embeddings.transformation import NebiusEmbeddingConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .exceptions import (
