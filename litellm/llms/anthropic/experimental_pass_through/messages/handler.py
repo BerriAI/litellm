@@ -14,43 +14,18 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.anthropic_messages.transformation import (
+    BaseAnthropicMessagesConfig,
+)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.utils import client
-
-DEFAULT_ANTHROPIC_API_BASE = "https://api.anthropic.com"
+from litellm.utils import ProviderConfigManager, client
 
 
-class AnthropicMessagesConfig:
-
-    @staticmethod
-    def get_supported_passthrough_params() -> List[str]:
-        return [
-            "messages",
-            "model",
-            "system",
-            "max_tokens",
-            # "metadata",
-            "stop_sequences",
-            "temperature",
-            "top_p",
-            "top_k",
-            "tools",
-            "tool_choice",
-            "thinking",
-        ]
-
-    @staticmethod
-    def get_complete_url(
-        api_base: Optional[str] = None,
-    ) -> str:
-        api_base = api_base or DEFAULT_ANTHROPIC_API_BASE
-        if not api_base.endswith("/v1/messages"):
-            api_base = f"{api_base}/v1/messages"
-        return api_base
+class AnthropicMessagesHandler:
 
     @staticmethod
     async def _handle_anthropic_streaming(
@@ -106,6 +81,16 @@ async def anthropic_messages(
             api_key=optional_params.api_key,
         )
     )
+    anthropic_messages_provider_config: Optional[BaseAnthropicMessagesConfig] = (
+        ProviderConfigManager.get_provider_anthropic_messages_config(
+            model=model,
+            provider=litellm.LlmProviders(_custom_llm_provider),
+        )
+    )
+    if anthropic_messages_provider_config is None:
+        raise ValueError(
+            f"Anthropic messages provider config not found for model: {model}"
+        )
 
     if client is None:
         async_httpx_client = get_async_httpx_client(
@@ -117,18 +102,20 @@ async def anthropic_messages(
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj", None)
 
     # Prepare headers
-    headers = {
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
-
+    headers = anthropic_messages_provider_config.validate_environment(
+        headers={},
+        model=model,
+        api_key=api_key,
+    )
     # Prepare request body
     request_body = kwargs.copy()
     request_body = {
         k: v
         for k, v in request_body.items()
-        if k in AnthropicMessagesConfig.get_supported_passthrough_params()
+        if k
+        in anthropic_messages_provider_config.get_supported_anthropic_messages_params(
+            model=model
+        )
     }
     request_body["stream"] = stream
     request_body["model"] = model
@@ -141,7 +128,9 @@ async def anthropic_messages(
 
     # Make the request
     response = await async_httpx_client.post(
-        url=AnthropicMessagesConfig.get_complete_url(api_base=api_base),
+        url=anthropic_messages_provider_config.get_complete_url(
+            api_base=api_base, model=model
+        ),
         headers=headers,
         data=json.dumps(request_body),
         timeout=600,
@@ -153,7 +142,7 @@ async def anthropic_messages(
     litellm_logging_obj.model_call_details["httpx_response"] = response
 
     if stream:
-        return await AnthropicMessagesConfig._handle_anthropic_streaming(
+        return await AnthropicMessagesHandler._handle_anthropic_streaming(
             response=response,
             request_body=request_body,
             litellm_logging_obj=litellm_logging_obj,
