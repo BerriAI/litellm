@@ -1,6 +1,6 @@
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi.requests import Request
 from fastapi.responses import RedirectResponse
@@ -58,6 +58,7 @@ class UISessionHandler:
         user_role: LitellmUserRoles,
         premium_user: bool,
         disabled_non_admin_personal_key_creation: bool,
+        login_method: Literal["username_password", "sso"],
     ) -> str:
         """
         Build a JWT token for the authenticated UI session
@@ -76,7 +77,7 @@ class UISessionHandler:
             "user_id": user_id,
             "user_email": None,
             "user_role": user_role,  # this is the path without sso - we can assume only admins will use this
-            "login_method": "username_password",
+            "login_method": login_method,
             "premium_user": premium_user,
             "auth_header_name": general_settings.get(
                 "litellm_key_header_name", "Authorization"
