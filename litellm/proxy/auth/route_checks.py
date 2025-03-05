@@ -1,5 +1,5 @@
 import re
-from typing import List, Optional
+from typing import List, Optional, Set, Union
 
 from fastapi import HTTPException, Request, status
 
@@ -225,7 +225,9 @@ class RouteChecks:
         return False
 
     @staticmethod
-    def check_route_access(route: str, allowed_routes: List[str]) -> bool:
+    def check_route_access(
+        route: str, allowed_routes: Union[List[str], Set[str]]
+    ) -> bool:
         """
         Check if a route has access by checking both exact matches and patterns
 

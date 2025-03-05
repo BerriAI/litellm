@@ -205,9 +205,11 @@ def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
     """
 
     for allowed_route in allowed_routes:
-        if (
-            allowed_route in LiteLLMRoutes.__members__
-            and user_route in LiteLLMRoutes[allowed_route].value
+        if allowed_route in LiteLLMRoutes.__members__ and (
+            RouteChecks.check_route_access(
+                route=user_route,
+                allowed_routes=LiteLLMRoutes[allowed_route].value,
+            )
         ):
             return True
         elif allowed_route == user_route:
