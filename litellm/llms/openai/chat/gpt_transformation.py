@@ -20,7 +20,11 @@ from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionImageObject,
+    ChatCompletionImageUrlObject,
+)
 from litellm.types.utils import ModelResponse, ModelResponseStream
 from litellm.utils import convert_to_model_response_object
 
@@ -189,6 +193,17 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                             content_item["image_url"] = {
                                 "url": content_item["image_url"],
                             }
+                        elif isinstance(content_item["image_url"], dict):
+                            litellm_specific_params = set(
+                                "format"
+                            )  # litellm-specific param, don't send to openai.
+                            content_item["image_url"] = ChatCompletionImageUrlObject(
+                                **{  # type: ignore
+                                    k: v
+                                    for k, v in content_item["image_url"].items()
+                                    if k in litellm_specific_params
+                                }
+                            )
         return messages
 
     def transform_request(
