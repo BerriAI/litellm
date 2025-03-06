@@ -6,7 +6,6 @@
 """
 
 import json
-from datetime import datetime
 from typing import Any, AsyncIterator, Dict, Optional, Union, cast
 
 import httpx
@@ -34,6 +33,8 @@ class AnthropicMessagesHandler:
         litellm_logging_obj: LiteLLMLoggingObj,
     ) -> AsyncIterator:
         """Helper function to handle Anthropic streaming responses using the existing logging handlers"""
+        from datetime import datetime
+
         from litellm.proxy.pass_through_endpoints.streaming_handler import (
             PassThroughStreamingHandler,
         )

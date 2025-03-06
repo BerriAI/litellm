@@ -4,7 +4,7 @@ import secrets
 from datetime import datetime
 from datetime import datetime as dt
 from datetime import timezone
-from typing import Any, List, Optional, cast
+from typing import Any, Dict, List, Optional, cast
 
 from pydantic import BaseModel
 
@@ -122,7 +122,7 @@ def get_logging_payload(  # noqa: PLR0915
         response_obj = {}
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
     litellm_params = kwargs.get("litellm_params", {})
-    metadata = dict(standard_logging_payload.get("metadata", {})) or {}
+    metadata: Dict[str, Any] = dict(standard_logging_payload.get("metadata", {})) or {}
     metadata = _add_proxy_server_request_to_metadata(
         metadata=metadata, litellm_params=litellm_params
     )
