@@ -800,9 +800,6 @@ from .llms.oobabooga.chat.transformation import OobaboogaConfig
 from .llms.maritalk import MaritalkConfig
 from .llms.openrouter.chat.transformation import OpenrouterConfig
 from .llms.anthropic.chat.transformation import AnthropicConfig
-from .llms.anthropic.experimental_pass_through.transformation import (
-    AnthropicExperimentalPassThroughConfig,
-)
 from .llms.groq.stt.transformation import GroqSTTConfig
 from .llms.anthropic.completion.transformation import AnthropicTextConfig
 from .llms.triton.completion.transformation import TritonConfig
