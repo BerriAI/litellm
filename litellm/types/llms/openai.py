@@ -360,7 +360,7 @@ class ChatCompletionCachedContent(TypedDict):
 class ChatCompletionThinkingBlock(TypedDict, total=False):
     type: Required[Literal["thinking"]]
     thinking: str
-    signature_delta: str
+    signature: str
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
@@ -378,6 +378,7 @@ class ChatCompletionTextObject(
 class ChatCompletionImageUrlObject(TypedDict, total=False):
     url: Required[str]
     detail: str
+    format: str
 
 
 class ChatCompletionImageObject(TypedDict):
