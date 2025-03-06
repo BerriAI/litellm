@@ -91,8 +91,7 @@ async def anthropic_messages(
         raise ValueError(
             f"Anthropic messages provider config not found for model: {model}"
         )
-
-    if client is None:
+    if client is None or not isinstance(client, AsyncHTTPHandler):
         async_httpx_client = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.ANTHROPIC
         )

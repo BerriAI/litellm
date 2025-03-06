@@ -4,6 +4,8 @@ import sys
 from datetime import datetime
 from typing import AsyncIterator, Dict, Any
 import asyncio
+import unittest.mock
+from unittest.mock import AsyncMock, MagicMock
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -381,3 +383,70 @@ async def test_anthropic_messages_litellm_router_streaming_with_logging():
         test_custom_logger.logged_standard_logging_payload["completion_tokens"]
         == response_completion_tokens
     )
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_with_extra_headers():
+    """
+    Test the anthropic_messages with extra headers
+    """
+    # Get API key from environment
+    api_key = os.getenv("ANTHROPIC_API_KEY", "fake-api-key")
+
+    # Set up test parameters
+    messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
+    extra_headers = {
+        "anthropic-beta": "very-custom-beta-value",
+        "anthropic-version": "custom-version-for-test",
+    }
+
+    # Create a mock response
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "id": "msg_123456",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+            {
+                "type": "text",
+                "text": "Why did the chicken cross the road? To get to the other side!",
+            }
+        ],
+        "model": "claude-3-haiku-20240307",
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+    }
+
+    # Create a mock client with AsyncMock for the post method
+    mock_client = MagicMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    # Call the handler with extra_headers and our mocked client
+    response = await anthropic_messages(
+        messages=messages,
+        api_key=api_key,
+        model="claude-3-haiku-20240307",
+        max_tokens=100,
+        client=mock_client,
+        provider_specific_header={
+            "custom_llm_provider": "anthropic",
+            "extra_headers": extra_headers,
+        },
+    )
+
+    # Verify the post method was called with the right parameters
+    mock_client.post.assert_called_once()
+    call_kwargs = mock_client.post.call_args.kwargs
+
+    # Verify headers were passed correctly
+    headers = call_kwargs.get("headers", {})
+    print("HEADERS IN REQUEST", headers)
+    for key, value in extra_headers.items():
+        assert key in headers
+        assert headers[key] == value
+
+    # Verify the response was processed correctly
+    assert response == mock_response.json.return_value
+
+    return response
