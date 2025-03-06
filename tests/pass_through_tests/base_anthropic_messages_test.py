@@ -9,13 +9,14 @@ class BaseAnthropicMessagesTest(ABC):
     Abstract base test class that enforces a common test across all test classes.
     """
 
-    @property
-    def client(self):
+    @abstractmethod
+    def get_client(self):
         return anthropic.Anthropic()
 
     def test_anthropic_basic_completion(self):
         print("making basic completion request to anthropic passthrough")
-        response = self.client.messages.create(
+        client = self.get_client()
+        response = client.messages.create(
             model="claude-3-5-sonnet-20241022",
             max_tokens=1024,
             messages=[{"role": "user", "content": "Say 'hello test' and nothing else"}],
@@ -30,8 +31,8 @@ class BaseAnthropicMessagesTest(ABC):
     def test_anthropic_streaming(self):
         print("making streaming request to anthropic passthrough")
         collected_output = []
-
-        with self.client.messages.stream(
+        client = self.get_client()
+        with client.messages.stream(
             max_tokens=10,
             messages=[
                 {"role": "user", "content": "Say 'hello stream test' and nothing else"}
@@ -51,7 +52,8 @@ class BaseAnthropicMessagesTest(ABC):
 
     def test_anthropic_messages_with_thinking(self):
         print("making request to anthropic passthrough with thinking")
-        response = self.client.messages.create(
+        client = self.get_client()
+        response = client.messages.create(
             model="claude-3-7-sonnet-20250219",
             max_tokens=20000,
             thinking={"type": "enabled", "budget_tokens": 16000},
@@ -71,8 +73,8 @@ class BaseAnthropicMessagesTest(ABC):
         print("making streaming request to anthropic passthrough with thinking enabled")
         collected_thinking = []
         collected_response = []
-
-        with self.client.messages.stream(
+        client = self.get_client()
+        with client.messages.stream(
             model="claude-3-7-sonnet-20250219",
             max_tokens=20000,
             thinking={"type": "enabled", "budget_tokens": 16000},
@@ -106,7 +108,8 @@ class BaseAnthropicMessagesTest(ABC):
     def test_bad_request_error_handling_streaming(self):
         print("making request to anthropic passthrough with bad request")
         try:
-            response = self.client.messages.create(
+            client = self.get_client()
+            response = client.messages.create(
                 model="claude-3-5-sonnet-20241022",
                 max_tokens=10,
                 stream=True,
@@ -125,7 +128,8 @@ class BaseAnthropicMessagesTest(ABC):
     def test_bad_request_error_handling_non_streaming(self):
         print("making request to anthropic passthrough with bad request")
         try:
-            response = self.client.messages.create(
+            client = self.get_client()
+            response = client.messages.create(
                 model="claude-3-5-sonnet-20241022",
                 max_tokens=10,
                 messages=["hi"],
