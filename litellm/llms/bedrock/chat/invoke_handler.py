@@ -1260,6 +1260,9 @@ class AWSEventStreamDecoder:
         _thinking_block = ChatCompletionThinkingBlock(type="thinking")
         if "text" in thinking_block:
             _thinking_block["thinking"] = thinking_block["text"]
+        elif "signature" in thinking_block:
+            _thinking_block["signature"] = thinking_block["signature"]
+            _thinking_block["thinking"] = ""  # consistent with anthropic response
         thinking_blocks_list.append(_thinking_block)
         return thinking_blocks_list
 
@@ -1322,6 +1325,12 @@ class AWSEventStreamDecoder:
                     thinking_blocks = self.translate_thinking_blocks(
                         delta_obj["reasoningContent"]
                     )
+                    if (
+                        thinking_blocks
+                        and len(thinking_blocks) > 0
+                        and reasoning_content is None
+                    ):
+                        reasoning_content = ""  # set to non-empty string to ensure consistency with Anthropic
             elif (
                 "contentBlockIndex" in chunk_data
             ):  # stop block, no 'start' or 'delta' object
