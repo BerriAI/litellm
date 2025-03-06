@@ -29,7 +29,6 @@ from litellm import (
     AnthropicConfig,
     Router,
     adapter_completion,
-    AnthropicExperimentalPassThroughConfig,
 )
 from litellm.adapters.anthropic_adapter import anthropic_adapter
 from litellm.types.llms.anthropic import AnthropicResponse
