@@ -584,14 +584,6 @@ class Delta(OpenAIObject):
         super(Delta, self).__init__(**params)
         add_provider_specific_fields(self, params.get("provider_specific_fields", {}))
         self.content = content
-
-        if litellm.merge_reasoning_content_in_choices:
-            self.content = (
-                (self.content or "") + f"<thinking>{reasoning_content}</thinking>"
-                if reasoning_content
-                else self.content
-            )
-
         self.role = role
         # Set default values and correct types
         self.function_call: Optional[Union[FunctionCall, Any]] = None

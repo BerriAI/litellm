@@ -955,7 +955,7 @@ class CustomStreamWrapper:
             if reasoning_content:
                 if self.sent_first_thinking_block is False:
                     self.thinking_content += (
-                        model_response.choices[0].delta.content or ""
+                        model_response.choices[0].delta.content or "<thinking>"
                     ) + f"{model_response.choices[0].delta.reasoning_content}"
                     self.sent_first_thinking_block = True
                     return None
@@ -973,8 +973,8 @@ class CustomStreamWrapper:
                 and not self.sent_last_thinking_block
                 and model_response.choices[0].delta.content
             ):
-                self.thinking_content += ""
-                model_response.choices[0].delta.content = self.thinking_content
+                self.thinking_content += "</thinking>"
+                model_response.choices[0].delta.content += self.thinking_content
                 self.sent_last_thinking_block = True
 
         return model_response
