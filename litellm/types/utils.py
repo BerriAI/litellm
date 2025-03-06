@@ -21,6 +21,8 @@ from openai.types.moderation_create_response import Moderation, ModerationCreate
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
+import litellm
+
 from ..litellm_core_utils.core_helpers import map_finish_reason
 from .guardrails import GuardrailEventHooks
 from .llms.openai import (
@@ -582,6 +584,14 @@ class Delta(OpenAIObject):
         super(Delta, self).__init__(**params)
         add_provider_specific_fields(self, params.get("provider_specific_fields", {}))
         self.content = content
+
+        if litellm.merge_reasoning_content_in_choices:
+            self.content = (
+                (self.content or "") + f"<thinking>{reasoning_content}</thinking>"
+                if reasoning_content
+                else self.content
+            )
+
         self.role = role
         # Set default values and correct types
         self.function_call: Optional[Union[FunctionCall, Any]] = None

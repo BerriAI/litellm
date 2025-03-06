@@ -282,6 +282,7 @@ priority_reservation: Optional[Dict[str, float]] = None
 force_ipv4: bool = (
     False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 )
+merge_reasoning_content_in_choices: bool = True
 module_level_aclient = AsyncHTTPHandler(
     timeout=request_timeout, client_alias="module level aclient"
 )
