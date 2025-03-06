@@ -4084,7 +4084,6 @@ def test_reasoning_content_completion(model):
         )
 
         reasoning_content_exists = False
-        signature_delta_exists = False
         for chunk in resp:
             print(f"chunk 2: {chunk}")
             if (
@@ -4119,4 +4118,3 @@ def test_is_delta_empty():
             audio=None,
         )
     )
-
