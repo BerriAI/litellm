@@ -66,13 +66,16 @@ def _process_gemini_image(image_url: str, format: Optional[str] = None) -> PartT
             extension_with_dot = os.path.splitext(image_url)[-1]  # Ex: ".png"
             extension = extension_with_dot[1:]  # Ex: "png"
 
-            file_type = get_file_type_from_extension(extension)
+            if not format:
+                file_type = get_file_type_from_extension(extension)
 
-            # Validate the file type is supported by Gemini
-            if not is_gemini_1_5_accepted_file_type(file_type):
-                raise Exception(f"File type not supported by gemini - {file_type}")
+                # Validate the file type is supported by Gemini
+                if not is_gemini_1_5_accepted_file_type(file_type):
+                    raise Exception(f"File type not supported by gemini - {file_type}")
 
-            mime_type = format or get_file_mime_type_for_file_type(file_type)
+                mime_type = get_file_mime_type_for_file_type(file_type)
+            else:
+                mime_type = format
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
 
             return PartType(file_data=file_data)
