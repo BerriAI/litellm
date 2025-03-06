@@ -90,14 +90,11 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             response.raise_for_status()
             return response.json()["SecretString"]
         except httpx.TimeoutException:
-            raise ValueError("Timeout error occurred")
+            raise ValueError(f"Timeout error occurred for secret name={secret_name}")
         except Exception as e:
-            verbose_logger.exception(
-                "Error reading secret name=%s from AWS Secrets Manager: %s",
-                secret_name,
-                str(e),
+            raise ValueError(
+                f"Error reading secret name={secret_name} from AWS Secrets Manager: {str(e)}"
             )
-        return None
 
     def sync_read_secret(
         self,
@@ -137,20 +134,11 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             )
             return response.json()["SecretString"]
         except httpx.TimeoutException:
-            raise ValueError("Timeout error occurred")
-        except httpx.HTTPStatusError as e:
-            verbose_logger.exception(
-                "Error reading secret name=%s from AWS Secrets Manager: %s",
-                secret_name,
-                str(e.response.text),
-            )
+            raise ValueError(f"Timeout error occurred for secret name={secret_name}")
         except Exception as e:
-            verbose_logger.exception(
-                "Error reading secret name=%s from AWS Secrets Manager: %s",
-                secret_name,
-                str(e),
+            raise ValueError(
+                f"Error reading secret name={secret_name} from AWS Secrets Manager: {str(e)}"
             )
-        return None
 
     async def async_write_secret(
         self,
