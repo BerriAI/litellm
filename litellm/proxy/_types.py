@@ -1963,7 +1963,7 @@ class ProxyException(Exception):
         code: Optional[Union[int, str]] = None,
         headers: Optional[Dict[str, str]] = None,
     ):
-        self.message = message
+        self.message = str(message)
         self.type = type
         self.param = param
 
