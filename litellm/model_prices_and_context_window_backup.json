@@ -6044,7 +6044,7 @@
         "mode": "chat",
         "supports_tool_choice": true
     },
-    "jamba-1.6-large": {
+    "jamba-large-1.6": {
         "max_tokens": 256000,
         "max_input_tokens": 256000,
         "max_output_tokens": 256000,
@@ -6054,7 +6054,7 @@
         "mode": "chat",
         "supports_tool_choice": true
     },
-    "jamba-1.6-mini": {
+    "jamba-mini-1.6": {
         "max_tokens": 256000,
         "max_input_tokens": 256000,
         "max_output_tokens": 256000,
