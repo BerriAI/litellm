@@ -680,12 +680,13 @@ def convert_generic_image_chunk_to_openai_image_obj(
     Return:
     "data:image/jpeg;base64,{base64_image}"
     """
-    return "data:{};{},{}".format(
-        image_chunk["media_type"], image_chunk["type"], image_chunk["data"]
-    )
+    media_type = image_chunk["media_type"]
+    return "data:{};{},{}".format(media_type, image_chunk["type"], image_chunk["data"])
 
 
-def convert_to_anthropic_image_obj(openai_image_url: str) -> GenericImageParsingChunk:
+def convert_to_anthropic_image_obj(
+    openai_image_url: str, format: Optional[str]
+) -> GenericImageParsingChunk:
     """
     Input:
     "image_url": "data:image/jpeg;base64,{base64_image}",
@@ -702,7 +703,11 @@ def convert_to_anthropic_image_obj(openai_image_url: str) -> GenericImageParsing
             openai_image_url = convert_url_to_base64(url=openai_image_url)
         # Extract the media type and base64 data
         media_type, base64_data = openai_image_url.split("data:")[1].split(";base64,")
-        media_type = media_type.replace("\\/", "/")
+
+        if format:
+            media_type = format
+        else:
+            media_type = media_type.replace("\\/", "/")
 
         return GenericImageParsingChunk(
             type="base64",
@@ -820,11 +825,12 @@ def anthropic_messages_pt_xml(messages: list):
             if isinstance(messages[msg_i]["content"], list):
                 for m in messages[msg_i]["content"]:
                     if m.get("type", "") == "image_url":
+                        format = m["image_url"].get("format")
                         user_content.append(
                             {
                                 "type": "image",
                                 "source": convert_to_anthropic_image_obj(
-                                    m["image_url"]["url"]
+                                    m["image_url"]["url"], format=format
                                 ),
                             }
                         )
@@ -1156,10 +1162,13 @@ def convert_to_anthropic_tool_result(
                 )
             elif content["type"] == "image_url":
                 if isinstance(content["image_url"], str):
-                    image_chunk = convert_to_anthropic_image_obj(content["image_url"])
-                else:
                     image_chunk = convert_to_anthropic_image_obj(
-                        content["image_url"]["url"]
+                        content["image_url"], format=None
+                    )
+                else:
+                    format = content["image_url"].get("format")
+                    image_chunk = convert_to_anthropic_image_obj(
+                        content["image_url"]["url"], format=format
                     )
                 anthropic_content_list.append(
                     AnthropicMessagesImageParam(
@@ -1318,6 +1327,7 @@ def _anthropic_content_element_factory(
                 data=image_chunk["data"],
             ),
         )
+
     return _anthropic_content_element
 
 
@@ -1369,13 +1379,16 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     for m in user_message_types_block["content"]:
                         if m.get("type", "") == "image_url":
                             m = cast(ChatCompletionImageObject, m)
+                            format: Optional[str] = None
                             if isinstance(m["image_url"], str):
                                 image_chunk = convert_to_anthropic_image_obj(
-                                    openai_image_url=m["image_url"]
+                                    openai_image_url=m["image_url"], format=None
                                 )
                             else:
+                                format = m["image_url"].get("format")
                                 image_chunk = convert_to_anthropic_image_obj(
-                                    openai_image_url=m["image_url"]["url"]
+                                    openai_image_url=m["image_url"]["url"],
+                                    format=format,
                                 )
 
                             _anthropic_content_element = (
@@ -2303,8 +2316,11 @@ class BedrockImageProcessor:
             )
 
     @classmethod
-    def process_image_sync(cls, image_url: str) -> BedrockContentBlock:
+    def process_image_sync(
+        cls, image_url: str, format: Optional[str] = None
+    ) -> BedrockContentBlock:
         """Synchronous image processing."""
+
         if "base64" in image_url:
             img_bytes, mime_type, image_format = cls._parse_base64_image(image_url)
         elif "http://" in image_url or "https://" in image_url:
@@ -2315,11 +2331,17 @@ class BedrockImageProcessor:
                 "Unsupported image type. Expected either image url or base64 encoded string"
             )
 
+        if format:
+            mime_type = format
+            image_format = mime_type.split("/")[1]
+
         image_format = cls._validate_format(mime_type, image_format)
         return cls._create_bedrock_block(img_bytes, mime_type, image_format)
 
     @classmethod
-    async def process_image_async(cls, image_url: str) -> BedrockContentBlock:
+    async def process_image_async(
+        cls, image_url: str, format: Optional[str]
+    ) -> BedrockContentBlock:
         """Asynchronous image processing."""
 
         if "base64" in image_url:
@@ -2333,6 +2355,10 @@ class BedrockImageProcessor:
             raise ValueError(
                 "Unsupported image type. Expected either image url or base64 encoded string"
             )
+
+        if format:  # override with user-defined params
+            mime_type = format
+            image_format = mime_type.split("/")[1]
 
         image_format = cls._validate_format(mime_type, image_format)
         return cls._create_bedrock_block(img_bytes, mime_type, image_format)
@@ -2821,12 +2847,14 @@ class BedrockConverseMessagesProcessor:
                                 _part = BedrockContentBlock(text=element["text"])
                                 _parts.append(_part)
                             elif element["type"] == "image_url":
+                                format: Optional[str] = None
                                 if isinstance(element["image_url"], dict):
                                     image_url = element["image_url"]["url"]
+                                    format = element["image_url"].get("format")
                                 else:
                                     image_url = element["image_url"]
                                 _part = await BedrockImageProcessor.process_image_async(  # type: ignore
-                                    image_url=image_url
+                                    image_url=image_url, format=format
                                 )
                                 _parts.append(_part)  # type: ignore
                             _cache_point_block = (
@@ -3059,12 +3087,15 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             _part = BedrockContentBlock(text=element["text"])
                             _parts.append(_part)
                         elif element["type"] == "image_url":
+                            format: Optional[str] = None
                             if isinstance(element["image_url"], dict):
                                 image_url = element["image_url"]["url"]
+                                format = element["image_url"].get("format")
                             else:
                                 image_url = element["image_url"]
                             _part = BedrockImageProcessor.process_image_sync(  # type: ignore
-                                image_url=image_url
+                                image_url=image_url,
+                                format=format,
                             )
                             _parts.append(_part)  # type: ignore
                         _cache_point_block = (

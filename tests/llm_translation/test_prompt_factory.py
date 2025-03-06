@@ -201,7 +201,7 @@ def test_convert_url_to_img():
     ],
 )
 def test_base64_image_input(url, expected_media_type):
-    response = convert_to_anthropic_image_obj(openai_image_url=url)
+    response = convert_to_anthropic_image_obj(openai_image_url=url, format=None)
 
     assert response["media_type"] == expected_media_type
 
@@ -682,9 +682,9 @@ def test_convert_generic_image_chunk_to_openai_image_obj():
     )
 
     url = "https://i.pinimg.com/736x/b4/b1/be/b4b1becad04d03a9071db2817fc9fe77.jpg"
-    image_obj = convert_to_anthropic_image_obj(url)
+    image_obj = convert_to_anthropic_image_obj(url, format=None)
     url_str = convert_generic_image_chunk_to_openai_image_obj(image_obj)
-    image_obj = convert_to_anthropic_image_obj(url_str)
+    image_obj = convert_to_anthropic_image_obj(url_str, format=None)
     print(image_obj)
 
 
