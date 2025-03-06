@@ -1188,6 +1188,8 @@ def test_anthropic_thinking_output(model):
     assert isinstance(resp.choices[0].message.thinking_blocks, list)
     assert len(resp.choices[0].message.thinking_blocks) > 0
 
+    assert resp.choices[0].message.thinking_blocks[0]["signature"] is not None
+
 
 @pytest.mark.parametrize(
     "model",
@@ -1222,7 +1224,7 @@ def test_anthropic_thinking_output_stream(model):
             ):
                 reasoning_content_exists = True
                 print(chunk.choices[0].delta.thinking_blocks[0])
-                if chunk.choices[0].delta.thinking_blocks[0].get("signature_delta"):
+                if chunk.choices[0].delta.thinking_blocks[0].get("signature"):
                     signature_block_exists = True
         assert reasoning_content_exists
         assert signature_block_exists

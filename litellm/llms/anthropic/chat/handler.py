@@ -551,7 +551,7 @@ class ModelResponseIterator:
                 ChatCompletionThinkingBlock(
                     type="thinking",
                     thinking=content_block["delta"].get("thinking") or "",
-                    signature_delta=content_block["delta"].get("signature"),
+                    signature=content_block["delta"].get("signature"),
                 )
             ]
             provider_specific_fields["thinking_blocks"] = thinking_blocks
