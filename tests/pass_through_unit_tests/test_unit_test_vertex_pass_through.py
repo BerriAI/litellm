@@ -54,7 +54,7 @@ async def test_get_litellm_virtual_key():
 
 
 @pytest.mark.asyncio
-async def test_vertex_proxy_route_api_key_auth():
+async def test_async_vertex_proxy_route_api_key_auth():
     """
     Critical
 
@@ -124,13 +124,13 @@ async def test_set_default_vertex_config():
     os.environ["DEFAULT_VERTEXAI_LOCATION"] = "env-location"
     os.environ["DEFAULT_GOOGLE_APPLICATION_CREDENTIALS"] = "env-creds"
     os.environ["GOOGLE_CREDS"] = "secret-creds"
+    from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
+        default_vertex_config,
+    )
 
     try:
         # Test with None config
         set_default_vertex_config()
-        from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
-            default_vertex_config,
-        )
 
         assert default_vertex_config.vertex_project == "env-project"
         assert default_vertex_config.vertex_location == "env-location"
@@ -170,6 +170,7 @@ async def test_set_default_vertex_config():
         del os.environ["DEFAULT_VERTEXAI_LOCATION"]
         del os.environ["DEFAULT_GOOGLE_APPLICATION_CREDENTIALS"]
         del os.environ["GOOGLE_CREDS"]
+        default_vertex_config = None
 
 
 @pytest.mark.asyncio
