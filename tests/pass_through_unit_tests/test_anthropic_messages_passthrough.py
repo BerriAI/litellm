@@ -92,6 +92,61 @@ async def test_anthropic_messages_streaming():
 
 
 @pytest.mark.asyncio
+async def test_anthropic_messages_streaming_with_bad_request():
+    """
+    Test the anthropic_messages with streaming request
+    """
+    try:
+        response = await anthropic_messages(
+            messages=["hi"],
+            api_key=os.getenv("ANTHROPIC_API_KEY"),
+            model="claude-3-haiku-20240307",
+            max_tokens=100,
+            stream=True,
+        )
+        print(response)
+        async for chunk in response:
+            print("chunk=", chunk)
+    except Exception as e:
+        print("got exception", e)
+        print("vars", vars(e))
+        assert e.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_router_streaming_with_bad_request():
+    """
+    Test the anthropic_messages with streaming request
+    """
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "claude-special-alias",
+                    "litellm_params": {
+                        "model": "claude-3-haiku-20240307",
+                        "api_key": os.getenv("ANTHROPIC_API_KEY"),
+                    },
+                }
+            ]
+        )
+
+        response = await router.aanthropic_messages(
+            messages=["hi"],
+            model="claude-special-alias",
+            max_tokens=100,
+            stream=True,
+        )
+        print(response)
+        async for chunk in response:
+            print("chunk=", chunk)
+    except Exception as e:
+        print("got exception", e)
+        print("vars", vars(e))
+        assert e.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_anthropic_messages_litellm_router_non_streaming():
     """
     Test the anthropic_messages with non-streaming request
