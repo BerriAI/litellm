@@ -5,6 +5,7 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 )
 
 DEFAULT_ANTHROPIC_API_BASE = "https://api.anthropic.com"
+DEFAULT_ANTHROPIC_API_VERSION = "2023-06-01"
 
 
 class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
@@ -37,8 +38,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         model: str,
         api_key: Optional[str] = None,
     ) -> dict:
-        return {
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        }
+        if "x-api-key" not in headers:
+            headers["x-api-key"] = api_key
+        if "anthropic-version" not in headers:
+            headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION
+        if "content-type" not in headers:
+            headers["content-type"] = "application/json"
+        return headers

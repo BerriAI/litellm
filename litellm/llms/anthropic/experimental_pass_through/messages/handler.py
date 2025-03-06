@@ -7,12 +7,11 @@
 
 import json
 from datetime import datetime
-from typing import Any, AsyncIterator, Dict, List, Optional, Union
+from typing import Any, AsyncIterator, Dict, Optional, Union, cast
 
 import httpx
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -22,6 +21,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import ProviderSpecificHeader
 from litellm.utils import ProviderConfigManager, client
 
 
@@ -102,8 +102,16 @@ async def anthropic_messages(
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj", None)
 
     # Prepare headers
+    provider_specific_header = cast(
+        Optional[ProviderSpecificHeader], kwargs.get("provider_specific_header", None)
+    )
+    extra_headers = (
+        provider_specific_header.get("extra_headers", {})
+        if provider_specific_header
+        else {}
+    )
     headers = anthropic_messages_provider_config.validate_environment(
-        headers={},
+        headers=extra_headers or {},
         model=model,
         api_key=api_key,
     )
