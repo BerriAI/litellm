@@ -201,7 +201,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                                 **{  # type: ignore
                                     k: v
                                     for k, v in content_item["image_url"].items()
-                                    if k in litellm_specific_params
+                                    if k not in litellm_specific_params
                                 }
                             )
         return messages
