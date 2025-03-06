@@ -933,11 +933,8 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["end_time"] = end_time
             self.model_call_details["cache_hit"] = cache_hit
 
-            if (
-                self.call_type == CallTypes.anthropic_messages.value
-                and self.stream != True
-            ):
-                result = self._handle_anthropic_messages_response_logging()
+            if self.call_type == CallTypes.anthropic_messages.value:
+                result = self._handle_anthropic_messages_response_logging(result=result)
             ## if model in model cost map - log the response cost
             ## else set cost to None
             if (
@@ -2310,12 +2307,23 @@ class Logging(LiteLLMLoggingBaseClass):
             return complete_streaming_response
         return None
 
-    def _handle_anthropic_messages_response_logging(self) -> ModelResponse:
-        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
-            AnthropicPassthroughLoggingHandler,
-        )
+    def _handle_anthropic_messages_response_logging(self, result: Any) -> ModelResponse:
+        """
+        Handles logging for Anthropic messages responses.
 
-        result: ModelResponse = litellm.AnthropicConfig().transform_response(
+        Args:
+            result: The response object from the model call
+
+        Returns:
+            The the response object from the model call
+
+        - For Non-streaming responses, we need to transform the response to a ModelResponse object.
+        - For streaming responses, anthropic_messages handler calls success_handler with a assembled ModelResponse.
+        """
+        if self.stream and isinstance(result, ModelResponse):
+            return result
+
+        result = litellm.AnthropicConfig().transform_response(
             raw_response=self.model_call_details["httpx_response"],
             model_response=litellm.ModelResponse(),
             model=self.model,
