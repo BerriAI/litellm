@@ -114,6 +114,7 @@ from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.proxy._types import *
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
@@ -178,7 +179,7 @@ from litellm.proxy.hooks.prompt_injection_detection import (
     _OPTIONAL_PromptInjectionDetection,
 )
 from litellm.proxy.hooks.proxy_failure_handler import _PROXY_failure_handler
-from litellm.proxy.hooks.proxy_track_cost_callback import _PROXY_track_cost_callback
+from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     router as budget_management_router,
@@ -937,10 +938,7 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
 def cost_tracking():
     global prisma_client
     if prisma_client is not None:
-        if isinstance(litellm._async_success_callback, list):
-            verbose_proxy_logger.debug("setting litellm success callback to track cost")
-            if (_PROXY_track_cost_callback) not in litellm._async_success_callback:  # type: ignore
-                litellm.logging_callback_manager.add_litellm_async_success_callback(_PROXY_track_cost_callback)  # type: ignore
+        litellm.logging_callback_manager.add_litellm_callback(_ProxyDBLogger())
 
 
 def error_tracking():
@@ -957,6 +955,9 @@ def _set_spend_logs_payload(
     prisma_client: PrismaClient,
     spend_logs_url: Optional[str] = None,
 ):
+    verbose_proxy_logger.info(
+        "Writing spend log to db - request_id: {}".format(payload.get("request_id"))
+    )
     if prisma_client is not None and spend_logs_url is not None:
         if isinstance(payload["startTime"], datetime):
             payload["startTime"] = payload["startTime"].isoformat()
@@ -1058,7 +1059,6 @@ async def update_database(  # noqa: PLR0915
                         start_time=start_time,
                         end_time=end_time,
                     )
-
                     payload["spend"] = response_cost
                     prisma_client = _set_spend_logs_payload(
                         payload=payload,
@@ -1655,10 +1655,6 @@ class ProxyConfig:
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
 
-            ## INIT ROUTER REDIS CACHE ##
-            if llm_router is not None:
-                llm_router._update_redis_cache(cache=redis_usage_cache)
-
     async def get_config(self, config_file_path: Optional[str] = None) -> dict:
         """
         Load config file
@@ -2184,6 +2180,9 @@ class ProxyConfig:
                 async_only_mode=True  # only init async clients
             ),
         )  # type:ignore
+
+        if redis_usage_cache is not None and router.cache.redis_cache is None:
+            router._update_redis_cache(cache=redis_usage_cache)
 
         # Guardrail settings
         guardrails_v2: Optional[List[Dict]] = None
@@ -3388,7 +3387,9 @@ class ProxyStartupEvent:
         DD tracer is used to trace Python applications.
         Doc: https://docs.datadoghq.com/tracing/trace_collection/automatic_instrumentation/dd_libraries/python/
         """
-        if get_secret_bool("USE_DDTRACE", False) is True:
+        from litellm.litellm_core_utils.dd_tracing import _should_use_dd_tracer
+
+        if _should_use_dd_tracer():
             import ddtrace
 
             ddtrace.patch_all(logging=True, openai=False)
@@ -3533,7 +3534,7 @@ async def chat_completion(  # noqa: PLR0915
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args
             or model  # for azure deployments
-            or data["model"]  # default passed in http request
+            or data.get("model", None)  # default passed in http request
         )
 
         global user_temperature, user_request_timeout, user_max_tokens, user_api_base
@@ -3725,9 +3726,14 @@ async def chat_completion(  # noqa: PLR0915
         timeout = getattr(
             e, "timeout", None
         )  # returns the timeout set by the wrapper. Used for testing if model-specific timeout are set correctly
-
+        _litellm_logging_obj: Optional[LiteLLMLoggingObj] = data.get(
+            "litellm_logging_obj", None
+        )
         custom_headers = get_custom_headers(
             user_api_key_dict=user_api_key_dict,
+            call_id=(
+                _litellm_logging_obj.litellm_call_id if _litellm_logging_obj else None
+            ),
             version=version,
             response_cost=0,
             model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
@@ -3804,7 +3810,7 @@ async def completion(  # noqa: PLR0915
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args
             or model  # for azure deployments
-            or data["model"]  # default passed in http request
+            or data.get("model", None)
         )
         if user_model:
             data["model"] = user_model
@@ -4040,7 +4046,7 @@ async def embeddings(  # noqa: PLR0915
             general_settings.get("embedding_model", None)  # server default
             or user_model  # model name passed via cli args
             or model  # for azure deployments
-            or data["model"]  # default passed in http request
+            or data.get("model", None)  # default passed in http request
         )
         if user_model:
             data["model"] = user_model
@@ -4213,7 +4219,7 @@ async def image_generation(
         data["model"] = (
             general_settings.get("image_generation_model", None)  # server default
             or user_model  # model name passed via cli args
-            or data["model"]  # default passed in http request
+            or data.get("model", None)  # default passed in http request
         )
         if user_model:
             data["model"] = user_model
@@ -4450,7 +4456,7 @@ async def audio_transcriptions(
         data["model"] = (
             general_settings.get("moderation_model", None)  # server default
             or user_model  # model name passed via cli args
-            or data["model"]  # default passed in http request
+            or data.get("model", None)  # default passed in http request
         )
         if user_model:
             data["model"] = user_model
@@ -5553,7 +5559,7 @@ async def anthropic_response(  # noqa: PLR0915
         data["model"] = (
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args
-            or data["model"]  # default passed in http request
+            or data.get("model", None)  # default passed in http request
         )
         if user_model:
             data["model"] = user_model
@@ -7055,6 +7061,9 @@ async def delete_model(model_info: ModelInfoDelete):
             )
 
     except Exception as e:
+        verbose_proxy_logger.exception(
+            f"Failed to delete model. Due to error - {str(e)}"
+        )
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
@@ -7253,7 +7262,7 @@ async def async_queue_request(
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args
             or model  # for azure deployments
-            or data["model"]  # default passed in http request
+            or data.get("model", None)  # default passed in http request
         )
 
         # users can pass in 'user' param to /chat/completions. Don't override it

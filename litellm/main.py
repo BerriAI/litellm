@@ -94,7 +94,7 @@ from litellm.utils import (
     read_config_args,
     supports_httpx_timeout,
     token_counter,
-    validate_chat_completion_messages,
+    validate_and_fix_openai_messages,
     validate_chat_completion_tool_choice,
 )
 
@@ -166,6 +166,7 @@ from .llms.vertex_ai.vertex_model_garden.main import VertexAIModelGardenModels
 from .llms.vllm.completion import handler as vllm_handler
 from .llms.watsonx.chat.handler import WatsonXChatHandler
 from .llms.watsonx.common_utils import IBMWatsonXMixin
+from .types.llms.anthropic import AnthropicThinkingParam
 from .types.llms.openai import (
     ChatCompletionAssistantMessage,
     ChatCompletionAudioParam,
@@ -341,6 +342,7 @@ async def acompletion(
     model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
     extra_headers: Optional[dict] = None,
     # Optional liteLLM function params
+    thinking: Optional[AnthropicThinkingParam] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -431,6 +433,7 @@ async def acompletion(
         "reasoning_effort": reasoning_effort,
         "extra_headers": extra_headers,
         "acompletion": True,  # assuming this is a required parameter
+        "thinking": thinking,
     }
     if custom_llm_provider is None:
         _, custom_llm_provider, _, _ = get_llm_provider(
@@ -800,6 +803,7 @@ def completion(  # type: ignore # noqa: PLR0915
     api_key: Optional[str] = None,
     model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
     # Optional liteLLM function params
+    thinking: Optional[AnthropicThinkingParam] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -851,7 +855,7 @@ def completion(  # type: ignore # noqa: PLR0915
     if model is None:
         raise ValueError("model param not passed in.")
     # validate messages
-    messages = validate_chat_completion_messages(messages=messages)
+    messages = validate_and_fix_openai_messages(messages=messages)
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
     ######### unpacking kwargs #####################
@@ -1106,6 +1110,7 @@ def completion(  # type: ignore # noqa: PLR0915
             parallel_tool_calls=parallel_tool_calls,
             messages=messages,
             reasoning_effort=reasoning_effort,
+            thinking=thinking,
             **non_default_params,
         )
 
@@ -3409,6 +3414,7 @@ def embedding(  # noqa: PLR0915
             or custom_llm_provider == "openai"
             or custom_llm_provider == "together_ai"
             or custom_llm_provider == "nvidia_nim"
+            or custom_llm_provider == "litellm_proxy"
         ):
             api_base = (
                 api_base
@@ -3485,7 +3491,8 @@ def embedding(  # noqa: PLR0915
             # set API KEY
             if api_key is None:
                 api_key = (
-                    litellm.api_key
+                    api_key
+                    or litellm.api_key
                     or litellm.openai_like_key
                     or get_secret_str("OPENAI_LIKE_API_KEY")
                 )
@@ -4514,6 +4521,7 @@ def image_generation(  # noqa: PLR0915
         non_default_params = {
             k: v for k, v in kwargs.items() if k not in default_params
         }  # model-specific params - pass them straight to the model/provider
+
         optional_params = get_optional_params_image_gen(
             model=model,
             n=n,
@@ -4525,6 +4533,7 @@ def image_generation(  # noqa: PLR0915
             custom_llm_provider=custom_llm_provider,
             **non_default_params,
         )
+
         logging: Logging = litellm_logging_obj
         logging.update_environment_variables(
             model=model,
@@ -4596,7 +4605,10 @@ def image_generation(  # noqa: PLR0915
                 client=client,
                 headers=headers,
             )
-        elif custom_llm_provider == "openai":
+        elif (
+            custom_llm_provider == "openai"
+            or custom_llm_provider in litellm.openai_compatible_providers
+        ):
             model_response = openai_chat_completions.image_generation(
                 model=model,
                 prompt=prompt,
@@ -4620,6 +4632,7 @@ def image_generation(  # noqa: PLR0915
                 optional_params=optional_params,
                 model_response=model_response,
                 aimg_generation=aimg_generation,
+                client=client,
             )
         elif custom_llm_provider == "vertex_ai":
             vertex_ai_project = (
@@ -5042,8 +5055,7 @@ def transcription(
         )
     elif (
         custom_llm_provider == "openai"
-        or custom_llm_provider == "groq"
-        or custom_llm_provider == "fireworks_ai"
+        or custom_llm_provider in litellm.openai_compatible_providers
     ):
         api_base = (
             api_base
@@ -5201,7 +5213,10 @@ def speech(
         custom_llm_provider=custom_llm_provider,
     )
     response: Optional[HttpxBinaryResponseContent] = None
-    if custom_llm_provider == "openai":
+    if (
+        custom_llm_provider == "openai"
+        or custom_llm_provider in litellm.openai_compatible_providers
+    ):
         if voice is None or not (isinstance(voice, str)):
             raise litellm.BadRequestError(
                 message="'voice' is required to be passed as a string for OpenAI TTS",
