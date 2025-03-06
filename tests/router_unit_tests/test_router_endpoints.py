@@ -6,6 +6,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from fastapi import Request
 from datetime import datetime
+from unittest.mock import AsyncMock
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -312,3 +313,50 @@ async def test_router_with_empty_choices(model_list):
         mock_response=mock_response,
     )
     assert response is not None
+
+
+@pytest.mark.asyncio
+async def test_ageneric_api_call_with_fallbacks_basic():
+    """
+    Test the _ageneric_api_call_with_fallbacks method with a basic successful call
+    """
+    # Create a mock function that will be passed to _ageneric_api_call_with_fallbacks
+    mock_function = AsyncMock()
+    mock_function.__name__ = "test_function"
+
+    # Create a mock response
+    mock_response = {
+        "id": "resp_123456",
+        "role": "assistant",
+        "content": "This is a test response",
+        "model": "test-model",
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+    }
+    mock_function.return_value = mock_response
+
+    # Create a router with a test model
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model-alias",
+                "litellm_params": {
+                    "model": "anthropic/test-model",
+                    "api_key": "fake-api-key",
+                },
+            }
+        ]
+    )
+
+    # Call the _ageneric_api_call_with_fallbacks method
+    response = await router._ageneric_api_call_with_fallbacks(
+        model="test-model-alias",
+        original_function=mock_function,
+        messages=[{"role": "user", "content": "Hello"}],
+        max_tokens=100,
+    )
+
+    # Verify the mock function was called
+    mock_function.assert_called_once()
+
+    # Verify the response
+    assert response == mock_response
