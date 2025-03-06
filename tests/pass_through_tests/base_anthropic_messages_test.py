@@ -103,7 +103,26 @@ class BaseAnthropicMessagesTest(ABC):
         assert len(collected_response) > 0
         assert len(full_response) > 0
 
-    def test_bad_request_error_handling(self):
+    def test_bad_request_error_handling_streaming(self):
+        print("making request to anthropic passthrough with bad request")
+        try:
+            response = self.client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=10,
+                stream=True,
+                messages=["hi"],
+            )
+            print(response)
+            assert pytest.fail("Expected BadRequestError")
+        except anthropic.BadRequestError as e:
+            print("Got BadRequestError from anthropic, e=", e)
+            print(e.__cause__)
+            print(e.status_code)
+            print(e.response)
+        except Exception as e:
+            pytest.fail(f"Got unexpected exception: {e}")
+
+    def test_bad_request_error_handling_non_streaming(self):
         print("making request to anthropic passthrough with bad request")
         try:
             response = self.client.messages.create(
@@ -112,7 +131,11 @@ class BaseAnthropicMessagesTest(ABC):
                 messages=["hi"],
             )
             print(response)
+            assert pytest.fail("Expected BadRequestError")
         except anthropic.BadRequestError as e:
-            print("Got BadRequestError from anthropic")
+            print("Got BadRequestError from anthropic, e=", e)
+            print(e.__cause__)
+            print(e.status_code)
+            print(e.response)
         except Exception as e:
             pytest.fail(f"Got unexpected exception: {e}")
