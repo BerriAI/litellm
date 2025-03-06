@@ -1195,7 +1195,8 @@ def test_anthropic_thinking_output(model):
     "model",
     [
         "anthropic/claude-3-7-sonnet-20250219",
-        # "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "bedrock/invoke/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
     ],
 )
 def test_anthropic_thinking_output_stream(model):
