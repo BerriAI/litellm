@@ -390,9 +390,9 @@ Returns 2 new fields in `message` and `delta` object:
 Each object has the following fields:
 - `type` - Literal["thinking"] - The type of thinking block
 - `thinking` - string - The thinking of the response. Also returned in `reasoning_content`
-- `signature_delta` - string - A base64 encoded string, returned by Anthropic.
+- `signature` - string - A base64 encoded string, returned by Anthropic.
 
-The `signature_delta` is required by Anthropic on subsequent calls, if 'thinking' content is passed in (only required to use `thinking` with tool calling). [Learn more](https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking#understanding-thinking-blocks)
+The `signature` is required by Anthropic on subsequent calls, if 'thinking' content is passed in (only required to use `thinking` with tool calling). [Learn more](https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking#understanding-thinking-blocks)
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -475,7 +475,7 @@ Same as [Anthropic API response](../providers/anthropic#usage---thinking--reason
                     {
                         "type": "thinking",
                         "thinking": "The capital of France is Paris. This is a straightforward factual question.",
-                        "signature_delta": "EqoBCkgIARABGAIiQL2UoU0b1OHYi+yCHpBY7U6FQW8/FcoLewocJQPa2HnmLM+NECy50y44F/kD4SULFXi57buI9fAvyBwtyjlOiO0SDE3+r3spdg6PLOo9PBoMma2ku5OTAoR46j9VIjDRlvNmBvff7YW4WI9oU8XagaOBSxLPxElrhyuxppEn7m6bfT40dqBSTDrfiw4FYB4qEPETTI6TA6wtjGAAqmFqKTo="
+                        "signature": "EqoBCkgIARABGAIiQL2UoU0b1OHYi+yCHpBY7U6FQW8/FcoLewocJQPa2HnmLM+NECy50y44F/kD4SULFXi57buI9fAvyBwtyjlOiO0SDE3+r3spdg6PLOo9PBoMma2ku5OTAoR46j9VIjDRlvNmBvff7YW4WI9oU8XagaOBSxLPxElrhyuxppEn7m6bfT40dqBSTDrfiw4FYB4qEPETTI6TA6wtjGAAqmFqKTo="
                     }
                 ]
             }
