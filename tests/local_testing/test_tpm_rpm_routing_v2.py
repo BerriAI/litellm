@@ -377,6 +377,7 @@ async def test_multiple_potential_deployments(sync_mode):
             deployment = await router.async_get_available_deployment(
                 model="azure-model",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                request_kwargs={},
             )
 
         ## get id ##

@@ -518,6 +518,10 @@ async def generate_key_fn(  # noqa: PLR0915
         if "budget_duration" in data_json:
             data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
 
+        if user_api_key_dict.user_id is not None:
+            data_json["created_by"] = user_api_key_dict.user_id
+            data_json["updated_by"] = user_api_key_dict.user_id
+
         # Set tags on the new key
         if "tags" in data_json:
             from litellm.proxy.proxy_server import premium_user
@@ -1122,6 +1126,8 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     organization_id: Optional[str] = None,
     table_name: Optional[Literal["key", "user"]] = None,
     send_invite_email: Optional[bool] = None,
+    created_by: Optional[str] = None,
+    updated_by: Optional[str] = None,
 ):
     from litellm.proxy.proxy_server import (
         litellm_proxy_budget_name,
@@ -1225,6 +1231,8 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "model_max_budget": model_max_budget_json,
             "budget_id": budget_id,
             "blocked": blocked,
+            "created_by": created_by,
+            "updated_by": updated_by,
         }
 
         if (
@@ -1962,6 +1970,10 @@ async def _list_key_helper(
         where=where,  # type: ignore
         skip=skip,  # type: ignore
         take=size,  # type: ignore
+        order=[
+            {"created_at": "desc"},
+            {"token": "desc"},  # fallback sort
+        ],
     )
 
     verbose_proxy_logger.debug(f"Fetched {len(keys)} keys")
