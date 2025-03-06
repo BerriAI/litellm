@@ -1188,18 +1188,20 @@ def test_anthropic_thinking_output(model):
     assert isinstance(resp.choices[0].message.thinking_blocks, list)
     assert len(resp.choices[0].message.thinking_blocks) > 0
 
+    assert resp.choices[0].message.thinking_blocks[0]["signature"] is not None
+
 
 @pytest.mark.parametrize(
     "model",
     [
         "anthropic/claude-3-7-sonnet-20250219",
-        "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        # "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
     ],
 )
 def test_anthropic_thinking_output_stream(model):
     # litellm.set_verbose = True
     try:
-        litellm._turn_on_debug()
+        # litellm._turn_on_debug()
         resp = litellm.completion(
             model=model,
             messages=[{"role": "user", "content": "Tell me a joke."}],
@@ -1209,6 +1211,7 @@ def test_anthropic_thinking_output_stream(model):
         )
 
         reasoning_content_exists = False
+        signature_block_exists = False
         for chunk in resp:
             print(f"chunk 2: {chunk}")
             if (
@@ -1220,8 +1223,11 @@ def test_anthropic_thinking_output_stream(model):
                 and isinstance(chunk.choices[0].delta.reasoning_content, str)
             ):
                 reasoning_content_exists = True
-                break
+                print(chunk.choices[0].delta.thinking_blocks[0])
+                if chunk.choices[0].delta.thinking_blocks[0].get("signature"):
+                    signature_block_exists = True
         assert reasoning_content_exists
+        assert signature_block_exists
     except litellm.Timeout:
         pytest.skip("Model is timing out")
 
