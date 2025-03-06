@@ -15,6 +15,7 @@ from litellm import verbose_logger
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.types.llms.openai import ChatCompletionChunk
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import Delta
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import (
@@ -71,6 +72,12 @@ class CustomStreamWrapper:
         self.sent_first_chunk = False
         self.sent_last_chunk = False
 
+        litellm_params: GenericLiteLLMParams = self.logging_obj.model_call_details.get(
+            "litellm_params", {}
+        )
+        self.merge_reasoning_content_in_choices = (
+            litellm_params.merge_reasoning_content_in_choices
+        )
         self.sent_first_thinking_block = False
         self.sent_last_thinking_block = False
         self.thinking_content = ""
@@ -92,12 +99,7 @@ class CustomStreamWrapper:
         self.holding_chunk = ""
         self.complete_response = ""
         self.response_uptil_now = ""
-        _model_info = (
-            self.logging_obj.model_call_details.get("litellm_params", {}).get(
-                "model_info", {}
-            )
-            or {}
-        )
+        _model_info: Dict = litellm_params.model_info or {}
 
         _api_base = get_api_base(
             model=model or "",

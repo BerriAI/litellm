@@ -1803,6 +1803,7 @@ all_litellm_params = [
     "max_budget",
     "budget_duration",
     "use_in_pass_through",
+    "merge_reasoning_content_in_choices",
 ] + list(StandardCallbackDynamicParams.__annotations__.keys())
 
 
