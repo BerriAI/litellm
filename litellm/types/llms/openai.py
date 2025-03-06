@@ -360,7 +360,7 @@ class ChatCompletionCachedContent(TypedDict):
 class ChatCompletionThinkingBlock(TypedDict, total=False):
     type: Required[Literal["thinking"]]
     thinking: str
-    signature_delta: str
+    signature: str
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 

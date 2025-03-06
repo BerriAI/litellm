@@ -2983,7 +2983,7 @@ class BedrockConverseMessagesProcessor:
         reasoning_content_blocks: List[BedrockContentBlock] = []
         for thinking_block in thinking_blocks:
             reasoning_text = thinking_block.get("thinking")
-            reasoning_signature = thinking_block.get("signature_delta")
+            reasoning_signature = thinking_block.get("signature")
             text_block = BedrockConverseReasoningTextBlock(
                 text=reasoning_text or "",
             )
