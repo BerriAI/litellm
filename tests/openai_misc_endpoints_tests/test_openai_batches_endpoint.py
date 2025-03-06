@@ -101,7 +101,7 @@ def await_batch_completion(batch_id: str, custom_llm_provider: str):
         )
         if batch.status == "completed":
             print(f"Batch {batch_id} completed.")
-            return
+            return batch.id
 
         tries += 1
         print(f"waiting for batch to complete... (attempt {tries}/{max_tries})")
@@ -173,9 +173,11 @@ def test_e2e_batches_files(custom_llm_provider):
         # azure takes very long to complete a batch
         return
     else:
-        await_batch_completion(
+        response_batch_id = await_batch_completion(
             batch_id=batch_id, custom_llm_provider=custom_llm_provider
         )
+        if response_batch_id is None:
+            return
 
     write_content_to_file(
         batch_id=batch_id,
