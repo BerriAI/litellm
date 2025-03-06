@@ -263,6 +263,13 @@ const sidebars = {
     {
       type: "category",
       label: "Supported Endpoints",
+      link: {
+        type: "generated-index",
+        title: "Supported Endpoints",
+        description:
+          "Learn how to deploy + call models from different providers on LiteLLM",
+        slug: "/supported_endpoints",
+      },
       items: [
         {
           type: "category",
