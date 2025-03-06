@@ -70,6 +70,11 @@ class CustomStreamWrapper:
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
         self.sent_last_chunk = False
+
+        self.sent_first_thinking_block = False
+        self.sent_last_thinking_block = False
+        self.thinking_content = ""
+
         self.system_fingerprint: Optional[str] = None
         self.received_finish_reason: Optional[str] = None
         self.intermittent_finish_reason: Optional[str] = (
@@ -873,6 +878,10 @@ class CustomStreamWrapper:
                     _index: Optional[int] = completion_obj.get("index")
                     if _index is not None:
                         model_response.choices[0].index = _index
+
+                model_response = self._optional_combine_thinking_block_in_choices(  # type: ignore
+                    model_response=model_response
+                )
                 print_verbose(f"returning model_response: {model_response}")
                 return model_response
             else:
@@ -928,6 +937,48 @@ class CustomStreamWrapper:
             if hasattr(model_response, "usage"):
                 self.chunks.append(model_response)
             return
+
+    def _optional_combine_thinking_block_in_choices(
+        self, model_response: ModelResponseStream
+    ) -> Optional[ModelResponseStream]:
+        """
+        UI's Like OpenWebUI expect to get 1 chunk with <thinking>...</thinking> tags in the chunk content
+
+        This helper handles that logic
+
+        Collects all `<thinking>...</thinking>` blocks and combines them into 1 chunk
+        """
+        if litellm.merge_reasoning_content_in_choices:
+            reasoning_content = getattr(
+                model_response.choices[0].delta, "reasoning_content", None
+            )
+            if reasoning_content:
+                if self.sent_first_thinking_block is False:
+                    self.thinking_content += (
+                        (model_response.choices[0].delta.content or "")
+                        + f"<thinking>{model_response.choices[0].delta.reasoning_content}"
+                    )
+                    self.sent_first_thinking_block = True
+                    return None
+                elif (
+                    self.sent_first_thinking_block is True
+                    and hasattr(model_response.choices[0].delta, "reasoning_content")
+                    and model_response.choices[0].delta.reasoning_content
+                ):
+                    self.thinking_content += (
+                        model_response.choices[0].delta.content or ""
+                    ) + f"{model_response.choices[0].delta.reasoning_content}"
+                    return None
+            elif (
+                self.sent_first_thinking_block is True
+                and not self.sent_last_thinking_block
+                and model_response.choices[0].delta.content
+            ):
+                self.thinking_content += "</thinking>"
+                model_response.choices[0].delta.content = self.thinking_content
+                self.sent_last_thinking_block = True
+
+        return model_response
 
     def chunk_creator(self, chunk: Any):  # type: ignore  # noqa: PLR0915
         model_response = self.model_response_creator()
