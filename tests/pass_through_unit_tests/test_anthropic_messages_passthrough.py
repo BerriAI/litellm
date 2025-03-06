@@ -21,9 +21,44 @@ from litellm.types.utils import StandardLoggingPayload
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.router import Router
+import importlib
 
 # Load environment variables
 load_dotenv()
+
+
+@pytest.fixture(scope="session")
+def event_loop():
+    """Create an instance of the default event loop for each test session."""
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    yield loop
+    loop.close()
+
+
+@pytest.fixture(scope="function", autouse=True)
+def setup_and_teardown(event_loop):  # Add event_loop as a dependency
+    curr_dir = os.getcwd()
+    sys.path.insert(0, os.path.abspath("../.."))
+
+    import litellm
+    from litellm import Router
+
+    importlib.reload(litellm)
+
+    # Set the event loop from the fixture
+    asyncio.set_event_loop(event_loop)
+
+    print(litellm)
+    yield
+
+    # Clean up any pending tasks
+    pending = asyncio.all_tasks(event_loop)
+    for task in pending:
+        task.cancel()
+
+    # Run the event loop until all tasks are cancelled
+    if pending:
+        event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
 
 
 def _validate_anthropic_response(response: Dict[str, Any]):
@@ -357,7 +392,7 @@ async def test_anthropic_messages_litellm_router_streaming_with_logging():
     print("input_tokens_anthropic_api", response_prompt_tokens)
     print("output_tokens_anthropic_api", response_completion_tokens)
 
-    await asyncio.sleep(2)
+    await asyncio.sleep(4)
 
     print(
         "logged_standard_logging_payload",
