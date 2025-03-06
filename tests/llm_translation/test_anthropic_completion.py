@@ -1196,10 +1196,11 @@ def test_anthropic_thinking_output(model):
     [
         "anthropic/claude-3-7-sonnet-20250219",
         # "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        # "bedrock/invoke/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
     ],
 )
 def test_anthropic_thinking_output_stream(model):
-    # litellm.set_verbose = True
+    litellm.set_verbose = True
     try:
         # litellm._turn_on_debug()
         resp = litellm.completion(
@@ -1207,7 +1208,7 @@ def test_anthropic_thinking_output_stream(model):
             messages=[{"role": "user", "content": "Tell me a joke."}],
             stream=True,
             thinking={"type": "enabled", "budget_tokens": 1024},
-            timeout=5,
+            timeout=10,
         )
 
         reasoning_content_exists = False

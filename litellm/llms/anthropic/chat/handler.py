@@ -474,7 +474,10 @@ class ModelResponseIterator:
         if len(self.content_blocks) == 0:
             return False
 
-        if self.content_blocks[0]["delta"]["type"] == "text_delta":
+        if (
+            self.content_blocks[0]["delta"]["type"] == "text_delta"
+            or self.content_blocks[0]["delta"]["type"] == "thinking_delta"
+        ):
             return False
 
         for block in self.content_blocks:
@@ -617,9 +620,11 @@ class ModelResponseIterator:
                         "index": self.tool_index,
                     }
             elif type_chunk == "content_block_stop":
+
                 ContentBlockStop(**chunk)  # type: ignore
                 # check if tool call content block
                 is_empty = self.check_empty_tool_call_args()
+
                 if is_empty:
                     tool_use = {
                         "id": None,
