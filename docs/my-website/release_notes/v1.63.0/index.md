@@ -1,6 +1,6 @@
 ---
-title: v1.61.21 - Anthropic 'thinking' response update
-slug: v1.61.21
+title: v1.63.0 - Anthropic 'thinking' response update
+slug: v1.63.0
 date: 2025-03-05T10:00:00
 authors:
   - name: Krrish Dholakia
