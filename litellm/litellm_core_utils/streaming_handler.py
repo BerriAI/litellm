@@ -72,8 +72,8 @@ class CustomStreamWrapper:
         self.sent_first_chunk = False
         self.sent_last_chunk = False
 
-        litellm_params: GenericLiteLLMParams = self.logging_obj.model_call_details.get(
-            "litellm_params", {}
+        litellm_params: GenericLiteLLMParams = GenericLiteLLMParams(
+            **self.logging_obj.model_call_details.get("litellm_params", {})
         )
         self.merge_reasoning_content_in_choices = (
             litellm_params.merge_reasoning_content_in_choices
@@ -976,7 +976,9 @@ class CustomStreamWrapper:
                 and model_response.choices[0].delta.content
             ):
                 self.thinking_content += "</thinking>"
-                model_response.choices[0].delta.content += self.thinking_content
+                model_response.choices[0].delta.content = (
+                    self.thinking_content + model_response.choices[0].delta.content
+                )
                 self.sent_last_thinking_block = True
 
         return model_response
