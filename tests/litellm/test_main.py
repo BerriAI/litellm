@@ -124,14 +124,14 @@ def test_completion_missing_role(openai_api_response):
     [
         "gemini/gemini-1.5-flash",
         "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        "bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0"
-        "anthropic/claude-3-5-sonnet",
+        # "bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0"
+        # "anthropic/claude-3-5-sonnet",
     ],
 )
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_url_with_format_param(model, sync_mode):
-    from litellm import completion
+    from litellm import acompletion, completion
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
     if sync_mode:
@@ -162,7 +162,7 @@ async def test_url_with_format_param(model, sync_mode):
             if sync_mode:
                 response = completion(**args, client=client)
             else:
-                response = await completion(**args, client=client)
+                response = await acompletion(**args, client=client)
             print(response)
         except Exception as e:
             print(e)

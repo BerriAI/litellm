@@ -2325,7 +2325,9 @@ class BedrockImageProcessor:
         return cls._create_bedrock_block(img_bytes, mime_type, image_format)
 
     @classmethod
-    async def process_image_async(cls, image_url: str) -> BedrockContentBlock:
+    async def process_image_async(
+        cls, image_url: str, format: Optional[str]
+    ) -> BedrockContentBlock:
         """Asynchronous image processing."""
 
         if "base64" in image_url:
@@ -2339,6 +2341,10 @@ class BedrockImageProcessor:
             raise ValueError(
                 "Unsupported image type. Expected either image url or base64 encoded string"
             )
+
+        if format:  # override with user-defined params
+            mime_type = format
+            image_format = mime_type.split("/")[1]
 
         image_format = cls._validate_format(mime_type, image_format)
         return cls._create_bedrock_block(img_bytes, mime_type, image_format)
@@ -2827,12 +2833,14 @@ class BedrockConverseMessagesProcessor:
                                 _part = BedrockContentBlock(text=element["text"])
                                 _parts.append(_part)
                             elif element["type"] == "image_url":
+                                format: Optional[str] = None
                                 if isinstance(element["image_url"], dict):
                                     image_url = element["image_url"]["url"]
+                                    format = element["image_url"].get("format")
                                 else:
                                     image_url = element["image_url"]
                                 _part = await BedrockImageProcessor.process_image_async(  # type: ignore
-                                    image_url=image_url
+                                    image_url=image_url, format=format
                                 )
                                 _parts.append(_part)  # type: ignore
                             _cache_point_block = (
