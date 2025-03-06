@@ -3288,7 +3288,7 @@ def test_vertex_anthropic_completion():
         assert len(response.choices[0].message.thinking_blocks) > 0
 
 
-def test_vertex_gemini_thinking_signed_s3_url():
+def test_signed_s3_url_with_format():
     from litellm import completion
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 

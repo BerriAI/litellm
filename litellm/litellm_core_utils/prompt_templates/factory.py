@@ -665,7 +665,7 @@ def construct_tool_use_system_prompt(
 
 
 def convert_generic_image_chunk_to_openai_image_obj(
-    image_chunk: GenericImageParsingChunk,
+    image_chunk: GenericImageParsingChunk, format: Optional[str] = None
 ) -> str:
     """
     Convert a generic image chunk to an OpenAI image object.
@@ -680,9 +680,8 @@ def convert_generic_image_chunk_to_openai_image_obj(
     Return:
     "data:image/jpeg;base64,{base64_image}"
     """
-    return "data:{};{},{}".format(
-        image_chunk["media_type"], image_chunk["type"], image_chunk["data"]
-    )
+    media_type = format or image_chunk["media_type"]
+    return "data:{};{},{}".format(media_type, image_chunk["type"], image_chunk["data"])
 
 
 def convert_to_anthropic_image_obj(openai_image_url: str) -> GenericImageParsingChunk:
