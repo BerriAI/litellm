@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 
 import anthropic
+import pytest
 
 
 class BaseAnthropicMessagesTest(ABC):
@@ -101,3 +102,17 @@ class BaseAnthropicMessagesTest(ABC):
         # Verify we also received a response
         assert len(collected_response) > 0
         assert len(full_response) > 0
+
+    def test_bad_request_error_handling(self):
+        print("making request to anthropic passthrough with bad request")
+        try:
+            response = self.client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=10,
+                messages=["hi"],
+            )
+            print(response)
+        except anthropic.BadRequestError as e:
+            print("Got BadRequestError from anthropic")
+        except Exception as e:
+            pytest.fail(f"Got unexpected exception: {e}")
