@@ -9,7 +9,7 @@
     "model": "gpt-4o",
     "user": "",
     "team_id": "",
-    "metadata": "{\"user_api_key_alias\": null, \"user_api_key_team_id\": null, \"user_api_key_org_id\": null, \"user_api_key_user_id\": null, \"user_api_key_team_alias\": null, \"spend_logs_metadata\": null, \"requester_ip_address\": null, \"applied_guardrails\": [], \"user_api_key\": null, \"additional_usage_values\": {\"completion_tokens_details\": null, \"prompt_tokens_details\": null}}",
+    "metadata": "{\"applied_guardrails\": [], \"additional_usage_values\": {\"completion_tokens_details\": null, \"prompt_tokens_details\": null}}",
     "cache_key": "Cache OFF",
     "spend": 0.00022500000000000002,
     "total_tokens": 30,
