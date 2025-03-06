@@ -135,15 +135,23 @@ async def anthropic_messages(
     request_body["model"] = model
     litellm_logging_obj.stream = stream
 
-    verbose_logger.debug(
-        "request_body= %s", json.dumps(request_body, indent=4, default=str)
+    # Make the request
+    request_url = anthropic_messages_provider_config.get_complete_url(
+        api_base=api_base, model=model
     )
 
-    # Make the request
+    litellm_logging_obj.pre_call(
+        input=[{"role": "user", "content": json.dumps(request_body)}],
+        api_key="",
+        additional_args={
+            "complete_input_dict": request_body,
+            "api_base": str(request_url),
+            "headers": headers,
+        },
+    )
+
     response = await async_httpx_client.post(
-        url=anthropic_messages_provider_config.get_complete_url(
-            api_base=api_base, model=model
-        ),
+        url=request_url,
         headers=headers,
         data=json.dumps(request_body),
         timeout=600,
