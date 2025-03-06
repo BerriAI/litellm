@@ -93,7 +93,9 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             raise ValueError("Timeout error occurred")
         except Exception as e:
             verbose_logger.exception(
-                "Error reading secret from AWS Secrets Manager: %s", str(e)
+                "Error reading secret name=%s from AWS Secrets Manager: %s",
+                secret_name,
+                str(e),
             )
         return None
 
@@ -138,12 +140,15 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             raise ValueError("Timeout error occurred")
         except httpx.HTTPStatusError as e:
             verbose_logger.exception(
-                "Error reading secret from AWS Secrets Manager: %s",
+                "Error reading secret name=%s from AWS Secrets Manager: %s",
+                secret_name,
                 str(e.response.text),
             )
         except Exception as e:
             verbose_logger.exception(
-                "Error reading secret from AWS Secrets Manager: %s", str(e)
+                "Error reading secret name=%s from AWS Secrets Manager: %s",
+                secret_name,
+                str(e),
             )
         return None
 
