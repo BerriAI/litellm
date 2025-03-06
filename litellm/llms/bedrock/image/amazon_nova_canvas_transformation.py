@@ -5,11 +5,7 @@ from openai.types.image import Image
 
 from litellm.types.llms.bedrock import (
     AmazonNovaCanvasTextToImageRequest, AmazonNovaCanvasTextToImageResponse,
-    AmazonNovaCanvasColorGuidedRequest, AmazonNovaCanvasImageVariationRequest,
-    AmazonNovaCanvasColorGuidedGenerationParams, AmazonNovaCanvasTextToImageParams,
-    AmazonNovaCanvasImageVariationParams, AmazonNovaCanvasInPaintingParams, AmazonNovaCanvasInpaintingRequest,
-    AmazonNovaCanvasOutpaintingRequest, AmazonNovaCanvasBackgroundRemovalRequest,
-    AmazonNovaCanvasBackgroundRemovalParams, AmazonNovaCanvasRequestBase, AmazonNovaCanvasOutPaintingParams,
+    AmazonNovaCanvasTextToImageParams, AmazonNovaCanvasRequestBase,
 )
 from litellm.types.utils import ImageResponse
 
@@ -64,7 +60,7 @@ class AmazonNovaCanvasConfig:
         """
         Transform the request body for Amazon Nova Canvas model
         """
-        task_type = optional_params.pop("taskType")
+        task_type = optional_params.pop("taskType", "TEXT_IMAGE")
         image_generation_config = optional_params.pop("imageGenerationConfig", {})
         image_generation_config = {**image_generation_config, **optional_params}
         if task_type == "TEXT_IMAGE":
@@ -73,36 +69,6 @@ class AmazonNovaCanvasConfig:
             text_to_image_params = AmazonNovaCanvasTextToImageParams(**text_to_image_params)
             return AmazonNovaCanvasTextToImageRequest(textToImageParams=text_to_image_params, taskType=task_type,
                                                       imageGenerationConfig=image_generation_config)
-        if task_type == "COLOR_GUIDED_GENERATION":
-            color_guided_generation_params = image_generation_config.pop("colorGuidedGenerationParams", {})
-            color_guided_generation_params = {"text": text, **color_guided_generation_params}
-            color_guided_generation_params = AmazonNovaCanvasColorGuidedGenerationParams(**color_guided_generation_params)
-            return AmazonNovaCanvasColorGuidedRequest(taskType=task_type,
-                                                      colorGuidedGenerationParams=color_guided_generation_params,
-                                                      imageGenerationConfig=image_generation_config)
-        if task_type == "IMAGE_VARIATION":
-            image_variation_params = image_generation_config.pop("imageVariationParams", {})
-            image_variation_params = AmazonNovaCanvasImageVariationParams(**image_variation_params)
-            return AmazonNovaCanvasImageVariationRequest(taskType=task_type,
-                                                         imageVariationParams=image_variation_params,
-                                                         imageGenerationConfig=image_generation_config)
-        if task_type == "INPAINTING":
-            inpainting_params = image_generation_config.pop("inPaintingParams", {})
-            inpainting_params = AmazonNovaCanvasInPaintingParams(**inpainting_params)
-            return AmazonNovaCanvasInpaintingRequest(taskType=task_type,
-                                                     inPaintingParams=inpainting_params,
-                                                     imageGenerationConfig=image_generation_config)
-        if task_type == "OUTPAINTING":
-            outpainting_params = image_generation_config.pop("outPaintingParams", {})
-            outpainting_params = AmazonNovaCanvasOutPaintingParams(**outpainting_params)
-            return AmazonNovaCanvasOutpaintingRequest(taskType=task_type,
-                                                      outPaintingParams=outpainting_params,
-                                                      imageGenerationConfig=image_generation_config)
-        if task_type == "BACKGROUND_REMOVAL":
-            background_removal_params = image_generation_config.pop("backgroundRemovalParams", {})
-            background_removal_params = AmazonNovaCanvasBackgroundRemovalParams(**background_removal_params)
-            return AmazonNovaCanvasBackgroundRemovalRequest(taskType=task_type,
-                                                            backgroundRemovalParams=background_removal_params)
         raise NotImplementedError(f"Task type {task_type} is not supported")
 
     @classmethod
