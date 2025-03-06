@@ -6,7 +6,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from fastapi import Request
 from datetime import datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -360,3 +360,153 @@ async def test_ageneric_api_call_with_fallbacks_basic():
 
     # Verify the response
     assert response == mock_response
+
+
+@pytest.mark.asyncio
+async def test_aadapter_completion():
+    """
+    Test the aadapter_completion method which uses async_function_with_fallbacks
+    """
+    # Create a mock for the _aadapter_completion method
+    mock_response = {
+        "id": "adapter_resp_123",
+        "object": "adapter.completion",
+        "created": 1677858242,
+        "model": "test-model-with-adapter",
+        "choices": [
+            {
+                "text": "This is a test adapter response",
+                "index": 0,
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+    }
+
+    # Create a router with a patched _aadapter_completion method
+    with patch.object(
+        Router, "_aadapter_completion", new_callable=AsyncMock
+    ) as mock_method:
+        mock_method.return_value = mock_response
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "test-adapter-model",
+                    "litellm_params": {
+                        "model": "anthropic/test-model",
+                        "api_key": "fake-api-key",
+                    },
+                }
+            ]
+        )
+
+        # Replace the async_function_with_fallbacks with a mock
+        router.async_function_with_fallbacks = AsyncMock(return_value=mock_response)
+
+        # Call the aadapter_completion method
+        response = await router.aadapter_completion(
+            adapter_id="test-adapter-id",
+            model="test-adapter-model",
+            prompt="This is a test prompt",
+            max_tokens=100,
+        )
+
+        # Verify the response
+        assert response == mock_response
+
+        # Verify async_function_with_fallbacks was called with the right parameters
+        router.async_function_with_fallbacks.assert_called_once()
+        call_kwargs = router.async_function_with_fallbacks.call_args.kwargs
+        assert call_kwargs["adapter_id"] == "test-adapter-id"
+        assert call_kwargs["model"] == "test-adapter-model"
+        assert call_kwargs["prompt"] == "This is a test prompt"
+        assert call_kwargs["max_tokens"] == 100
+        assert call_kwargs["original_function"] == router._aadapter_completion
+        assert "metadata" in call_kwargs
+        assert call_kwargs["metadata"]["model_group"] == "test-adapter-model"
+
+
+@pytest.mark.asyncio
+async def test__aadapter_completion():
+    """
+    Test the _aadapter_completion method directly
+    """
+    # Create a mock response for litellm.aadapter_completion
+    mock_response = {
+        "id": "adapter_resp_123",
+        "object": "adapter.completion",
+        "created": 1677858242,
+        "model": "test-model-with-adapter",
+        "choices": [
+            {
+                "text": "This is a test adapter response",
+                "index": 0,
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+    }
+
+    # Create a router with a mocked litellm.aadapter_completion
+    with patch(
+        "litellm.aadapter_completion", new_callable=AsyncMock
+    ) as mock_adapter_completion:
+        mock_adapter_completion.return_value = mock_response
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "test-adapter-model",
+                    "litellm_params": {
+                        "model": "anthropic/test-model",
+                        "api_key": "fake-api-key",
+                    },
+                }
+            ]
+        )
+
+        # Mock the async_get_available_deployment method
+        router.async_get_available_deployment = AsyncMock(
+            return_value={
+                "model_name": "test-adapter-model",
+                "litellm_params": {
+                    "model": "test-model",
+                    "api_key": "fake-api-key",
+                },
+                "model_info": {
+                    "id": "test-unique-id",
+                },
+            }
+        )
+
+        # Mock the async_routing_strategy_pre_call_checks method
+        router.async_routing_strategy_pre_call_checks = AsyncMock()
+
+        # Call the _aadapter_completion method
+        response = await router._aadapter_completion(
+            adapter_id="test-adapter-id",
+            model="test-adapter-model",
+            prompt="This is a test prompt",
+            max_tokens=100,
+        )
+
+        # Verify the response
+        assert response == mock_response
+
+        # Verify litellm.aadapter_completion was called with the right parameters
+        mock_adapter_completion.assert_called_once()
+        call_kwargs = mock_adapter_completion.call_args.kwargs
+        assert call_kwargs["adapter_id"] == "test-adapter-id"
+        assert call_kwargs["model"] == "test-model"
+        assert call_kwargs["prompt"] == "This is a test prompt"
+        assert call_kwargs["max_tokens"] == 100
+        assert call_kwargs["api_key"] == "fake-api-key"
+        assert call_kwargs["caching"] == router.cache_responses
+
+        # Verify the success call was recorded
+        assert router.success_calls["test-model"] == 1
+        assert router.total_calls["test-model"] == 1
+
+        # Verify async_routing_strategy_pre_call_checks was called
+        router.async_routing_strategy_pre_call_checks.assert_called_once()
