@@ -73,6 +73,8 @@ def remove_index_from_tool_calls(
 def get_litellm_metadata_from_kwargs(kwargs: dict):
     """
     Helper to get litellm metadata from all litellm request kwargs
+
+    Return `litellm_metadata` if it exists, otherwise return `metadata`
     """
     litellm_params = kwargs.get("litellm_params", {})
     if litellm_params:

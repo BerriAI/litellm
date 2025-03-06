@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import StandardLoggingPayload
@@ -119,9 +120,7 @@ def get_logging_payload(  # noqa: PLR0915
         response_obj = {}
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
     litellm_params = kwargs.get("litellm_params", {})
-    metadata = (
-        litellm_params.get("metadata", {}) or {}
-    )  # if litellm_params['metadata'] == None
+    metadata = get_litellm_metadata_from_kwargs(kwargs)
     metadata = _add_proxy_server_request_to_metadata(
         metadata=metadata, litellm_params=litellm_params
     )
