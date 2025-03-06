@@ -162,7 +162,6 @@ async def anthropic_messages(
         url=request_url,
         headers=headers,
         data=json.dumps(request_body),
-        timeout=600,
         stream=stream,
     )
     response.raise_for_status()
