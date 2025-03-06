@@ -194,16 +194,15 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                                 "url": content_item["image_url"],
                             }
                         elif isinstance(content_item["image_url"], dict):
-                            litellm_specific_params = set(
-                                "format"
-                            )  # litellm-specific param, don't send to openai.
-                            content_item["image_url"] = ChatCompletionImageUrlObject(
+                            litellm_specific_params = {"format"}
+                            new_image_url_obj = ChatCompletionImageUrlObject(
                                 **{  # type: ignore
                                     k: v
                                     for k, v in content_item["image_url"].items()
                                     if k not in litellm_specific_params
                                 }
                             )
+                            content_item["image_url"] = new_image_url_obj
         return messages
 
     def transform_request(
