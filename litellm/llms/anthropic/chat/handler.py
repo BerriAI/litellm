@@ -527,6 +527,7 @@ class ModelResponseIterator:
         provider_specific_fields = {}
         content_block = ContentBlockDelta(**chunk)  # type: ignore
         thinking_blocks: List[ChatCompletionThinkingBlock] = []
+
         self.content_blocks.append(content_block)
         if "text" in content_block["delta"]:
             text = content_block["delta"]["text"]
