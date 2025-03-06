@@ -47,3 +47,21 @@ class BaseAnthropicMessagesTest(ABC):
 
         full_response = "".join(collected_output)
         print(full_response)
+
+    def test_anthropic_messages_with_thinking(self):
+        print("making request to anthropic passthrough with thinking")
+        response = self.client.messages.create(
+            model="claude-3-7-sonnet-20250219",
+            max_tokens=20000,
+            thinking={"type": "enabled", "budget_tokens": 16000},
+            messages=[
+                {"role": "user", "content": "Just pinging with thinking enabled"}
+            ],
+        )
+
+        print(response)
+
+        # Verify the first content block is a thinking block
+        response_thinking = response.content[0].thinking
+        assert response_thinking is not None
+        assert len(response_thinking) > 0
