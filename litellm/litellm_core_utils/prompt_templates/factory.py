@@ -2302,8 +2302,11 @@ class BedrockImageProcessor:
             )
 
     @classmethod
-    def process_image_sync(cls, image_url: str) -> BedrockContentBlock:
+    def process_image_sync(
+        cls, image_url: str, format: Optional[str] = None
+    ) -> BedrockContentBlock:
         """Synchronous image processing."""
+
         if "base64" in image_url:
             img_bytes, mime_type, image_format = cls._parse_base64_image(image_url)
         elif "http://" in image_url or "https://" in image_url:
@@ -2313,6 +2316,10 @@ class BedrockImageProcessor:
             raise ValueError(
                 "Unsupported image type. Expected either image url or base64 encoded string"
             )
+
+        if format:
+            mime_type = format
+            image_format = mime_type.split("/")[1]
 
         image_format = cls._validate_format(mime_type, image_format)
         return cls._create_bedrock_block(img_bytes, mime_type, image_format)
@@ -3058,12 +3065,15 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             _part = BedrockContentBlock(text=element["text"])
                             _parts.append(_part)
                         elif element["type"] == "image_url":
+                            format: Optional[str] = None
                             if isinstance(element["image_url"], dict):
                                 image_url = element["image_url"]["url"]
+                                format = element["image_url"].get("format")
                             else:
                                 image_url = element["image_url"]
                             _part = BedrockImageProcessor.process_image_sync(  # type: ignore
-                                image_url=image_url
+                                image_url=image_url,
+                                format=format,
                             )
                             _parts.append(_part)  # type: ignore
                         _cache_point_block = (
