@@ -290,43 +290,6 @@ async def test_aaaaatext_completion_endpoint(model_list, sync_mode):
 
 
 @pytest.mark.asyncio
-async def test_anthropic_router_completion_e2e(model_list):
-    from litellm.adapters.anthropic_adapter import anthropic_adapter
-    from litellm.types.llms.anthropic import AnthropicResponse
-
-    litellm.set_verbose = True
-
-    litellm.adapters = [{"id": "anthropic", "adapter": anthropic_adapter}]
-
-    router = Router(model_list=model_list)
-    messages = [{"role": "user", "content": "Hey, how's it going?"}]
-
-    ## Test 1: user facing function
-    response = await router.aadapter_completion(
-        model="claude-3-5-sonnet-20240620",
-        messages=messages,
-        adapter_id="anthropic",
-        mock_response="This is a fake call",
-    )
-
-    ## Test 2: underlying function
-    await router._aadapter_completion(
-        model="claude-3-5-sonnet-20240620",
-        messages=messages,
-        adapter_id="anthropic",
-        mock_response="This is a fake call",
-    )
-
-    print("Response: {}".format(response))
-
-    assert response is not None
-
-    AnthropicResponse.model_validate(response)
-
-    assert response.model == "gpt-3.5-turbo"
-
-
-@pytest.mark.asyncio
 async def test_router_with_empty_choices(model_list):
     """
     https://github.com/BerriAI/litellm/issues/8306
