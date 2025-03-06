@@ -55,7 +55,7 @@ else:
     LiteLLMLoggingObj = Any
 
 
-def _process_gemini_image(image_url: str) -> PartType:
+def _process_gemini_image(image_url: str, format: Optional[str] = None) -> PartType:
     """
     Given an image URL, return the appropriate PartType for Gemini
     """
@@ -72,20 +72,23 @@ def _process_gemini_image(image_url: str) -> PartType:
             if not is_gemini_1_5_accepted_file_type(file_type):
                 raise Exception(f"File type not supported by gemini - {file_type}")
 
-            mime_type = get_file_mime_type_for_file_type(file_type)
+            mime_type = format or get_file_mime_type_for_file_type(file_type)
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
 
             return PartType(file_data=file_data)
         elif (
             "https://" in image_url
-            and (image_type := _get_image_mime_type_from_url(image_url)) is not None
+            and (image_type := format or _get_image_mime_type_from_url(image_url))
+            is not None
         ):
             file_data = FileDataType(file_uri=image_url, mime_type=image_type)
             return PartType(file_data=file_data)
         elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
             # https links for unsupported mime types and base64 images
             image = convert_to_anthropic_image_obj(image_url)
-            _blob = BlobType(data=image["data"], mime_type=image["media_type"])
+            _blob = BlobType(
+                data=image["data"], mime_type=format or image["media_type"]
+            )
             return PartType(inline_data=_blob)
         raise Exception("Invalid image received - {}".format(image_url))
     except Exception as e:
@@ -159,11 +162,15 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                         elif element["type"] == "image_url":
                             element = cast(ChatCompletionImageObject, element)
                             img_element = element
+                            format: Optional[str] = None
                             if isinstance(img_element["image_url"], dict):
                                 image_url = img_element["image_url"]["url"]
+                                format = img_element["image_url"].get("format")
                             else:
                                 image_url = img_element["image_url"]
-                            _part = _process_gemini_image(image_url=image_url)
+                            _part = _process_gemini_image(
+                                image_url=image_url, format=format
+                            )
                             _parts.append(_part)
                     user_content.extend(_parts)
                 elif (

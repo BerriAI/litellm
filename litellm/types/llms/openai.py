@@ -378,6 +378,7 @@ class ChatCompletionTextObject(
 class ChatCompletionImageUrlObject(TypedDict, total=False):
     url: Required[str]
     detail: str
+    format: str
 
 
 class ChatCompletionImageObject(TypedDict):
