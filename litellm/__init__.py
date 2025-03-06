@@ -800,9 +800,6 @@ from .llms.oobabooga.chat.transformation import OobaboogaConfig
 from .llms.maritalk import MaritalkConfig
 from .llms.openrouter.chat.transformation import OpenrouterConfig
 from .llms.anthropic.chat.transformation import AnthropicConfig
-from .llms.anthropic.experimental_pass_through.transformation import (
-    AnthropicExperimentalPassThroughConfig,
-)
 from .llms.groq.stt.transformation import GroqSTTConfig
 from .llms.anthropic.completion.transformation import AnthropicTextConfig
 from .llms.triton.completion.transformation import TritonConfig
@@ -821,6 +818,9 @@ from .llms.infinity.rerank.transformation import InfinityRerankConfig
 from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
+from .llms.anthropic.experimental_pass_through.messages.transformation import (
+    AnthropicMessagesConfig,
+)
 from .llms.together_ai.chat import TogetherAIConfig
 from .llms.together_ai.completion.transformation import TogetherAITextCompletionConfig
 from .llms.cloudflare.chat.transformation import CloudflareChatConfig
@@ -1011,6 +1011,7 @@ from .assistants.main import *
 from .batches.main import *
 from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
+from .llms.anthropic.experimental_pass_through.messages.handler import *
 from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
 from .files.main import *
