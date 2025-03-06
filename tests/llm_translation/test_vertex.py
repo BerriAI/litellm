@@ -1141,6 +1141,12 @@ def test_process_gemini_image():
         mime_type="image/png", file_uri="gs://bucket/image.png"
     )
 
+    # Test gs url with format specified
+    gcs_result = _process_gemini_image("gs://bucket/image", format="image/jpeg")
+    assert gcs_result["file_data"] == FileDataType(
+        mime_type="image/jpeg", file_uri="gs://bucket/image"
+    )
+
     # Test HTTPS JPG URL
     https_result = _process_gemini_image("https://example.com/image.jpg")
     print("https_result JPG", https_result)
