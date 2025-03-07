@@ -14,7 +14,7 @@ import json
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, List, Optional, Tuple, Union, cast
+from typing import List, Optional, Tuple, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
