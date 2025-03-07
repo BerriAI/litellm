@@ -942,11 +942,15 @@ class CustomStreamWrapper:
 
     def _optional_combine_thinking_block_in_choices(
         self, model_response: ModelResponseStream
-    ) -> Optional[ModelResponseStream]:
+    ) -> None:
         """
         UI's Like OpenWebUI expect to get 1 chunk with <think>...</think> tags in the chunk content
 
-        This helper handles placing reasoning_content in content with <think>...</think> tags
+        In place updates the model_response object with reasoning_content in content with <think>...</think> tags
+
+        Enabled when `merge_reasoning_content_in_choices=True` passed in request params
+
+
         """
         if self.merge_reasoning_content_in_choices is True:
             reasoning_content = getattr(
