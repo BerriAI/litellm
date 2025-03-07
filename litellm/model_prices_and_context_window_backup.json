@@ -6432,6 +6432,18 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true
     },
+    "eu.amazon.nova-micro-v1:0": {
+        "max_tokens": 4096, 
+        "max_input_tokens": 300000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.000000046,
+        "output_cost_per_token": 0.000000184,
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
+    },
     "amazon.nova-lite-v1:0": {
         "max_tokens": 4096, 
         "max_input_tokens": 128000,
@@ -6452,6 +6464,20 @@
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.00000006,
         "output_cost_per_token": 0.00000024,
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
+    },
+    "eu.amazon.nova-lite-v1:0": {
+        "max_tokens": 4096, 
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.000000078,
+        "output_cost_per_token": 0.000000312,
         "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "supports_function_calling": true,
@@ -6487,6 +6513,21 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true
+    },
+    "eu.amazon.nova-pro-v1:0": {
+        "max_tokens": 4096, 
+        "max_input_tokens": 300000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000105,
+        "output_cost_per_token": 0.0000042,
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "anthropic.claude-3-sonnet-20240229-v1:0": {
         "max_tokens": 4096, 
