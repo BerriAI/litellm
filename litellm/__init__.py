@@ -558,7 +558,7 @@ def add_known_models():
             anyscale_models.append(key)
         elif value.get("litellm_provider") == "cerebras":
             cerebras_models.append(key)
-        elif value.get("litellm_provider") == "nvidia":
+        elif value.get("litellm_provider") == "nvidia_nim":
             nvidia_models.append(key)
         elif value.get("litellm_provider") == "galadriel":
             galadriel_models.append(key)
@@ -692,7 +692,7 @@ models_by_provider: dict = {
     "azure_text": azure_text_models,
     "anyscale": anyscale_models,
     "cerebras": cerebras_models,
-    "nvidia": nvidia_models,
+    "nvidia_nim": nvidia_models,
     "galadriel": galadriel_models,
     "sambanova": sambanova_models,
     "assemblyai": assemblyai_models,
@@ -942,10 +942,10 @@ from .llms.openai.chat.gpt_audio_transformation import (
 
 openAIGPTAudioConfig = OpenAIGPTAudioConfig()
 
-from .llms.nvidia.chat import NvidiaConfig
+from .llms.nvidia.chat import NvidiaNimConfig
 from .llms.nvidia.embed import NvidiaEmbeddingConfig
 
-nvidiaConfig = NvidiaConfig()
+nvidiaConfig = NvidiaNimConfig()
 nvidiaEmbeddingConfig = NvidiaEmbeddingConfig()
 
 from .llms.cerebras.chat import CerebrasConfig
