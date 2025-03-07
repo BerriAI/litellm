@@ -76,7 +76,7 @@ resp = completion(
 )
 
 print(
-    resp.choices[0].message.provider_specific_fields["reasoning_content"]
+    resp.choices[0].message.reasoning_content
 )
 ```
 

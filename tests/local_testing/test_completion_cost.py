@@ -1574,7 +1574,11 @@ def test_completion_cost_azure_ai_rerank(model):
                 "relevance_score": 0.990732,
             },
         ],
-        meta={},
+        meta={
+            "billed_units": {
+                "search_units": 1,
+            }
+        },
     )
     print("response", response)
     model = model
@@ -2766,12 +2770,66 @@ def test_add_known_models():
 def test_bedrock_cost_calc_with_region():
     from litellm import completion
 
-    response = completion(
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        messages=[{"role": "user", "content": "Hello, how are you?"}],
-        aws_region_name="us-east-1",
-    )
-    assert response._hidden_params["response_cost"] > 0
+    from litellm import ModelResponse
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    litellm.add_known_models()
+
+    hidden_params = {
+        "custom_llm_provider": "bedrock",
+        "region_name": "us-east-1",
+        "optional_params": {},
+        "litellm_call_id": "cf371a5d-679b-410f-b862-8084676d6d59",
+        "model_id": None,
+        "api_base": None,
+        "response_cost": 0.0005639999999999999,
+        "additional_headers": {},
+    }
+
+    litellm.set_verbose = True
+
+    bedrock_models = litellm.bedrock_models + litellm.bedrock_converse_models
+
+    for model in bedrock_models:
+        if litellm.model_cost[model]["mode"] == "chat":
+            response = {
+                "id": "cmpl-55db75e0b05344058b0bd8ee4e00bf84",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "index": 0,
+                        "logprobs": None,
+                        "message": {
+                            "content": 'Here\'s one:\n\nWhy did the Linux kernel go to therapy?\n\nBecause it had a lot of "core" issues!\n\nHope that one made you laugh!',
+                            "refusal": None,
+                            "role": "assistant",
+                            "audio": None,
+                            "function_call": None,
+                            "tool_calls": [],
+                        },
+                    }
+                ],
+                "created": 1729243714,
+                "model": model,
+                "object": "chat.completion",
+                "service_tier": None,
+                "system_fingerprint": None,
+                "usage": {
+                    "completion_tokens": 32,
+                    "prompt_tokens": 16,
+                    "total_tokens": 48,
+                    "completion_tokens_details": None,
+                    "prompt_tokens_details": None,
+                },
+            }
+
+            model_response = ModelResponse(**response)
+            model_response._hidden_params = hidden_params
+            cost = completion_cost(model_response, custom_llm_provider="bedrock")
+
+            assert cost > 0
 
 
 # @pytest.mark.parametrize(
@@ -2909,3 +2967,85 @@ async def test_cost_calculator_with_custom_pricing_router(model_item, custom_pri
     )
     # assert resp.model == "random-model"
     assert resp._hidden_params["response_cost"] > 0
+
+
+def test_json_valid_model_cost_map():
+    import json
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+
+    model_cost = litellm.get_model_cost_map(url="")
+
+    try:
+        # Attempt to serialize and deserialize the JSON
+        json_str = json.dumps(model_cost)
+        json.loads(json_str)
+    except json.JSONDecodeError as e:
+        assert False, f"Invalid JSON format: {str(e)}"
+
+
+def test_batch_cost_calculator():
+
+    args = {
+        "completion_response": {
+            "choices": [
+                {
+                    "content_filter_results": {
+                        "hate": {"filtered": False, "severity": "safe"},
+                        "protected_material_code": {
+                            "filtered": False,
+                            "detected": False,
+                        },
+                        "protected_material_text": {
+                            "filtered": False,
+                            "detected": False,
+                        },
+                        "self_harm": {"filtered": False, "severity": "safe"},
+                        "sexual": {"filtered": False, "severity": "safe"},
+                        "violence": {"filtered": False, "severity": "safe"},
+                    },
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "logprobs": None,
+                    "message": {
+                        "content": 'As of my last update in October 2023, there are eight recognized planets in the solar system. They are:\n\n1. **Mercury** - The closest planet to the Sun, known for its extreme temperature fluctuations.\n2. **Venus** - Similar in size to Earth but with a thick atmosphere rich in carbon dioxide, leading to a greenhouse effect that makes it the hottest planet.\n3. **Earth** - The only planet known to support life, with a diverse environment and liquid water.\n4. **Mars** - Known as the Red Planet, it has the largest volcano and canyon in the solar system and features signs of past water.\n5. **Jupiter** - The largest planet in the solar system, known for its Great Red Spot and numerous moons.\n6. **Saturn** - Famous for its stunning rings, it is a gas giant also known for its extensive moon system.\n7. **Uranus** - An ice giant with a unique tilt, it rotates on its side and has a blue color due to methane in its atmosphere.\n8. **Neptune** - Another ice giant, known for its deep blue color and strong winds, it is the farthest planet from the Sun.\n\nPluto was previously classified as the ninth planet but was reclassified as a "dwarf planet" in 2006 by the International Astronomical Union.',
+                        "refusal": None,
+                        "role": "assistant",
+                    },
+                }
+            ],
+            "created": 1741135408,
+            "id": "chatcmpl-B7X96teepFM4ILP7cm4Ga62eRuV8p",
+            "model": "gpt-4o-mini-2024-07-18",
+            "object": "chat.completion",
+            "prompt_filter_results": [
+                {
+                    "prompt_index": 0,
+                    "content_filter_results": {
+                        "hate": {"filtered": False, "severity": "safe"},
+                        "jailbreak": {"filtered": False, "detected": False},
+                        "self_harm": {"filtered": False, "severity": "safe"},
+                        "sexual": {"filtered": False, "severity": "safe"},
+                        "violence": {"filtered": False, "severity": "safe"},
+                    },
+                }
+            ],
+            "system_fingerprint": "fp_b705f0c291",
+            "usage": {
+                "completion_tokens": 278,
+                "completion_tokens_details": {
+                    "accepted_prediction_tokens": 0,
+                    "audio_tokens": 0,
+                    "reasoning_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+                "prompt_tokens": 20,
+                "prompt_tokens_details": {"audio_tokens": 0, "cached_tokens": 0},
+                "total_tokens": 298,
+            },
+        },
+        "model": None,
+    }
+
+    cost = completion_cost(**args)
+    assert cost > 0
