@@ -21,6 +21,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._types import (
     CommonProxyErrors,
+    LiteLLM_ProxyModelTable,
     LitellmUserRoles,
     PrismaCompatibleUpdateDBModel,
     ProxyErrorTypes,
@@ -227,12 +228,16 @@ async def _add_model_to_db(
     model_params: Deployment,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
-):
+    new_encryption_key: Optional[str] = None,
+    should_create_model_in_db: bool = True,
+) -> Optional[LiteLLM_ProxyModelTable]:
     # encrypt litellm params #
     _litellm_params_dict = model_params.litellm_params.dict(exclude_none=True)
     _orignal_litellm_model_name = model_params.litellm_params.model
     for k, v in _litellm_params_dict.items():
-        encrypted_value = encrypt_value_helper(value=v)
+        encrypted_value = encrypt_value_helper(
+            value=v, new_encryption_key=new_encryption_key
+        )
         model_params.litellm_params[k] = encrypted_value
     _data: dict = {
         "model_id": model_params.model_info.id,
@@ -246,9 +251,12 @@ async def _add_model_to_db(
     }
     if model_params.model_info.id is not None:
         _data["model_id"] = model_params.model_info.id
-    model_response = await prisma_client.db.litellm_proxymodeltable.create(
-        data=_data  # type: ignore
-    )
+    if should_create_model_in_db:
+        model_response = await prisma_client.db.litellm_proxymodeltable.create(
+            data=_data  # type: ignore
+        )
+    else:
+        model_response = LiteLLM_ProxyModelTable(**_data)
     return model_response
 
 
