@@ -18,23 +18,31 @@ This guide walks you through connecting OpenWeb UI to LiteLLM. Using LiteLLM wit
 - OpenWebUI starts running on [http://localhost:3000](http://localhost:3000)
 - LiteLLM starts running on [http://localhost:4000](http://localhost:4000)
 
-### Create a Virtual Key on LiteLLM 
+### 2.Create a Virtual Key on LiteLLM 
 
 Navigate to [http://localhost:4000/ui](http://localhost:4000/ui) and create a new virtual Key. 
 
 LiteLLM allows you to specify what models are available on OpenWeb UI (by specifying the models the key will have access to).
 
+<Image img={require('../../img/litellm_make_key_openweb.gif')} />
+
 ### Connect OpenWeb UI to LiteLLM
 
-#### Navigate to Settings 
+On OpenWeb UI, navigate to Settings -> Connections and create a new connection to LiteLLM
 
-#### Click on Connections 
+Enter the following details:
+- URL: `http://localhost:4000` (your litellm proxy base url)
+- Key: `your-virtual-key` (the key you created in the previous step)
 
-#### Enter LiteLLM API Base and Virtual Key
+<Image img={require('../../img/litellm_setup_openweb.gif')} />
 
-#### Click on Save
+### Test it
 
-#### Test it
+On the top left corner, select models you should only see the models you gave the key access to in Step 2.
+
+Once you selected a model, enter your message content and click on `Submit`
+
+<Image img={require('../../img/basic_litellm.gif')} />
 
 ## Render `thinking` content on OpenWeb UI
 
