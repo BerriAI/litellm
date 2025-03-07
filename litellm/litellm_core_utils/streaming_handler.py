@@ -948,7 +948,7 @@ class CustomStreamWrapper:
 
         This helper handles placing reasoning_content in content with <think>...</think> tags
         """
-        if self.merge_reasoning_content_in_choices:
+        if self.merge_reasoning_content_in_choices is True:
             reasoning_content = getattr(
                 model_response.choices[0].delta, "reasoning_content", None
             )
@@ -974,8 +974,8 @@ class CustomStreamWrapper:
                 )
                 self.sent_last_thinking_block = True
 
-        if hasattr(model_response.choices[0].delta, "reasoning_content"):
-            del model_response.choices[0].delta.reasoning_content
+            if hasattr(model_response.choices[0].delta, "reasoning_content"):
+                del model_response.choices[0].delta.reasoning_content
         return
 
     def chunk_creator(self, chunk: Any):  # type: ignore  # noqa: PLR0915
