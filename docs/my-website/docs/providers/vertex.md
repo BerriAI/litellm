@@ -1686,6 +1686,14 @@ assert isinstance(
 
 Pass any file supported by Vertex AI, through LiteLLM. 
 
+LiteLLM Supports the following image types passed in url
+
+```
+Images with Cloud Storage URIs - gs://cloud-samples-data/generative-ai/image/boats.jpeg
+Images with direct links - https://storage.googleapis.com/github-repo/img/gemini/intro/landmark3.jpg
+Videos with Cloud Storage URIs - https://storage.googleapis.com/github-repo/img/gemini/multimodality_usecases_overview/pixel8.mp4
+Base64 Encoded Local Images
+```
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
