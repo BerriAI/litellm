@@ -1274,9 +1274,13 @@ async def team_info(
             )
 
         try:
-            team_info: BaseModel = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": team_id}
+            team_info: Optional[BaseModel] = (
+                await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id}
+                )
             )
+            if team_info is None:
+                raise Exception
         except Exception:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
