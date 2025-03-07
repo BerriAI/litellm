@@ -192,6 +192,8 @@ class GenericLiteLLMParams(BaseModel):
     budget_duration: Optional[str] = None
     use_in_pass_through: Optional[bool] = False
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
+    merge_reasoning_content_in_choices: Optional[bool] = False
+    model_info: Optional[Dict] = None
 
     def __init__(
         self,
@@ -231,6 +233,9 @@ class GenericLiteLLMParams(BaseModel):
         budget_duration: Optional[str] = None,
         # Pass through params
         use_in_pass_through: Optional[bool] = False,
+        # This will merge the reasoning content in the choices
+        merge_reasoning_content_in_choices: Optional[bool] = False,
+        model_info: Optional[Dict] = None,
         **params,
     ):
         args = locals()

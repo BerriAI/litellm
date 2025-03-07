@@ -1,27 +1,13 @@
 model_list:
-  - model_name: fake-openai-endpoint
+  - model_name: model-1
     litellm_params:
-      model: openai/my-fake-model
-      api_key: my-fake-key
+      model: openai/model-1
+      api_key: os.environ/OPENAI_API_KEY_MODEL_1
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
-  - model_name: claude-special-alias
+  - model_name: model-2
     litellm_params:
-      model: anthropic/claude-3-haiku-20240307
-      api_key: os.environ/ANTHROPIC_API_KEY
-  - model_name: claude-3-5-sonnet-20241022
-    litellm_params:
-      model: anthropic/claude-3-5-sonnet-20241022
-      api_key: os.environ/ANTHROPIC_API_KEY
-  - model_name: claude-3-7-sonnet-20250219
-    litellm_params:
-      model: anthropic/claude-3-7-sonnet-20250219
-      api_key: os.environ/ANTHROPIC_API_KEY
-  - model_name: anthropic/*
-    litellm_params:
-      model: anthropic/*
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: openai/model-2
+      api_key: os.environ/OPENAI_API_KEY_MODEL_2
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
-general_settings:
-  store_model_in_db: true
-  store_prompts_in_spend_logs: true
 

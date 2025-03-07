@@ -256,7 +256,6 @@ const sidebars = {
         "completion/batching",
         "completion/mock_requests",
         "completion/reliable_completions",
-        'tutorials/litellm_proxy_aporia',
 
       ]
     },
@@ -357,23 +356,6 @@ const sidebars = {
           label: "LangChain, LlamaIndex, Instructor Integration",
           items: ["langchain/langchain", "tutorials/instructor"],
         },
-        {
-          type: "category",
-          label: "Tutorials",
-          items: [
-
-            'tutorials/azure_openai',
-            'tutorials/instructor',
-            "tutorials/gradio_integration",
-            "tutorials/huggingface_codellama",
-            "tutorials/huggingface_tutorial",
-            "tutorials/TogetherAI_liteLLM",
-            "tutorials/finetuned_chat_gpt",
-            "tutorials/text_completion",
-            "tutorials/first_playground",
-            "tutorials/model_fallbacks",
-          ],
-        },
       ],
     },
     {
@@ -431,6 +413,31 @@ const sidebars = {
         "observability/opik_integration",
       ],
     },
+    {
+      type: "category",
+      label: "Tutorials",
+      items: [
+        "tutorials/openweb_ui",
+        'tutorials/litellm_proxy_aporia',
+        {
+          type: "category",
+          label: "LiteLLM Python SDK Tutorials",
+          items: [
+
+            'tutorials/azure_openai',
+            'tutorials/instructor',
+            "tutorials/gradio_integration",
+            "tutorials/huggingface_codellama",
+            "tutorials/huggingface_tutorial",
+            "tutorials/TogetherAI_liteLLM",
+            "tutorials/finetuned_chat_gpt",
+            "tutorials/text_completion",
+            "tutorials/first_playground",
+            "tutorials/model_fallbacks",
+          ],
+        },
+      ]
+    },
 
     {
       type: "category",
@@ -453,6 +460,7 @@ const sidebars = {
           items: [
             "projects/smolagents",
             "projects/Docq.AI",
+            "projects/PDL",
             "projects/OpenInterpreter",
             "projects/Elroy",
             "projects/dbally",
