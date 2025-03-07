@@ -1,15 +1,13 @@
 model_list:
-  - model_name: fake-openai-endpoint
+  - model_name: model-1
     litellm_params:
-      model: openai/my-fake-model
-      api_key: my-fake-key
+      model: openai/model-1
+      api_key: os.environ/OPENAI_API_KEY_MODEL_1
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+  - model_name: model-2
+    litellm_params:
+      model: openai/model-2
+      api_key: os.environ/OPENAI_API_KEY_MODEL_2
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
-
-general_settings:
-  store_model_in_db: true
-
-
-litellm_settings:
-  callbacks: ["gcs_bucket"]
 

@@ -11,6 +11,8 @@ import {
   Grid,
   Badge,
   Button as TremorButton,
+  TextInput,
+  NumberInput,
 } from "@tremor/react";
 import { ArrowLeftIcon, TrashIcon } from "@heroicons/react/outline";
 import { modelDeleteCall, modelUpdateCall } from "./networking";
@@ -43,11 +45,61 @@ export default function ModelInfoView({
   setEditModalVisible,
   setSelectedModel
 }: ModelInfoViewProps) {
-  const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
+  const [localModelData, setLocalModelData] = useState(modelData);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
 
   const canEditModel = userRole === "Admin";
+
+  const handleModelUpdate = async (values: any) => {
+    try {
+      if (!accessToken) return;
+      setIsSaving(true);
+      
+      const updateData = {
+        model_name: values.model_name,
+        litellm_params: {
+          ...localModelData.litellm_params,
+          model: values.litellm_model_name,
+          api_base: values.api_base,
+          custom_llm_provider: values.custom_llm_provider,
+          organization: values.organization,
+          tpm: values.tpm,
+          rpm: values.rpm,
+          max_retries: values.max_retries,
+          timeout: values.timeout,
+          stream_timeout: values.stream_timeout,
+          input_cost_per_token: values.input_cost / 1_000_000,
+          output_cost_per_token: values.output_cost / 1_000_000,
+        },
+        model_info: {
+          id: modelId,
+        }
+        
+      };
+
+      await modelUpdateCall(accessToken, updateData);
+      
+      setLocalModelData({
+        ...localModelData,
+        model_name: values.model_name,
+        litellm_model_name: values.litellm_model_name,
+        litellm_params: updateData.litellm_params
+      });
+
+      message.success("Model settings updated successfully");
+      setIsDirty(false);
+      setIsEditing(false);
+    } catch (error) {
+      console.error("Error updating model:", error);
+      message.error("Failed to update model settings");
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   if (!modelData) {
     return (
@@ -154,122 +206,253 @@ export default function ModelInfoView({
               </Card>
             </Grid>
 
+            {/* Audit info shown as a subtle banner below the overview */}
+            <div className="mb-6 text-sm text-gray-500 flex items-center gap-x-6">
+              <div className="flex items-center gap-x-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Created At {modelData.model_info.created_at 
+                  ? new Date(modelData.model_info.created_at).toLocaleDateString('en-US', {
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric'
+                    })
+                  : "Not Set"}
+              </div>
+              <div className="flex items-center gap-x-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                </svg>
+                Created By {modelData.model_info.created_by || "Not Set"}
+              </div>
+            </div>
+
             {/* Settings Card */}
             <Card>
               <div className="flex justify-between items-center mb-4">
                 <Title>Model Settings</Title>
-                {(canEditModel && !isEditing) && (
-                  <TremorButton 
-                    variant="light"
+                {canEditModel && !isEditing && (
+                  <TremorButton
+                    variant="secondary"
                     onClick={() => setIsEditing(true)}
+                    className="flex items-center"
                   >
-                    Edit Settings
+                    Edit Model
                   </TremorButton>
                 )}
               </div>
-
-              {isEditing ? (
-                <EditModelModal
-                  visible={isEditing}
-                  onCancel={() => setIsEditing(false)}
-                  model={modelData}
-                  onSubmit={(data: FormData) => handleEditModelSubmit(data, accessToken, setEditModalVisible, setSelectedModel)}
-                />
-              ) : (
+              <Form
+                form={form}
+                onFinish={handleModelUpdate}
+                initialValues={{
+                  model_name: localModelData.model_name,
+                  litellm_model_name: localModelData.litellm_model_name,
+                  api_base: localModelData.litellm_params?.api_base,
+                  custom_llm_provider: localModelData.litellm_params?.custom_llm_provider,
+                  organization: localModelData.litellm_params?.organization,
+                  tpm: localModelData.litellm_params?.tpm,
+                  rpm: localModelData.litellm_params?.rpm,
+                  max_retries: localModelData.litellm_params?.max_retries,
+                  timeout: localModelData.litellm_params?.timeout,
+                  stream_timeout: localModelData.litellm_params?.stream_timeout,
+                  input_cost: localModelData.litellm_params?.input_cost_per_token ? 
+                    (localModelData.litellm_params.input_cost_per_token * 1_000_000) : modelData.input_cost * 1_000_000,
+                  output_cost: localModelData.litellm_params?.output_cost_per_token ? 
+                    (localModelData.litellm_params.output_cost_per_token * 1_000_000) : modelData.output_cost * 1_000_000,
+                }}
+                layout="vertical"
+                onValuesChange={() => setIsDirty(true)}
+              >
                 <div className="space-y-4">
-                  <div>
-                    <Text className="font-medium">Model ID</Text>
-                    <div className="font-mono">{modelData.model_info.id}</div>
-                  </div>
-                  
-                  <div>
-                    <Text className="font-medium">Public Model Name</Text>
-                    <div>{getDisplayModelName(modelData)}</div>
+                  <div className="space-y-4">
+                    <div>
+                      <Text className="font-medium">Model Name</Text>
+                      {isEditing ? (
+                        <Form.Item name="model_name" className="mb-0">
+                          <TextInput placeholder="Enter model name" />
+                        </Form.Item>
+                      ) : (
+                        <div className="mt-1 p-2 bg-gray-50 rounded">{localModelData.model_name}</div>
+                      )}
+                    </div>
+
+                    <div>
+                      <Text className="font-medium">LiteLLM Model Name</Text>
+                      {isEditing ? (
+                        <Form.Item name="litellm_model_name" className="mb-0">
+                          <TextInput placeholder="Enter LiteLLM model name" />
+                        </Form.Item>
+                      ) : (
+                        <div className="mt-1 p-2 bg-gray-50 rounded">{localModelData.litellm_model_name}</div>
+                      )}
+                    </div>
+
+                    <div>
+                      <Text className="font-medium">Input Cost (per 1M tokens)</Text>
+                      {isEditing ? (
+                        <Form.Item name="input_cost" className="mb-0">
+                          <NumberInput placeholder="Enter input cost" />
+                        </Form.Item>
+                      ) : (
+                        <div className="mt-1 p-2 bg-gray-50 rounded">
+                          {localModelData.litellm_params?.input_cost_per_token 
+                            ? (localModelData.litellm_params.input_cost_per_token * 1_000_000).toFixed(4) 
+                            : modelData.input_cost * 1_000_000}
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <Text className="font-medium">Output Cost (per 1M tokens)</Text>
+                      {isEditing ? (
+                        <Form.Item name="output_cost" className="mb-0">
+                          <NumberInput placeholder="Enter output cost" />
+                        </Form.Item>
+                      ) : (
+                        <div className="mt-1 p-2 bg-gray-50 rounded">
+                          {localModelData.litellm_params?.output_cost_per_token 
+                            ? (localModelData.litellm_params.output_cost_per_token * 1_000_000).toFixed(4) 
+                            : modelData.output_cost * 1_000_000}
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <Text className="font-medium">API Base</Text>
+                      {isEditing ? (
+                        <Form.Item name="api_base" className="mb-0">
+                          <TextInput placeholder="Enter API base" />
+                        </Form.Item>
+                      ) : (
+                        <div className="mt-1 p-2 bg-gray-50 rounded">
+                          {localModelData.litellm_params?.api_base || "Not Set"}
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <Text className="font-medium">Custom LLM Provider</Text>
+                      {isEditing ? (
+                        <Form.Item name="custom_llm_provider" className="mb-0">
+                          <TextInput placeholder="Enter custom LLM provider" />
+                        </Form.Item>
+                      ) : (
+                        <div className="mt-1 p-2 bg-gray-50 rounded">
+                          {localModelData.litellm_params?.custom_llm_provider || "Not Set"}
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <Text className="font-medium">Organization</Text>
+                      {isEditing ? (
+                        <Form.Item name="organization" className="mb-0">
+                          <TextInput placeholder="Enter organization" />
+                        </Form.Item>
+                      ) : (
+                        <div className="mt-1 p-2 bg-gray-50 rounded">
+                          {localModelData.litellm_params?.organization || "Not Set"}
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <Text className="font-medium">TPM (Tokens per Minute)</Text>
+                      {isEditing ? (
+                        <Form.Item name="tpm" className="mb-0">
+                          <NumberInput placeholder="Enter TPM" />
+                        </Form.Item>
+                      ) : (
+                        <div className="mt-1 p-2 bg-gray-50 rounded">
+                          {localModelData.litellm_params?.tpm || "Not Set"}
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <Text className="font-medium">RPM (Requests per Minute)</Text>
+                      {isEditing ? (
+                        <Form.Item name="rpm" className="mb-0">
+                          <NumberInput placeholder="Enter RPM" />
+                        </Form.Item>
+                      ) : (
+                        <div className="mt-1 p-2 bg-gray-50 rounded">
+                          {localModelData.litellm_params?.rpm || "Not Set"}
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <Text className="font-medium">Max Retries</Text>
+                      {isEditing ? (
+                        <Form.Item name="max_retries" className="mb-0">
+                          <NumberInput placeholder="Enter max retries" />
+                        </Form.Item>
+                      ) : (
+                        <div className="mt-1 p-2 bg-gray-50 rounded">
+                          {localModelData.litellm_params?.max_retries || "Not Set"}
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <Text className="font-medium">Timeout (seconds)</Text>
+                      {isEditing ? (
+                        <Form.Item name="timeout" className="mb-0">
+                          <NumberInput placeholder="Enter timeout" />
+                        </Form.Item>
+                      ) : (
+                        <div className="mt-1 p-2 bg-gray-50 rounded">
+                          {localModelData.litellm_params?.timeout || "Not Set"}
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <Text className="font-medium">Stream Timeout (seconds)</Text>
+                      {isEditing ? (
+                        <Form.Item name="stream_timeout" className="mb-0">
+                          <NumberInput placeholder="Enter stream timeout" />
+                        </Form.Item>
+                      ) : (
+                        <div className="mt-1 p-2 bg-gray-50 rounded">
+                          {localModelData.litellm_params?.stream_timeout || "Not Set"}
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <Text className="font-medium">Team ID</Text>
+                      <div className="mt-1 p-2 bg-gray-50 rounded">
+                        {modelData.model_info.team_id || "Not Set"}
+                      </div>
+                    </div>
                   </div>
 
-                  <div>
-                    <Text className="font-medium">LiteLLM Model Name</Text>
-                    <div>{modelData.litellm_model_name}</div>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Input Cost (per 1M tokens)</Text>
-                    <div>{modelData.litellm_params?.input_cost_per_token ? (modelData.litellm_params.input_cost_per_token * 1_000_000).toFixed(4) : "Not Set"}</div>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Output Cost (per 1M tokens)</Text>
-                    <div>{modelData.litellm_params?.output_cost_per_token ? (modelData.litellm_params.output_cost_per_token * 1_000_000).toFixed(4) : "Not Set"}</div>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">API Base</Text>
-                    <div>{modelData.litellm_params?.api_base || "Not Set"}</div>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Custom LLM Provider</Text>
-                    <div>{modelData.litellm_params?.custom_llm_provider || "Not Set"}</div>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Model</Text>
-                    <div>{modelData.litellm_params?.model || "Not Set"}</div>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Organization</Text>
-                    <div>{modelData.litellm_params?.organization || "Not Set"}</div>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">TPM (Tokens per Minute)</Text>
-                    <div>{modelData.litellm_params?.tpm || "Not Set"}</div>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">RPM (Requests per Minute)</Text>
-                    <div>{modelData.litellm_params?.rpm || "Not Set"}</div>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Max Retries</Text>
-                    <div>{modelData.litellm_params?.max_retries || "Not Set"}</div>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Timeout (seconds)</Text>
-                    <div>{modelData.litellm_params?.timeout || "Not Set"}</div>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Stream Timeout (seconds)</Text>
-                    <div>{modelData.litellm_params?.stream_timeout || "Not Set"}</div>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Team ID</Text>
-                    <div>{modelData.model_info.team_id || "Not Set"}</div>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Created At</Text>
-                    <div>{modelData.model_info.created_at ? new Date(modelData.model_info.created_at).toLocaleString() : "Not Set"}</div>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Created By</Text>
-                    <div>{modelData.model_info.created_by || "Not Set"}</div>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">LiteLLM Parameters</Text>
-                    <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
-                      {JSON.stringify(modelData.cleanedLitellmParams, null, 2)}
-                    </pre>
-                  </div>
+                  {isEditing && (
+                    <div className="mt-6 flex justify-end gap-2">
+                      <TremorButton
+                        variant="secondary"
+                        onClick={() => {
+                          form.resetFields();
+                          setIsDirty(false);
+                          setIsEditing(false);
+                        }}
+                      >
+                        Cancel
+                      </TremorButton>
+                      <TremorButton
+                        variant="primary"
+                        onClick={() => form.submit()}
+                        loading={isSaving}
+                      >
+                        Save Changes
+                      </TremorButton>
+                    </div>
+                  )}
                 </div>
-              )}
+              </Form>
             </Card>
           </TabPanel>
 

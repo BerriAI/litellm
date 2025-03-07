@@ -27,7 +27,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
-from litellm.utils import CustomStreamWrapper, get_secret
+from litellm.utils import CustomStreamWrapper
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -73,7 +73,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
 
     def get_complete_url(
         self,
-        api_base: str,
+        api_base: Optional[str],
         model: str,
         optional_params: dict,
         stream: Optional[bool] = None,
@@ -461,6 +461,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         data: dict,
         messages: list,
         client: Optional[AsyncHTTPHandler] = None,
+        json_mode: Optional[bool] = None,
     ) -> CustomStreamWrapper:
         streaming_response = CustomStreamWrapper(
             completion_stream=None,
@@ -475,6 +476,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 logging_obj=logging_obj,
                 fake_stream=True if "ai21" in api_base else False,
                 bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
+                json_mode=json_mode,
             ),
             model=model,
             custom_llm_provider="bedrock",
@@ -493,6 +495,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         data: dict,
         messages: list,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        json_mode: Optional[bool] = None,
     ) -> CustomStreamWrapper:
         if client is None or isinstance(client, AsyncHTTPHandler):
             client = _get_httpx_client(params={})
@@ -509,6 +512,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 logging_obj=logging_obj,
                 fake_stream=True if "ai21" in api_base else False,
                 bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
+                json_mode=json_mode,
             ),
             model=model,
             custom_llm_provider="bedrock",
@@ -534,7 +538,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         """
         Helper function to get the bedrock provider from the model
 
-        handles 3 scenarions:
+        handles 4 scenarios:
         1. model=invoke/anthropic.claude-3-5-sonnet-20240620-v1:0 -> Returns `anthropic`
         2. model=anthropic.claude-3-5-sonnet-20240620-v1:0 -> Returns `anthropic`
         3. model=llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n -> Returns `llama`
@@ -555,6 +559,10 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         # check if provider == "nova"
         if "nova" in model:
             return "nova"
+
+        for provider in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
+            if provider in model:
+                return provider
         return None
 
     @staticmethod
@@ -597,61 +605,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 modelId, spec="deepseek_r1"
             )
         return modelId
-
-    def get_aws_region_from_model_arn(self, model: Optional[str]) -> Optional[str]:
-        try:
-            # First check if the string contains the expected prefix
-            if not isinstance(model, str) or "arn:aws:bedrock" not in model:
-                return None
-
-            # Split the ARN and check if we have enough parts
-            parts = model.split(":")
-            if len(parts) < 4:
-                return None
-
-            # Get the region from the correct position
-            region = parts[3]
-            if not region:  # Check if region is empty
-                return None
-
-            return region
-        except Exception:
-            # Catch any unexpected errors and return None
-            return None
-
-    def _get_aws_region_name(
-        self, optional_params: dict, model: Optional[str] = None
-    ) -> str:
-        """
-        Get the AWS region name from the environment variables
-        """
-        aws_region_name = optional_params.get("aws_region_name", None)
-        ### SET REGION NAME ###
-        if aws_region_name is None:
-            # check model arn #
-            aws_region_name = self.get_aws_region_from_model_arn(model)
-            # check env #
-            litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
-
-            if (
-                aws_region_name is None
-                and litellm_aws_region_name is not None
-                and isinstance(litellm_aws_region_name, str)
-            ):
-                aws_region_name = litellm_aws_region_name
-
-            standard_aws_region_name = get_secret("AWS_REGION", None)
-            if (
-                aws_region_name is None
-                and standard_aws_region_name is not None
-                and isinstance(standard_aws_region_name, str)
-            ):
-                aws_region_name = standard_aws_region_name
-
-        if aws_region_name is None:
-            aws_region_name = "us-west-2"
-
-        return aws_region_name
 
     def _get_model_id_from_model_with_spec(
         self,

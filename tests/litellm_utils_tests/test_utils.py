@@ -1165,6 +1165,9 @@ def test_models_by_provider():
     """
     Make sure all providers from model map are in the valid providers list
     """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
     from litellm import models_by_provider
 
     providers = set()
@@ -1968,6 +1971,32 @@ def test_get_applied_guardrails(test_case):
     assert sorted(result) == sorted(test_case["expected"])
 
 
+@pytest.mark.parametrize(
+    "endpoint, params, expected_bool",
+    [
+        ("localhost:4000/v1/rerank", ["max_chunks_per_doc"], True),
+        ("localhost:4000/v2/rerank", ["max_chunks_per_doc"], False),
+        ("localhost:4000", ["max_chunks_per_doc"], True),
+        ("localhost:4000/v1/rerank", ["max_tokens_per_doc"], True),
+        ("localhost:4000/v2/rerank", ["max_tokens_per_doc"], False),
+        ("localhost:4000", ["max_tokens_per_doc"], False),
+        (
+            "localhost:4000/v1/rerank",
+            ["max_chunks_per_doc", "max_tokens_per_doc"],
+            True,
+        ),
+        (
+            "localhost:4000/v2/rerank",
+            ["max_chunks_per_doc", "max_tokens_per_doc"],
+            False,
+        ),
+        ("localhost:4000", ["max_chunks_per_doc", "max_tokens_per_doc"], False),
+    ],
+)
+def test_should_use_cohere_v1_client(endpoint, params, expected_bool):
+    assert litellm.utils.should_use_cohere_v1_client(endpoint, params) == expected_bool
+
+
 def test_add_openai_metadata():
     from litellm.utils import add_openai_metadata
 
@@ -1985,3 +2014,24 @@ def test_add_openai_metadata():
     assert result == {
         "user_api_key_end_user_id": "123",
     }
+
+
+def test_message_object():
+    from litellm.types.utils import Message
+
+    message = Message(content="Hello, world!", role="user")
+    assert message.content == "Hello, world!"
+    assert message.role == "user"
+    assert not hasattr(message, "audio")
+    assert not hasattr(message, "thinking_blocks")
+    assert not hasattr(message, "reasoning_content")
+
+
+def test_delta_object():
+    from litellm.types.utils import Delta
+
+    delta = Delta(content="Hello, world!", role="user")
+    assert delta.content == "Hello, world!"
+    assert delta.role == "user"
+    assert not hasattr(delta, "thinking_blocks")
+    assert not hasattr(delta, "reasoning_content")

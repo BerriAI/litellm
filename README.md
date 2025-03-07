@@ -40,7 +40,7 @@ LiteLLM manages:
 [**Jump to LiteLLM Proxy (LLM Gateway) Docs**](https://github.com/BerriAI/litellm?tab=readme-ov-file#openai-proxy---docs) <br>
 [**Jump to Supported LLM Providers**](https://github.com/BerriAI/litellm?tab=readme-ov-file#supported-providers-docs)
 
-🚨 **Stable Release:** Use docker images with the `-stable` tag. These have undergone 12 hour load tests, before being published. 
+🚨 **Stable Release:** Use docker images with the `-stable` tag. These have undergone 12 hour load tests, before being published. [More information about the release cycle here](https://docs.litellm.ai/docs/proxy/release_cycle)
 
 Support for more providers. Missing a provider or LLM Platform, raise a [feature request](https://github.com/BerriAI/litellm/issues/new?assignees=&labels=enhancement&projects=&template=feature_request.yml&title=%5BFeature%5D%3A+).
 
@@ -343,25 +343,32 @@ curl 'http://0.0.0.0:4000/key/generate' \
 To contribute: Clone the repo locally -> Make a change -> Submit a PR with the change.
 
 Here's how to modify the repo locally:
+
 Step 1: Clone the repo
 
 ```
 git clone https://github.com/BerriAI/litellm.git
 ```
 
-Step 2: Navigate into the project, and install dependencies:
+Step 2: Install dependencies:
 
 ```
-cd litellm
-poetry install -E extra_proxy -E proxy
+pip install -r requirements.txt
 ```
 
 Step 3: Test your change:
 
+a. Add a pytest test within `tests/litellm/`
+
+This folder follows the same directory structure as `litellm/`.
+
+If a corresponding test file does not exist, create one.
+
+b. Run the test
+
 ```
-cd tests # pwd: Documents/litellm/litellm/tests
-poetry run flake8
-poetry run pytest .
+cd tests/litellm # pwd: Documents/litellm/litellm/tests/litellm
+pytest /path/to/test_file.py
 ```
 
 Step 4: Submit a PR with your changes! 🚀

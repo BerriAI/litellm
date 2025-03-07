@@ -1,6 +1,5 @@
 "use client";
-
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Button, TextInput, Grid, Col } from "@tremor/react";
 import {
   Card,
@@ -24,16 +23,22 @@ import {
   Radio,
 } from "antd";
 import { unfurlWildcardModelsInList, getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import SchemaFormFields from './common_components/check_openapi_schema';
 import {
   keyCreateCall,
   slackBudgetAlertsHealthCheck,
   modelAvailableCall,
   getGuardrailsList,
+  proxyBaseUrl,
+  getPossibleUserRoles,
+  userFilterUICall,
 } from "./networking";
 import { Team } from "./key_team_helpers/key_list";
 import TeamDropdown from "./common_components/team_dropdown";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Tooltip } from 'antd';
+import Createuser from "./create_user_button";
+import debounce from 'lodash/debounce';
 
 const { Option } = Select;
 
@@ -45,6 +50,18 @@ interface CreateKeyProps {
   data: any[] | null;
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
   teams: Team[] | null;
+}
+
+interface User {
+  user_id: string;
+  user_email: string;
+  role?: string;
+}
+
+interface UserOption {
+  label: string;
+  value: string;
+  user: User;
 }
 
 const getPredefinedTags = (data: any[] | null) => {
@@ -137,6 +154,13 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
+  const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
+  const [newlyCreatedUserId, setNewlyCreatedUserId] = useState<string | null>(null);
+  const [possibleUIRoles, setPossibleUIRoles] = useState<
+    Record<string, Record<string, string>>
+  >({});
+  const [userOptions, setUserOptions] = useState<UserOption[]>([]);
+  const [userSearchLoading, setUserSearchLoading] = useState<boolean>(false);
 
   const handleOk = () => {
     setIsModalVisible(false);
@@ -169,6 +193,29 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     };
 
     fetchGuardrails();
+  }, [accessToken]);
+
+  // Fetch possible user roles when component mounts
+  useEffect(() => {
+    const fetchPossibleRoles = async () => {
+      try {
+        if (accessToken) {
+          // Check if roles are cached in session storage
+          const cachedRoles = sessionStorage.getItem('possibleUserRoles');
+          if (cachedRoles) {
+            setPossibleUIRoles(JSON.parse(cachedRoles));
+          } else {
+            const availableUserRoles = await getPossibleUserRoles(accessToken);
+            sessionStorage.setItem('possibleUserRoles', JSON.stringify(availableUserRoles));
+            setPossibleUIRoles(availableUserRoles);
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching possible user roles:", error);
+      }
+    };
+    
+    fetchPossibleRoles();
   }, [accessToken]);
 
   const handleCreate = async (formValues: Record<string, any>) => {
@@ -232,15 +279,69 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     form.setFieldValue('models', []);
   }, [selectedCreateKeyTeam, userModels]);
 
+  // Add a callback function to handle user creation
+  const handleUserCreated = (userId: string) => {
+    setNewlyCreatedUserId(userId);
+    form.setFieldsValue({ user_id: userId });
+    setIsCreateUserModalVisible(false);
+  };
+
+  const fetchUsers = async (searchText: string): Promise<void> => {
+    if (!searchText) {
+      setUserOptions([]);
+      return;
+    }
+
+    setUserSearchLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.append('user_email', searchText); // Always search by email
+      if (accessToken == null) {
+        return;
+      }
+      const response = await userFilterUICall(accessToken, params);
+      
+      const data: User[] = response;
+      const options: UserOption[] = data.map(user => ({
+        label: `${user.user_email} (${user.user_id})`,
+        value: user.user_id,
+        user
+      }));
+      
+      setUserOptions(options);
+    } catch (error) {
+      console.error('Error fetching users:', error);
+      message.error('Failed to search for users');
+    } finally {
+      setUserSearchLoading(false);
+    }
+  };
+
+  const debouncedSearch = useCallback(
+    debounce((text: string) => fetchUsers(text), 300),
+    [accessToken]
+  );
+
+  const handleUserSearch = (value: string): void => {
+    debouncedSearch(value);
+  };
+
+  const handleUserSelect = (_value: string, option: UserOption): void => {
+    const selectedUser = option.user;
+    form.setFieldsValue({
+      user_id: selectedUser.user_id
+    });
+  };
+
   return (
     <div>
       <Button className="mx-auto" onClick={() => setIsModalVisible(true)}>
         + Create New Key
       </Button>
       <Modal
-        title="Create Key"
+        // title="Create Key"
         visible={isModalVisible}
-        width={800}
+        width={1000}
         footer={null}
         onOk={handleOk}
         onCancel={handleCancel}
@@ -252,8 +353,20 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           wrapperCol={{ span: 16 }}
           labelAlign="left"
         >
-          <>
-            <Form.Item label="Owned By" className="mb-4">
+          {/* Section 1: Key Ownership */}
+          <div className="mb-8">
+            <Title className="mb-4">Key Ownership</Title>
+            <Form.Item 
+              label={
+                <span>
+                  Owned By{' '}
+                  <Tooltip title="Select who will own this API key">
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              } 
+              className="mb-4"
+            >
               <Radio.Group
                 onChange={(e) => setKeyOwner(e.target.value)}
                 value={keyOwner}
@@ -264,34 +377,59 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               </Radio.Group>
             </Form.Item>
 
+            {keyOwner === "another_user" && (
+              <Form.Item
+                label={
+                  <span>
+                    User ID{' '}
+                    <Tooltip title="The user who will own this key and be responsible for its usage">
+                      <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                    </Tooltip>
+                  </span>
+                }
+                name="user_id"
+                className="mt-4"
+                rules={[{ required: keyOwner === "another_user", message: `Please input the user ID of the user you are assigning the key to` }]}
+              >
+                <div>
+                  <div style={{ display: 'flex', marginBottom: '8px' }}>
+                    <Select
+                      showSearch
+                      placeholder="Type email to search for users"
+                      filterOption={false}
+                      onSearch={handleUserSearch}
+                      onSelect={(value, option) => handleUserSelect(value, option as UserOption)}
+                      options={userOptions}
+                      loading={userSearchLoading}
+                      allowClear
+                      style={{ width: '100%' }}
+                      notFoundContent={userSearchLoading ? 'Searching...' : 'No users found'}
+                    />
+                    <Button2 
+                      onClick={() => setIsCreateUserModalVisible(true)}
+                      style={{ marginLeft: '8px' }}
+                    >
+                      Create User
+                    </Button2>
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    Search by email to find users
+                  </div>
+                </div>
+              </Form.Item>
+            )}
             <Form.Item
-              label="User ID"
-              name="user_id"
-              hidden={keyOwner !== "another_user"}
-              valuePropName="user_id"
-              className="mt-8"
-              rules={[{ required: keyOwner === "another_user", message: `Please input the user ID of the user you are assigning the key to` }]}
-              help={"Get User ID - Click on the 'Users' tab in the sidebar."}
-            >
-              <TextInput 
-                placeholder="User ID" 
-                onChange={(e) => form.setFieldValue('user_id', e.target.value)}
-              />
-            </Form.Item>
-
-            <Form.Item
-              label={keyOwner === "you" || keyOwner === "another_user" ? "Key Name" : "Service Account ID"}
-              name="key_alias"
-              rules={[{ required: true, message: `Please input a ${keyOwner === "you" ? "key name" : "service account ID"}` }]}
-              help={keyOwner === "you" ? "required" : "IDs can include letters, numbers, and hyphens"}
-            >
-              <TextInput placeholder="" />
-            </Form.Item>
-            <Form.Item
-              label="Team"
+              label={
+                <span>
+                  Team{' '}
+                  <Tooltip title="The team this key belongs to, which determines available models and budget limits">
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              }
               name="team_id"
               initialValue={team ? team.team_id : null}
-              className="mt-8"
+              className="mt-4"
             >
               <TeamDropdown 
                 teams={teams} 
@@ -302,11 +440,34 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               />
             </Form.Item>
 
+          </div>
+
+          {/* Section 2: Key Details */}
+          <div className="mb-8">
+            <Title className="mb-4">Key Details</Title>
+            <Form.Item
+              label={
+                <span>
+                  {keyOwner === "you" || keyOwner === "another_user" ? "Key Name" : "Service Account ID"}{' '}
+                  <Tooltip title={keyOwner === "you" || keyOwner === "another_user" ? 
+                    "A descriptive name to identify this key" : 
+                    "Unique identifier for this service account"}>
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              }
+              name="key_alias"
+              rules={[{ required: true, message: `Please input a ${keyOwner === "you" ? "key name" : "service account ID"}` }]}
+              help="required"
+            >
+              <TextInput placeholder="" />
+            </Form.Item>
+            
             <Form.Item
               label={
                 <span>
                   Models{' '}
-                  <Tooltip title="These are the models that your selected team has access to">
+                  <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team">
                     <InfoCircleOutlined style={{ marginLeft: '4px' }} />
                   </Tooltip>
                 </span>
@@ -314,6 +475,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               name="models"
               rules={[{ required: true, message: "Please select a model" }]}
               help="required"
+              className="mt-4"
             >
               <Select
                 mode="multiple"
@@ -335,14 +497,25 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 ))}
               </Select>
             </Form.Item>
-            <Accordion className="mt-20 mb-8">
+          </div>
+
+          {/* Section 3: Optional Settings */}
+          <div className="mb-8">
+            <Accordion className="mt-4 mb-4">
               <AccordionHeader>
-                <b>Optional Settings</b>
+                <Title className="m-0">Optional Settings</Title>
               </AccordionHeader>
               <AccordionBody>
                 <Form.Item
-                  className="mt-8"
-                  label="Max Budget (USD)"
+                  className="mt-4"
+                  label={
+                    <span>
+                      Max Budget (USD){' '}
+                      <Tooltip title="Maximum amount in USD this key can spend. When reached, the key will be blocked from making further requests">
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </span>
+                  }
                   name="max_budget"
                   help={`Budget cannot exceed team max budget: $${team?.max_budget !== null && team?.max_budget !== undefined ? team?.max_budget : "unlimited"}`}
                   rules={[
@@ -365,8 +538,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   <InputNumber step={0.01} precision={2} width={200} />
                 </Form.Item>
                 <Form.Item
-                  className="mt-8"
-                  label="Reset Budget"
+                  className="mt-4"
+                  label={
+                    <span>
+                      Reset Budget{' '}
+                      <Tooltip title="How often the budget should reset. For example, setting 'daily' will reset the budget every 24 hours">
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </span>
+                  }
                   name="budget_duration"
                   help={`Team Reset Budget: ${team?.budget_duration !== null && team?.budget_duration !== undefined ? team?.budget_duration : "None"}`}
                 >
@@ -377,8 +557,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   </Select>
                 </Form.Item>
                 <Form.Item
-                  className="mt-8"
-                  label="Tokens per minute Limit (TPM)"
+                  className="mt-4"
+                  label={
+                    <span>
+                      Tokens per minute Limit (TPM){' '}
+                      <Tooltip title="Maximum number of tokens this key can process per minute. Helps control usage and costs">
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </span>
+                  }
                   name="tpm_limit"
                   help={`TPM cannot exceed team TPM limit: ${team?.tpm_limit !== null && team?.tpm_limit !== undefined ? team?.tpm_limit : "unlimited"}`}
                   rules={[
@@ -401,8 +588,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   <InputNumber step={1} width={400} />
                 </Form.Item>
                 <Form.Item
-                  className="mt-8"
-                  label="Requests per minute Limit (RPM)"
+                  className="mt-4"
+                  label={
+                    <span>
+                      Requests per minute Limit (RPM){' '}
+                      <Tooltip title="Maximum number of API requests this key can make per minute. Helps prevent abuse and manage load">
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </span>
+                  }
                   name="rpm_limit"
                   help={`RPM cannot exceed team RPM limit: ${team?.rpm_limit !== null && team?.rpm_limit !== undefined ? team?.rpm_limit : "unlimited"}`}
                   rules={[
@@ -425,17 +619,24 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   <InputNumber step={1} width={400} />
                 </Form.Item>
                 <Form.Item
-                  label="Expire Key (eg: 30s, 30h, 30d)"
+                  label={
+                    <span>
+                      Expire Key{' '}
+                      <Tooltip title="Set when this key should expire. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days)">
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </span>
+                  }
                   name="duration"
-                  className="mt-8"
+                  className="mt-4"
                 >
-                  <TextInput placeholder="" />
+                  <TextInput placeholder="e.g., 30d" />
                 </Form.Item>
                 <Form.Item 
                   label={
                     <span>
                       Guardrails{' '}
-                      <Tooltip title="Setup your first guardrail">
+                      <Tooltip title="Apply safety guardrails to this key to filter content or enforce policies">
                         <a 
                           href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
                           target="_blank" 
@@ -448,7 +649,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     </span>
                   }
                   name="guardrails" 
-                  className="mt-8"
+                  className="mt-4"
                   help="Select existing guardrails or enter new ones"
                 >
                   <Select
@@ -459,13 +660,36 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   />
                 </Form.Item>
 
-                <Form.Item label="Metadata" name="metadata" className="mt-8">
+                <Form.Item 
+                  label={
+                    <span>
+                      Metadata{' '}
+                      <Tooltip title="JSON object with additional information about this key. Used for tracking or custom logic">
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </span>
+                  } 
+                  name="metadata" 
+                  className="mt-4"
+                >
                   <Input.TextArea
                     rows={4}
                     placeholder="Enter metadata as JSON"
                   />
                 </Form.Item>
-                <Form.Item label="Tags" name="tags" className="mt-8" help={`Tags for tracking spend and/or doing tag-based routing.`}>
+                <Form.Item 
+                  label={
+                    <span>
+                      Tags{' '}
+                      <Tooltip title="Tags for tracking spend and/or doing tag-based routing. Used for analytics and filtering">
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </span>
+                  } 
+                  name="tags" 
+                  className="mt-4" 
+                  help={`Tags for tracking spend and/or doing tag-based routing.`}
+                >
                 <Select
                     mode="tags"
                     style={{ width: '100%' }}
@@ -474,15 +698,66 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     options={predefinedTags}
                   />
                 </Form.Item>
+                <Accordion className="mt-4 mb-4">
+                  <AccordionHeader>
+                  <div className="flex items-center gap-2">
+
+                    <b>Advanced Settings</b>
+                    <Tooltip title={ 
+                      <span>
+                        Learn more about advanced settings in our{' '}
+                        <a 
+                          href={proxyBaseUrl ? `${proxyBaseUrl}/#/key%20management/generate_key_fn_key_generate_post`: `/#/key%20management/generate_key_fn_key_generate_post`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-400 hover:text-blue-300"
+                        >
+                          documentation
+                        </a>
+                      </span>
+                    }>
+                      <InfoCircleOutlined className="text-gray-400 hover:text-gray-300 cursor-help" />
+                    </Tooltip>
+                    </div>
+                  </AccordionHeader>
+                  <AccordionBody>
+                    <SchemaFormFields 
+                      schemaComponent="GenerateKeyRequest"
+                      form={form}
+                      excludedFields={['key_alias', 'team_id', 'models', 'duration', 'metadata', 'tags', 'guardrails', "max_budget", "budget_duration", "tpm_limit", "rpm_limit"]}
+                    />
+                  </AccordionBody>
+                </Accordion>
               </AccordionBody>
             </Accordion>
-          </>
+          </div>
 
           <div style={{ textAlign: "right", marginTop: "10px" }}>
             <Button2 htmlType="submit">Create Key</Button2>
           </div>
         </Form>
       </Modal>
+
+      {/* Add the Create User Modal */}
+      {isCreateUserModalVisible && (
+        <Modal
+          title="Create New User"
+          visible={isCreateUserModalVisible}
+          onCancel={() => setIsCreateUserModalVisible(false)}
+          footer={null}
+          width={800}
+        >
+          <Createuser 
+            userID={userID}
+            accessToken={accessToken}
+            teams={teams}
+            possibleUIRoles={possibleUIRoles}
+            onUserCreated={handleUserCreated}
+            isEmbedded={true}
+          />
+        </Modal>
+      )}
+
       {apiKey && (
         <Modal
           visible={isModalVisible}
