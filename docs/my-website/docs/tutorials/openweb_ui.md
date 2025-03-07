@@ -1,3 +1,7 @@
+import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # OpenWeb UI with LiteLLM
 
 This guide walks you through connecting OpenWeb UI to LiteLLM. Using LiteLLM with OpenWeb UI allows teams to 
@@ -52,7 +56,7 @@ model_list:
 
 On the models dropdown select `thinking-anthropic-claude-3-7-sonnet`
 
-<Image img={require('../../img/openweb_thinking.gif')} />
+<Image img={require('../../img/litellm_thinking_openweb.gif')} />
 
 
 
