@@ -4450,9 +4450,6 @@ class Router:
             model_id=_deployment_model_id
         )
         if _deployment_on_router is not None:
-            verbose_router_logger.info(
-                "Upserting deployment with model id={}".format(_deployment_model_id)
-            )
             # deployment with this model_id exists on the router
             if deployment.litellm_params == _deployment_on_router.litellm_params:
                 # No need to update
