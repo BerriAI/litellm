@@ -15,7 +15,7 @@ This guide walks you through connecting OpenWeb UI to LiteLLM. Using LiteLLM wit
 - Make sure to setup LiteLLM with the [LiteLLM Getting Started Guide](https://docs.litellm.ai/docs/proxy/docker_quick_start)
 
 
-## 1. Connect OpenWeb UI to LiteLLM
+## 1. Start LiteLLM & OpenWebUI
 
 Deploy this docker compose to deploy both OpenWebUI and LiteLLM.
 
