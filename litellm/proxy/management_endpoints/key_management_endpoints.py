@@ -1515,9 +1515,14 @@ async def delete_key_aliases(
     tags=["key management"],
     dependencies=[Depends(user_api_key_auth)],
 )
+@router.post(
+    "/key/regenerate",
+    tags=["key management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
 @management_endpoint_wrapper
 async def regenerate_key_fn(
-    key: str,
+    key: Optional[str] = None,
     data: Optional[RegenerateKeyRequest] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     litellm_changed_by: Optional[str] = Header(
@@ -1575,6 +1580,7 @@ async def regenerate_key_fn(
 
         from litellm.proxy.proxy_server import (
             hash_token,
+            master_key,
             premium_user,
             prisma_client,
             proxy_logging_obj,
@@ -1587,7 +1593,9 @@ async def regenerate_key_fn(
             )
 
         # Check if key exists, raise exception if key is not in the DB
-
+        key = key or data.key if data else None
+        if not key:
+            raise HTTPException(status_code=400, detail={"error": "No key passed in."})
         ### 1. Create New copy that is duplicate of existing key
         ######################################################################
 
@@ -1601,6 +1609,14 @@ async def regenerate_key_fn(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": "DB not connected. prisma_client is None"},
             )
+
+        try:
+            is_master_key_valid = secrets.compare_digest(key, master_key)  # type: ignore
+        except Exception:
+            is_master_key_valid = False
+
+        if is_master_key_valid:
+            raise Exception("Valid master key")
 
         if "sk" not in key:
             hashed_api_key = key

@@ -4445,10 +4445,14 @@ class Router:
         """
         # check if deployment already exists
         _deployment_model_id = deployment.model_info.id or ""
+
         _deployment_on_router: Optional[Deployment] = self.get_deployment(
             model_id=_deployment_model_id
         )
         if _deployment_on_router is not None:
+            verbose_router_logger.info(
+                "Upserting deployment with model id={}".format(_deployment_model_id)
+            )
             # deployment with this model_id exists on the router
             if deployment.litellm_params == _deployment_on_router.litellm_params:
                 # No need to update

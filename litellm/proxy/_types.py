@@ -664,6 +664,7 @@ class RegenerateKeyRequest(GenerateKeyRequest):
     duration: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
+    new_master_key: Optional[str] = None
 
 
 class KeyRequest(LiteLLMPydanticObjectBase):
