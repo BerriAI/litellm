@@ -83,7 +83,7 @@ def process_azure_headers(headers: Union[httpx.Headers, dict]) -> dict:
     return {**llm_response_headers, **openai_headers}
 
 
-def get_azure_ad_token_from_entrata_id(
+def get_azure_ad_token_from_entra_id(
     tenant_id: str,
     client_id: str,
     client_secret: str,
@@ -103,7 +103,7 @@ def get_azure_ad_token_from_entrata_id(
     """
     from azure.identity import ClientSecretCredential, get_bearer_token_provider
 
-    verbose_logger.debug("Getting Azure AD Token from Entrata ID")
+    verbose_logger.debug("Getting Azure AD Token from Entra ID")
 
     if tenant_id.startswith("os.environ/"):
         _tenant_id = get_secret_str(tenant_id)
