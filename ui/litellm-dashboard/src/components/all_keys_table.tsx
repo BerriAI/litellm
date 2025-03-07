@@ -370,7 +370,7 @@ export function AllKeysTable({
               </div>
             </div>
           </div>
-          <div className="h-[32rem] overflow-auto">
+          <div className="h-[75vh] overflow-auto">
             
             <DataTable
               columns={columns.filter(col => col.id !== 'expander')}
