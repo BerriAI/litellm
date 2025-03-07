@@ -99,7 +99,9 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             raise ValueError("Timeout error occurred")
         except Exception as e:
             verbose_logger.exception(
-                "Error reading secret from AWS Secrets Manager: %s", str(e)
+                "Error reading secret='%s' from AWS Secrets Manager: %s",
+                secret_name,
+                str(e),
             )
         return None
 
@@ -149,37 +151,51 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             raise ValueError("Timeout error occurred")
         except httpx.HTTPStatusError as e:
             verbose_logger.exception(
-                "Error reading secret from AWS Secrets Manager: %s",
+                "Error reading secret='%s' from AWS Secrets Manager: %s, %s",
+                secret_name,
                 str(e.response.text),
+                str(e.response.status_code),
             )
         except Exception as e:
             verbose_logger.exception(
-                "Error reading secret from AWS Secrets Manager: %s", str(e)
+                "Error reading secret='%s' from AWS Secrets Manager: %s",
+                secret_name,
+                str(e),
             )
         return None
 
+    def _parse_primary_secret(self, primary_secret_json_str: Optional[str]) -> dict:
+        """
+        Parse the primary secret JSON string into a dictionary
+
+        Args:
+            primary_secret_json_str: JSON string containing key-value pairs
+
+        Returns:
+            Dictionary of key-value pairs from the primary secret
+        """
+        return json.loads(primary_secret_json_str or "{}")
+
     def sync_read_secret_from_primary_secret(
         self, secret_name: str, primary_secret_name: str
-    ) -> str:
+    ) -> Optional[str]:
         """
         Read a secret from the primary secret
         """
-        primary_secret_kv_pairs_json_str = (
-            self.sync_read_secret(secret_name=primary_secret_name) or "{}"
-        )
-        primary_secret_kv_pairs = json.loads(primary_secret_kv_pairs_json_str)
+        primary_secret_json_str = self.sync_read_secret(secret_name=primary_secret_name)
+        primary_secret_kv_pairs = self._parse_primary_secret(primary_secret_json_str)
         return primary_secret_kv_pairs.get(secret_name)
 
     async def async_read_secret_from_primary_secret(
         self, secret_name: str, primary_secret_name: str
-    ) -> str:
+    ) -> Optional[str]:
         """
         Read a secret from the primary secret
         """
-        primary_secret_kv_pairs_json_str = (
-            await self.async_read_secret(secret_name=primary_secret_name) or "{}"
+        primary_secret_json_str = await self.async_read_secret(
+            secret_name=primary_secret_name
         )
-        primary_secret_kv_pairs = json.loads(primary_secret_kv_pairs_json_str)
+        primary_secret_kv_pairs = self._parse_primary_secret(primary_secret_json_str)
         return primary_secret_kv_pairs.get(secret_name)
 
     async def async_write_secret(
