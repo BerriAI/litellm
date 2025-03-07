@@ -1,13 +1,10 @@
 model_list:
-  - model_name: model-1
+  - model_name: thinking-us.anthropic.claude-3-7-sonnet-20250219-v1:0
     litellm_params:
-      model: openai/model-1
-      api_key: os.environ/OPENAI_API_KEY_MODEL_1
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-  - model_name: model-2
-    litellm_params:
-      model: openai/model-2
-      api_key: os.environ/OPENAI_API_KEY_MODEL_2
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      model: bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0
+      thinking: {"type": "enabled", "budget_tokens": 1024}
+      max_tokens: 1080
+      merge_reasoning_content_in_choices: true
+
 
 

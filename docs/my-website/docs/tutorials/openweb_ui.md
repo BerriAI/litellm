@@ -46,13 +46,15 @@ Once the Team is created, you can invite Users to the Team. You can read more ab
 
 Navigate to [http://localhost:4000/ui](http://localhost:4000/ui) and create a new team.
 
+<Image img={require('../../img/litellm_create_team.gif')} />
+
 ### 2.2 Create a Virtual Key on LiteLLM
 
 Navigate to [http://localhost:4000/ui](http://localhost:4000/ui) and create a new virtual Key. 
 
 LiteLLM allows you to specify what models are available on OpenWeb UI (by specifying the models the key will have access to).
 
-<Image img={require('../../img/litellm_make_key_openweb.gif')} />
+<Image img={require('../../img/create_key_in_team_oweb.gif')} />
 
 ## 3. Connect OpenWeb UI to LiteLLM
 
