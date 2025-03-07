@@ -256,7 +256,6 @@ const sidebars = {
         "completion/batching",
         "completion/mock_requests",
         "completion/reliable_completions",
-        'tutorials/litellm_proxy_aporia',
 
       ]
     },
@@ -430,6 +429,14 @@ const sidebars = {
         `observability/telemetry`,
         "observability/opik_integration",
       ],
+    },
+    {
+      type: "category",
+      label: "Tutorials",
+      items: [
+        "tutorials/openweb_ui",
+        'tutorials/litellm_proxy_aporia',
+      ]
     },
 
     {
