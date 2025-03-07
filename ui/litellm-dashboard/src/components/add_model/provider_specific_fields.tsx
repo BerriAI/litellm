@@ -24,9 +24,21 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
   return (
     <>
       {selectedProviderEnum === Providers.OpenAI && (
-        <Form.Item label="OpenAI Organization ID" name="organization">
-          <TextInput placeholder="[OPTIONAL] my-unique-org" />
-        </Form.Item>
+        <>
+          <Form.Item
+            label="API Base"
+            name="api_base"
+          >
+            <Select placeholder="Select API Base" defaultValue="https://api.openai.com/v1">
+              <Select.Option value="https://api.openai.com/v1">https://api.openai.com/v1</Select.Option>
+              <Select.Option value="https://eu.api.openai.com">https://eu.api.openai.com</Select.Option>
+            </Select>
+          </Form.Item>
+          
+          <Form.Item label="OpenAI Organization ID" name="organization">
+            <TextInput placeholder="[OPTIONAL] my-unique-org" />
+          </Form.Item>
+        </>
       )}
 
       {selectedProviderEnum === Providers.Vertex_AI && (
