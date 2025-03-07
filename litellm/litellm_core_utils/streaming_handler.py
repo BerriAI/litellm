@@ -944,11 +944,9 @@ class CustomStreamWrapper:
         self, model_response: ModelResponseStream
     ) -> Optional[ModelResponseStream]:
         """
-        UI's Like OpenWebUI expect to get 1 chunk with <thinking>...</thinking> tags in the chunk content
+        UI's Like OpenWebUI expect to get 1 chunk with <think>...</think> tags in the chunk content
 
-        This helper handles that logic
-
-        Collects all `<think>...</think>` blocks and combines them into 1 chunk
+        This helper handles placing reasoning_content in content with <think>...</think> tags
         """
         if True:
             reasoning_content = getattr(
