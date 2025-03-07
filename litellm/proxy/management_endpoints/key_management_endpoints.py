@@ -531,7 +531,8 @@ async def generate_key_fn(  # noqa: PLR0915
                     f"Only premium users can add tags to keys. {CommonProxyErrors.not_premium_user.value}"
                 )
 
-            if data_json["metadata"] is None:
+            _metadata = data_json.get("metadata")
+            if not _metadata:
                 data_json["metadata"] = {"tags": data_json["tags"]}
             else:
                 data_json["metadata"]["tags"] = data_json["tags"]
