@@ -188,6 +188,14 @@ export function AllKeysTable({
       ),
     },
     {
+      header: "Key Alias",
+      accessorKey: "key_alias",
+      cell: (info) => {
+        const value = info.getValue() as string;
+        return <Tooltip title={value}>{value ? (value.length > 20 ? `${value.slice(0, 20)}...` : value) : "-"}</Tooltip>
+      }
+    },
+    {
       header: "Secret Key",
       accessorKey: "key_name",
       cell: (info) => <span className="font-mono text-xs">{info.getValue() as string}</span>,
@@ -204,12 +212,6 @@ export function AllKeysTable({
     {
       header: "Team ID",
       accessorKey: "team_id",
-      cell: (info) => <Tooltip title={info.getValue() as string}>{info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}</Tooltip>
-    },
-
-    {
-      header: "Key Alias",
-      accessorKey: "key_alias",
       cell: (info) => <Tooltip title={info.getValue() as string}>{info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}</Tooltip>
     },
     {
@@ -370,7 +372,7 @@ export function AllKeysTable({
               </div>
             </div>
           </div>
-          <div className="h-[32rem] overflow-auto">
+          <div className="h-[75vh] overflow-auto">
             
             <DataTable
               columns={columns.filter(col => col.id !== 'expander')}
