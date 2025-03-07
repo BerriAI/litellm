@@ -2913,9 +2913,9 @@
         "supports_tool_choice": true
     },
     "claude-3-7-sonnet-latest": {
-        "max_tokens": 8192,
+        "max_tokens": 128000,
         "max_input_tokens": 200000,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 128000,
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000015,
         "cache_creation_input_token_cost": 0.00000375,
@@ -2932,9 +2932,9 @@
         "supports_tool_choice": true
     },
     "claude-3-7-sonnet-20250219": {
-        "max_tokens": 8192,
+        "max_tokens": 128000,
         "max_input_tokens": 200000,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 128000,
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000015,
         "cache_creation_input_token_cost": 0.00000375,
