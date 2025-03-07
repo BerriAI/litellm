@@ -2841,3 +2841,72 @@ async def test_bedrock_thinking_in_assistant_message(sync_mode):
             "Alright, let's get started with resolving this issue about implementing"
             in json_data
         )
+
+
+@pytest.mark.asyncio
+async def test_bedrock_stream_thinking_content_openwebui():
+    """
+    When merge_reasoning_content_in_choices=True
+
+    The content should be collected as
+
+    ```
+    <think>
+    I am a helpful assistant, the user wants to know who I am
+    </think>
+
+    Hi I am Anthropic, I am a helpful assistant
+
+    ```
+    """
+    response = await litellm.acompletion(
+        model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        messages=[{"role": "user", "content": "Hello who is this?"}],
+        stream=True,
+        max_tokens=1080,
+        thinking={"type": "enabled", "budget_tokens": 1024},
+        merge_reasoning_content_in_choices=True,
+    )
+    content = ""
+    async for chunk in response:
+        content += chunk.choices[0].delta.content or ""
+
+        # OpenWebUI expects the reasoning_content to be removed, otherwise this will appear as duplicate thinking blocks
+        assert getattr(chunk.choices[0].delta, "reasoning_content", None) is None
+        print(chunk)
+
+    print("collected content", content)
+
+    # Assert that the content follows the expected format with exactly one thinking section
+    think_open_pos = content.find("<think>")
+    think_close_pos = content.find("</think>")
+
+    # Assert there's exactly one opening and closing tag
+    assert think_open_pos >= 0, "Opening <think> tag not found"
+    assert think_close_pos > 0, "Closing </think> tag not found"
+    assert (
+        content.count("<think>") == 1
+    ), "There should be exactly one opening <think> tag"
+    assert (
+        content.count("</think>") == 1
+    ), "There should be exactly one closing </think> tag"
+
+    # Assert the opening tag comes before the closing tag
+    assert (
+        think_open_pos < think_close_pos
+    ), "Opening tag should come before closing tag"
+
+    # Assert there's content between the tags
+    thinking_content = content[think_open_pos + 7 : think_close_pos]
+    assert (
+        len(thinking_content.strip()) > 0
+    ), "There should be content between thinking tags"
+
+    # Assert there's content after the closing tag
+    assert (
+        len(content) > think_close_pos + 8
+    ), "There should be content after the thinking tags"
+    response_content = content[think_close_pos + 8 :].strip()
+    assert (
+        len(response_content) > 0
+    ), "There should be non-empty content after thinking tags"
