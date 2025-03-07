@@ -307,6 +307,10 @@ def cost_per_token(  # noqa: PLR0915
             prompt_tokens_cost_usd_dollar = (
                 model_info["input_cost_per_second"] * response_time_ms / 1000  # type: ignore
             )
+        ## Prompt Caching cost calculation
+        if model_info["cache_read_input_token_cost"] is not None and model_info["cache_read_input_token_cost"] > 0:
+            ## COST PER TOKEN ##
+            prompt_tokens_cost_usd_dollar += model_info["cache_read_input_token_cost"] * cache_read_input_tokens
 
         if model_info["output_cost_per_token"] > 0:
             completion_tokens_cost_usd_dollar = (
