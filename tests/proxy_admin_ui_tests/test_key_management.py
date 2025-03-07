@@ -162,6 +162,7 @@ async def test_regenerate_api_key(prisma_client):
     print(result)
 
     # regenerate the key
+    print("regenerating key: {}".format(generated_key))
     new_key = await regenerate_key_fn(
         key=generated_key,
         user_api_key_dict=UserAPIKeyAuth(

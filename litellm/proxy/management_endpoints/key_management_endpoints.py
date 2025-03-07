@@ -40,6 +40,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+from litellm.proxy.spend_tracking.spend_tracking_utils import _is_master_key
 from litellm.proxy.utils import (
     PrismaClient,
     _hash_token_if_needed,
@@ -1677,7 +1678,7 @@ async def regenerate_key_fn(
             )
 
         # Check if key exists, raise exception if key is not in the DB
-        key = key or data.key if data else None
+        key = data.key if data and data.key else key
         if not key:
             raise HTTPException(status_code=400, detail={"error": "No key passed in."})
         ### 1. Create New copy that is duplicate of existing key
@@ -1694,12 +1695,9 @@ async def regenerate_key_fn(
                 detail={"error": "DB not connected. prisma_client is None"},
             )
 
-        try:
-            is_master_key_valid = secrets.compare_digest(key, master_key)  # type: ignore
-        except Exception:
-            is_master_key_valid = False
+        _is_master_key_valid = _is_master_key(api_key=key, _master_key=master_key)
 
-        if master_key is not None and data and is_master_key_valid:
+        if master_key is not None and data and _is_master_key_valid:
             if data.new_master_key is None:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
