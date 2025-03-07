@@ -57,6 +57,7 @@ def get_litellm_params(
     prompt_variables: Optional[dict] = None,
     async_call: Optional[bool] = None,
     ssl_verify: Optional[bool] = None,
+    merge_reasoning_content_in_choices: Optional[bool] = None,
     **kwargs,
 ) -> dict:
     litellm_params = {
@@ -97,5 +98,6 @@ def get_litellm_params(
         "prompt_variables": prompt_variables,
         "async_call": async_call,
         "ssl_verify": ssl_verify,
+        "merge_reasoning_content_in_choices": merge_reasoning_content_in_choices,
     }
     return litellm_params
