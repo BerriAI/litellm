@@ -12,13 +12,15 @@ This guide walks you through connecting OpenWeb UI to LiteLLM. Using LiteLLM wit
 
 ## Quickstart
 
+- Make sure to setup LiteLLM with the [LiteLLM Getting Started Guide](https://docs.litellm.ai/docs/proxy/docker_quick_start)
 
-### Connect OpenWeb UI to LiteLLM
+
+### 1. Connect OpenWeb UI to LiteLLM
 
 - OpenWebUI starts running on [http://localhost:3000](http://localhost:3000)
 - LiteLLM starts running on [http://localhost:4000](http://localhost:4000)
 
-### 2.Create a Virtual Key on LiteLLM 
+### 2. Create a Virtual Key on LiteLLM 
 
 Navigate to [http://localhost:4000/ui](http://localhost:4000/ui) and create a new virtual Key. 
 
@@ -26,7 +28,7 @@ LiteLLM allows you to specify what models are available on OpenWeb UI (by specif
 
 <Image img={require('../../img/litellm_make_key_openweb.gif')} />
 
-### Connect OpenWeb UI to LiteLLM
+### 3. Connect OpenWeb UI to LiteLLM
 
 On OpenWeb UI, navigate to Settings -> Connections and create a new connection to LiteLLM
 
@@ -36,7 +38,7 @@ Enter the following details:
 
 <Image img={require('../../img/litellm_setup_openweb.gif')} />
 
-### Test it
+### 4. Test it
 
 On the top left corner, select models you should only see the models you gave the key access to in Step 2.
 
