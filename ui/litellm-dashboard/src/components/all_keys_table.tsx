@@ -210,7 +210,10 @@ export function AllKeysTable({
     {
       header: "Key Alias",
       accessorKey: "key_alias",
-      cell: (info) => <Tooltip title={info.getValue() as string}>{info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}</Tooltip>
+      cell: (info) => {
+        const value = info.getValue() as string;
+        return <Tooltip title={value}>{value ? (value.length > 20 ? `${value.slice(0, 20)}...` : value) : "-"}</Tooltip>
+      }
     },
     {
       header: "Organization ID",
