@@ -21,16 +21,23 @@ class TogetherAIConfig(OpenAIGPTConfig):
         Docs: https://docs.together.ai/docs/json-mode
         """
         supports_function_calling: Optional[bool] = None
-        try:
-            model_info = get_model_info(model, custom_llm_provider="together_ai")
-            supports_function_calling = model_info.get(
-                "supports_function_calling", False
-            )
-        except Exception as e:
-            verbose_logger.debug(f"Error getting supported openai params: {e}")
-            pass
+        
+        supported_models = [
+            "deepseek-ai/DeepSeek-V3",
+            "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+            "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
+            "meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
+            "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+            "mistralai/Mixtral-8x7B-Instruct-v0.1",
+            "mistralai/Mistral-7B-Instruct-v0.1",
+            "Qwen/Qwen2.5-7B-Instruct-Turbo",
+            "Qwen/Qwen2.5-72B-Instruct-Turbo"
+        ]
+
+        supports_function_calling = model in supported_models
 
         optional_params = super().get_supported_openai_params(model)
+
         if supports_function_calling is not True:
             verbose_logger.debug(
                 "Only some together models support function calling/response_format. Docs - https://docs.together.ai/docs/function-calling"
