@@ -75,8 +75,8 @@ class CustomStreamWrapper:
         litellm_params: GenericLiteLLMParams = GenericLiteLLMParams(
             **self.logging_obj.model_call_details.get("litellm_params", {})
         )
-        self.merge_reasoning_content_in_choices = (
-            litellm_params.merge_reasoning_content_in_choices
+        self.merge_reasoning_content_in_choices: bool = (
+            litellm_params.merge_reasoning_content_in_choices or False
         )
         self.sent_first_thinking_block = False
         self.sent_last_thinking_block = False
@@ -881,7 +881,7 @@ class CustomStreamWrapper:
                     if _index is not None:
                         model_response.choices[0].index = _index
 
-                model_response = self._optional_combine_thinking_block_in_choices(  # type: ignore
+                self._optional_combine_thinking_block_in_choices(
                     model_response=model_response
                 )
                 print_verbose(f"returning model_response: {model_response}")
@@ -948,40 +948,37 @@ class CustomStreamWrapper:
 
         This helper handles that logic
 
-        Collects all `<thinking>...</thinking>` blocks and combines them into 1 chunk
+        Collects all `<think>...</think>` blocks and combines them into 1 chunk
         """
-        if litellm.merge_reasoning_content_in_choices:
+        if True:
             reasoning_content = getattr(
                 model_response.choices[0].delta, "reasoning_content", None
             )
             if reasoning_content:
                 if self.sent_first_thinking_block is False:
-                    self.thinking_content += (
-                        model_response.choices[0].delta.content or "<thinking>"
-                    ) + f"{model_response.choices[0].delta.reasoning_content}"
+                    model_response.choices[0].delta.content += (
+                        "<think>" + reasoning_content
+                    )
                     self.sent_first_thinking_block = True
-                    return None
                 elif (
                     self.sent_first_thinking_block is True
                     and hasattr(model_response.choices[0].delta, "reasoning_content")
                     and model_response.choices[0].delta.reasoning_content
                 ):
-                    self.thinking_content += (
-                        model_response.choices[0].delta.content or ""
-                    ) + f"{model_response.choices[0].delta.reasoning_content}"
-                    return None
+                    model_response.choices[0].delta.content = reasoning_content
             elif (
                 self.sent_first_thinking_block is True
                 and not self.sent_last_thinking_block
                 and model_response.choices[0].delta.content
             ):
-                self.thinking_content += "</thinking>"
                 model_response.choices[0].delta.content = (
-                    self.thinking_content + model_response.choices[0].delta.content
+                    "</think>" + model_response.choices[0].delta.content
                 )
                 self.sent_last_thinking_block = True
 
-        return model_response
+        if hasattr(model_response.choices[0].delta, "reasoning_content"):
+            del model_response.choices[0].delta.reasoning_content
+        return
 
     def chunk_creator(self, chunk: Any):  # type: ignore  # noqa: PLR0915
         model_response = self.model_response_creator()
