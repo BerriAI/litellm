@@ -46,6 +46,7 @@ const sidebars = {
             "proxy/health",
             "proxy/debugging",
             "proxy/spending_monitoring",
+            "proxy/master_key_rotations",
           ],
         },
         "proxy/demo",
