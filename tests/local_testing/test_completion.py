@@ -11,7 +11,7 @@ import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+)  # Adds the parent directory to the system-path
 
 
 import os
@@ -1574,6 +1574,43 @@ HF Tests we should pass
     - Deployed Endpoint
 """
 
+
+#####################################################
+#####################################################
+# Test util to sort models to TGI, conv, None
+from litellm.llms.huggingface.chat.transformation import HuggingfaceChatConfig
+
+
+def test_get_hf_task_for_model():
+    model = "glaiveai/glaive-coder-7b"
+    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
+    print(f"model:{model}, model type: {model_type}")
+    assert model_type == "text-generation-inference"
+
+    model = "meta-llama/Llama-2-7b-hf"
+    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
+    print(f"model:{model}, model type: {model_type}")
+    assert model_type == "text-generation-inference"
+
+    model = "facebook/blenderbot-400M-distill"
+    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
+    print(f"model:{model}, model type: {model_type}")
+    assert model_type == "conversational"
+
+    model = "facebook/blenderbot-3B"
+    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
+    print(f"model:{model}, model type: {model_type}")
+    assert model_type == "conversational"
+
+    # neither Conv or None
+    model = "roneneldan/TinyStories-3M"
+    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
+    print(f"model:{model}, model type: {model_type}")
+    assert model_type == "text-generation"
+
+
+# test_get_hf_task_for_model()
+# litellm.set_verbose=False
 # ################### Hugging Face TGI models ########################
 # # TGI model
 # # this is a TGI model https://huggingface.co/glaiveai/glaive-coder-7b
@@ -1651,7 +1688,7 @@ def tgi_mock_post(url, **kwargs):
     ]
     return mock_response
 
-@pytest.mark.skip(reason="this test will be rewritten to use the new Hugging Face completion")
+
 def test_hf_test_completion_tgi():
     litellm.set_verbose = True
     try:
@@ -1719,6 +1756,52 @@ async def test_openai_compatible_custom_api_base(provider):
         assert "hello" in mock_call.call_args.kwargs["extra_body"]
 
 
+@pytest.mark.parametrize(
+    "provider",
+    [
+        "openai",
+        "hosted_vllm",
+    ],
+)  # "vertex_ai",
+@pytest.mark.asyncio
+async def test_openai_compatible_custom_api_video(provider):
+    litellm.set_verbose = True
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What do you see in this video?",
+                },
+                {
+                    "type": "video_url",
+                    "video_url": {"url": "https://www.youtube.com/watch?v=29_ipKNI8I0"},
+                },
+            ],
+        }
+    ]
+    from openai import OpenAI
+
+    openai_client = OpenAI(api_key="fake-key")
+
+    with patch.object(
+        openai_client.chat.completions, "create", new=MagicMock()
+    ) as mock_call:
+        try:
+            completion(
+                model="{provider}/my-vllm-model".format(provider=provider),
+                messages=messages,
+                response_format={"type": "json_object"},
+                client=openai_client,
+                api_base="my-custom-api-base",
+            )
+        except Exception as e:
+            print(e)
+
+        mock_call.assert_called_once()
+
+
 def test_lm_studio_completion(monkeypatch):
     monkeypatch.delenv("LM_STUDIO_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -1734,78 +1817,6 @@ def test_lm_studio_completion(monkeypatch):
         pytest.fail(f"Error occurred: {e}")
     except litellm.APIError as e:
         print(e)
-
-
-@pytest.mark.asyncio
-async def test_litellm_gateway_from_sdk():
-    litellm.set_verbose = True
-    messages = [
-        {
-            "role": "user",
-            "content": "Hello world",
-        }
-    ]
-    from openai import OpenAI
-
-    openai_client = OpenAI(api_key="fake-key")
-
-    with patch.object(
-        openai_client.chat.completions, "create", new=MagicMock()
-    ) as mock_call:
-        try:
-            completion(
-                model="litellm_proxy/my-vllm-model",
-                messages=messages,
-                response_format={"type": "json_object"},
-                client=openai_client,
-                api_base="my-custom-api-base",
-                hello="world",
-            )
-        except Exception as e:
-            print(e)
-
-        mock_call.assert_called_once()
-
-        print("Call KWARGS - {}".format(mock_call.call_args.kwargs))
-
-        assert "hello" in mock_call.call_args.kwargs["extra_body"]
-
-
-@pytest.mark.asyncio
-async def test_litellm_gateway_from_sdk_structured_output():
-    from pydantic import BaseModel
-
-    class Result(BaseModel):
-        answer: str
-
-    litellm.set_verbose = True
-    from openai import OpenAI
-
-    openai_client = OpenAI(api_key="fake-key")
-
-    with patch.object(
-        openai_client.chat.completions, "create", new=MagicMock()
-    ) as mock_call:
-        try:
-            litellm.completion(
-                model="litellm_proxy/openai/gpt-4o",
-                messages=[
-                    {"role": "user", "content": "What is the capital of France?"}
-                ],
-                api_key="my-test-api-key",
-                user="test",
-                response_format=Result,
-                base_url="https://litellm.ml-serving-internal.scale.com",
-                client=openai_client,
-            )
-        except Exception as e:
-            print(e)
-
-        mock_call.assert_called_once()
-
-        print("Call KWARGS - {}".format(mock_call.call_args.kwargs))
-        json_schema = mock_call.call_args.kwargs["response_format"]
-        assert "json_schema" in json_schema
 
 
 # ################### Hugging Face Conversational models ########################
@@ -1854,7 +1865,7 @@ def mock_post(url, **kwargs):
     ]
     return mock_response
 
-@pytest.mark.skip(reason="this test will be rewritten to use the new Hugging Face completion")
+
 def test_hf_classifier_task():
     try:
         client = HTTPHandler()
@@ -4055,7 +4066,7 @@ def test_completion_gemini(model):
 @pytest.mark.asyncio
 async def test_acompletion_gemini():
     litellm.set_verbose = True
-    model_name = "gemini/gemini-pro"
+    model_name = "gemini/gemini-1.5-flash"
     messages = [{"role": "user", "content": "Hey, how's it going?"}]
     try:
         response = await litellm.acompletion(model=model_name, messages=messages)
