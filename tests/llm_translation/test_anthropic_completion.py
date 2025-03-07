@@ -986,7 +986,38 @@ def test_anthropic_thinking_output(model):
     assert isinstance(resp.choices[0].message.thinking_blocks, list)
     assert len(resp.choices[0].message.thinking_blocks) > 0
 
+    assert resp.choices[0].message.thinking_blocks[0]["type"] == "thinking"
     assert resp.choices[0].message.thinking_blocks[0]["signature"] is not None
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic/claude-3-7-sonnet-20250219",
+        "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    ],
+)
+def test_anthropic_redacted_thinking_output(model):
+    from litellm import completion
+
+    litellm._turn_on_debug()
+
+    resp = completion(
+        model=model,
+        messages=[{"role": "user", "content": "ANTHROPIC_MAGIC_STRING_TRIGGER_REDACTED_THINKING_46C9A13E193C177646C7398A98432ECCCE4C1253D5E2D82641AC0E52CC2876CB"}],
+        thinking={"type": "enabled", "budget_tokens": 1024},
+    )
+
+    print(resp)
+    assert resp.choices[0].message.reasoning_content is not None
+    assert isinstance(resp.choices[0].message.reasoning_content, str)
+    assert resp.choices[0].message.thinking_blocks is not None
+    assert isinstance(resp.choices[0].message.thinking_blocks, list)
+    assert len(resp.choices[0].message.thinking_blocks) > 0
+    assert resp.choices[0].message.thinking_blocks[0]["type"] == "redacted_thinking"
+    assert resp.choices[0].message.thinking_blocks[0]["data"] is not None
+
+
 
 
 @pytest.mark.parametrize(
@@ -1025,10 +1056,56 @@ def test_anthropic_thinking_output_stream(model):
                 print(chunk.choices[0].delta.thinking_blocks[0])
                 if chunk.choices[0].delta.thinking_blocks[0].get("signature"):
                     signature_block_exists = True
+                    assert chunk.choices[0].delta.thinking_blocks[0]["type"] == "thinking"
         assert reasoning_content_exists
         assert signature_block_exists
     except litellm.Timeout:
         pytest.skip("Model is timing out")
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic/claude-3-7-sonnet-20250219",
+        # "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        # "bedrock/invoke/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    ],
+)
+def test_anthropic_thinking_output_stream(model):
+    litellm.set_verbose = True
+    try:
+        # litellm._turn_on_debug()
+        resp = litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "ANTHROPIC_MAGIC_STRING_TRIGGER_REDACTED_THINKING_46C9A13E193C177646C7398A98432ECCCE4C1253D5E2D82641AC0E52CC2876CB"}],
+            stream=True,
+            thinking={"type": "enabled", "budget_tokens": 1024},
+            timeout=10,
+        )
+
+        reasoning_content_exists = False
+        data_exists = False
+        for chunk in resp:
+            print(f"chunk 2: {chunk}")
+            if (
+                hasattr(chunk.choices[0].delta, "thinking_blocks")
+                and chunk.choices[0].delta.thinking_blocks is not None
+                and chunk.choices[0].delta.reasoning_content is not None
+                and isinstance(chunk.choices[0].delta.thinking_blocks, list)
+                and len(chunk.choices[0].delta.thinking_blocks) > 0
+                and isinstance(chunk.choices[0].delta.reasoning_content, str)
+            ):
+                reasoning_content_exists = True
+                print(chunk.choices[0].delta.thinking_blocks[0])
+                if chunk.choices[0].delta.thinking_blocks[0].get("data"):
+                    data_exists = True
+                    assert chunk.choices[0].delta.thinking_blocks[0]["type"] == "redacted_thinking"
+        assert reasoning_content_exists
+        assert data_exists
+    except litellm.Timeout:
+        pytest.skip("Model is timing out")
+
+
 
 
 def test_anthropic_custom_headers():
