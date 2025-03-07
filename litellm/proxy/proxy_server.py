@@ -2419,6 +2419,33 @@ class ProxyConfig:
                 added_models += 1
         return added_models
 
+    def decrypt_model_list_from_db(self, new_models: list) -> list:
+        _model_list: list = []
+        for m in new_models:
+            _litellm_params = m.litellm_params
+            if isinstance(_litellm_params, dict):
+                # decrypt values
+                for k, v in _litellm_params.items():
+                    decrypted_value = decrypt_value_helper(value=v)
+                    _litellm_params[k] = decrypted_value
+                _litellm_params = LiteLLM_Params(**_litellm_params)
+            else:
+                verbose_proxy_logger.error(
+                    f"Invalid model added to proxy db. Invalid litellm params. litellm_params={_litellm_params}"
+                )
+                continue  # skip to next model
+
+            _model_info = self.get_model_info_with_id(model=m)
+            _model_list.append(
+                Deployment(
+                    model_name=m.model_name,
+                    litellm_params=_litellm_params,
+                    model_info=_model_info,
+                ).to_json(exclude_none=True)
+            )
+
+        return _model_list
+
     async def _update_llm_router(
         self,
         new_models: list,
@@ -2430,29 +2457,9 @@ class ProxyConfig:
             if llm_router is None and master_key is not None:
                 verbose_proxy_logger.debug(f"len new_models: {len(new_models)}")
 
-                _model_list: list = []
-                for m in new_models:
-                    _litellm_params = m.litellm_params
-                    if isinstance(_litellm_params, dict):
-                        # decrypt values
-                        for k, v in _litellm_params.items():
-                            decrypted_value = decrypt_value_helper(value=v)
-                            _litellm_params[k] = decrypted_value
-                        _litellm_params = LiteLLM_Params(**_litellm_params)
-                    else:
-                        verbose_proxy_logger.error(
-                            f"Invalid model added to proxy db. Invalid litellm params. litellm_params={_litellm_params}"
-                        )
-                        continue  # skip to next model
-
-                    _model_info = self.get_model_info_with_id(model=m)
-                    _model_list.append(
-                        Deployment(
-                            model_name=m.model_name,
-                            litellm_params=_litellm_params,
-                            model_info=_model_info,
-                        ).to_json(exclude_none=True)
-                    )
+                _model_list: list = self.decrypt_model_list_from_db(
+                    new_models=new_models
+                )
                 if len(_model_list) > 0:
                     verbose_proxy_logger.debug(f"_model_list: {_model_list}")
                     llm_router = litellm.Router(
@@ -2541,7 +2548,21 @@ class ProxyConfig:
         environment_variables = config_data.get("environment_variables", {})
         self._decrypt_and_set_db_env_variables(environment_variables)
 
-    def _decrypt_and_set_db_env_variables(self, environment_variables: dict) -> None:
+    def _encrypt_env_variables(
+        self, environment_variables: dict, new_encryption_key: Optional[str] = None
+    ) -> dict:
+        """
+        Encrypts a dictionary of environment variables and returns them.
+        """
+        encrypted_env_vars = {}
+        for k, v in environment_variables.items():
+            encrypted_value = encrypt_value_helper(
+                value=v, new_encryption_key=new_encryption_key
+            )
+            encrypted_env_vars[k] = encrypted_value
+        return encrypted_env_vars
+
+    def _decrypt_and_set_db_env_variables(self, environment_variables: dict) -> dict:
         """
         Decrypts a dictionary of environment variables and then sets them in the environment
 
@@ -2549,15 +2570,18 @@ class ProxyConfig:
             environment_variables: dict - dictionary of environment variables to decrypt and set
             eg. `{"LANGFUSE_PUBLIC_KEY": "kFiKa1VZukMmD8RB6WXB9F......."}`
         """
+        decrypted_env_vars = {}
         for k, v in environment_variables.items():
             try:
                 decrypted_value = decrypt_value_helper(value=v)
                 if decrypted_value is not None:
                     os.environ[k] = decrypted_value
+                    decrypted_env_vars[k] = decrypted_value
             except Exception as e:
                 verbose_proxy_logger.error(
                     "Error setting env variable: %s - %s", k, str(e)
                 )
+        return decrypted_env_vars
 
     async def _add_router_settings_from_db_config(
         self,

@@ -1,5 +1,6 @@
 import base64
 import os
+from typing import Optional
 
 from litellm._logging import verbose_proxy_logger
 
@@ -19,9 +20,9 @@ def _get_salt_key():
     return salt_key
 
 
-def encrypt_value_helper(value: str):
+def encrypt_value_helper(value: str, new_encryption_key: Optional[str] = None):
 
-    signing_key = _get_salt_key()
+    signing_key = new_encryption_key or _get_salt_key()
 
     try:
         if isinstance(value, str):

@@ -786,6 +786,13 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 )
                 valid_token = None
 
+        if valid_token is None:
+            raise Exception(
+                "Invalid proxy server token passed. Received API Key (hashed)={}. Unable to find token in cache or `LiteLLM_VerificationTokenTable`".format(
+                    api_key
+                )
+            )
+
         user_obj: Optional[LiteLLM_UserTable] = None
         valid_token_dict: dict = {}
         if valid_token is not None:

@@ -664,6 +664,7 @@ class RegenerateKeyRequest(GenerateKeyRequest):
     duration: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
+    new_master_key: Optional[str] = None
 
 
 class KeyRequest(LiteLLMPydanticObjectBase):
@@ -686,6 +687,30 @@ class LiteLLM_ModelTable(LiteLLMPydanticObjectBase):
     updated_by: str
 
     model_config = ConfigDict(protected_namespaces=())
+
+
+class LiteLLM_ProxyModelTable(LiteLLMPydanticObjectBase):
+    model_id: str
+    model_name: str
+    litellm_params: dict
+    model_info: dict
+    created_by: str
+    updated_by: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def check_potential_json_str(cls, values):
+        if isinstance(values.get("litellm_params"), str):
+            try:
+                values["litellm_params"] = json.loads(values["litellm_params"])
+            except json.JSONDecodeError:
+                pass
+        if isinstance(values.get("model_info"), str):
+            try:
+                values["model_info"] = json.loads(values["model_info"])
+            except json.JSONDecodeError:
+                pass
+        return values
 
 
 class NewUserRequest(GenerateRequestBase):
