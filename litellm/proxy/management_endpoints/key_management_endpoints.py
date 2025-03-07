@@ -1536,35 +1536,62 @@ async def _rotate_master_key(
     """
     from litellm.proxy.proxy_server import proxy_config
 
+    # try:
+    #     models: Optional[List] = (
+    #         await prisma_client.db.litellm_proxymodeltable.find_many()
+    #     )
+    # except Exception:
+    #     models = None
+    # # 2. process model table
+    # if models:
+    #     decrypted_models = proxy_config.decrypt_model_list_from_db(new_models=models)
+    #     verbose_proxy_logger.info(
+    #         "ABLE TO DECRYPT MODELS - len(decrypted_models): %s", len(decrypted_models)
+    #     )
+    #     new_models = []
+    #     for model in decrypted_models:
+    #         new_model = await _add_model_to_db(
+    #             model_params=Deployment(**model),
+    #             user_api_key_dict=user_api_key_dict,
+    #             prisma_client=prisma_client,
+    #             new_encryption_key=new_master_key,
+    #             should_create_model_in_db=False,
+    #         )
+    #         if new_model:
+    #             new_models.append(jsonify_object(new_model.model_dump()))
+    #     verbose_proxy_logger.info("Resetting proxy model table with")
+    #     await prisma_client.db.litellm_proxymodeltable.delete_many()
+    #     verbose_proxy_logger.info("Creating %s models", len(new_models))
+    #     await prisma_client.db.litellm_proxymodeltable.create_many(
+    #         data=new_models,
+    #     )
+    # 3. process config table
     try:
-        models: Optional[List] = (
-            await prisma_client.db.litellm_proxymodeltable.find_many()
-        )
+        config = await prisma_client.db.litellm_config.find_many()
     except Exception:
-        models = None
-    # 2. process model table
-    if models:
-        decrypted_models = proxy_config.decrypt_model_list_from_db(new_models=models)
-        verbose_proxy_logger.info(
-            "ABLE TO DECRYPT MODELS - len(decrypted_models): %s", len(decrypted_models)
-        )
-        new_models = []
-        for model in decrypted_models:
-            new_model = await _add_model_to_db(
-                model_params=Deployment(**model),
-                user_api_key_dict=user_api_key_dict,
-                prisma_client=prisma_client,
-                new_encryption_key=new_master_key,
-                should_create_model_in_db=False,
+        config = None
+
+    if config:
+        """If environment_variables is found, decrypt it and encrypt it with the new master key"""
+        environment_variables_dict = {}
+        for c in config:
+            if c.param_name == "environment_variables":
+                environment_variables_dict = c.param_value
+
+        if environment_variables_dict:
+            decrypted_env_vars = proxy_config._decrypt_and_set_db_env_variables(
+                environment_variables=environment_variables_dict
             )
-            if new_model:
-                new_models.append(jsonify_object(new_model.model_dump()))
-        verbose_proxy_logger.info("Resetting proxy model table with")
-        await prisma_client.db.litellm_proxymodeltable.delete_many()
-        verbose_proxy_logger.info("Creating %s models", len(new_models))
-        await prisma_client.db.litellm_proxymodeltable.create_many(
-            data=new_models,
-        )
+            encrypted_env_vars = proxy_config._encrypt_env_variables(
+                environment_variables=decrypted_env_vars,
+                new_encryption_key=new_master_key,
+            )
+
+            if encrypted_env_vars:
+                await prisma_client.db.litellm_config.update(
+                    where={"param_name": "environment_variables"},
+                    data={"param_value": jsonify_object(encrypted_env_vars)},
+                )
 
 
 @router.post(
