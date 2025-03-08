@@ -873,7 +873,7 @@ class BaseLLMHTTPHandler:
         elif isinstance(audio_file, bytes):
             # Assume it's already binary data
             binary_data = audio_file
-        elif isinstance(audio_file, io.BufferedReader):
+        elif isinstance(audio_file, io.BufferedReader) or isinstance(audio_file, io.BytesIO):
             # Handle file-like objects
             binary_data = audio_file.read()
 
