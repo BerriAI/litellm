@@ -1589,6 +1589,7 @@ class StandardLoggingHiddenParams(TypedDict):
     response_cost: Optional[str]
     litellm_overhead_time_ms: Optional[float]
     additional_headers: Optional[StandardLoggingAdditionalHeaders]
+    batch_models: Optional[List[str]]
 
 
 class StandardLoggingModelInformation(TypedDict):

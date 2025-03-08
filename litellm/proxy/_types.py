@@ -1896,6 +1896,7 @@ class SpendLogsMetadata(TypedDict):
     applied_guardrails: Optional[List[str]]
     status: StandardLoggingPayloadStatus
     proxy_server_request: Optional[str]
+    batch_models: Optional[List[str]]
     error_information: Optional[StandardLoggingPayloadErrorInformation]
 
 

@@ -1554,11 +1554,12 @@ class Logging(LiteLLMLoggingBaseClass):
             result, LiteLLMBatch
         ):
 
-            response_cost, batch_usage = await _handle_completed_batch(
+            response_cost, batch_usage, batch_models = await _handle_completed_batch(
                 batch=result, custom_llm_provider=self.custom_llm_provider
             )
 
             result._hidden_params["response_cost"] = response_cost
+            result._hidden_params["batch_models"] = batch_models
             result.usage = batch_usage
 
         start_time, end_time, result = self._success_handler_helper_fn(
@@ -3154,6 +3155,7 @@ class StandardLoggingPayloadSetup:
             response_cost=None,
             additional_headers=None,
             litellm_overhead_time_ms=None,
+            batch_models=None,
         )
         if hidden_params is not None:
             for key in StandardLoggingHiddenParams.__annotations__.keys():
@@ -3267,6 +3269,7 @@ def get_standard_logging_object_payload(
                         api_base=None,
                         response_cost=None,
                         litellm_overhead_time_ms=None,
+                        batch_models=None,
                     )
                 )
 
@@ -3551,6 +3554,7 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         response_cost=None,
         additional_headers=None,
         litellm_overhead_time_ms=None,
+        batch_models=None,
     )
 
     # Convert numeric values to appropriate types
