@@ -739,6 +739,35 @@ async def user_update(
         )
 
 
+async def get_user_key_counts(
+    prisma_client,
+    user_ids: Optional[List[str]] = None,
+):
+    """
+    Helper function to get the count of keys for each user using Prisma's count method.
+
+    Args:
+        prisma_client: The Prisma client instance
+        user_ids: List of user IDs to get key counts for
+
+    Returns:
+        Dictionary mapping user_id to key count
+    """
+    if not user_ids or len(user_ids) == 0:
+        return {}
+
+    result = {}
+
+    # Get count for each user_id individually
+    for user_id in user_ids:
+        count = await prisma_client.db.litellm_verificationtoken.count(
+            where={"user_id": user_id}
+        )
+        result[user_id] = count
+
+    return result
+
+
 @router.get(
     "/user/get_users",
     tags=["Internal User management"],
@@ -830,14 +859,9 @@ async def get_users(
 
     # Get key count for each user
     if users is not None:
-        user_keys = await prisma_client.db.litellm_verificationtoken.group_by(
-            by=["user_id"],
-            count={"user_id": True},
-            where={"user_id": {"in": [user.user_id for user in users]}},
+        user_key_counts = await get_user_key_counts(
+            prisma_client, [user.user_id for user in users]
         )
-        user_key_counts = {
-            item["user_id"]: item["_count"]["user_id"] for item in user_keys
-        }
     else:
         user_key_counts = {}
 
