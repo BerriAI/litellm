@@ -107,7 +107,11 @@ def scan_directory(base_dir):
 
 def main():
     # Start from the project root directory
-    base_dir = "../../litellm"
+
+    base_dir = "./litellm"
+
+    # Local testing
+    # base_dir = "../../litellm"
 
     print(f"Scanning for .replace('data:', ...) usage in {base_dir}")
     issues = scan_directory(base_dir)
@@ -119,7 +123,7 @@ def main():
 
         # Fail the test if issues are found
         raise Exception(
-            f"Found {len(issues)} instances of .replace('data:', ...) which may be unsafe"
+            f"Found {len(issues)} instances of .replace('data:', ...) which may be unsafe. Use litellm.CustomStreamWrapper._strip_sse_data_from_chunk instead."
         )
     else:
         print("✅ No instances of .replace('data:', ...) found.")

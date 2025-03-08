@@ -1832,9 +1832,7 @@ class CustomStreamWrapper:
             )
 
     @staticmethod
-    def _strip_sse_data_from_chunk(
-        chunk: Optional[Union[str, bytes]]
-    ) -> Optional[Union[str, bytes]]:
+    def _strip_sse_data_from_chunk(chunk: Optional[str]) -> Optional[str]:
         """
         Strips the 'data: ' prefix from Server-Sent Events (SSE) chunks.
 
