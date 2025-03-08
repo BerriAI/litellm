@@ -196,7 +196,7 @@ def get_logging_payload(  # noqa: PLR0915
             else None
         ),
         batch_models=(
-            standard_logging_payload["hidden_params"].get("batch_models", None)
+            standard_logging_payload.get("hidden_params", {}).get("batch_models", None)
             if standard_logging_payload is not None
             else None
         ),
