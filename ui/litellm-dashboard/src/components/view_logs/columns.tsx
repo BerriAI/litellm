@@ -93,7 +93,7 @@ export const columns: ColumnDef<LogEntry>[] = [
     accessorKey: "request_id",
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "")}>
-        <span className="font-mono text-xs max-w-[100px] truncate block">
+        <span className="font-mono text-xs max-w-[15ch] truncate block">
           {String(info.getValue() || "")}
         </span>
       </Tooltip>
@@ -114,7 +114,11 @@ export const columns: ColumnDef<LogEntry>[] = [
   {
     header: "Team Name",
     accessorKey: "metadata.user_api_key_team_alias",
-    cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
+    cell: (info: any) => (
+      <Tooltip title={String(info.getValue() || "-")}>
+        <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
+      </Tooltip>
+    ),
   },
   {
     header: "Key Hash",
@@ -123,7 +127,7 @@ export const columns: ColumnDef<LogEntry>[] = [
       const value = String(info.getValue() || "-");
       return (
         <Tooltip title={value}>
-          <span className="font-mono">{value.slice(0, 5)}...</span>
+          <span className="font-mono max-w-[15ch] truncate block">{value}</span>
         </Tooltip>
       );
     },
@@ -131,7 +135,11 @@ export const columns: ColumnDef<LogEntry>[] = [
   {
     header: "Key Name",
     accessorKey: "metadata.user_api_key_alias",
-    cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
+    cell: (info: any) => (
+      <Tooltip title={String(info.getValue() || "-")}>
+        <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
+      </Tooltip>
+    ),
   },
   {
     header: "Model",
@@ -154,7 +162,7 @@ export const columns: ColumnDef<LogEntry>[] = [
             />
           )}
           <Tooltip title={modelName}>
-            <span className="max-w-[100px] truncate">
+            <span className="max-w-[15ch] truncate block">
               {modelName}
             </span>
           </Tooltip>
@@ -181,12 +189,20 @@ export const columns: ColumnDef<LogEntry>[] = [
   {
     header: "Internal User",
     accessorKey: "user",
-    cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
+    cell: (info: any) => (
+      <Tooltip title={String(info.getValue() || "-")}>
+        <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
+      </Tooltip>
+    ),
   },
   {
     header: "End User",
     accessorKey: "end_user",
-    cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
+    cell: (info: any) => (
+      <Tooltip title={String(info.getValue() || "-")}>
+        <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
+      </Tooltip>
+    ),
   },
 
   {
