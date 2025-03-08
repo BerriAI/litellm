@@ -55,6 +55,7 @@ from litellm.types.utils import (
     LiteLLMLoggingBaseClass,
     ModelResponse,
     ModelResponseStream,
+    RawRequestTypedDict,
     StandardCallbackDynamicParams,
     StandardLoggingAdditionalHeaders,
     StandardLoggingHiddenParams,
@@ -205,6 +206,7 @@ class Logging(LiteLLMLoggingBaseClass):
         ] = None,
         applied_guardrails: Optional[List[str]] = None,
         kwargs: Optional[Dict] = None,
+        log_raw_request_response: bool = False,
     ):
         _input: Optional[str] = messages  # save original value of messages
         if messages is not None:
@@ -233,6 +235,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.sync_streaming_chunks: List[Any] = (
             []
         )  # for generating complete stream response
+        self.log_raw_request_response = log_raw_request_response
 
         # Initialize dynamic callbacks
         self.dynamic_input_callbacks: Optional[
@@ -453,6 +456,18 @@ class Logging(LiteLLMLoggingBaseClass):
 
         return model, messages, non_default_params
 
+    def _get_raw_request_body(self, data: Optional[Union[dict, str]]) -> dict:
+        if data is None:
+            return {"error": "Received empty dictionary for raw request body"}
+        if isinstance(data, str):
+            try:
+                return json.loads(data)
+            except Exception:
+                return {
+                    "error": "Unable to parse raw request body. Got - {}".format(data)
+                }
+        return data
+
     def _pre_call(self, input, api_key, model=None, additional_args={}):
         """
         Common helper function across the sync + async pre-call function
@@ -468,6 +483,7 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["model"] = model
 
     def pre_call(self, input, api_key, model=None, additional_args={}):  # noqa: PLR0915
+
         # Log the exact input to the LLM API
         litellm.error_logs["PRE_CALL"] = locals()
         try:
@@ -485,28 +501,54 @@ class Logging(LiteLLMLoggingBaseClass):
                 additional_args=additional_args,
             )
             # log raw request to provider (like LangFuse) -- if opted in.
-            if log_raw_request_response is True:
+            if (
+                self.log_raw_request_response is True
+                or log_raw_request_response is True
+            ):
+
                 _litellm_params = self.model_call_details.get("litellm_params", {})
                 _metadata = _litellm_params.get("metadata", {}) or {}
                 try:
                     # [Non-blocking Extra Debug Information in metadata]
-                    if (
-                        turn_off_message_logging is not None
-                        and turn_off_message_logging is True
-                    ):
+                    if turn_off_message_logging is True:
+
                         _metadata["raw_request"] = (
                             "redacted by litellm. \
                             'litellm.turn_off_message_logging=True'"
                         )
                     else:
+
                         curl_command = self._get_request_curl_command(
                             api_base=additional_args.get("api_base", ""),
                             headers=additional_args.get("headers", {}),
                             additional_args=additional_args,
                             data=additional_args.get("complete_input_dict", {}),
                         )
+
                         _metadata["raw_request"] = str(curl_command)
+                        # split up, so it's easier to parse in the UI
+                        self.model_call_details["raw_request_typed_dict"] = (
+                            RawRequestTypedDict(
+                                raw_request_api_base=str(
+                                    additional_args.get("api_base") or ""
+                                ),
+                                raw_request_body=self._get_raw_request_body(
+                                    additional_args.get("complete_input_dict", {})
+                                ),
+                                raw_request_headers=self._get_masked_headers(
+                                    additional_args.get("headers", {}) or {},
+                                    ignore_sensitive_headers=True,
+                                ),
+                                error=None,
+                            )
+                        )
                 except Exception as e:
+                    self.model_call_details["raw_request_typed_dict"] = (
+                        RawRequestTypedDict(
+                            error=str(e),
+                        )
+                    )
+                    traceback.print_exc()
                     _metadata["raw_request"] = (
                         "Unable to Log \
                         raw request: {}".format(
@@ -639,9 +681,14 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 verbose_logger.debug(f"\033[92m{curl_command}\033[0m\n")
 
+    def _get_request_body(self, data: dict) -> str:
+        return str(data)
+
     def _get_request_curl_command(
-        self, api_base: str, headers: dict, additional_args: dict, data: dict
+        self, api_base: str, headers: Optional[dict], additional_args: dict, data: dict
     ) -> str:
+        if headers is None:
+            headers = {}
         curl_command = "\n\nPOST Request Sent from LiteLLM:\n"
         curl_command += "curl -X POST \\\n"
         curl_command += f"{api_base} \\\n"
@@ -649,11 +696,10 @@ class Logging(LiteLLMLoggingBaseClass):
         formatted_headers = " ".join(
             [f"-H '{k}: {v}'" for k, v in masked_headers.items()]
         )
-
         curl_command += (
             f"{formatted_headers} \\\n" if formatted_headers.strip() != "" else ""
         )
-        curl_command += f"-d '{str(data)}'\n"
+        curl_command += f"-d '{self._get_request_body(data)}'\n"
         if additional_args.get("request_str", None) is not None:
             # print the sagemaker / bedrock client request
             curl_command = "\nRequest Sent from LiteLLM:\n"
@@ -662,12 +708,20 @@ class Logging(LiteLLMLoggingBaseClass):
             curl_command = str(self.model_call_details)
         return curl_command
 
-    def _get_masked_headers(self, headers: dict):
+    def _get_masked_headers(
+        self, headers: dict, ignore_sensitive_headers: bool = False
+    ) -> dict:
         """
         Internal debugging helper function
 
         Masks the headers of the request sent from LiteLLM
         """
+        sensitive_keywords = [
+            "authorization",
+            "token",
+            "key",
+            "secret",
+        ]
         return {
             k: (
                 (v[:-44] + "*" * 44)
@@ -675,6 +729,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 else "*****"
             )
             for k, v in headers.items()
+            if not ignore_sensitive_headers
+            or not any(
+                sensitive_keyword in k.lower()
+                for sensitive_keyword in sensitive_keywords
+            )
         }
 
     def post_call(
