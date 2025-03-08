@@ -5604,6 +5604,19 @@ async def supported_openai_params(model: str):
         )
 
 
+@router.post(
+    "/utils/transform_request",
+    tags=["llm utils"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def transform_request(request: TransformRequestBody):
+    from litellm.utils import return_raw_request_str
+
+    return return_raw_request_str(
+        endpoint=request.call_type, kwargs=request.request_body
+    )
+
+
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
 @router.post(
     "/model/new",

@@ -229,39 +229,3 @@ async def test_url_with_format_param_openai(model, sync_mode):
         json_str = json.dumps(mock_client.call_args.kwargs)
 
         assert "format" not in json_str
-
-
-def test_transform_request():
-    """
-    Return the json str of the request
-    """
-    from datetime import datetime
-
-    from litellm import completion
-    from litellm.litellm_core_utils.litellm_logging import Logging
-
-    litellm_logging_obj = Logging(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": "hi"}],
-        stream=False,
-        call_type="acompletion",
-        litellm_call_id="1234",
-        start_time=datetime.now(),
-        function_id="1234",
-        log_raw_request_response=True,
-    )
-
-    try:
-        response = completion(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "Hello, world!"}],
-            litellm_logging_obj=litellm_logging_obj,
-            my_special_param="my_special_value",  # 👈 ensure the request fails
-        )
-    except Exception as e:
-        print(e)
-
-    print(
-        f"litellm_logging_obj.model_call_details: {json.dumps(litellm_logging_obj.model_call_details, indent=4, default=str)}"
-    )
-    return litellm_logging_obj.model_call_details["raw_request"]
