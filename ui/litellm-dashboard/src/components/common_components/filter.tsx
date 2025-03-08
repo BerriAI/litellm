@@ -178,7 +178,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
         {buttonLabel}
       </TremorButton>
       {showFilters && (
-        <Card className="absolute left-0 mt-2 w-96 z-50 border border-gray-200 shadow-lg">
+        <Card className="absolute left-0 mt-2 w-[500px] z-50 border border-gray-200 shadow-lg">
           <div className="flex flex-col gap-4">
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium">Where</span>
@@ -186,13 +186,14 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
               <Dropdown
                 menu={{
                   items: dropdownItems,
-                  onClick: ({ key }) => handleFilterSelect(key)
+                  onClick: ({ key }) => handleFilterSelect(key),
+                  style: { minWidth: '200px' }
                 }}
                 onOpenChange={setDropdownOpen}
                 open={dropdownOpen}
                 trigger={['click']}
               >
-                <Button className="min-w-32 text-left flex justify-between items-center">
+                <Button className="min-w-40 text-left flex justify-between items-center">
                   {currentOption?.label || selectedFilter}
                   {dropdownOpen ? (
                     <ChevronUpIcon className="h-4 w-4" />
@@ -220,7 +221,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
                   }
                 }}
                 filterOption={false}
-                className="flex-1 w-full max-w-full truncate"
+                className="flex-1 w-full max-w-full truncate min-w-100"
                 loading={searchLoading}
                 options={searchOptions}
                 allowClear
