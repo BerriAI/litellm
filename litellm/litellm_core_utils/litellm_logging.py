@@ -536,7 +536,8 @@ class Logging(LiteLLMLoggingBaseClass):
                                     additional_args.get("complete_input_dict", {})
                                 ),
                                 raw_request_headers=self._get_masked_headers(
-                                    additional_args.get("headers", {}) or {}
+                                    additional_args.get("headers", {}) or {},
+                                    ignore_sensitive_headers=True,
                                 ),
                                 error=None,
                             )
@@ -707,12 +708,20 @@ class Logging(LiteLLMLoggingBaseClass):
             curl_command = str(self.model_call_details)
         return curl_command
 
-    def _get_masked_headers(self, headers: dict) -> dict:
+    def _get_masked_headers(
+        self, headers: dict, ignore_sensitive_headers: bool = False
+    ) -> dict:
         """
         Internal debugging helper function
 
         Masks the headers of the request sent from LiteLLM
         """
+        sensitive_keywords = [
+            "authorization",
+            "token",
+            "key",
+            "secret",
+        ]
         return {
             k: (
                 (v[:-44] + "*" * 44)
@@ -720,6 +729,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 else "*****"
             )
             for k, v in headers.items()
+            if not ignore_sensitive_headers
+            or not any(
+                sensitive_keyword in k.lower()
+                for sensitive_keyword in sensitive_keywords
+            )
         }
 
     def post_call(
