@@ -754,6 +754,8 @@ async def get_user_key_counts(
     Returns:
         Dictionary mapping user_id to key count
     """
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
     if not user_ids or len(user_ids) == 0:
         return {}
 
@@ -761,10 +763,14 @@ async def get_user_key_counts(
 
     # Get count for each user_id individually
     for user_id in user_ids:
-        where_condition = {"user_id": user_id}
-        where_condition.update(_get_condition_to_filter_out_ui_session_tokens())
         count = await prisma_client.db.litellm_verificationtoken.count(
-            where=where_condition
+            where={
+                "user_id": user_id,
+                "OR": [
+                    {"team_id": None},
+                    {"team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}},
+                ],
+            }
         )
         result[user_id] = count
 
