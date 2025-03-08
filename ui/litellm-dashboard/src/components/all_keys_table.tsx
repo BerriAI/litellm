@@ -12,6 +12,9 @@ import { FilterOption } from "./common_components/filter";
 import { Organization, userListCall } from "./networking";
 import { createTeamSearchFunction } from "./key_team_helpers/team_search_fn";
 import { createOrgSearchFunction } from "./key_team_helpers/organization_search_fn";
+import { keyListCall } from "./networking";
+import { fetchAllKeyAliases, fetchAllTeams, fetchAllOrganizations } from './key_team_helpers/filter_helpers';
+
 interface AllKeysTableProps {
   keys: KeyResponse[];
   isLoading?: boolean;
@@ -95,17 +98,66 @@ export function AllKeysTable({
   userID,
   userRole,
   organizations,
-  setCurrentOrg
+  setCurrentOrg,
 }: AllKeysTableProps) {
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
   const [filters, setFilters] = useState<{
     'Team ID': string;
     'Organization ID': string;
+    'Key Alias': string;
   }>({
     'Team ID': '',
-    'Organization ID': ''
+    'Organization ID': '',
+    'Key Alias': ''
   });
   const [userList, setUserList] = useState<UserResponse[]>([]);
+  const [allKeyAliases, setAllKeyAliases] = useState<string[]>([]);
+  const [allTeams, setAllTeams] = useState<Team[]>(teams || []);
+  const [allOrganizations, setAllOrganizations] = useState<Organization[]>(organizations || []);
+
+  // Fetch all data for filters when component mounts
+  useEffect(() => {
+    const loadAllFilterData = async () => {
+      // Load all key aliases
+      const aliases = await fetchAllKeyAliases(accessToken);
+      setAllKeyAliases(aliases);
+      
+      // Load all teams - no organization filter needed here
+      const teamsData = await fetchAllTeams(accessToken);
+      if (teamsData.length > 0) {
+        setAllTeams(teamsData);
+      }
+      
+      // Load all organizations
+      const orgsData = await fetchAllOrganizations(accessToken);
+      if (orgsData.length > 0) {
+        setAllOrganizations(orgsData);
+      }
+    };
+    
+    if (accessToken) {
+      loadAllFilterData();
+    }
+  }, [accessToken]);
+
+  // Update teams and organizations when props change
+  useEffect(() => {
+    if (teams && teams.length > 0) {
+      setAllTeams(prevTeams => {
+        // Only update if we don't already have a larger set of teams
+        return prevTeams.length < teams.length ? teams : prevTeams;
+      });
+    }
+  }, [teams]);
+
+  useEffect(() => {
+    if (organizations && organizations.length > 0) {
+      setAllOrganizations(prevOrgs => {
+        // Only update if we don't already have a larger set of organizations
+        return prevOrgs.length < organizations.length ? organizations : prevOrgs;
+      });
+    }
+  }, [organizations]);
 
   useEffect(() => {
     if (accessToken) {
@@ -122,7 +174,8 @@ export function AllKeysTable({
     // Update filters state
     setFilters({
       'Team ID': newFilters['Team ID'] || '',
-      'Organization ID': newFilters['Organization ID'] || ''
+      'Organization ID': newFilters['Organization ID'] || '',
+      'Key Alias': newFilters['Key Alias'] || ''
     });
   
     // Handle Team change
@@ -146,12 +199,13 @@ export function AllKeysTable({
     // Reset filters state
     setFilters({
       'Team ID': '',
-      'Organization ID': ''
+      'Organization ID': '',
+      'Key Alias': ''
     });
     
     // Reset team and org selections
-    setSelectedTeam(null); // or whatever your default value should be
-    setCurrentOrg(null); // or whatever your default value should be
+    setSelectedTeam(null);
+    setCurrentOrg(null);
   };
   
 
@@ -323,8 +377,59 @@ export function AllKeysTable({
   ];
 
   const filterOptions: FilterOption[] = [
-    { name: 'Team ID', label: 'Team ID', isSearchable: true, searchFn: createTeamSearchFunction(teams) },
-    { name: 'Organization ID', label: 'Organization ID', isSearchable: true, searchFn: createOrgSearchFunction(organizations) }
+    { 
+      name: 'Team ID', 
+      label: 'Team ID', 
+      isSearchable: true, 
+      searchFn: async (searchText: string) => {
+        if (!allTeams || allTeams.length === 0) return [];
+        
+        const filteredTeams = allTeams.filter(team => 
+          team.team_id.toLowerCase().includes(searchText.toLowerCase()) || 
+          (team.team_alias && team.team_alias.toLowerCase().includes(searchText.toLowerCase()))
+        );
+        
+        return filteredTeams.map(team => ({
+          label: `${team.team_alias || team.team_id} (${team.team_id})`,
+          value: team.team_id
+        }));
+      }
+    },
+    { 
+      name: 'Organization ID', 
+      label: 'Organization ID', 
+      isSearchable: true, 
+      searchFn: async (searchText: string) => {
+        if (!allOrganizations || allOrganizations.length === 0) return [];
+        
+        const filteredOrgs = allOrganizations.filter(org => 
+          org.organization_id.toLowerCase().includes(searchText.toLowerCase()) || 
+          (org.organization_name && org.organization_name.toLowerCase().includes(searchText.toLowerCase()))
+        );
+        
+        return filteredOrgs.map(org => ({
+          label: `${org.organization_name || 'Unknown'} (${org.organization_id})`,
+          value: org.organization_id
+        }));
+      }
+    },
+    {
+      name: 'Key Alias',
+      label: 'Key Alias',
+      isSearchable: true,
+      searchFn: async (searchText: string) => {
+        if (!allKeyAliases || allKeyAliases.length === 0) return [];
+        
+        const filteredAliases = allKeyAliases.filter(alias => 
+          alias && alias.toLowerCase().includes(searchText.toLowerCase())
+        );
+        
+        return filteredAliases.map(alias => ({
+          label: alias,
+          value: alias
+        }));
+      }
+    }
   ];
   
   
