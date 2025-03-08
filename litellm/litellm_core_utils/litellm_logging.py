@@ -205,6 +205,7 @@ class Logging(LiteLLMLoggingBaseClass):
         ] = None,
         applied_guardrails: Optional[List[str]] = None,
         kwargs: Optional[Dict] = None,
+        log_raw_request_response: bool = False,
     ):
         _input: Optional[str] = messages  # save original value of messages
         if messages is not None:
@@ -233,6 +234,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.sync_streaming_chunks: List[Any] = (
             []
         )  # for generating complete stream response
+        self.log_raw_request_response = log_raw_request_response
 
         # Initialize dynamic callbacks
         self.dynamic_input_callbacks: Optional[
@@ -468,6 +470,7 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["model"] = model
 
     def pre_call(self, input, api_key, model=None, additional_args={}):  # noqa: PLR0915
+
         # Log the exact input to the LLM API
         litellm.error_logs["PRE_CALL"] = locals()
         try:
@@ -485,28 +488,35 @@ class Logging(LiteLLMLoggingBaseClass):
                 additional_args=additional_args,
             )
             # log raw request to provider (like LangFuse) -- if opted in.
-            if log_raw_request_response is True:
+            if (
+                self.log_raw_request_response is True
+                or log_raw_request_response is True
+            ):
+
                 _litellm_params = self.model_call_details.get("litellm_params", {})
                 _metadata = _litellm_params.get("metadata", {}) or {}
                 try:
                     # [Non-blocking Extra Debug Information in metadata]
-                    if (
-                        turn_off_message_logging is not None
-                        and turn_off_message_logging is True
-                    ):
+                    if turn_off_message_logging is True:
+
                         _metadata["raw_request"] = (
                             "redacted by litellm. \
                             'litellm.turn_off_message_logging=True'"
                         )
                     else:
+
                         curl_command = self._get_request_curl_command(
                             api_base=additional_args.get("api_base", ""),
                             headers=additional_args.get("headers", {}),
                             additional_args=additional_args,
                             data=additional_args.get("complete_input_dict", {}),
                         )
+
                         _metadata["raw_request"] = str(curl_command)
+                        self.model_call_details["raw_request"] = str(curl_command)
                 except Exception as e:
+
+                    traceback.print_exc()
                     _metadata["raw_request"] = (
                         "Unable to Log \
                         raw request: {}".format(
@@ -640,8 +650,10 @@ class Logging(LiteLLMLoggingBaseClass):
                 verbose_logger.debug(f"\033[92m{curl_command}\033[0m\n")
 
     def _get_request_curl_command(
-        self, api_base: str, headers: dict, additional_args: dict, data: dict
+        self, api_base: str, headers: Optional[dict], additional_args: dict, data: dict
     ) -> str:
+        if headers is None:
+            headers = {}
         curl_command = "\n\nPOST Request Sent from LiteLLM:\n"
         curl_command += "curl -X POST \\\n"
         curl_command += f"{api_base} \\\n"
