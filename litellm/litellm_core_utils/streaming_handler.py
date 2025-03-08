@@ -637,7 +637,10 @@ class CustomStreamWrapper:
                 if isinstance(chunk, bytes):
                     chunk = chunk.decode("utf-8")
                 if "text_output" in chunk:
-                    response = chunk.replace("data: ", "").strip()
+                    response = (
+                        CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
+                    )
+                    response = response.strip()
                     parsed_response = json.loads(response)
                 else:
                     return {
@@ -1827,6 +1830,31 @@ class CustomStreamWrapper:
                 completion_kwargs={},
                 extra_kwargs={},
             )
+
+    @staticmethod
+    def _strip_sse_data_from_chunk(chunk: Optional[str]) -> Optional[str]:
+        """
+        Strips the 'data:' prefix from Server-Sent Events (SSE) chunks.
+
+        SSE messages are prefixed with 'data:' which is part of the protocol,
+        not the actual content from the LLM. This method removes that prefix
+        and returns the actual content.
+
+        Args:
+            chunk: The SSE chunk that may contain the 'data:' prefix
+
+        Returns:
+            The chunk with the 'data:' prefix removed, or the original chunk
+            if no prefix was found. Returns None if input is None.
+        """
+        if chunk is None:
+            return None
+
+        if isinstance(chunk, str) and chunk.startswith("data:"):
+            # Strip the prefix and any leading whitespace that might follow it
+            return chunk[5:].lstrip()
+
+        return chunk
 
 
 def calculate_total_usage(chunks: List[ModelResponse]) -> Usage:
