@@ -637,7 +637,7 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
   const hasMessages = row.original.messages && 
     (Array.isArray(row.original.messages) ? row.original.messages.length > 0 : Object.keys(row.original.messages).length > 0);
   const hasResponse = row.original.response && Object.keys(formatData(row.original.response)).length > 0;
-  const missingData = !hasMessages || !hasResponse;
+  const missingData = !hasMessages && !hasResponse;
   
   // Format the response with error details if present
   const formattedResponse = () => {
