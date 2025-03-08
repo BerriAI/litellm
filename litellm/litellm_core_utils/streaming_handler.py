@@ -1836,17 +1836,17 @@ class CustomStreamWrapper:
         chunk: Optional[Union[str, bytes]]
     ) -> Optional[Union[str, bytes]]:
         """
-        Strips the 'data:' prefix from Server-Sent Events (SSE) chunks.
+        Strips the 'data: ' prefix from Server-Sent Events (SSE) chunks.
 
-        SSE messages are prefixed with 'data:' which is part of the protocol,
+        SSE messages are prefixed with 'data: ' which is part of the protocol,
         not the actual content from the LLM. This method removes that prefix
         and returns the actual content.
 
         Args:
-            chunk: The SSE chunk that may contain the 'data:' prefix (string or bytes)
+            chunk: The SSE chunk that may contain the 'data: ' prefix (string or bytes)
 
         Returns:
-            The chunk with the 'data:' prefix removed, or the original chunk
+            The chunk with the 'data: ' prefix removed, or the original chunk
             if no prefix was found. Returns None if input is None.
 
         See OpenAI Python Ref for this: https://github.com/openai/openai-python/blob/041bf5a8ec54da19aad0169671793c2078bd6173/openai/api_requestor.py#L100
