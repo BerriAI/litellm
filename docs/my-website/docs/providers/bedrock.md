@@ -286,9 +286,12 @@ print(response)
 </TabItem>
 </Tabs>
 
-## Usage - Function Calling 
+## Usage - Function Calling / Tool calling
 
-LiteLLM uses Bedrock's Converse API for making tool calls
+LiteLLM supports tool calling via Bedrock's Converse and Invoke API's.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
 
 ```python
 from litellm import completion
@@ -333,6 +336,69 @@ assert isinstance(
     response.choices[0].message.tool_calls[0].function.arguments, str
 )
 ```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: bedrock-claude-3-7
+    litellm_params:
+      model: bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0 # for bedrock invoke, specify `bedrock/invoke/<model>`
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+-H "Content-Type: application/json" \
+-H "Authorization: Bearer $LITELLM_API_KEY" \
+-d '{
+  "model": "bedrock-claude-3-7",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What'\''s the weather like in Boston today?"
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_current_weather",
+        "description": "Get the current weather in a given location",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string",
+              "description": "The city and state, e.g. San Francisco, CA"
+            },
+            "unit": {
+              "type": "string",
+              "enum": ["celsius", "fahrenheit"]
+            }
+          },
+          "required": ["location"]
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto"
+}'
+
+```
+
+
+</TabItem>
+</Tabs>
 
 
 ## Usage - Vision 
@@ -500,20 +566,28 @@ Same as [Anthropic API response](../providers/anthropic#usage---thinking--reason
 ```python
 from litellm import completion
 import os 
+from pydantic import BaseModel
 
 # set env
 os.environ["AWS_ACCESS_KEY_ID"] = ""
 os.environ["AWS_SECRET_ACCESS_KEY"] = ""
 os.environ["AWS_REGION_NAME"] = ""
 
+class CalendarEvent(BaseModel):
+  name: str
+  date: str
+  participants: list[str]
+
+class EventsList(BaseModel):
+    events: list[CalendarEvent]
 
 response = completion(
   model="bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0", # specify invoke via `bedrock/invoke/anthropic.claude-3-7-sonnet-20250219-v1:0`
-  response_format={ "type": "json_object" },
+  response_format=EventsList,
   messages=[
     {"role": "system", "content": "You are a helpful assistant designed to output JSON."},
     {"role": "user", "content": "Who won the world series in 2020?"}
-  ]
+  ],
 )
 print(response.choices[0].message.content)
 ```
@@ -546,7 +620,6 @@ curl http://0.0.0.0:4000/v1/chat/completions \
   -H "Authorization: Bearer $LITELLM_KEY" \
   -d '{
     "model": "bedrock-claude-3-7",
-    "response_format": { "type": "json_object" },
     "messages": [
       {
         "role": "system",
@@ -554,9 +627,37 @@ curl http://0.0.0.0:4000/v1/chat/completions \
       },
       {
         "role": "user",
-        "content": "Who won the world series in 2020?"
+        "content": "Who won the worlde series in 2020?"
       }
-    ]
+    ],
+    "response_format": {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "math_reasoning",
+        "description": "reason about maths",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "steps": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "explanation": { "type": "string" },
+                  "output": { "type": "string" }
+                },
+                "required": ["explanation", "output"],
+                "additionalProperties": false
+              }
+            },
+            "final_answer": { "type": "string" }
+          },
+          "required": ["steps", "final_answer"],
+          "additionalProperties": false
+        },
+        "strict": true
+      }
+    }
   }'
 ```
 </TabItem>

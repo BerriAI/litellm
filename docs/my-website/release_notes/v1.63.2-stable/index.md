@@ -40,9 +40,9 @@ Here's a Demo Instance to test changes:
 ## LLM Translation
 
 1. Support `/openai/` passthrough for Assistant endpoints. [Get Started](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
-2. Bedrock Claude - fix tool calling transformation on invoke route. [ADD DOCS - tool calling with bedrock invoke]
-3. Bedrock Claude - response_format support for claude on invoke route. [ADD DOCS - json mode with bedrock invoke]
-4. Bedrock - pass `description` if set in response_format. [ADD DOCS - response_format with bedrock]
+2. Bedrock Claude - fix tool calling transformation on invoke route. [Get Started](../../docs/providers/bedrock#usage---function-calling--tool-calling)
+3. Bedrock Claude - response_format support for claude on invoke route. [Get Started](../../docs/providers/bedrock#usage---structured-output--json-mode)
+4. Bedrock - pass `description` if set in response_format. [Get Started](../../docs/providers/bedrock#usage---structured-output--json-mode)
 5. Bedrock - Fix passing response_format: {"type": "text"}. [PR](https://github.com/BerriAI/litellm/commit/c84b489d5897755139aa7d4e9e54727ebe0fa540)
 6. OpenAI - Handle sending image_url as str to openai. [Get Started](https://docs.litellm.ai/docs/completion/vision)
 7. Deepseek - return 'reasoning_content' missing on streaming. [Get Started](https://docs.litellm.ai/docs/reasoning_content)
