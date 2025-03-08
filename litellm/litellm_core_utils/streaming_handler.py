@@ -1854,13 +1854,10 @@ class CustomStreamWrapper:
         if chunk is None:
             return None
 
-        if isinstance(chunk, str) and chunk.startswith("data:"):
+        if isinstance(chunk, str) and chunk.startswith("data: "):
             # Strip the prefix and any leading whitespace that might follow it
-            return chunk[5:].lstrip()
-        elif isinstance(chunk, bytes) and chunk.startswith(b"data:"):
-            # Handle bytes case - strip prefix and leading whitespace
-            return chunk[5:].lstrip()
-
+            _length_of_sse_data_prefix = len("data: ")
+            return chunk[_length_of_sse_data_prefix:]
         return chunk
 
 
