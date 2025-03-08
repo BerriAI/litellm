@@ -6480,7 +6480,7 @@ def add_openai_metadata(metadata: dict) -> dict:
     return visible_metadata.copy()
 
 
-def return_raw_request_str(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict:
+def return_raw_request(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict:
     """
     Return the json str of the request
 

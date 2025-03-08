@@ -515,20 +515,21 @@ class Logging(LiteLLMLoggingBaseClass):
 
                         _metadata["raw_request"] = str(curl_command)
                         # split up, so it's easier to parse in the UI
-                        self.model_call_details["raw_request_typed_dict"] = (
+                        self.model_call_details["raw_request_typed_dict"] = (  # type: ignore
                             RawRequestTypedDict(
                                 raw_request_api_base=str(
                                     additional_args.get("api_base") or ""
                                 ),
-                                raw_request_body=self._get_request_body(
-                                    additional_args.get("complete_input_dict", {})
+                                raw_request_body=cast(
+                                    Optional[dict],
+                                    additional_args.get("complete_input_dict", {}),
                                 ),
-                                raw_request_headers=self._get_request_headers(
-                                    additional_args.get("headers", {})
+                                raw_request_headers=self._get_masked_headers(
+                                    additional_args.get("headers", {}) or {}
                                 ),
+                                error=None,
                             )
                         )
-
                 except Exception as e:
                     self.model_call_details["raw_request_typed_dict"] = (
                         RawRequestTypedDict(
@@ -671,13 +672,6 @@ class Logging(LiteLLMLoggingBaseClass):
     def _get_request_body(self, data: dict) -> str:
         return str(data)
 
-    def _get_request_headers(self, headers: dict) -> str:
-        masked_headers = self._get_masked_headers(headers)
-        formatted_headers = " ".join(
-            [f"-H '{k}: {v}'" for k, v in masked_headers.items()]
-        )
-        return formatted_headers
-
     def _get_request_curl_command(
         self, api_base: str, headers: Optional[dict], additional_args: dict, data: dict
     ) -> str:
@@ -686,8 +680,10 @@ class Logging(LiteLLMLoggingBaseClass):
         curl_command = "\n\nPOST Request Sent from LiteLLM:\n"
         curl_command += "curl -X POST \\\n"
         curl_command += f"{api_base} \\\n"
-        formatted_headers = self._get_request_headers(headers)
-
+        masked_headers = self._get_masked_headers(headers)
+        formatted_headers = " ".join(
+            [f"-H '{k}: {v}'" for k, v in masked_headers.items()]
+        )
         curl_command += (
             f"{formatted_headers} \\\n" if formatted_headers.strip() != "" else ""
         )
@@ -700,7 +696,7 @@ class Logging(LiteLLMLoggingBaseClass):
             curl_command = str(self.model_call_details)
         return curl_command
 
-    def _get_masked_headers(self, headers: dict):
+    def _get_masked_headers(self, headers: dict) -> dict:
         """
         Internal debugging helper function
 

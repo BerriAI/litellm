@@ -6,6 +6,12 @@ interface TransformRequestPanelProps {
   accessToken: string | null;
 }
 
+interface TransformResponse {
+  raw_request_api_base: string;
+  raw_request_body: Record<string, any>;
+  raw_request_headers: Record<string, string>;
+}
+
 const TransformRequestPanel: React.FC<TransformRequestPanelProps> = ({ accessToken }) => {
   const [originalRequestJSON, setOriginalRequestJSON] = useState(`{
   "model": "openai/gpt-4o",
@@ -27,54 +33,30 @@ const TransformRequestPanel: React.FC<TransformRequestPanelProps> = ({ accessTok
   const [transformedResponse, setTransformedResponse] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   
-  // Function to format the curl command with proper indentation
-  const formatCurlCommand = (response: string) => {
-    // Remove the "POST Request Sent from LiteLLM:" prefix
-    let cleaned = response.replace("\n\nPOST Request Sent from LiteLLM:\n", "");
-    
-    // Format curl command
-    try {
-        // Extract URL
-        const urlMatch = cleaned.match(/https:\/\/[^\s\\]+/);
-        const url = urlMatch ? urlMatch[0] : "api.openai.com/v1/";
-        
-        // Extract data payload
-        console.log(`cleaned: ${cleaned}`);
-        // Updated regex to better handle the -d parameter with single quotes
-        const dataMatch = cleaned.match(/-d\s+'([^']+)'/);
-        let dataPayload = "{}";
-        
-        if (dataMatch && dataMatch[1]) {
-          console.log(`dataMatch[1]: ${dataMatch[1]}`);
-          // Format the JSON part
-          try {
-            // Replace single quotes with double quotes, but we need to be careful about nested quotes
-            // First, let's convert the Python-style single-quoted JSON to valid JSON
-            const processedStr = dataMatch[1]
-              .replace(/'/g, '"')           // Replace all single quotes with double quotes
-              .replace(/"\s*:\s*"/g, '":"') // Fix spacing in key-value pairs
-              .replace(/"\s*,\s*"/g, '","') // Fix spacing in arrays
-              .replace(/{\s*"/g, '{"')      // Fix spacing at start of objects
-              .replace(/"\s*}/g, '"}');     // Fix spacing at end of objects
-            
-            const jsonObj = JSON.parse(processedStr);
-            dataPayload = JSON.stringify(jsonObj, null, 2);
-          } catch (e) {
-            console.error("Error parsing JSON:", e);
-            // If parsing fails, at least return the raw data
-            dataPayload = dataMatch[1];
-          }
-        }
-      } catch (e) {
-      // If formatting fails, return a basic cleanup
-      return cleaned
-        .replace(/\\\n/g, ' \\\n  ') // Add consistent indentation
-        .replace(/-d '/, "-d '\n  ") // Format the data part
-        .replace(/}'$/, "}\n'"); // Close data block nicely
-    }
+  // Function to format curl command from API response parts
+  const formatCurlCommand = (apiBase: string, requestBody: Record<string, any>, requestHeaders: Record<string, string>) => {
+    // Format the request body as nicely indented JSON with 2 spaces
+    const formattedBody = JSON.stringify(requestBody, null, 2)
+      // Add additional indentation for the entire body
+      .split('\n')
+      .map(line => `      ${line}`)
+      .join('\n');
+
+    // Build headers string
+    const headerString = Object.entries(requestHeaders)
+      .map(([key, value]) => `  -H '${key}: ${value}'`)
+      .join(' \\\n');
+
+    // Build the curl command with proper indentation
+    return `curl -X POST \\
+    ${apiBase} \\
+${headerString ? `${headerString} \\\n` : ''}  -H 'Content-Type: application/json' \\
+    -d '{
+${formattedBody}
+    }'`;
   };
   
-  // Function to handle the transform request using fetch
+  // Function to handle the transform request
   const handleTransform = async () => {
     setIsLoading(true);
     
@@ -109,15 +91,29 @@ const TransformRequestPanel: React.FC<TransformRequestPanelProps> = ({ accessTok
         throw new Error(`HTTP error ${response.status}`);
       }
       
-      // Get the response as text
-      const rawText = await response.text();
+      // Parse the response as JSON
+      const data = await response.json();
+      console.log("API response:", data);
       
-      // Format the curl command
-      const formattedCurl = formatCurlCommand(rawText);
-      
-      // Update the transformed response state
-      setTransformedResponse(formattedCurl);
-      message.success('Request transformed successfully');
+      // Check if the response has the expected fields
+      if (data.raw_request_api_base && data.raw_request_body) {
+        // Format the curl command with the separate parts
+        const formattedCurl = formatCurlCommand(
+          data.raw_request_api_base, 
+          data.raw_request_body, 
+          data.raw_request_headers || {}
+        );
+        
+        // Update state with the formatted curl command
+        setTransformedResponse(formattedCurl);
+        message.success('Request transformed successfully');
+      } else {
+        // Handle the case where the API returns a different format
+        // Try to extract the parts from a string response if needed
+        const rawText = typeof data === 'string' ? data : JSON.stringify(data);
+        setTransformedResponse(rawText);
+        message.info('Transformed request received in unexpected format');
+      }
     } catch (err) {
       console.error('Error transforming request:', err);
       message.error('Failed to transform request');
@@ -236,7 +232,7 @@ const TransformRequestPanel: React.FC<TransformRequestPanelProps> = ({ accessTok
             }}
           >
             {transformedResponse || `curl -X POST \\
-  https://api.openai.com/v1/chat/completions \\
+  https://api.openai.com/v1/ \\
   -H 'Authorization: *****' \\
   -H 'Content-Type: application/json' \\
   -d '{

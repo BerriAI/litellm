@@ -1999,6 +1999,5 @@ class LiteLLMBatch(Batch):
 
 class RawRequestTypedDict(TypedDict, total=False):
     raw_request_api_base: Optional[str]
-    raw_request_body: Optional[str]
-    raw_request_headers: Optional[str]
+    raw_request_body: Optional[dict]
     error: Optional[str]

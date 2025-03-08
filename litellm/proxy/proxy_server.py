@@ -290,7 +290,7 @@ from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import RouterGeneralSettings, updateDeployment
 from litellm.types.utils import CustomHuggingfaceTokenizer
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import RawRequestTypedDict, StandardLoggingPayload
 from litellm.utils import _add_custom_logger_callback_to_specific_event
 
 try:
@@ -5608,13 +5608,12 @@ async def supported_openai_params(model: str):
     "/utils/transform_request",
     tags=["llm utils"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=RawRequestTypedDict,
 )
 async def transform_request(request: TransformRequestBody):
-    from litellm.utils import return_raw_request_str
+    from litellm.utils import return_raw_request
 
-    return return_raw_request_str(
-        endpoint=request.call_type, kwargs=request.request_body
-    )
+    return return_raw_request(endpoint=request.call_type, kwargs=request.request_body)
 
 
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
