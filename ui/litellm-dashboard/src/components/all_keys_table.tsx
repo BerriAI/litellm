@@ -13,6 +13,7 @@ import { Organization, userListCall } from "./networking";
 import { createTeamSearchFunction } from "./key_team_helpers/team_search_fn";
 import { createOrgSearchFunction } from "./key_team_helpers/organization_search_fn";
 import { fetchAllKeyAliases, fetchAllTeams, fetchAllOrganizations } from './key_team_helpers/filter_helpers';
+import { useFilterLogic } from "./key_team_helpers/filter_logic";
 
 interface AllKeysTableProps {
   keys: KeyResponse[];
@@ -100,93 +101,25 @@ export function AllKeysTable({
   setCurrentOrg,
 }: AllKeysTableProps) {
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
-  const [filters, setFilters] = useState<{
-    'Team ID': string;
-    'Organization ID': string;
-    'Key Alias': string;
-  }>({
-    'Team ID': '',
-    'Organization ID': '',
-    'Key Alias': ''
-  });
   const [userList, setUserList] = useState<UserResponse[]>([]);
-  const [allKeyAliases, setAllKeyAliases] = useState<string[]>([]);
-  const [allTeams, setAllTeams] = useState<Team[]>(teams || []);
-  const [allOrganizations, setAllOrganizations] = useState<Organization[]>(organizations || []);
-  const [filteredKeys, setFilteredKeys] = useState<KeyResponse[]>(keys);
-
-  // Apply filters to keys whenever keys or filters change
-  useEffect(() => {
-    if (!keys) {
-      setFilteredKeys([]);
-      return;
-    }
-
-    let result = [...keys];
-
-    // Apply Team ID filter
-    if (filters['Team ID']) {
-      result = result.filter(key => key.team_id === filters['Team ID']);
-    }
-
-    // Apply Organization ID filter
-    if (filters['Organization ID']) {
-      result = result.filter(key => key.organization_id === filters['Organization ID']);
-    }
-
-    // Apply Key Alias filter
-    if (filters['Key Alias']) {
-      result = result.filter(key => 
-        key.key_alias && key.key_alias.toLowerCase().includes(filters['Key Alias'].toLowerCase())
-      );
-    }
-
-    setFilteredKeys(result);
-  }, [keys, filters]);
-
-  // Fetch all data for filters when component mounts
-  useEffect(() => {
-    const loadAllFilterData = async () => {
-      // Load all key aliases
-      const aliases = await fetchAllKeyAliases(accessToken);
-      setAllKeyAliases(aliases);
-      
-      // Load all teams - no organization filter needed here
-      const teamsData = await fetchAllTeams(accessToken);
-      if (teamsData.length > 0) {
-        setAllTeams(teamsData);
-      }
-      
-      // Load all organizations
-      const orgsData = await fetchAllOrganizations(accessToken);
-      if (orgsData.length > 0) {
-        setAllOrganizations(orgsData);
-      }
-    };
-    
-    if (accessToken) {
-      loadAllFilterData();
-    }
-  }, [accessToken]); // Remove the reference to currentOrg
-
-  // Update teams and organizations when props change
-  useEffect(() => {
-    if (teams && teams.length > 0) {
-      setAllTeams(prevTeams => {
-        // Only update if we don't already have a larger set of teams
-        return prevTeams.length < teams.length ? teams : prevTeams;
-      });
-    }
-  }, [teams]);
-
-  useEffect(() => {
-    if (organizations && organizations.length > 0) {
-      setAllOrganizations(prevOrgs => {
-        // Only update if we don't already have a larger set of organizations
-        return prevOrgs.length < organizations.length ? organizations : prevOrgs;
-      });
-    }
-  }, [organizations]);
+  
+  // Use the filter logic hook
+  const {
+    filters,
+    filteredKeys,
+    allKeyAliases,
+    allTeams,
+    allOrganizations,
+    handleFilterChange,
+    handleFilterReset
+  } = useFilterLogic({
+    keys,
+    teams,
+    organizations,
+    accessToken,
+    setSelectedTeam,
+    setCurrentOrg
+  });
 
   useEffect(() => {
     if (accessToken) {
@@ -198,45 +131,6 @@ export function AllKeysTable({
       fetchUserList();
     }
   }, [accessToken, keys]);
-
-  const handleFilterChange = (newFilters: Record<string, string>) => {
-    // Update filters state
-    setFilters({
-      'Team ID': newFilters['Team ID'] || '',
-      'Organization ID': newFilters['Organization ID'] || '',
-      'Key Alias': newFilters['Key Alias'] || ''
-    });
-  
-    // Handle Team change
-    if (newFilters['Team ID']) {
-      const selectedTeamData = allTeams?.find(team => team.team_id === newFilters['Team ID']);
-      if (selectedTeamData) {
-        setSelectedTeam(selectedTeamData);
-      }
-    }
-  
-    // Handle Org change
-    if (newFilters['Organization ID']) {
-      const selectedOrg = allOrganizations?.find(org => org.organization_id === newFilters['Organization ID']);
-      if (selectedOrg) {
-        setCurrentOrg(selectedOrg);
-      }
-    }
-  };
-
-  const handleFilterReset = () => {
-    // Reset filters state
-    setFilters({
-      'Team ID': '',
-      'Organization ID': '',
-      'Key Alias': ''
-    });
-    
-    // Reset team and org selections
-    setSelectedTeam(null);
-    setCurrentOrg(null);
-  };
-  
 
   const columns: ColumnDef<KeyResponse>[] = [
     {
