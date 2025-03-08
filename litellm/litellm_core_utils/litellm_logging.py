@@ -456,6 +456,18 @@ class Logging(LiteLLMLoggingBaseClass):
 
         return model, messages, non_default_params
 
+    def _get_raw_request_body(self, data: Optional[Union[dict, str]]) -> dict:
+        if data is None:
+            return {"error": "Received empty dictionary for raw request body"}
+        if isinstance(data, str):
+            try:
+                return json.loads(data)
+            except Exception:
+                return {
+                    "error": "Unable to parse raw request body. Got - {}".format(data)
+                }
+        return data
+
     def _pre_call(self, input, api_key, model=None, additional_args={}):
         """
         Common helper function across the sync + async pre-call function
@@ -515,14 +527,13 @@ class Logging(LiteLLMLoggingBaseClass):
 
                         _metadata["raw_request"] = str(curl_command)
                         # split up, so it's easier to parse in the UI
-                        self.model_call_details["raw_request_typed_dict"] = (  # type: ignore
+                        self.model_call_details["raw_request_typed_dict"] = (
                             RawRequestTypedDict(
                                 raw_request_api_base=str(
                                     additional_args.get("api_base") or ""
                                 ),
-                                raw_request_body=cast(
-                                    Optional[dict],
-                                    additional_args.get("complete_input_dict", {}),
+                                raw_request_body=self._get_raw_request_body(
+                                    additional_args.get("complete_input_dict", {})
                                 ),
                                 raw_request_headers=self._get_masked_headers(
                                     additional_args.get("headers", {}) or {}
