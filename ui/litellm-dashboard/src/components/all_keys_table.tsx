@@ -12,6 +12,8 @@ import { FilterOption } from "./common_components/filter";
 import { Organization, userListCall } from "./networking";
 import { createTeamSearchFunction } from "./key_team_helpers/team_search_fn";
 import { createOrgSearchFunction } from "./key_team_helpers/organization_search_fn";
+import { useFilterLogic } from "./key_team_helpers/filter_logic";
+
 interface AllKeysTableProps {
   keys: KeyResponse[];
   isLoading?: boolean;
@@ -95,17 +97,28 @@ export function AllKeysTable({
   userID,
   userRole,
   organizations,
-  setCurrentOrg
+  setCurrentOrg,
 }: AllKeysTableProps) {
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
-  const [filters, setFilters] = useState<{
-    'Team ID': string;
-    'Organization ID': string;
-  }>({
-    'Team ID': '',
-    'Organization ID': ''
-  });
   const [userList, setUserList] = useState<UserResponse[]>([]);
+  
+  // Use the filter logic hook
+  const {
+    filters,
+    filteredKeys,
+    allKeyAliases,
+    allTeams,
+    allOrganizations,
+    handleFilterChange,
+    handleFilterReset
+  } = useFilterLogic({
+    keys,
+    teams,
+    organizations,
+    accessToken,
+    setSelectedTeam,
+    setCurrentOrg
+  });
 
   useEffect(() => {
     if (accessToken) {
@@ -117,43 +130,6 @@ export function AllKeysTable({
       fetchUserList();
     }
   }, [accessToken, keys]);
-
-  const handleFilterChange = (newFilters: Record<string, string>) => {
-    // Update filters state
-    setFilters({
-      'Team ID': newFilters['Team ID'] || '',
-      'Organization ID': newFilters['Organization ID'] || ''
-    });
-  
-    // Handle Team change
-    if (newFilters['Team ID']) {
-      const selectedTeamData = teams?.find(team => team.team_id === newFilters['Team ID']);
-      if (selectedTeamData) {
-        setSelectedTeam(selectedTeamData);
-      }
-    }
-  
-    // Handle Org change
-    if (newFilters['Organization ID']) {
-      const selectedOrg = organizations?.find(org => org.organization_id === newFilters['Organization ID']);
-      if (selectedOrg) {
-        setCurrentOrg(selectedOrg);
-      }
-    }
-  };
-
-  const handleFilterReset = () => {
-    // Reset filters state
-    setFilters({
-      'Team ID': '',
-      'Organization ID': ''
-    });
-    
-    // Reset team and org selections
-    setSelectedTeam(null); // or whatever your default value should be
-    setCurrentOrg(null); // or whatever your default value should be
-  };
-  
 
   const columns: ColumnDef<KeyResponse>[] = [
     {
@@ -205,7 +181,7 @@ export function AllKeysTable({
       accessorKey: "team_id", // Change to access the team_id
       cell: ({ row, getValue }) => {
         const teamId = getValue() as string;
-        const team = teams?.find(t => t.team_id === teamId);
+        const team = allTeams?.find(t => t.team_id === teamId);
         return team?.team_alias || "Unknown";
       },
     },
@@ -323,8 +299,42 @@ export function AllKeysTable({
   ];
 
   const filterOptions: FilterOption[] = [
-    { name: 'Team ID', label: 'Team ID', isSearchable: true, searchFn: createTeamSearchFunction(teams) },
-    { name: 'Organization ID', label: 'Organization ID', isSearchable: true, searchFn: createOrgSearchFunction(organizations) }
+    { 
+      name: 'Team ID', 
+      label: 'Team ID', 
+      isSearchable: true, 
+      searchFn: async (searchText: string) => {
+        if (!allTeams || allTeams.length === 0) return [];
+        
+        const filteredTeams = allTeams.filter(team => 
+          team.team_id.toLowerCase().includes(searchText.toLowerCase()) || 
+          (team.team_alias && team.team_alias.toLowerCase().includes(searchText.toLowerCase()))
+        );
+        
+        return filteredTeams.map(team => ({
+          label: `${team.team_alias || team.team_id} (${team.team_id})`,
+          value: team.team_id
+        }));
+      }
+    },
+    { 
+      name: 'Organization ID', 
+      label: 'Organization ID', 
+      isSearchable: true, 
+      searchFn: async (searchText: string) => {
+        if (!allOrganizations || allOrganizations.length === 0) return [];
+        
+        const filteredOrgs = allOrganizations.filter(org => 
+          org.organization_id.toLowerCase().includes(searchText.toLowerCase()) || 
+          (org.organization_name && org.organization_name.toLowerCase().includes(searchText.toLowerCase()))
+        );
+        
+        return filteredOrgs.map(org => ({
+          label: `${org.organization_name || 'Unknown'} (${org.organization_id})`,
+          value: org.organization_id
+        }));
+      }
+    },
   ];
   
   
@@ -338,7 +348,7 @@ export function AllKeysTable({
           accessToken={accessToken}
           userID={userID}
           userRole={userRole}
-          teams={teams}
+          teams={allTeams}
         />
       ) : (
         <div className="border-b py-4 flex-1 overflow-hidden">
@@ -376,7 +386,7 @@ export function AllKeysTable({
             
             <DataTable
               columns={columns.filter(col => col.id !== 'expander')}
-              data={keys}
+              data={filteredKeys}
               isLoading={isLoading}
               getRowCanExpand={() => false}
               renderSubComponent={() => <></>}
