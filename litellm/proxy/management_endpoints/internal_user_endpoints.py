@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.key_management_endpoints import (
+    _get_condition_to_filter_out_ui_session_tokens,
     generate_key_helper_fn,
     prepare_metadata_fields,
 )
@@ -830,10 +831,12 @@ async def get_users(
 
     # Get key count for each user
     if users is not None:
+        where_condition = {"user_id": {"in": [user.user_id for user in users]}}
+        where_condition.update(_get_condition_to_filter_out_ui_session_tokens())
         user_keys = await prisma_client.db.litellm_verificationtoken.group_by(
             by=["user_id"],
             count={"user_id": True},
-            where={"user_id": {"in": [user.user_id for user in users]}},
+            where=where_condition,
         )
         user_key_counts = {
             item["user_id"]: item["_count"]["user_id"] for item in user_keys
