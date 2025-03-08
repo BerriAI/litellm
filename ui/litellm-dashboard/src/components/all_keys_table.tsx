@@ -113,6 +113,36 @@ export function AllKeysTable({
   const [allKeyAliases, setAllKeyAliases] = useState<string[]>([]);
   const [allTeams, setAllTeams] = useState<Team[]>(teams || []);
   const [allOrganizations, setAllOrganizations] = useState<Organization[]>(organizations || []);
+  const [filteredKeys, setFilteredKeys] = useState<KeyResponse[]>(keys);
+
+  // Apply filters to keys whenever keys or filters change
+  useEffect(() => {
+    if (!keys) {
+      setFilteredKeys([]);
+      return;
+    }
+
+    let result = [...keys];
+
+    // Apply Team ID filter
+    if (filters['Team ID']) {
+      result = result.filter(key => key.team_id === filters['Team ID']);
+    }
+
+    // Apply Organization ID filter
+    if (filters['Organization ID']) {
+      result = result.filter(key => key.organization_id === filters['Organization ID']);
+    }
+
+    // Apply Key Alias filter
+    if (filters['Key Alias']) {
+      result = result.filter(key => 
+        key.key_alias && key.key_alias.toLowerCase().includes(filters['Key Alias'].toLowerCase())
+      );
+    }
+
+    setFilteredKeys(result);
+  }, [keys, filters]);
 
   // Fetch all data for filters when component mounts
   useEffect(() => {
@@ -203,8 +233,8 @@ export function AllKeysTable({
     });
     
     // Reset team and org selections
-    setSelectedTeam(null); // or whatever your default value should be
-    setCurrentOrg(null); // or whatever your default value should be
+    setSelectedTeam(null);
+    setCurrentOrg(null);
   };
   
 
@@ -480,7 +510,7 @@ export function AllKeysTable({
             
             <DataTable
               columns={columns.filter(col => col.id !== 'expander')}
-              data={keys}
+              data={filteredKeys}
               isLoading={isLoading}
               getRowCanExpand={() => false}
               renderSubComponent={() => <></>}
