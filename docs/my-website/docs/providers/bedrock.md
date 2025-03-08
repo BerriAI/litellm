@@ -492,6 +492,76 @@ Same as [Anthropic API response](../providers/anthropic#usage---thinking--reason
 ```
 
 
+## Usage - Structured Output / JSON mode 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os 
+
+# set env
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+
+response = completion(
+  model="bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0", # specify invoke via `bedrock/invoke/anthropic.claude-3-7-sonnet-20250219-v1:0`
+  response_format={ "type": "json_object" },
+  messages=[
+    {"role": "system", "content": "You are a helpful assistant designed to output JSON."},
+    {"role": "user", "content": "Who won the world series in 2020?"}
+  ]
+)
+print(response.choices[0].message.content)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: bedrock-claude-3-7
+    litellm_params:
+      model: bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0 # specify invoke via `bedrock/invoke/<model_name>` 
+      aws_access_key_id: os.environ/CUSTOM_AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/CUSTOM_AWS_SECRET_ACCESS_KEY
+      aws_region_name: os.environ/CUSTOM_AWS_REGION_NAME
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "bedrock-claude-3-7",
+    "response_format": { "type": "json_object" },
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a helpful assistant designed to output JSON."
+      },
+      {
+        "role": "user",
+        "content": "Who won the world series in 2020?"
+      }
+    ]
+  }'
+```
+</TabItem>
+</Tabs>
+
 ## Usage - Bedrock Guardrails
 
 Example of using [Bedrock Guardrails with LiteLLM](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html)
