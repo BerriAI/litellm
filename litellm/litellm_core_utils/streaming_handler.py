@@ -1832,7 +1832,9 @@ class CustomStreamWrapper:
             )
 
     @staticmethod
-    def _strip_sse_data_from_chunk(chunk: Optional[str]) -> Optional[str]:
+    def _strip_sse_data_from_chunk(
+        chunk: Optional[Union[str, bytes]]
+    ) -> Optional[Union[str, bytes]]:
         """
         Strips the 'data:' prefix from Server-Sent Events (SSE) chunks.
 
@@ -1841,17 +1843,22 @@ class CustomStreamWrapper:
         and returns the actual content.
 
         Args:
-            chunk: The SSE chunk that may contain the 'data:' prefix
+            chunk: The SSE chunk that may contain the 'data:' prefix (string or bytes)
 
         Returns:
             The chunk with the 'data:' prefix removed, or the original chunk
             if no prefix was found. Returns None if input is None.
+
+        See OpenAI Python Ref for this: https://github.com/openai/openai-python/blob/041bf5a8ec54da19aad0169671793c2078bd6173/openai/api_requestor.py#L100
         """
         if chunk is None:
             return None
 
         if isinstance(chunk, str) and chunk.startswith("data:"):
             # Strip the prefix and any leading whitespace that might follow it
+            return chunk[5:].lstrip()
+        elif isinstance(chunk, bytes) and chunk.startswith(b"data:"):
+            # Handle bytes case - strip prefix and leading whitespace
             return chunk[5:].lstrip()
 
         return chunk
