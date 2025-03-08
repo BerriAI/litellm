@@ -1836,6 +1836,8 @@ class CustomStreamWrapper:
         """
         Strips the 'data: ' prefix from Server-Sent Events (SSE) chunks.
 
+        Some providers like sagemaker send it as `data:`, need to handle both
+
         SSE messages are prefixed with 'data: ' which is part of the protocol,
         not the actual content from the LLM. This method removes that prefix
         and returns the actual content.
@@ -1852,10 +1854,17 @@ class CustomStreamWrapper:
         if chunk is None:
             return None
 
-        if isinstance(chunk, str) and chunk.startswith("data: "):
-            # Strip the prefix and any leading whitespace that might follow it
-            _length_of_sse_data_prefix = len("data: ")
-            return chunk[_length_of_sse_data_prefix:]
+        if isinstance(chunk, str):
+            # OpenAI sends `data: `
+            if chunk.startswith("data: "):
+                # Strip the prefix and any leading whitespace that might follow it
+                _length_of_sse_data_prefix = len("data: ")
+                return chunk[_length_of_sse_data_prefix:]
+            elif chunk.startswith("data:"):
+                # Sagemaker sends `data:`, no trailing whitespace
+                _length_of_sse_data_prefix = len("data:")
+                return chunk[_length_of_sse_data_prefix:]
+
         return chunk
 
 
