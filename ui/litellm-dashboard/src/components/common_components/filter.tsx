@@ -62,9 +62,48 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  useEffect(() => {
+    if (options.length > 0 && options[0].isSearchable && options[0].searchFn) {
+      loadInitialOptions(options[0]);
+    }
+  }, []);
+
+  const loadInitialOptions = async (option: FilterOption) => {
+    if (!option.isSearchable || !option.searchFn) return;
+    
+    setSearchLoading(true);
+    try {
+      const results = await option.searchFn('');
+      setSearchOptions(results);
+    } catch (error) {
+      console.error('Error loading initial options:', error);
+      setSearchOptions([]);
+    } finally {
+      setSearchLoading(false);
+    }
+  };
+  
+  useEffect(() => {
+    if (showFilters && currentOption?.isSearchable && currentOption?.searchFn) {
+      loadInitialOptions(currentOption);
+    }
+  }, [showFilters, selectedFilter]);
+
+  const handleFilterSelect = (key: string) => {
+    setSelectedFilter(key);
+    setDropdownOpen(false);
+    
+    const newOption = options.find(opt => opt.name === key);
+    if (newOption?.isSearchable && newOption?.searchFn) {
+      loadInitialOptions(newOption);
+    } else {
+      setSearchOptions([]);
+    }
+  };
+
   const debouncedSearch = useCallback(
     debounce(async (value: string, option: FilterOption) => {
-      if (!value || !option.isSearchable || !option.searchFn) return;
+      if (!option.isSearchable || !option.searchFn) return;
       
       setSearchLoading(true);
       try {
@@ -147,11 +186,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
               <Dropdown
                 menu={{
                   items: dropdownItems,
-                  onClick: ({ key }) => {
-                    setSelectedFilter(key);
-                    setDropdownOpen(false);
-                    setSearchOptions([]);
-                  }
+                  onClick: ({ key }) => handleFilterSelect(key)
                 }}
                 onOpenChange={setDropdownOpen}
                 open={dropdownOpen}
