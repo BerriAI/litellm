@@ -4,7 +4,7 @@ from typing import Any, List, Literal, Tuple
 import litellm
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import Batch
-from litellm.types.utils import Usage
+from litellm.types.utils import CallTypes, Usage
 
 
 async def _handle_completed_batch(
@@ -105,6 +105,7 @@ def _get_batch_job_cost_from_file_content(
                 total_cost += litellm.completion_cost(
                     completion_response=_response_body,
                     custom_llm_provider=custom_llm_provider,
+                    call_type=CallTypes.aretrieve_batch.value,
                 )
                 verbose_logger.debug("total_cost=%s", total_cost)
         return total_cost
