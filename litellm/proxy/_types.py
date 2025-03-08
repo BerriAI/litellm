@@ -19,6 +19,7 @@ from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.utils import (
+    CallTypes,
     EmbeddingResponse,
     GenericBudgetConfigType,
     ImageResponse,
@@ -2579,3 +2580,8 @@ class PrismaCompatibleUpdateDBModel(TypedDict, total=False):
 
 class SpecialManagementEndpointEnums(enum.Enum):
     DEFAULT_ORGANIZATION = "default_organization"
+
+
+class TransformRequestBody(BaseModel):
+    call_type: CallTypes
+    request_body: dict
