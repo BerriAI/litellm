@@ -42,9 +42,23 @@ export const columns: ColumnDef<LogEntry>[] = [
           {...{
             onClick: row.getToggleExpandedHandler(),
             style: { cursor: "pointer" },
+            "aria-label": row.getIsExpanded() ? "Collapse row" : "Expand row",
           }}
+          className="w-6 h-6 flex items-center justify-center"
         >
-          {row.getIsExpanded() ? "▼" : "▶"}
+          <svg
+            className={`w-4 h-4 transition-transform ${row.getIsExpanded() ? 'transform rotate-90' : ''}`}
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M9 5l7 7-7 7"
+            />
+          </svg>
         </button>
       ) : (
         "●"
