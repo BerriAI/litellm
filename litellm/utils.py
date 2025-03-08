@@ -156,6 +156,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     ProviderField,
     ProviderSpecificModelInfo,
+    RawRequestTypedDict,
     SelectTokenizerResponse,
     StreamingChoices,
     TextChoices,
@@ -6479,7 +6480,7 @@ def add_openai_metadata(metadata: dict) -> dict:
     return visible_metadata.copy()
 
 
-def return_raw_request_str(endpoint: CallTypes, kwargs: dict) -> str:
+def return_raw_request_str(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict:
     """
     Return the json str of the request
 
@@ -6513,7 +6514,12 @@ def return_raw_request_str(endpoint: CallTypes, kwargs: dict) -> str:
     except Exception as e:
         received_exception = str(e)
 
-    if "raw_request" in litellm_logging_obj.model_call_details:
-        return litellm_logging_obj.model_call_details["raw_request"]
+    raw_request_typed_dict = litellm_logging_obj.model_call_details.get(
+        "raw_request_typed_dict"
+    )
+    if raw_request_typed_dict:
+        return cast(RawRequestTypedDict, raw_request_typed_dict)
     else:
-        return received_exception
+        return RawRequestTypedDict(
+            error=received_exception,
+        )

@@ -55,6 +55,7 @@ from litellm.types.utils import (
     LiteLLMLoggingBaseClass,
     ModelResponse,
     ModelResponseStream,
+    RawRequestTypedDict,
     StandardCallbackDynamicParams,
     StandardLoggingAdditionalHeaders,
     StandardLoggingHiddenParams,
@@ -513,9 +514,27 @@ class Logging(LiteLLMLoggingBaseClass):
                         )
 
                         _metadata["raw_request"] = str(curl_command)
-                        self.model_call_details["raw_request"] = str(curl_command)
-                except Exception as e:
+                        # split up, so it's easier to parse in the UI
+                        self.model_call_details["raw_request_typed_dict"] = (
+                            RawRequestTypedDict(
+                                raw_request_api_base=str(
+                                    additional_args.get("api_base") or ""
+                                ),
+                                raw_request_body=self._get_request_body(
+                                    additional_args.get("complete_input_dict", {})
+                                ),
+                                raw_request_headers=self._get_request_headers(
+                                    additional_args.get("headers", {})
+                                ),
+                            )
+                        )
 
+                except Exception as e:
+                    self.model_call_details["raw_request_typed_dict"] = (
+                        RawRequestTypedDict(
+                            error=str(e),
+                        )
+                    )
                     traceback.print_exc()
                     _metadata["raw_request"] = (
                         "Unable to Log \
@@ -649,6 +668,16 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 verbose_logger.debug(f"\033[92m{curl_command}\033[0m\n")
 
+    def _get_request_body(self, data: dict) -> str:
+        return str(data)
+
+    def _get_request_headers(self, headers: dict) -> str:
+        masked_headers = self._get_masked_headers(headers)
+        formatted_headers = " ".join(
+            [f"-H '{k}: {v}'" for k, v in masked_headers.items()]
+        )
+        return formatted_headers
+
     def _get_request_curl_command(
         self, api_base: str, headers: Optional[dict], additional_args: dict, data: dict
     ) -> str:
@@ -657,15 +686,12 @@ class Logging(LiteLLMLoggingBaseClass):
         curl_command = "\n\nPOST Request Sent from LiteLLM:\n"
         curl_command += "curl -X POST \\\n"
         curl_command += f"{api_base} \\\n"
-        masked_headers = self._get_masked_headers(headers)
-        formatted_headers = " ".join(
-            [f"-H '{k}: {v}'" for k, v in masked_headers.items()]
-        )
+        formatted_headers = self._get_request_headers(headers)
 
         curl_command += (
             f"{formatted_headers} \\\n" if formatted_headers.strip() != "" else ""
         )
-        curl_command += f"-d '{str(data)}'\n"
+        curl_command += f"-d '{self._get_request_body(data)}'\n"
         if additional_args.get("request_str", None) is not None:
             # print the sagemaker / bedrock client request
             curl_command = "\nRequest Sent from LiteLLM:\n"
