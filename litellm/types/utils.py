@@ -117,6 +117,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_second: Optional[float]  # for OpenAI Speech models
+    input_cost_per_token_batches: Optional[float]
+    output_cost_per_token_batches: Optional[float]
     output_cost_per_token: Required[float]
     output_cost_per_character: Optional[float]  # only for vertex ai models
     output_cost_per_audio_token: Optional[float]
@@ -213,6 +215,8 @@ CallTypesLiteral = Literal[
     "acreate_batch",
     "pass_through_endpoint",
     "anthropic_messages",
+    "aretrieve_batch",
+    "retrieve_batch",
 ]
 
 
@@ -1585,6 +1589,7 @@ class StandardLoggingHiddenParams(TypedDict):
     response_cost: Optional[str]
     litellm_overhead_time_ms: Optional[float]
     additional_headers: Optional[StandardLoggingAdditionalHeaders]
+    batch_models: Optional[List[str]]
 
 
 class StandardLoggingModelInformation(TypedDict):

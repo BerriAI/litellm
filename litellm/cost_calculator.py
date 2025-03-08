@@ -239,6 +239,15 @@ def cost_per_token(  # noqa: PLR0915
             custom_llm_provider=custom_llm_provider,
             billed_units=rerank_billed_units,
         )
+    elif (
+        call_type == "aretrieve_batch"
+        or call_type == "retrieve_batch"
+        or call_type == CallTypes.aretrieve_batch
+        or call_type == CallTypes.retrieve_batch
+    ):
+        return batch_cost_calculator(
+            usage=usage_block, model=model, custom_llm_provider=custom_llm_provider
+        )
     elif call_type == "atranscription" or call_type == "transcription":
         return openai_cost_per_second(
             model=model,
@@ -960,3 +969,54 @@ def default_image_cost_calculator(
             )
 
     return cost_info["input_cost_per_pixel"] * height * width * n
+
+
+def batch_cost_calculator(
+    usage: Usage,
+    model: str,
+    custom_llm_provider: Optional[str] = None,
+) -> Tuple[float, float]:
+    """
+    Calculate the cost of a batch job
+    """
+
+    _, custom_llm_provider, _, _ = litellm.get_llm_provider(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
+
+    verbose_logger.info(
+        "Calculating batch cost per token. model=%s, custom_llm_provider=%s",
+        model,
+        custom_llm_provider,
+    )
+
+    try:
+        model_info: Optional[ModelInfo] = litellm.get_model_info(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+    except Exception:
+        model_info = None
+
+    if not model_info:
+        return 0.0, 0.0
+
+    input_cost_per_token_batches = model_info.get("input_cost_per_token_batches")
+    input_cost_per_token = model_info.get("input_cost_per_token")
+    output_cost_per_token_batches = model_info.get("output_cost_per_token_batches")
+    output_cost_per_token = model_info.get("output_cost_per_token")
+    total_prompt_cost = 0.0
+    total_completion_cost = 0.0
+    if input_cost_per_token_batches:
+        total_prompt_cost = usage.prompt_tokens * input_cost_per_token_batches
+    elif input_cost_per_token:
+        total_prompt_cost = (
+            usage.prompt_tokens * (input_cost_per_token) / 2
+        )  # batch cost is usually half of the regular token cost
+    if output_cost_per_token_batches:
+        total_completion_cost = usage.completion_tokens * output_cost_per_token_batches
+    elif output_cost_per_token:
+        total_completion_cost = (
+            usage.completion_tokens * (output_cost_per_token) / 2
+        )  # batch cost is usually half of the regular token cost
+
+    return total_prompt_cost, total_completion_cost
