@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Button, Select, Tabs, message } from 'antd';
 import { CopyOutlined } from '@ant-design/icons';
+import { Title } from '@tremor/react';
 
 interface TransformRequestPanelProps {
   accessToken: string | null;
@@ -39,21 +40,21 @@ const TransformRequestPanel: React.FC<TransformRequestPanelProps> = ({ accessTok
     const formattedBody = JSON.stringify(requestBody, null, 2)
       // Add additional indentation for the entire body
       .split('\n')
-      .map(line => `      ${line}`)
+      .map(line => `  ${line}`)
       .join('\n');
 
-    // Build headers string
+    // Build headers string with consistent indentation
     const headerString = Object.entries(requestHeaders)
-      .map(([key, value]) => `  -H '${key}: ${value}'`)
-      .join(' \\\n');
+      .map(([key, value]) => `-H '${key}: ${value}'`)
+      .join(' \\\n  ');
 
-    // Build the curl command with proper indentation
+    // Build the curl command with consistent indentation
     return `curl -X POST \\
-    ${apiBase} \\
-${headerString ? `${headerString} \\\n` : ''}  -H 'Content-Type: application/json' \\
-    -d '{
+  ${apiBase} \\
+  ${headerString ? `${headerString} \\\n  ` : ''}-H 'Content-Type: application/json' \\
+  -d '{
 ${formattedBody}
-    }'`;
+  }'`;
   };
   
   // Function to handle the transform request
@@ -122,14 +123,25 @@ ${formattedBody}
     }
   };
 
+  // Add this handler function near your other handlers
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault(); // Prevent default behavior
+      handleTransform();
+    }
+  };
+
   return (
+    <div className="w-full m-2" style={{ overflow: 'hidden' }}>
+        <Title>Playground</Title>
+        <p className="text-sm text-gray-500">See how LiteLLM transforms your request for the specified provider.</p>
     <div style={{ 
       display: 'flex', 
       gap: '16px', 
-      width: '100%', 
-      height: '100%', 
+      width: '100%',
+      minWidth: 0,
       overflow: 'hidden'
-    }}>
+    }} className="mt-4">
       {/* Original Request Panel */}
       <div style={{ 
         flex: '1 1 50%',
@@ -138,11 +150,13 @@ ${formattedBody}
         border: '1px solid #e8e8e8', 
         borderRadius: '8px', 
         padding: '24px',
-        overflow: 'hidden'
+        overflow: 'hidden',
+        maxHeight: '600px',
+        minWidth: 0
       }}>
         <div style={{ marginBottom: '24px' }}>
           <h2 style={{ fontSize: '24px', fontWeight: 'bold', margin: '0 0 4px 0' }}>Original Request</h2>
-          <p style={{ color: '#666', margin: 0 }}>The request you would send to LiteLLM</p>
+          <p style={{ color: '#666', margin: 0 }}>The request you would send to LiteLLM's `/chat/completions` endpoint.</p>
         </div>
         
         <textarea 
@@ -161,20 +175,15 @@ ${formattedBody}
           }}
           value={originalRequestJSON}
           onChange={(e) => setOriginalRequestJSON(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Press Cmd/Ctrl + Enter to transform"
         />
         
         <div style={{ 
           display: 'flex', 
-          justifyContent: 'space-between',
+          justifyContent: 'flex-end',
           marginTop: 'auto'
         }}>
-          <Select 
-            defaultValue="OpenAI" 
-            style={{ width: '120px' }}
-          >
-            <Select.Option value="OpenAI">OpenAI</Select.Option>
-          </Select>
-          
           <Button 
             type="primary" 
             style={{ 
@@ -200,17 +209,16 @@ ${formattedBody}
         border: '1px solid #e8e8e8', 
         borderRadius: '8px', 
         padding: '24px',
-        overflow: 'hidden'
+        overflow: 'hidden',
+        maxHeight: '800px',
+        minWidth: 0
       }}>
         <div style={{ marginBottom: '24px' }}>
           <h2 style={{ fontSize: '24px', fontWeight: 'bold', margin: '0 0 4px 0' }}>Transformed Request</h2>
-          <p style={{ color: '#666', margin: 0 }}>How LiteLLM transforms your request for OpenAI</p>
+          <p style={{ color: '#666', margin: 0 }}>How LiteLLM transforms your request for the specified provider.</p>
+          <br/>
+          <p style={{ color: '#666', margin: 0 }} className="text-xs">Note: Sensitive headers are not shown.</p>
         </div>
-        
-        <Tabs defaultActiveKey="JSON" style={{ marginBottom: '16px' }}>
-          <Tabs.TabPane tab="JSON" key="JSON" />
-          <Tabs.TabPane tab="Differences" key="Differences" />
-        </Tabs>
         
         <div style={{ 
           position: 'relative',
@@ -232,25 +240,19 @@ ${formattedBody}
             }}
           >
             {transformedResponse || `curl -X POST \\
-  https://api.openai.com/v1/ \\
-  -H 'Authorization: *****' \\
+  https://api.openai.com/v1/chat/completions \\
+  -H 'Authorization: Bearer sk-xxx' \\
   -H 'Content-Type: application/json' \\
   -d '{
-  "model": "gpt-4o",
+  "model": "gpt-4",
   "messages": [
     {
       "role": "system",
       "content": "You are a helpful assistant."
-    },
-    {
-      "role": "user",
-      "content": "Explain quantum computing in simple terms"
     }
   ],
-  "temperature": 0.7,
-  "max_tokens": 500,
-  "stream": true
-}'`}
+  "temperature": 0.7
+  }'`}
           </pre>
           
           <Button 
@@ -269,6 +271,7 @@ ${formattedBody}
           />
         </div>
       </div>
+    </div>
     </div>
   );
 };
