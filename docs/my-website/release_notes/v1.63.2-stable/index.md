@@ -50,8 +50,8 @@ Here's a Demo Instance to test changes:
 9. Bedrock - handle thinking blocks in assistant message. [Get Started](https://docs.litellm.ai/docs/providers/bedrock#usage---thinking--reasoning-content)
 10. Anthropic - Return `signature` on streaming. [Get Started](https://docs.litellm.ai/docs/providers/bedrock#usage---thinking--reasoning-content)
 - Note: We've also migrated from `signature_delta` to `signature`. [Read more](https://docs.litellm.ai/release_notes/v1.63.0)
-11. Support format param for specifying image type. [ADD DOCS - specifying image format]
-12. Anthropic - `/v1/messages` endpoint - `thinking` param support. [ADD DOC]
+11. Support format param for specifying image type. [Get Started](../../docs/completion/vision.md#explicitly-specify-image-type)
+12. Anthropic - `/v1/messages` endpoint - `thinking` param support. [Get Started](../../docs/anthropic_unified.md)
 - Note: this refactors the [BETA] unified `/v1/messages` endpoint, to just work for the Anthropic API. 
 13. Vertex AI - handle $id in response schema when calling vertex ai. [Get Started](https://docs.litellm.ai/docs/providers/vertex#json-schema)
 
