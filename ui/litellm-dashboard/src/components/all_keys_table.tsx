@@ -12,7 +12,6 @@ import { FilterOption } from "./common_components/filter";
 import { Organization, userListCall } from "./networking";
 import { createTeamSearchFunction } from "./key_team_helpers/team_search_fn";
 import { createOrgSearchFunction } from "./key_team_helpers/organization_search_fn";
-import { fetchAllKeyAliases, fetchAllTeams, fetchAllOrganizations } from './key_team_helpers/filter_helpers';
 import { useFilterLogic } from "./key_team_helpers/filter_logic";
 
 interface AllKeysTableProps {
@@ -336,23 +335,6 @@ export function AllKeysTable({
         }));
       }
     },
-    {
-      name: 'Key Alias',
-      label: 'Key Alias',
-      isSearchable: true,
-      searchFn: async (searchText: string) => {
-        if (!allKeyAliases || allKeyAliases.length === 0) return [];
-        
-        const filteredAliases = allKeyAliases.filter(alias => 
-          alias && alias.toLowerCase().includes(searchText.toLowerCase())
-        );
-        
-        return filteredAliases.map(alias => ({
-          label: alias,
-          value: alias
-        }));
-      }
-    }
   ];
   
   

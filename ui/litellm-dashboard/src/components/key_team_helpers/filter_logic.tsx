@@ -5,7 +5,6 @@ import { Team, Organization } from "../networking";
 export interface FilterState {
   'Team ID': string;
   'Organization ID': string;
-  'Key Alias': string;
   [key: string]: string;
 }
 
@@ -27,7 +26,6 @@ export function useFilterLogic({
   const [filters, setFilters] = useState<FilterState>({
     'Team ID': '',
     'Organization ID': '',
-    'Key Alias': ''
   });
   const [allKeyAliases, setAllKeyAliases] = useState<string[]>([]);
   const [allTeams, setAllTeams] = useState<Team[]>(teams || []);
@@ -53,12 +51,6 @@ export function useFilterLogic({
       result = result.filter(key => key.organization_id === filters['Organization ID']);
     }
 
-    // Apply Key Alias filter
-    if (filters['Key Alias']) {
-      result = result.filter(key => 
-        key.key_alias && key.key_alias.toLowerCase().includes(filters['Key Alias'].toLowerCase())
-      );
-    }
 
     setFilteredKeys(result);
   }, [keys, filters]);
@@ -66,9 +58,7 @@ export function useFilterLogic({
   // Fetch all data for filters when component mounts
   useEffect(() => {
     const loadAllFilterData = async () => {
-      // Load all key aliases
-      const aliases = await fetchAllKeyAliases(accessToken);
-      setAllKeyAliases(aliases);
+
       
       // Load all teams - no organization filter needed here
       const teamsData = await fetchAllTeams(accessToken);
@@ -112,7 +102,6 @@ export function useFilterLogic({
     setFilters({
       'Team ID': newFilters['Team ID'] || '',
       'Organization ID': newFilters['Organization ID'] || '',
-      'Key Alias': newFilters['Key Alias'] || ''
     });
   
     // Handle Team change
@@ -137,7 +126,6 @@ export function useFilterLogic({
     setFilters({
       'Team ID': '',
       'Organization ID': '',
-      'Key Alias': ''
     });
     
     // Reset team and org selections
