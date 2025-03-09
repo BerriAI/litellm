@@ -119,7 +119,7 @@ def get_llm_provider(  # noqa: PLR0915
             if _is_non_openai_azure_model(model):
                 custom_llm_provider = "openai"
                 return model, custom_llm_provider, dynamic_api_key, api_base
-        elif model.split("/", 1)[0] == "nvidia_nim" or model in litellm.nvidia_models:
+        elif model.split("/", 1)[0] in ["nvidia_nim", "nvidia"] or model in litellm.nvidia_models:
             api_base = (
                 api_base 
                 or get_secret("NVIDIA_API_BASE") 
@@ -128,9 +128,7 @@ def get_llm_provider(  # noqa: PLR0915
                 or "https://integrate.api.nvidia.com/v1"
             ) # type: ignore
             dynamic_api_key = api_key or get_secret_str("NVIDIA_API_KEY") or get_secret_str("NVIDIA_NIM_API_KEY")
-            custom_llm_provider = "nvidia_nim"
-            if model.split("/", 1)[0] == "nvidia_nim":
-                model = model.split("/", 1)[1]
+            custom_llm_provider, model = model.split("/", 1)
             
             # if model not in litellm.nvidia_models:
             #     raise Warning(
@@ -205,7 +203,7 @@ def get_llm_provider(  # noqa: PLR0915
                         custom_llm_provider = "groq"
                         dynamic_api_key = get_secret_str("GROQ_API_KEY")
                     elif endpoint == "https://integrate.api.nvidia.com/v1":
-                        custom_llm_provider = "nvidia_nim"
+                        custom_llm_provider = model.split("/", 1)[0]
                         dynamic_api_key = get_secret_str("NVIDIA_API_KEY") or get_secret_str("NVIDIA_NIM_API_KEY")
                     elif endpoint == "https://api.cerebras.ai/v1":
                         custom_llm_provider = "cerebras"

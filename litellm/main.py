@@ -1648,6 +1648,7 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "nvidia_nim"
+            or custom_llm_provider == "nvidia"
             or custom_llm_provider == "cerebras"
             or custom_llm_provider == "sambanova"
             or custom_llm_provider == "volcengine"
@@ -3417,6 +3418,7 @@ def embedding(  # noqa: PLR0915
             or custom_llm_provider == "openai"
             or custom_llm_provider == "together_ai"
             or custom_llm_provider == "nvidia_nim"
+            or custom_llm_provider == "nvidia"
             or custom_llm_provider == "litellm_proxy"
         ):
             api_base = (
@@ -3916,6 +3918,7 @@ async def atext_completion(
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "groq"
             or custom_llm_provider == "nvidia_nim"
+            or custom_llm_provider == "nvidia"
             or custom_llm_provider == "cerebras"
             or custom_llm_provider == "sambanova"
             or custom_llm_provider == "ai21_chat"
