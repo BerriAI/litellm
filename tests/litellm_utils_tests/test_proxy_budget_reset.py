@@ -685,3 +685,141 @@ async def test_service_logger_teams_failure():
     teams_found_str = event_metadata.get("teams_found", "")
     assert "team1" in teams_found_str
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reset_budget_for_litellm_teams():
+    """
+    Test that the reset_budget_for_litellm_teams method correctly resets the budget for teams.
+    """
+    team1 = {
+        "id": "team1",
+        "spend": 30.0,
+        "budget_duration": 180,
+    }
+    team2 = {"id": "team2", "spend": 35.0, "budget_duration": 180}
+
+    prisma_client = MagicMock()
+    prisma_client.get_data = AsyncMock(return_value=[team1, team2])
+    prisma_client.update_data = AsyncMock()
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
+    proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock()
+
+    job = ResetBudgetJob(proxy_logging_obj, prisma_client)
+
+    async def fake_reset_team(team, current_time):
+        team["spend"] = 0.0
+        team["budget_reset_at"] = (
+            current_time + timedelta(seconds=team["budget_duration"])
+        ).isoformat()
+        return team
+
+    with patch.object(
+        ResetBudgetJob, "_reset_budget_for_team", side_effect=fake_reset_team
+    ) as mock_reset_team:
+        await job.reset_budget_for_litellm_teams()
+        await asyncio.sleep(0.1)
+
+    assert mock_reset_team.call_count == 2
+    prisma_client.update_data.assert_awaited_once()
+    update_call = prisma_client.update_data.call_args
+    assert update_call.kwargs.get("table_name") == "team"
+    updated_teams = update_call.kwargs.get("data_list", [])
+    assert len(updated_teams) == 2
+    assert updated_teams[0]["id"] == "team1"
+    assert updated_teams[1]["id"] == "team2"
+
+
+@pytest.mark.asyncio
+async def test_reset_budget_for_litellm_users():
+    """
+    Test that the reset_budget_for_litellm_users method correctly resets the budget for users.
+    """
+    user1 = {
+        "id": "user1",
+        "spend": 20.0,
+        "budget_duration": 120,
+    }
+    user2 = {"id": "user2", "spend": 25.0, "budget_duration": 120}
+
+    prisma_client = MagicMock()
+    prisma_client.get_data = AsyncMock(return_value=[user1, user2])
+    prisma_client.update_data = AsyncMock()
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
+    proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock()
+
+    job = ResetBudgetJob(proxy_logging_obj, prisma_client)
+
+    async def fake_reset_user(user, current_time):
+        user["spend"] = 0.0
+        user["budget_reset_at"] = (
+            current_time + timedelta(seconds=user["budget_duration"])
+        ).isoformat()
+        return user
+
+    with patch.object(
+        ResetBudgetJob, "_reset_budget_for_user", side_effect=fake_reset_user
+    ) as mock_reset_user:
+        await job.reset_budget_for_litellm_users()
+        await asyncio.sleep(0.1)
+
+    assert mock_reset_user.call_count == 2
+    prisma_client.update_data.assert_awaited_once()
+    update_call = prisma_client.update_data.call_args
+    assert update_call.kwargs.get("table_name") == "user"
+    updated_users = update_call.kwargs.get("data_list", [])
+    assert len(updated_users) == 2
+    assert updated_users[0]["id"] == "user1"
+    assert updated_users[1]["id"] == "user2"
+
+
+@pytest.mark.asyncio
+async def test_reset_budget_for_litellm_keys():
+    """
+    Test that the reset_budget_for_litellm_keys method correctly resets the budget for keys.
+    """
+    key1 = {
+        "id": "key1",
+        "spend": 10.0,
+        "budget_duration": 60,
+    }
+    key2 = {"id": "key2", "spend": 15.0, "budget_duration": 60}
+
+    prisma_client = MagicMock()
+    prisma_client.get_data = AsyncMock(return_value=[key1, key2])
+    prisma_client.update_data = AsyncMock()
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
+    proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock()
+
+    job = ResetBudgetJob(proxy_logging_obj, prisma_client)
+
+    async def fake_reset_key(key, current_time):
+        key["spend"] = 0.0
+        key["budget_reset_at"] = (
+            current_time + timedelta(seconds=key["budget_duration"])
+        ).isoformat()
+        return key
+
+    with patch.object(
+        ResetBudgetJob, "_reset_budget_for_key", side_effect=fake_reset_key
+    ) as mock_reset_key:
+        await job.reset_budget_for_litellm_keys()
+        await asyncio.sleep(0.1)
+
+    assert mock_reset_key.call_count == 2
+    prisma_client.update_data.assert_awaited_once()
+    update_call = prisma_client.update_data.call_args
+    assert update_call.kwargs.get("table_name") == "key"
+    updated_keys = update_call.kwargs.get("data_list", [])
+    assert len(updated_keys) == 2
+    assert updated_keys[0]["id"] == "key1"
+    assert updated_keys[1]["id"] == "key2"
