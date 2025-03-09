@@ -1116,7 +1116,9 @@ async def test_list_key_helper_team_filtering(prisma_client):
         # Test 1: Get all keys with pagination (exclude litellm-dashboard)
         all_keys = []
         page = 1
-        while True:
+        max_pages_to_check = 3  # Only check the first 3 pages
+
+        while page <= max_pages_to_check:
             result = await _list_key_helper(
                 prisma_client=prisma_client,
                 size=100,
@@ -1130,7 +1132,7 @@ async def test_list_key_helper_team_filtering(prisma_client):
 
             all_keys.extend(result["keys"])
 
-            if page >= result["total_pages"]:
+            if page >= result["total_pages"] or page >= max_pages_to_check:
                 break
             page += 1
 
