@@ -1423,7 +1423,9 @@ def test_cost_azure_openai_prompt_caching():
     print("_expected_cost2", _expected_cost2)
     print("cost_2", cost_2)
 
-    assert cost_2 == _expected_cost2
+    assert (
+        abs(cost_2 - _expected_cost2) < 1e-5
+    )  # Allow for small floating-point differences
 
 
 def test_completion_cost_vertex_llama3():
