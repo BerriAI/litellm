@@ -15,6 +15,8 @@ tags: [llm translation, thinking, reasoning_content, claude-3-7-sonnet]
 hide_table_of_contents: false
 ---
 
+import Image from '@theme/IdealImage';
+
 
 These are the changes since `v1.61.20-stable`.
 
@@ -28,6 +30,9 @@ This release is primarily focused on:
 This release will be live on 03/09/2025
 
 ::: 
+
+<Image img={require('../../img/release_notes/v1632_release.jpg')} />
+
 
 ## Demo Instance
 
@@ -45,6 +50,8 @@ Here's a Demo Instance to test changes:
 3. Fix Azure O1 mini pricing [PR](https://github.com/BerriAI/litellm/commit/52de1949ef2f76b8572df751f9c868a016d4832c)
 
 ## LLM Translation
+
+<Image img={require('../../img/release_notes/anthropic_thinking.jpg')}/>
 
 1. Support `/openai/` passthrough for Assistant endpoints. [Get Started](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
 2. Bedrock Claude - fix tool calling transformation on invoke route. [Get Started](../../docs/providers/bedrock#usage---function-calling--tool-calling)
@@ -68,6 +75,8 @@ Here's a Demo Instance to test changes:
 2. Batches API - Log batch models in spend logs / standard logging payload. [Get Started](../../docs/proxy/logging_spec.md#standardlogginghiddenparams)
 
 ## Management Endpoints / UI
+
+<Image img={require('../../img/release_notes/error_logs.jpg')} />
 
 1. Virtual Keys Page
     - Allow team/org filters to be searchable on the Create Key Page
