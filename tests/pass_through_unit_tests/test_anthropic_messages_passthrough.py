@@ -153,7 +153,7 @@ async def test_anthropic_messages_streaming_with_bad_request():
 @pytest.mark.asyncio
 async def test_anthropic_messages_streaming_with_unsupported_model():
     """
-    Test the anthropic_messages with streaming request
+    Test that BadRequestError is raised when sending an unsupported model to anthropic messages
     """
     try:
         response = await anthropic_messages(
