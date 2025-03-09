@@ -113,6 +113,7 @@ def test_ollama_vision_model():
         assert json_data["model"] == "llama3.2-vision:11b"
         assert "images" in json_data
         assert "prompt" in json_data
+        assert json_data["prompt"].startswith("### User:\n")
 
 
 mock_ollama_embedding_response = EmbeddingResponse(model="ollama/nomic-embed-text")
