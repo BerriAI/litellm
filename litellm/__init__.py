@@ -180,6 +180,7 @@ cloudflare_api_key: Optional[str] = None
 baseten_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
+snowflake_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
@@ -412,6 +413,7 @@ cerebras_models: List = []
 galadriel_models: List = []
 sambanova_models: List = []
 assemblyai_models: List = []
+snowflake_models: List = []
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -565,6 +567,8 @@ def add_known_models():
             assemblyai_models.append(key)
         elif value.get("litellm_provider") == "jina_ai":
             jina_ai_models.append(key)
+        elif value.get("litellm_provider") == "snowflake":
+            snowflake_models.append(key)
 
 
 add_known_models()
@@ -593,6 +597,29 @@ petals_models = [
 ollama_models = ["llama2"]
 
 maritalk_models = ["maritalk"]
+
+snowflake_models = [
+    "snowflake/deepseek-r1",
+    "snowflake/claude-3-5-sonnet",
+    "snowflake/llama3.2-1b",
+    "snowflake/llama3.2-3b",
+    "snowflake/llama3.1-8b",
+    "snowflake/llama3.1-70b",
+    "snowflake/llama3.3-70b",
+    "snowflake/snowflake-llama-3.3-70b",
+    "snowflake/llama3.1-405b",
+    "snowflake/snowflake-llama-3.1-405b",
+    "snowflake/snowflake-arctic",
+    "snowflake/reka-core",
+    "snowflake/reka-flash",
+    "snowflake/mistral-large2",
+    "snowflake/mixtral-8x7b",
+    "snowflake/mistral-7b",
+    "snowflake/jamba-instruct",
+    "snowflake/jamba-1.5-mini",
+    "snowflake/jamba-1.5-large",
+    "snowflake/gemma-7b"
+]
 
 model_list = (
     open_ai_chat_completion_models
@@ -638,6 +665,7 @@ model_list = (
     + azure_text_models
     + assemblyai_models
     + jina_ai_models
+    + snowflake_models
 )
 
 model_list_set = set(model_list)
@@ -693,6 +721,7 @@ models_by_provider: dict = {
     "sambanova": sambanova_models,
     "assemblyai": assemblyai_models,
     "jina_ai": jina_ai_models,
+    "snowflake": snowflake_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -809,6 +838,7 @@ from .llms.databricks.embed.transformation import DatabricksEmbeddingConfig
 from .llms.predibase.chat.transformation import PredibaseConfig
 from .llms.replicate.chat.transformation import ReplicateConfig
 from .llms.cohere.completion.transformation import CohereTextConfig as CohereConfig
+from .llms.snowflake.completion.transformation import SnowflakeConfig
 from .llms.cohere.rerank.transformation import CohereRerankConfig
 from .llms.cohere.rerank_v2.transformation import CohereRerankV2Config
 from .llms.azure_ai.rerank.transformation import AzureAIRerankConfig
@@ -925,6 +955,8 @@ from .llms.openai.chat.o_series_transformation import (
     OpenAIOSeriesConfig as OpenAIO1Config,  # maintain backwards compatibility
     OpenAIOSeriesConfig,
 )
+
+from .llms.snowflake.completion.transformation import SnowflakeConfig
 
 openaiOSeriesConfig = OpenAIOSeriesConfig()
 from .llms.openai.chat.gpt_transformation import (

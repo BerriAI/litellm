@@ -1924,6 +1924,7 @@ class LlmProviders(str, Enum):
     HUMANLOOP = "humanloop"
     TOPAZ = "topaz"
     ASSEMBLYAI = "assemblyai"
+    SNOWFLAKE = "snowflake"
 
 
 # Create a set of all provider values for quick lookup
