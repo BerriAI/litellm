@@ -106,3 +106,7 @@ Here's a Demo Instance to test changes:
 3. Reliability fix - Handle emoji’s in text - fix orjson error
 4. Model Access Patch - don't overwrite litellm.anthropic_models when running auth checks
 5. Enable setting timezone information in docker image 
+
+## Complete Git Diff
+
+[Here's the complete git diff](https://github.com/BerriAI/litellm/compare/v1.61.20-stable...v1.63.2-stable)
