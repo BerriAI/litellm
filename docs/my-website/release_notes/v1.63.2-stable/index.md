@@ -22,6 +22,13 @@ This release is primarily focused on:
 - LLM Translation improvements (more `thinking` content improvements)
 - UI improvements (Error logs now shown on UI)
 
+
+::: info
+
+This release will be live on 03/09/2025
+
+::: 
+
 ## Demo Instance
 
 Here's a Demo Instance to test changes:
