@@ -2856,6 +2856,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 acompletion=acompletion,
                 model_response=model_response,
                 encoding=encoding,
+                client=client,
             )
             if acompletion is True or optional_params.get("stream", False) is True:
                 return generator
