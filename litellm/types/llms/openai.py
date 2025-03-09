@@ -364,6 +364,12 @@ class ChatCompletionThinkingBlock(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
+class ChatCompletionRedactedThinkingBlock(TypedDict, total=False):
+    type: Required[Literal["redacted_thinking"]]
+    data: str
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+
+
 class OpenAIChatCompletionTextObject(TypedDict):
     type: Literal["text"]
     text: str
