@@ -953,7 +953,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 prompt_variables=prompt_variables,
             )
         )
-
     try:
         if base_url is not None:
             api_base = base_url
@@ -3090,6 +3089,7 @@ def completion(  # type: ignore # noqa: PLR0915
         return response
     except Exception as e:
         ## Map to OpenAI Exception
+        print(e, model, custom_llm_provider)
         raise exception_type(
             model=model,
             custom_llm_provider=custom_llm_provider,

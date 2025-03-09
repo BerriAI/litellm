@@ -928,6 +928,7 @@ def client(original_function):  # noqa: PLR0915
                                     )
 
         except Exception as e:
+            print("error", e)
             raise e
 
     @wraps(original_function)
@@ -2239,6 +2240,9 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         elif value.get("litellm_provider") == "bedrock":
             if key not in litellm.bedrock_models:
                 litellm.bedrock_models.append(key)
+        elif value.get("litellm_provider") == "nvidia_nim":
+            if key not in litellm.nvidia_models:
+                litellm.nvidia_models.append(key)
     return model_cost
 
 
@@ -2542,7 +2546,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             request_type="embeddings",
         )
         _check_valid_arg(supported_params=supported_params)
-        optional_params = litellm.nvidiaNimEmbeddingConfig.map_openai_params(
+        optional_params = litellm.nvidiaEmbeddingConfig.map_openai_params(
             non_default_params=non_default_params, optional_params={}, kwargs=kwargs
         )
         return optional_params
@@ -3428,6 +3432,10 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "nvidia_nim":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.NvidiaNimConfig().map_openai_params(
             model=model,
             non_default_params=non_default_params,
@@ -3978,6 +3986,9 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
             or get_secret("TOGETHERAI_API_KEY")
             or get_secret("TOGETHER_AI_TOKEN")
         )
+    # nvidia
+    elif llm_provider == "nvidia_nim":
+        api_key = api_key or get_secret("NVIDIA_API_KEY") or get_secret("NVIDIA_NIM_API_KEY")
     return api_key
 
 
@@ -4908,10 +4919,10 @@ def validate_environment(  # noqa: PLR0915
             else:
                 missing_keys.append("GROQ_API_KEY")
         elif custom_llm_provider == "nvidia_nim":
-            if "NVIDIA_NIM_API_KEY" in os.environ:
+            if "NVIDIA_API_KEY" in os.environ or "NVIDIA_NIM_API_KEY" in os.environ:
                 keys_in_environment = True
             else:
-                missing_keys.append("NVIDIA_NIM_API_KEY")
+                missing_keys.append("NVIDIA_API_KEY")
         elif custom_llm_provider == "cerebras":
             if "CEREBRAS_API_KEY" in os.environ:
                 keys_in_environment = True
