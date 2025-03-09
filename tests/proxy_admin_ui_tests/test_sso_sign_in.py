@@ -17,7 +17,7 @@ from litellm.proxy._types import LitellmUserRoles
 import os
 import jwt
 import time
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -40,13 +40,12 @@ def prisma_client():
     modified_url = append_query_params(database_url, params)
     os.environ["DATABASE_URL"] = modified_url
 
-    # Assuming DBClient is a class that needs to be instantiated
+    # Assuming PrismaClient is a class that needs to be instantiated
     prisma_client = PrismaClient(
         database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
     )
 
     # Reset litellm.proxy.proxy_server.prisma_client to None
-    litellm.proxy.proxy_server.custom_db_client = None
     litellm.proxy.proxy_server.litellm_proxy_budget_name = (
         f"litellm-proxy-budget-{time.time()}"
     )
@@ -62,9 +61,13 @@ async def test_auth_callback_new_user(mock_google_sso, mock_env_vars, prisma_cli
     Tests that a new SSO Sign In user is by default given an 'INTERNAL_USER_VIEW_ONLY' role
     """
     import uuid
+    import litellm
+
+    litellm._turn_on_debug()
 
     # Generate a unique user ID
     unique_user_id = str(uuid.uuid4())
+    unique_user_email = f"newuser{unique_user_id}@example.com"
 
     try:
         # Set up the prisma client
@@ -76,8 +79,9 @@ async def test_auth_callback_new_user(mock_google_sso, mock_env_vars, prisma_cli
 
         # Mock the GoogleSSO verify_and_process method
         mock_sso_result = MagicMock()
-        mock_sso_result.email = "newuser@example.com"
+        mock_sso_result.email = unique_user_email
         mock_sso_result.id = unique_user_id
+        mock_sso_result.provider = "google"
         mock_google_sso.return_value.verify_and_process = AsyncMock(
             return_value=mock_sso_result
         )
@@ -108,8 +112,9 @@ async def test_auth_callback_new_user(mock_google_sso, mock_env_vars, prisma_cli
         )
         print("inserted user from SSO", user)
         assert user is not None
-        assert user.user_email == "newuser@example.com"
+        assert user.user_email == unique_user_email
         assert user.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+        assert user.metadata == {"auth_provider": "google"}
 
     finally:
         # Clean up: Delete the user from the database
@@ -132,6 +137,7 @@ async def test_auth_callback_new_user_with_sso_default(
 
     # Generate a unique user ID
     unique_user_id = str(uuid.uuid4())
+    unique_user_email = f"newuser{unique_user_id}@example.com"
 
     try:
         # Set up the prisma client
@@ -146,8 +152,9 @@ async def test_auth_callback_new_user_with_sso_default(
 
         # Mock the GoogleSSO verify_and_process method
         mock_sso_result = MagicMock()
-        mock_sso_result.email = "newuser@example.com"
+        mock_sso_result.email = unique_user_email
         mock_sso_result.id = unique_user_id
+        mock_sso_result.provider = "google"
         mock_google_sso.return_value.verify_and_process = AsyncMock(
             return_value=mock_sso_result
         )
@@ -178,7 +185,7 @@ async def test_auth_callback_new_user_with_sso_default(
         )
         print("inserted user from SSO", user)
         assert user is not None
-        assert user.user_email == "newuser@example.com"
+        assert user.user_email == unique_user_email
         assert user.user_role == LitellmUserRoles.INTERNAL_USER
 
     finally:

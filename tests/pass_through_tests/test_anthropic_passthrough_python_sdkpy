@@ -1,0 +1,38 @@
+"""
+This test ensures that the proxy can passthrough anthropic requests
+"""
+
+import pytest
+import anthropic
+
+client = anthropic.Anthropic(
+    base_url="http://0.0.0.0:4000/anthropic", api_key="sk-1234"
+)
+
+
+def test_anthropic_basic_completion():
+    print("making basic completion request to anthropic passthrough")
+    response = client.messages.create(
+        model="claude-3-5-sonnet-20241022",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "Say 'hello test' and nothing else"}],
+    )
+    print(response)
+
+
+def test_anthropic_streaming():
+    print("making streaming request to anthropic passthrough")
+    collected_output = []
+
+    with client.messages.stream(
+        max_tokens=10,
+        messages=[
+            {"role": "user", "content": "Say 'hello stream test' and nothing else"}
+        ],
+        model="claude-3-5-sonnet-20241022",
+    ) as stream:
+        for text in stream.text_stream:
+            collected_output.append(text)
+
+    full_response = "".join(collected_output)
+    print(full_response)

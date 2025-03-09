@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect } from "react";
 import {
   Button,
   TextInput,
@@ -17,7 +17,7 @@ import {
   Select,
   message,
 } from "antd";
-import { budgetCreateCall } from "../networking";
+import { budgetUpdateCall } from "../networking";
 import { budgetItem } from "./budget_panel";
 
 interface BudgetModalProps {
@@ -26,15 +26,23 @@ interface BudgetModalProps {
   setIsModalVisible: React.Dispatch<React.SetStateAction<boolean>>;
   setBudgetList: React.Dispatch<React.SetStateAction<any[]>>;
   existingBudget: budgetItem
+  handleUpdateCall: () => void
 }
 const EditBudgetModal: React.FC<BudgetModalProps> = ({
   isModalVisible,
   accessToken,
   setIsModalVisible,
   setBudgetList,
-  existingBudget
+  existingBudget,
+  handleUpdateCall
 }) => {
+  console.log("existingBudget", existingBudget)
   const [form] = Form.useForm();
+
+  useEffect(() => {
+    form.setFieldsValue(existingBudget);
+  }, [existingBudget, form]);
+
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
@@ -51,14 +59,14 @@ const EditBudgetModal: React.FC<BudgetModalProps> = ({
     }
     try {
       message.info("Making API Call");
-      // setIsModalVisible(true);
-      const response = await budgetCreateCall(accessToken, formValues);
-      console.log("key create Response:", response);
+      setIsModalVisible(true);
+      const response = await budgetUpdateCall(accessToken, formValues);
       setBudgetList((prevData) =>
         prevData ? [...prevData, response] : [response]
       ); // Check if prevData is null
-      message.success("API Key Created");
+      message.success("Budget Updated");
       form.resetFields();
+      handleUpdateCall();
     } catch (error) {
       console.error("Error creating the key:", error);
       message.error(`Error creating the key: ${error}`, 20);
@@ -135,7 +143,7 @@ const EditBudgetModal: React.FC<BudgetModalProps> = ({
         </>
 
         <div style={{ textAlign: "right", marginTop: "10px" }}>
-          <Button2 htmlType="submit">Edit Budget</Button2>
+          <Button2 htmlType="submit">Save</Button2>
         </div>
       </Form>
     </Modal>

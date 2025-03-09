@@ -1,18 +1,24 @@
 import React, { useState, useEffect } from "react";
 import { Select, SelectItem, Text, Title } from "@tremor/react";
-import { ProxySettings } from "./user_dashboard";
+import { ProxySettings, UserInfo } from "./user_dashboard";
+import { getProxyUISettings } from "./networking"
 
 interface DashboardTeamProps {
   teams: Object[] | null;
   setSelectedTeam: React.Dispatch<React.SetStateAction<any | null>>;
   userRole: string | null;
   proxySettings: ProxySettings | null;
+  setProxySettings: React.Dispatch<React.SetStateAction<ProxySettings | null>>;
+  userInfo: UserInfo | null;
+  accessToken: string | null;
+  setKeys: React.Dispatch<React.SetStateAction<any | null>>;
 }
 
 type TeamInterface = {
   models: any[];
   team_id: null;
-  team_alias: String
+  team_alias: String;
+  max_budget: number | null;
 }
 
 const DashboardTeam: React.FC<DashboardTeamProps> = ({
@@ -20,17 +26,35 @@ const DashboardTeam: React.FC<DashboardTeamProps> = ({
   setSelectedTeam,
   userRole,
   proxySettings,
+  setProxySettings,
+  userInfo,
+  accessToken,
+  setKeys
 }) => {
+  console.log(`userInfo: ${JSON.stringify(userInfo)}`)
   const defaultTeam: TeamInterface = {
-    models: [],
+    models: userInfo?.models || [],
     team_id: null,
-    team_alias: "Default Team"
+    team_alias: "Default Team",
+    max_budget: userInfo?.max_budget || null,
   }
 
+  const getProxySettings = async () => {
+    if (proxySettings === null && accessToken) {
+      const proxy_settings: ProxySettings = await getProxyUISettings(accessToken);
+      setProxySettings(proxy_settings);
+    }
+  };
+
+  useEffect(() => {
+    getProxySettings();
+  }, [proxySettings]);
 
   const [value, setValue] = useState(defaultTeam);
 
   let updatedTeams;
+  console.log(`userRole: ${userRole}`)
+  console.log(`proxySettings: ${JSON.stringify(proxySettings)}`)
   if (userRole === "App User") {
     // Non-Admin SSO users should only see their own team - they should not see "Default Team"
     updatedTeams = teams;
@@ -58,7 +82,10 @@ const DashboardTeam: React.FC<DashboardTeamProps> = ({
             <SelectItem
               key={index}
               value={String(index)}
-              onClick={() => setSelectedTeam(team)}
+              onClick={() => {
+                setSelectedTeam(team);
+                // setKeys(team["keys"]);
+              }}
             >
               {team["team_alias"]}
             </SelectItem>

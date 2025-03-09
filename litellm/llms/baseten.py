@@ -1,12 +1,9 @@
 import json
-import os
 import time
-from enum import Enum
 from typing import Callable
 
-import requests  # type: ignore
-
-from litellm.utils import ModelResponse, Usage
+import litellm
+from litellm.types.utils import ModelResponse, Usage
 
 
 class BasetenError(Exception):
@@ -36,7 +33,7 @@ def completion(
     encoding,
     api_key,
     logging_obj,
-    optional_params=None,
+    optional_params: dict,
     litellm_params=None,
     logger_fn=None,
 ):
@@ -59,7 +56,7 @@ def completion(
         "parameters": optional_params,
         "stream": (
             True
-            if "stream" in optional_params and optional_params["stream"] == True
+            if "stream" in optional_params and optional_params["stream"] is True
             else False
         ),
     }
@@ -71,18 +68,18 @@ def completion(
         additional_args={"complete_input_dict": data},
     )
     ## COMPLETION CALL
-    response = requests.post(
+    response = litellm.module_level_client.post(
         completion_url_fragment_1 + model + completion_url_fragment_2,
         headers=headers,
         data=json.dumps(data),
         stream=(
             True
-            if "stream" in optional_params and optional_params["stream"] == True
+            if "stream" in optional_params and optional_params["stream"] is True
             else False
         ),
     )
     if "text/event-stream" in response.headers["Content-Type"] or (
-        "stream" in optional_params and optional_params["stream"] == True
+        "stream" in optional_params and optional_params["stream"] is True
     ):
         return response.iter_lines()
     else:
@@ -145,7 +142,7 @@ def completion(
                     sum_logprob = 0
                     for token in completion_response[0]["details"]["tokens"]:
                         sum_logprob += token["logprob"]
-                    model_response.choices[0].logprobs = sum_logprob
+                    model_response.choices[0].logprobs = sum_logprob  # type: ignore
             else:
                 raise BasetenError(
                     message=f"Unable to parse response. Original response: {response.text}",

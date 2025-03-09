@@ -1,5 +1,8 @@
-import litellm
 from typing import Optional, Union
+
+import litellm
+
+from ..exceptions import UnsupportedParamsError
 from ..types.llms.openai import *
 
 

@@ -3,6 +3,7 @@ import { BarChart, BarList, Card, Title, Table, TableHead, TableHeaderCell, Tabl
 import React, { useState, useEffect } from "react";
 
 import ViewUserSpend from "./view_user_spend";
+import { ProxySettings } from "./user_dashboard";
 import { 
   Grid, Col, Text, 
   LineChart, TabPanel, TabPanels, 
@@ -35,6 +36,7 @@ import {
   adminspendByProvider,
   adminGlobalActivity,
   adminGlobalActivityPerModel,
+  getProxyUISettings
 } from "./networking";
 import { start } from "repl";
 console.log("process.env.NODE_ENV", process.env.NODE_ENV);
@@ -74,15 +76,11 @@ const customTooltip = (props: CustomTooltipTypeBar) => {
   const value = payload[0].payload;
   const date = value["startTime"];
   const model_values = value["models"];
-  // Convert the object into an array of key-value pairs
   const entries: [string, number][] = Object.entries(model_values).map(
     ([key, value]) => [key, value as number]
-  ); // Type assertion to specify the value as number
+  );
 
-  // Sort the array based on the float value in descending order
   entries.sort((a, b) => b[1] - a[1]);
-
-  // Get the top 5 key-value pairs
   const topEntries = entries.slice(0, 5);
 
   return (
@@ -96,7 +94,7 @@ const customTooltip = (props: CustomTooltipTypeBar) => {
               {":"}
               <span className="text-xs text-tremor-content-emphasis">
                 {" "}
-                {value ? (value < 0.01 ? "<$0.01" : value.toFixed(2)) : ""}
+                {value ? `$${value.toFixed(2)}` : ""}
               </span>
             </p>
           </div>
@@ -166,6 +164,8 @@ const UsagePage: React.FC<UsagePageProps> = ({
     from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), 
     to: new Date(),
   });
+  const [proxySettings, setProxySettings] = useState<ProxySettings | null>(null);
+  const [totalMonthlySpend, setTotalMonthlySpend] = useState<number>(0);
 
   const firstDay = new Date(
     currentDate.getFullYear(),
@@ -193,6 +193,19 @@ const UsagePage: React.FC<UsagePageProps> = ({
   
     return formatter.format(number);
   }
+
+
+  const fetchProxySettings = async () => {
+    if (accessToken) {
+      try {
+        const proxy_settings: ProxySettings = await getProxyUISettings(accessToken);
+        console.log("usage tab: proxy_settings", proxy_settings);
+        return proxy_settings;
+      } catch (error) {
+        console.error("Error fetching proxy settings:", error);
+      }
+    }
+  };
 
   useEffect(() => {
     updateTagSpendData(dateValue.from, dateValue.to);
@@ -228,6 +241,14 @@ const UsagePage: React.FC<UsagePageProps> = ({
       return;
     }
 
+    
+    // we refetch because the state variable can be None when the user refreshes the page
+    const proxy_settings: ProxySettings | undefined = await fetchProxySettings();
+
+    if (proxy_settings?.DISABLE_EXPENSIVE_DB_QUERIES) {
+      return;  // Don't run expensive DB queries - return out when SpendLogs has more than 1M rows
+    }
+
     // the endTime put it to the last hour of the selected date
     endTime.setHours(23, 59, 59, 999);
 
@@ -261,7 +282,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   console.log(`End date is ${endTime}`);
 
   const valueFormatter = (number: number) =>
-    `$ ${new Intl.NumberFormat("us").format(number).toString()}`;
+    `$ ${number.toFixed(2)}`;
 
   const fetchAndSetData = async (
     fetchFunction: () => Promise<any>,
@@ -277,11 +298,94 @@ const UsagePage: React.FC<UsagePageProps> = ({
     }
   };
 
-  const fetchOverallSpend = () => fetchAndSetData(
-    () => accessToken ? adminSpendLogsCall(accessToken) : Promise.reject("No access token"),
-    setKeySpendData,
-    "Error fetching overall spend"
-  );
+  // Update the fillMissingDates function to handle different date formats
+  const fillMissingDates = (data: any[], startDate: Date, endDate: Date, categories: string[]) => {
+    const filledData = [];
+    const currentDate = new Date(startDate);
+    
+    // Helper function to standardize date format
+    const standardizeDate = (dateStr: string) => {
+      if (dateStr.includes('-')) {
+        // Already in YYYY-MM-DD format
+        return dateStr;
+      } else {
+        // Convert "Jan 06" format
+        const [month, day] = dateStr.split(' ');
+        const year = new Date().getFullYear();
+        const monthIndex = new Date(`${month} 01 2024`).getMonth();
+        const fullDate = new Date(year, monthIndex, parseInt(day));
+        return fullDate.toISOString().split('T')[0];
+      }
+    };
+
+    // Create a map of existing dates for quick lookup
+    const existingDates = new Map(
+      data.map(item => {
+        const standardizedDate = standardizeDate(item.date);
+        return [standardizedDate, {
+          ...item,
+          date: standardizedDate // Store standardized date format
+        }];
+      })
+    );
+
+    // Iterate through each date in the range
+    while (currentDate <= endDate) {
+      const dateStr = currentDate.toISOString().split('T')[0];
+      
+      if (existingDates.has(dateStr)) {
+        // Use existing data if we have it
+        filledData.push(existingDates.get(dateStr));
+      } else {
+        // Create an entry with zero values
+        const emptyEntry: any = {
+          date: dateStr,
+          api_requests: 0,
+          total_tokens: 0
+        };
+        
+        // Add zero values for each model/team if needed
+        categories.forEach(category => {
+          if (!emptyEntry[category]) {
+            emptyEntry[category] = 0;
+          }
+        });
+
+        filledData.push(emptyEntry);
+      }
+      
+      // Move to next day
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
+    
+    return filledData;
+  };
+
+  // Update the fetchOverallSpend function
+  const fetchOverallSpend = async () => {
+    if (!accessToken) {
+      return;
+    }
+    try {
+      const data = await adminSpendLogsCall(accessToken);
+      
+      // Get the first and last day of the current month
+      const now = new Date();
+      const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+      const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      
+      // Fill in missing dates
+      const filledData = fillMissingDates(data, firstDay, lastDay, []);
+      
+      // Calculate total spend for the month and round to 2 decimal places
+      const monthlyTotal = Number(filledData.reduce((sum, day) => sum + (day.spend || 0), 0).toFixed(2));
+      setTotalMonthlySpend(monthlyTotal);
+      
+      setKeySpendData(filledData);
+    } catch (error) {
+      console.error("Error fetching overall spend:", error);
+    }
+  };
 
   const fetchProviderSpend = () => fetchAndSetData(
     () => accessToken && token ? adminspendByProvider(accessToken, token, startTime, endTime) : Promise.reject("No access token or token"),
@@ -296,7 +400,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
         const top_keys = await adminTopKeysCall(accessToken);
         return top_keys.map((k: any) => ({
           key: (k["key_alias"] || k["key_name"] || k["api_key"]).substring(0, 10),
-          spend: k["total_spend"],
+          spend: Number(k["total_spend"].toFixed(2)),
         }));
       },
       setTopKeys,
@@ -311,7 +415,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
         const top_models = await adminTopModelsCall(accessToken);
         return top_models.map((k: any) => ({
           key: k["model"],
-          spend: k["total_spend"],
+          spend: Number(k["total_spend"].toFixed(2)),
         }));
       },
       setTopModels,
@@ -319,16 +423,31 @@ const UsagePage: React.FC<UsagePageProps> = ({
     );
   };
 
+  // Update the fetchTeamSpend function
   const fetchTeamSpend = async () => {
     if (!accessToken) return;
     await fetchAndSetData(
       async () => {
         const teamSpend = await teamSpendLogsCall(accessToken);
-        setTeamSpendData(teamSpend.daily_spend);
+        
+        // Get the first and last day of the current month
+        const now = new Date();
+        const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+        const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+        
+        // Fill in missing dates with zero values for all teams
+        const filledData = fillMissingDates(
+          teamSpend.daily_spend,
+          firstDay,
+          lastDay,
+          teamSpend.teams
+        );
+        
+        setTeamSpendData(filledData);
         setUniqueTeamIds(teamSpend.teams);
         return teamSpend.total_spend_per_team.map((tspt: any) => ({
           name: tspt["team_id"] || "",
-          value: (tspt["total_spend"] || 0).toFixed(2),
+          value: Number(tspt["total_spend"] || 0).toFixed(2),
         }));
       },
       setTotalSpendPerTeam,
@@ -366,48 +485,120 @@ const UsagePage: React.FC<UsagePageProps> = ({
     );
   };
 
-  const fetchGlobalActivity = () => {
+  // Update the fetchGlobalActivity function
+  const fetchGlobalActivity = async () => {
     if (!accessToken) return;
-    fetchAndSetData(
-      () => adminGlobalActivity(accessToken, startTime, endTime),
-      setGlobalActivity,
-      "Error fetching global activity"
-    );
+    try {
+      const data = await adminGlobalActivity(accessToken, startTime, endTime);
+      
+      // Get the date range from the current month
+      const now = new Date();
+      const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+      const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      
+      // Fill in missing dates for daily_data
+      const filledDailyData = fillMissingDates(
+        data.daily_data || [],
+        firstDay,
+        lastDay,
+        ['api_requests', 'total_tokens']
+      );
+      
+      setGlobalActivity({
+        ...data,
+        daily_data: filledDailyData
+      });
+    } catch (error) {
+      console.error("Error fetching global activity:", error);
+    }
   };
 
-  const fetchGlobalActivityPerModel = () => {
+  // Update the fetchGlobalActivityPerModel function
+  const fetchGlobalActivityPerModel = async () => {
     if (!accessToken) return;
-    fetchAndSetData(
-      () => adminGlobalActivityPerModel(accessToken, startTime, endTime),
-      setGlobalActivityPerModel,
-      "Error fetching global activity per model"
-    );
+    try {
+      const data = await adminGlobalActivityPerModel(accessToken, startTime, endTime);
+      
+      // Get the date range from the current month
+      const now = new Date();
+      const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+      const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      
+      // Fill in missing dates for each model's daily data
+      const filledModelData = data.map((modelData: any) => ({
+        ...modelData,
+        daily_data: fillMissingDates(
+          modelData.daily_data || [],
+          firstDay,
+          lastDay,
+          ['api_requests', 'total_tokens']
+        )
+      }));
+      
+      setGlobalActivityPerModel(filledModelData);
+    } catch (error) {
+      console.error("Error fetching global activity per model:", error);
+    }
   };
 
   useEffect(() => {
-    if (accessToken && token && userRole && userID) {
+    const initlizeUsageData = async () => {
+      if (accessToken && token && userRole && userID) {
+        const proxy_settings: ProxySettings | undefined = await fetchProxySettings();
+        if (proxy_settings) {
+          setProxySettings(proxy_settings); // saved in state so it can be used when rendering UI
+          if (proxy_settings?.DISABLE_EXPENSIVE_DB_QUERIES) {
+            return;  // Don't run expensive UI queries - return out of initlizeUsageData at this point
+          }
+        }
+        
+
+        console.log("fetching data - valiue of proxySettings", proxySettings);
 
 
-      fetchOverallSpend();
-      fetchProviderSpend();
-      fetchTopKeys();
-      fetchTopModels();
-      fetchGlobalActivity();
-      fetchGlobalActivityPerModel();
+        fetchOverallSpend();
+        fetchProviderSpend();
+        fetchTopKeys();
+        fetchTopModels();
+        fetchGlobalActivity();
+        fetchGlobalActivityPerModel();
 
-      if (isAdminOrAdminViewer(userRole)) {
-        fetchTeamSpend();
-        fetchTagNames();
-        fetchTopTags();
-        fetchTopEndUsers();
+        if (isAdminOrAdminViewer(userRole)) {
+          fetchTeamSpend();
+          fetchTagNames();
+          fetchTopTags();
+          fetchTopEndUsers();
+        }
       }
-    }
+  };
+
+  initlizeUsageData();
   }, [accessToken, token, userRole, userID, startTime, endTime]);
 
 
+  if (proxySettings?.DISABLE_EXPENSIVE_DB_QUERIES) {
+    return (
+      <div style={{ width: "100%" }} className="p-8">      
+        <Card>
+          <Title>Database Query Limit Reached</Title>
+          <Text className="mt-4">
+            SpendLogs in DB has {proxySettings.NUM_SPEND_LOGS_ROWS} rows. 
+            <br></br>
+            Please follow our guide to view usage when SpendLogs has more than 1M rows.
+          </Text>
+          <Button className="mt-4">
+            <a href="https://docs.litellm.ai/docs/proxy/spending_monitoring" target="_blank">
+              View Usage Guide
+            </a>
+          </Button>
+        </Card>
+      </div>
+    );
+  }
+
+
   return (
-    <div style={{ width: "100%" }} className="p-8">
-      
+    <div style={{ width: "100%" }} className="p-8">      
       <TabGroup>
         <TabList className="mt-2">
           <Tab>All Up</Tab>
@@ -434,14 +625,19 @@ const UsagePage: React.FC<UsagePageProps> = ({
         <TabPanels>
           <TabPanel>
             <Grid numItems={2} className="gap-2 h-[100vh] w-full">
-            <ViewUserSpend
-            userID={userID}
-            userRole={userRole}
-            accessToken={accessToken}
-            userSpend={null}
-            selectedTeam={null}
-            userMaxBudget={null}
-          />
+              <Col numColSpan={2}>
+                <Text className="text-tremor-default text-tremor-content dark:text-dark-tremor-content mb-2 mt-2 text-lg">
+                  Project Spend {new Date().toLocaleString('default', { month: 'long' })} 1 - {new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()}
+                </Text>
+                <ViewUserSpend
+                  userID={userID}
+                  userRole={userRole}
+                  accessToken={accessToken}
+                  userSpend={totalMonthlySpend}
+                  selectedTeam={null}
+                  userMaxBudget={null}
+                />
+              </Col>
               <Col numColSpan={2}>
                 <Card>
                   <Title>Monthly Spend</Title>
@@ -449,7 +645,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                     data={keySpendData}
                     index="date"
                     categories={["spend"]}
-                    colors={["blue"]}
+                    colors={["cyan"]}
                     valueFormatter={valueFormatter}
                     yAxisWidth={100}
                     tickGap={5}
@@ -465,12 +661,13 @@ const UsagePage: React.FC<UsagePageProps> = ({
                     data={topKeys}
                     index="key"
                     categories={["spend"]}
-                    colors={["blue"]}
+                    colors={["cyan"]}
                     yAxisWidth={80}
                     tickGap={5}
                     layout="vertical"
                     showXAxis={false}
                     showLegend={false}
+                    valueFormatter={(value) => `$${value.toFixed(2)}`}
                   />
                 </Card>
               </Col>
@@ -482,11 +679,12 @@ const UsagePage: React.FC<UsagePageProps> = ({
                     data={topModels}
                     index="key"
                     categories={["spend"]}
-                    colors={["blue"]}
+                    colors={["cyan"]}
                     yAxisWidth={200}
                     layout="vertical"
                     showXAxis={false}
                     showLegend={false}
+                    valueFormatter={(value) => `$${value.toFixed(2)}`}
                   />
                 </Card>
                
@@ -496,10 +694,8 @@ const UsagePage: React.FC<UsagePageProps> = ({
               </Col>
               <Col numColSpan={2}>
               <Card className="mb-2">
-                <Title>✨ Spend by Provider</Title>
-                {
-                  premiumUser ? (
-                    <>
+                <Title>Spend by Provider</Title>
+                <>
                     <Grid numItems={2}>
                   <Col numColSpan={1}>
                     <DonutChart
@@ -508,6 +704,8 @@ const UsagePage: React.FC<UsagePageProps> = ({
                       data={spendByProvider}
                       index="provider"
                       category="spend"
+                      colors={["cyan"]}
+                      valueFormatter={(value) => `$${value.toFixed(2)}`}
                     />
                   </Col>
                   <Col numColSpan={1}>
@@ -534,17 +732,6 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   </Col>
                 </Grid>
                     </>
-                  ) : (
-                    <div>
-                    <p className="mb-2 text-gray-500 italic text-[12px]">Upgrade to use this feature</p>
-                    <Button variant="primary" className="mb-2">
-                          <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
-                            Get Free Trial
-                          </a>
-                        </Button>
-                    </div>
-                  )
-                }
                 
               </Card>
             </Col>
@@ -585,9 +772,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
                 </Card>
 
-                {
-                  premiumUser ? ( 
-                    <>
+                <>
                     {globalActivityPerModel.map((globalActivity, index) => (
                 <Card key={index}>
                   <Title>{globalActivity.model}</Title>
@@ -619,69 +804,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   </Grid>
                 </Card>
               ))}
-                    </>
-                  ) : 
-                  <>
-                  {globalActivityPerModel && globalActivityPerModel.length > 0 &&
-                    globalActivityPerModel.slice(0, 1).map((globalActivity, index) => (
-                      <Card key={index}>
-                        <Title>✨ Activity by Model</Title>
-                        <p className="mb-2 text-gray-500 italic text-[12px]">Upgrade to see analytics for all models</p>
-                        <Button variant="primary" className="mb-2">
-                          <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
-                            Get Free Trial
-                          </a>
-                        </Button>
-                        <Card>
-                        <Title>{globalActivity.model}</Title>
-                        <Grid numItems={2}>
-                          <Col>
-                            <Subtitle
-                              style={{
-                                fontSize: "15px",
-                                fontWeight: "normal",
-                                color: "#535452",
-                              }}
-                            >
-                              API Requests {valueFormatterNumbers(globalActivity.sum_api_requests)}
-                            </Subtitle>
-                            <AreaChart
-                              className="h-40"
-                              data={globalActivity.daily_data}
-                              index="date"
-                              colors={['cyan']}
-                              categories={['api_requests']}
-                              valueFormatter={valueFormatterNumbers}
-                              onValueChange={(v) => console.log(v)}
-                            />
-                          </Col>
-                          <Col>
-                            <Subtitle
-                              style={{
-                                fontSize: "15px",
-                                fontWeight: "normal",
-                                color: "#535452",
-                              }}
-                            >
-                              Tokens {valueFormatterNumbers(globalActivity.sum_total_tokens)}
-                            </Subtitle>
-                            <BarChart
-                              className="h-40"
-                              data={globalActivity.daily_data}
-                              index="date"
-                              colors={['cyan']}
-                              valueFormatter={valueFormatterNumbers}
-                              categories={['total_tokens']}
-                              onValueChange={(v) => console.log(v)}
-                            />
-                          </Col>
-                          
-                        </Grid>
-                        </Card>
-                      </Card>
-                    ))}
-                </>
-                }              
+                    </>             
               </Grid>
             </TabPanel>
             </TabPanels>
@@ -899,7 +1022,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
               data={topTagsData}
               index="name"
               categories={["spend"]}
-              colors={["blue"]}
+              colors={["cyan"]}
              >
 
              </BarChart>

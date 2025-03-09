@@ -20,6 +20,7 @@ async def config_update(session):
             "success_callback": ["langfuse"],
         },
         "environment_variables": {
+            "LANGFUSE_HOST": os.environ["LANGFUSE_HOST"],
             "LANGFUSE_PUBLIC_KEY": os.environ["LANGFUSE_PUBLIC_KEY"],
             "LANGFUSE_SECRET_KEY": os.environ["LANGFUSE_SECRET_KEY"],
         },
@@ -66,7 +67,9 @@ async def chat_completion(session, key, model="azure-gpt-3.5", request_metadata=
 
 
 @pytest.mark.asyncio
-@pytest.mark.flaky(retries=6, delay=1)
+@pytest.mark.skip(
+    reason="langfuse apis are flaky, we unit test team / key based logging in test_langfuse_unit_tests.py"
+)
 async def test_team_logging():
     """
     1. Add Langfuse as a callback with /config/update
@@ -98,6 +101,7 @@ async def test_team_logging():
             import langfuse
 
             langfuse_client = langfuse.Langfuse(
+                host=os.getenv("LANGFUSE_HOST"),
                 public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
                 secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
             )

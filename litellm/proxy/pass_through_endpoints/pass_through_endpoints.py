@@ -1,30 +1,19 @@
 import ast
 import asyncio
 import json
-import traceback
 from base64 import b64encode
 from datetime import datetime
-from typing import AsyncIterable, List, Optional
+from typing import List, Optional
+from urllib.parse import urlparse
 
 import httpx
-from fastapi import (
-    APIRouter,
-    Depends,
-    FastAPI,
-    HTTPException,
-    Request,
-    Response,
-    status,
-)
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
-    ModelResponseIterator,
-)
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import (
     ConfigFieldInfo,
     ConfigFieldUpdate,
@@ -34,9 +23,12 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.custom_http import httpxSpecialProvider
+from litellm.types.utils import StandardLoggingUserAPIKeyMetadata
 
-from .streaming_handler import chunk_processor
+from .streaming_handler import PassThroughStreamingHandler
 from .success_handler import PassThroughEndpointLogging
 from .types import EndpointType, PassthroughStandardLoggingPayload
 
@@ -45,14 +37,14 @@ router = APIRouter()
 pass_through_endpoint_logging = PassThroughEndpointLogging()
 
 
-def get_response_body(response: httpx.Response):
+def get_response_body(response: httpx.Response) -> Optional[dict]:
     try:
         return response.json()
     except Exception:
-        return response.text
+        return None
 
 
-async def set_env_variables_in_header(custom_headers: dict):
+async def set_env_variables_in_header(custom_headers: Optional[dict]) -> Optional[dict]:
     """
     checks if any headers on config.yaml are defined as os.environ/COHERE_API_KEY etc
 
@@ -62,6 +54,8 @@ async def set_env_variables_in_header(custom_headers: dict):
 
     {"Authorization": "bearer os.environ/COHERE_API_KEY"}
     """
+    if custom_headers is None:
+        return None
     headers = {}
     for key, value in custom_headers.items():
         # langfuse Api requires base64 encoded headers - it's simpleer to just ask litellm users to set their langfuse public and secret keys
@@ -103,7 +97,7 @@ async def set_env_variables_in_header(custom_headers: dict):
     return headers
 
 
-async def chat_completion_pass_through_endpoint(
+async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
     fastapi_response: Response,
     request: Request,
     adapter_id: str,
@@ -141,7 +135,7 @@ async def chat_completion_pass_through_endpoint(
         data["model"] = (
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args
-            or data["model"]  # default passed in http request
+            or data.get("model", None)  # default passed in http request
         )
         if user_model:
             data["model"] = user_model
@@ -267,44 +261,85 @@ async def chat_completion_pass_through_endpoint(
         )
 
 
-def forward_headers_from_request(
-    request: Request,
-    headers: dict,
-    forward_headers: Optional[bool] = False,
-):
-    """
-    Helper to forward headers from original request
-    """
-    if forward_headers is True:
-        request_headers = dict(request.headers)
+class HttpPassThroughEndpointHelpers:
+    @staticmethod
+    def forward_headers_from_request(
+        request: Request,
+        headers: dict,
+        forward_headers: Optional[bool] = False,
+    ):
+        """
+        Helper to forward headers from original request
+        """
+        if forward_headers is True:
+            request_headers = dict(request.headers)
 
-        # Header We Should NOT forward
-        request_headers.pop("content-length", None)
-        request_headers.pop("host", None)
+            # Header We Should NOT forward
+            request_headers.pop("content-length", None)
+            request_headers.pop("host", None)
 
-        # Combine request headers with custom headers
-        headers = {**request_headers, **headers}
-    return headers
+            # Combine request headers with custom headers
+            headers = {**request_headers, **headers}
+        return headers
+
+    @staticmethod
+    def get_response_headers(
+        headers: httpx.Headers, litellm_call_id: Optional[str] = None
+    ) -> dict:
+        excluded_headers = {"transfer-encoding", "content-encoding"}
+
+        return_headers = {
+            key: value
+            for key, value in headers.items()
+            if key.lower() not in excluded_headers
+        }
+        if litellm_call_id:
+            return_headers["x-litellm-call-id"] = litellm_call_id
+
+        return return_headers
+
+    @staticmethod
+    def get_endpoint_type(url: str) -> EndpointType:
+        parsed_url = urlparse(url)
+        if ("generateContent") in url or ("streamGenerateContent") in url:
+            return EndpointType.VERTEX_AI
+        elif parsed_url.hostname == "api.anthropic.com":
+            return EndpointType.ANTHROPIC
+        return EndpointType.GENERIC
+
+    @staticmethod
+    async def _make_non_streaming_http_request(
+        request: Request,
+        async_client: httpx.AsyncClient,
+        url: str,
+        headers: dict,
+        requested_query_params: Optional[dict] = None,
+        custom_body: Optional[dict] = None,
+    ) -> httpx.Response:
+        """
+        Make a non-streaming HTTP request
+
+        If request is GET, don't include a JSON body
+        """
+        if request.method == "GET":
+            response = await async_client.request(
+                method=request.method,
+                url=url,
+                headers=headers,
+                params=requested_query_params,
+            )
+        else:
+            response = await async_client.request(
+                method=request.method,
+                url=url,
+                headers=headers,
+                params=requested_query_params,
+                json=custom_body,
+            )
+        return response
 
 
-def get_response_headers(headers: httpx.Headers) -> dict:
-    excluded_headers = {"transfer-encoding", "content-encoding"}
-    return_headers = {
-        key: value
-        for key, value in headers.items()
-        if key.lower() not in excluded_headers
-    }
-
-    return return_headers
-
-
-def get_endpoint_type(url: str) -> EndpointType:
-    if ("generateContent") in url or ("streamGenerateContent") in url:
-        return EndpointType.VERTEX_AI
-    return EndpointType.GENERIC
-
-
-async def pass_through_request(
+async def pass_through_request(  # noqa: PLR0915
     request: Request,
     target: str,
     custom_headers: dict,
@@ -315,7 +350,6 @@ async def pass_through_request(
     stream: Optional[bool] = None,
 ):
     try:
-        import time
         import uuid
 
         from litellm.litellm_core_utils.litellm_logging import Logging
@@ -323,25 +357,19 @@ async def pass_through_request(
 
         url = httpx.URL(target)
         headers = custom_headers
-        headers = forward_headers_from_request(
+        headers = HttpPassThroughEndpointHelpers.forward_headers_from_request(
             request=request, headers=headers, forward_headers=forward_headers
         )
 
-        endpoint_type: EndpointType = get_endpoint_type(str(url))
+        endpoint_type: EndpointType = HttpPassThroughEndpointHelpers.get_endpoint_type(
+            str(url)
+        )
 
         _parsed_body = None
         if custom_body:
             _parsed_body = custom_body
         else:
-            request_body = await request.body()
-            if request_body == b"" or request_body is None:
-                _parsed_body = None
-            else:
-                body_str = request_body.decode()
-                try:
-                    _parsed_body = ast.literal_eval(body_str)
-                except Exception:
-                    _parsed_body = json.loads(body_str)
+            _parsed_body = await _read_request_body(request)
         verbose_proxy_logger.debug(
             "Pass through endpoint sending request to \nURL {}\nheaders: {}\nbody: {}\n".format(
                 url, headers, _parsed_body
@@ -354,8 +382,13 @@ async def pass_through_request(
             data=_parsed_body,
             call_type="pass_through_endpoint",
         )
+        async_client_obj = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.PassThroughEndpoint,
+            params={"timeout": 600},
+        )
+        async_client = async_client_obj.client
 
-        async_client = httpx.AsyncClient(timeout=600)
+        litellm_call_id = str(uuid.uuid4())
 
         # create logging object
         start_time = datetime.now()
@@ -365,27 +398,21 @@ async def pass_through_request(
             stream=False,
             call_type="pass_through_endpoint",
             start_time=start_time,
-            litellm_call_id=str(uuid.uuid4()),
+            litellm_call_id=litellm_call_id,
             function_id="1245",
         )
         passthrough_logging_payload = PassthroughStandardLoggingPayload(
             url=str(url),
             request_body=_parsed_body,
         )
-
+        kwargs = _init_kwargs_for_pass_through_endpoint(
+            user_api_key_dict=user_api_key_dict,
+            _parsed_body=_parsed_body,
+            passthrough_logging_payload=passthrough_logging_payload,
+            litellm_call_id=litellm_call_id,
+            request=request,
+        )
         # done for supporting 'parallel_request_limiter.py' with pass-through endpoints
-        kwargs = {
-            "litellm_params": {
-                "metadata": {
-                    "user_api_key": user_api_key_dict.api_key,
-                    "user_api_key_user_id": user_api_key_dict.user_id,
-                    "user_api_key_team_id": user_api_key_dict.team_id,
-                    "user_api_key_end_user_id": user_api_key_dict.user_id,
-                }
-            },
-            "call_type": "pass_through_endpoint",
-            "passthrough_logging_payload": passthrough_logging_payload,
-        }
         logging_obj.update_environment_variables(
             model="unknown",
             user="unknown",
@@ -393,6 +420,7 @@ async def pass_through_request(
             litellm_params=kwargs["litellm_params"],
             call_type="pass_through_endpoint",
         )
+        logging_obj.model_call_details["litellm_call_id"] = litellm_call_id
 
         # combine url with query params for logging
 
@@ -424,7 +452,6 @@ async def pass_through_request(
                 "headers": headers,
             },
         )
-
         if stream:
             req = async_client.build_request(
                 "POST",
@@ -443,20 +470,20 @@ async def pass_through_request(
                     status_code=e.response.status_code, detail=await e.response.aread()
                 )
 
-            async def stream_response() -> AsyncIterable[bytes]:
-                async for chunk in chunk_processor(
-                    response.aiter_bytes(),
+            return StreamingResponse(
+                PassThroughStreamingHandler.chunk_processor(
+                    response=response,
+                    request_body=_parsed_body,
                     litellm_logging_obj=logging_obj,
                     endpoint_type=endpoint_type,
                     start_time=start_time,
                     passthrough_success_handler_obj=pass_through_endpoint_logging,
                     url_route=str(url),
-                ):
-                    yield chunk
-
-            return StreamingResponse(
-                stream_response(),
-                headers=get_response_headers(response.headers),
+                ),
+                headers=HttpPassThroughEndpointHelpers.get_response_headers(
+                    headers=response.headers,
+                    litellm_call_id=litellm_call_id,
+                ),
                 status_code=response.status_code,
             )
 
@@ -468,18 +495,25 @@ async def pass_through_request(
         )
         verbose_proxy_logger.debug("request body: {}".format(_parsed_body))
 
-        response = await async_client.request(
-            method=request.method,
-            url=url,
-            headers=headers,
-            params=requested_query_params,
-            json=_parsed_body,
-        )
+        if request.method == "GET":
+            response = await async_client.request(
+                method=request.method,
+                url=url,
+                headers=headers,
+                params=requested_query_params,
+            )
+        else:
+            response = await async_client.request(
+                method=request.method,
+                url=url,
+                headers=headers,
+                params=requested_query_params,
+                json=_parsed_body,
+            )
 
-        if (
-            response.headers.get("content-type") is not None
-            and response.headers["content-type"] == "text/event-stream"
-        ):
+        verbose_proxy_logger.debug("response.headers= %s", response.headers)
+
+        if _is_streaming_response(response) is True:
             try:
                 response.raise_for_status()
             except httpx.HTTPStatusError as e:
@@ -487,20 +521,20 @@ async def pass_through_request(
                     status_code=e.response.status_code, detail=await e.response.aread()
                 )
 
-            async def stream_response() -> AsyncIterable[bytes]:
-                async for chunk in chunk_processor(
-                    response.aiter_bytes(),
+            return StreamingResponse(
+                PassThroughStreamingHandler.chunk_processor(
+                    response=response,
+                    request_body=_parsed_body,
                     litellm_logging_obj=logging_obj,
                     endpoint_type=endpoint_type,
                     start_time=start_time,
                     passthrough_success_handler_obj=pass_through_endpoint_logging,
                     url_route=str(url),
-                ):
-                    yield chunk
-
-            return StreamingResponse(
-                stream_response(),
-                headers=get_response_headers(response.headers),
+                ),
+                headers=HttpPassThroughEndpointHelpers.get_response_headers(
+                    headers=response.headers,
+                    litellm_call_id=litellm_call_id,
+                ),
                 status_code=response.status_code,
             )
 
@@ -517,23 +551,30 @@ async def pass_through_request(
         content = await response.aread()
 
         ## LOG SUCCESS
-        passthrough_logging_payload["response_body"] = get_response_body(response)
+        response_body: Optional[dict] = get_response_body(response)
+        passthrough_logging_payload["response_body"] = response_body
         end_time = datetime.now()
-        await pass_through_endpoint_logging.pass_through_async_success_handler(
-            httpx_response=response,
-            url_route=str(url),
-            result="",
-            start_time=start_time,
-            end_time=end_time,
-            logging_obj=logging_obj,
-            cache_hit=False,
-            **kwargs,
+        asyncio.create_task(
+            pass_through_endpoint_logging.pass_through_async_success_handler(
+                httpx_response=response,
+                response_body=response_body,
+                url_route=str(url),
+                result="",
+                start_time=start_time,
+                end_time=end_time,
+                logging_obj=logging_obj,
+                cache_hit=False,
+                **kwargs,
+            )
         )
 
         return Response(
             content=content,
             status_code=response.status_code,
-            headers=get_response_headers(response.headers),
+            headers=HttpPassThroughEndpointHelpers.get_response_headers(
+                headers=response.headers,
+                litellm_call_id=litellm_call_id,
+            ),
         )
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -558,6 +599,59 @@ async def pass_through_request(
             )
 
 
+def _init_kwargs_for_pass_through_endpoint(
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth,
+    passthrough_logging_payload: PassthroughStandardLoggingPayload,
+    _parsed_body: Optional[dict] = None,
+    litellm_call_id: Optional[str] = None,
+) -> dict:
+    _parsed_body = _parsed_body or {}
+    _litellm_metadata: Optional[dict] = _parsed_body.pop("litellm_metadata", None)
+    _metadata = dict(
+        StandardLoggingUserAPIKeyMetadata(
+            user_api_key_hash=user_api_key_dict.api_key,
+            user_api_key_alias=user_api_key_dict.key_alias,
+            user_api_key_user_email=user_api_key_dict.user_email,
+            user_api_key_user_id=user_api_key_dict.user_id,
+            user_api_key_team_id=user_api_key_dict.team_id,
+            user_api_key_org_id=user_api_key_dict.org_id,
+            user_api_key_team_alias=user_api_key_dict.team_alias,
+            user_api_key_end_user_id=user_api_key_dict.end_user_id,
+        )
+    )
+    _metadata["user_api_key"] = user_api_key_dict.api_key
+    if _litellm_metadata:
+        _metadata.update(_litellm_metadata)
+
+    _metadata = _update_metadata_with_tags_in_header(
+        request=request,
+        metadata=_metadata,
+    )
+
+    kwargs = {
+        "litellm_params": {
+            "metadata": _metadata,
+        },
+        "call_type": "pass_through_endpoint",
+        "litellm_call_id": litellm_call_id,
+        "passthrough_logging_payload": passthrough_logging_payload,
+    }
+    return kwargs
+
+
+def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> dict:
+    """
+    If tags are in the request headers, add them to the metadata
+
+    Used for google and vertex JS SDKs
+    """
+    _tags = request.headers.get("tags")
+    if _tags:
+        metadata["tags"] = _tags.split(",")
+    return metadata
+
+
 def create_pass_through_route(
     endpoint,
     target: str,
@@ -568,7 +662,7 @@ def create_pass_through_route(
     # check if target is an adapter.py or a url
     import uuid
 
-    from litellm.proxy.utils import get_instance_fn
+    from litellm.proxy.types_utils.utils import get_instance_fn
 
     try:
         if isinstance(target, CustomLogger):
@@ -617,6 +711,13 @@ def create_pass_through_route(
     return endpoint_func
 
 
+def _is_streaming_response(response: httpx.Response) -> bool:
+    _content_type = response.headers.get("content-type")
+    if _content_type is not None and "text/event-stream" in _content_type:
+        return True
+    return False
+
+
 async def initialize_pass_through_endpoints(pass_through_endpoints: list):
 
     verbose_proxy_logger.debug("initializing pass through endpoints")
@@ -663,7 +764,6 @@ async def initialize_pass_through_endpoints(pass_through_endpoints: list):
 
 @router.get(
     "/config/pass_through_endpoint",
-    tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=PassThroughEndpointResponse,
 )
@@ -713,7 +813,6 @@ async def get_pass_through_endpoints(
 
 @router.post(
     "/config/pass_through_endpoint/{endpoint_id}",
-    tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def update_pass_through_endpoints(request: Request, endpoint_id: str):
@@ -725,7 +824,6 @@ async def update_pass_through_endpoints(request: Request, endpoint_id: str):
 
 @router.post(
     "/config/pass_through_endpoint",
-    tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def create_pass_through_endpoints(
@@ -771,7 +869,6 @@ async def create_pass_through_endpoints(
 
 @router.delete(
     "/config/pass_through_endpoint",
-    tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=PassThroughEndpointResponse,
 )

@@ -7,21 +7,12 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 
-from typing import Optional, Literal, Union
-import litellm, traceback, sys, uuid
-from litellm.caching import DualCache
+from typing import Literal
+import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_logger import CustomLogger
 from fastapi import HTTPException
 from litellm._logging import verbose_proxy_logger
-from litellm.utils import (
-    ModelResponse,
-    EmbeddingResponse,
-    ImageResponse,
-    StreamingChoices,
-)
-from datetime import datetime
-import aiohttp, asyncio
 
 
 class _ENTERPRISE_GoogleTextModeration(CustomLogger):
@@ -48,8 +39,8 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
     # Class variables or attributes
     def __init__(self):
         try:
-            from google.cloud import language_v1
-        except:
+            from google.cloud import language_v1  # type: ignore
+        except Exception:
             raise Exception(
                 "Missing google.cloud package. Run `pip install --upgrade google-cloud-language`"
             )
@@ -57,8 +48,8 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
         # Instantiates a client
         self.client = language_v1.LanguageServiceClient()
         self.moderate_text_request = language_v1.ModerateTextRequest
-        self.language_document = language_v1.types.Document
-        self.document_type = language_v1.types.Document.Type.PLAIN_TEXT
+        self.language_document = language_v1.types.Document  # type: ignore
+        self.document_type = language_v1.types.Document.Type.PLAIN_TEXT  # type: ignore
 
         default_confidence_threshold = (
             litellm.google_moderation_confidence_threshold or 0.8
@@ -90,7 +81,7 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
                 print(print_statement)  # noqa
-        except:
+        except Exception:
             pass
 
     async def async_moderation_hook(

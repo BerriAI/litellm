@@ -5,26 +5,18 @@
 # +-------------------------------------------------------------+
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-import sys, os
+import sys
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-from typing import Optional, Literal, Union
-import litellm, traceback, sys, uuid
-from litellm.caching import DualCache
+from typing import Literal
+import litellm
+import sys
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_logger import CustomLogger
 from fastapi import HTTPException
-from litellm._logging import verbose_proxy_logger
-from litellm.utils import (
-    ModelResponse,
-    EmbeddingResponse,
-    ImageResponse,
-    StreamingChoices,
-)
-from datetime import datetime
-import aiohttp, asyncio
 from litellm._logging import verbose_proxy_logger
 
 litellm.set_verbose = True
@@ -51,8 +43,8 @@ class _ENTERPRISE_OpenAI_Moderation(CustomLogger):
             "audio_transcription",
         ],
     ):
+        text = ""
         if "messages" in data and isinstance(data["messages"], list):
-            text = ""
             for m in data["messages"]:  # assume messages is a list
                 if "content" in m and isinstance(m["content"], str):
                     text += m["content"]
@@ -67,7 +59,7 @@ class _ENTERPRISE_OpenAI_Moderation(CustomLogger):
         )
 
         verbose_proxy_logger.debug("Moderation response: %s", moderation_response)
-        if moderation_response.results[0].flagged == True:
+        if moderation_response.results[0].flagged is True:
             raise HTTPException(
                 status_code=403, detail={"error": "Violated content safety policy"}
             )

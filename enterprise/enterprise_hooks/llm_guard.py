@@ -7,22 +7,15 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 ## This provides an LLM Guard Integration for content moderation on the proxy
 
-from typing import Optional, Literal, Union
-import litellm, traceback, sys, uuid, os
-from litellm.caching import DualCache
+from typing import Optional, Literal
+import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_logger import CustomLogger
 from fastapi import HTTPException
 from litellm._logging import verbose_proxy_logger
-from litellm.utils import (
-    ModelResponse,
-    EmbeddingResponse,
-    ImageResponse,
-    StreamingChoices,
-)
-from datetime import datetime
-import aiohttp, asyncio
+import aiohttp
 from litellm.utils import get_formatted_prompt
+from litellm.secret_managers.main import get_secret_str
 
 litellm.set_verbose = True
 
@@ -38,7 +31,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
         self.llm_guard_mode = litellm.llm_guard_mode
         if mock_testing == True:  # for testing purposes only
             return
-        self.llm_guard_api_base = litellm.get_secret("LLM_GUARD_API_BASE", None)
+        self.llm_guard_api_base = get_secret_str("LLM_GUARD_API_BASE", None)
         if self.llm_guard_api_base is None:
             raise Exception("Missing `LLM_GUARD_API_BASE` from environment")
         elif not self.llm_guard_api_base.endswith("/"):
@@ -49,7 +42,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
                 print(print_statement)  # noqa
-        except:
+        except Exception:
             pass
 
     async def moderation_check(self, text: str):
@@ -158,7 +151,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
                 "moderation",
                 "audio_transcription",
             ]
-        except Exception as e:
+        except Exception:
             self.print_verbose(
                 f"Call Type - {call_type}, not in accepted list - ['completion','embeddings','image_generation','moderation','audio_transcription']"
             )

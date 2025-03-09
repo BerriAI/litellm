@@ -493,3 +493,48 @@ response = completion("openai/your-model-name", messages)
 If you need to set api_base dynamically, just pass it in completions instead - `completions(...,api_base="your-proxy-api-base")`
 
 For more check out [setting API Base/Keys](../set_keys.md)
+
+### Forwarding Org ID for Proxy requests
+
+Forward openai Org ID's from the client to OpenAI with `forward_openai_org_id` param. 
+
+1. Setup config.yaml 
+
+```yaml
+model_list:
+  - model_name: "gpt-3.5-turbo"
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+general_settings:
+    forward_openai_org_id: true # 👈 KEY CHANGE
+```
+
+2. Start Proxy
+
+```bash
+litellm --config config.yaml --detailed_debug
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Make OpenAI call
+
+```python
+from openai import OpenAI
+client = OpenAI(
+    api_key="sk-1234",
+    organization="my-special-org",
+    base_url="http://0.0.0.0:4000"
+)
+
+client.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hello world"}])
+```
+
+In your logs you should see the forwarded org id
+
+```bash
+LiteLLM:DEBUG: utils.py:255 - Request to litellm:
+LiteLLM:DEBUG: utils.py:255 - litellm.acompletion(... organization='my-special-org',)
+```

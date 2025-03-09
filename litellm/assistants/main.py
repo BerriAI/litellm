@@ -7,13 +7,11 @@ from functools import partial
 from typing import Any, Coroutine, Dict, Iterable, List, Literal, Optional, Union
 
 import httpx
-from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+from openai import AsyncOpenAI, OpenAI
 from openai.types.beta.assistant import Assistant
 from openai.types.beta.assistant_deleted import AssistantDeleted
 
 import litellm
-from litellm import client
-from litellm.llms.AzureOpenAI import assistants
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import (
     exception_type,
@@ -22,8 +20,8 @@ from litellm.utils import (
     supports_httpx_timeout,
 )
 
-from ..llms.AzureOpenAI.assistants import AzureAssistantsAPI
-from ..llms.OpenAI.openai import OpenAIAssistantsAPI
+from ..llms.azure.assistants import AzureAssistantsAPI
+from ..llms.openai.openai import OpenAIAssistantsAPI
 from ..types.llms.openai import *
 from ..types.router import *
 from .utils import get_optional_params_add_message
@@ -96,7 +94,7 @@ def get_assistants(
     if (
         timeout is not None
         and isinstance(timeout, httpx.Timeout)
-        and supports_httpx_timeout(custom_llm_provider) == False
+        and supports_httpx_timeout(custom_llm_provider) is False
     ):
         read_timeout = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
@@ -280,7 +278,7 @@ def create_assistants(
     if (
         timeout is not None
         and isinstance(timeout, httpx.Timeout)
-        and supports_httpx_timeout(custom_llm_provider) == False
+        and supports_httpx_timeout(custom_llm_provider) is False
     ):
         read_timeout = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
@@ -464,7 +462,7 @@ def delete_assistant(
     if (
         timeout is not None
         and isinstance(timeout, httpx.Timeout)
-        and supports_httpx_timeout(custom_llm_provider) == False
+        and supports_httpx_timeout(custom_llm_provider) is False
     ):
         read_timeout = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
@@ -649,7 +647,7 @@ def create_thread(
     if (
         timeout is not None
         and isinstance(timeout, httpx.Timeout)
-        and supports_httpx_timeout(custom_llm_provider) == False
+        and supports_httpx_timeout(custom_llm_provider) is False
     ):
         read_timeout = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
@@ -805,7 +803,7 @@ def get_thread(
     if (
         timeout is not None
         and isinstance(timeout, httpx.Timeout)
-        and supports_httpx_timeout(custom_llm_provider) == False
+        and supports_httpx_timeout(custom_llm_provider) is False
     ):
         read_timeout = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
@@ -991,7 +989,7 @@ def add_message(
     if (
         timeout is not None
         and isinstance(timeout, httpx.Timeout)
-        and supports_httpx_timeout(custom_llm_provider) == False
+        and supports_httpx_timeout(custom_llm_provider) is False
     ):
         read_timeout = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
@@ -1149,7 +1147,7 @@ def get_messages(
     if (
         timeout is not None
         and isinstance(timeout, httpx.Timeout)
-        and supports_httpx_timeout(custom_llm_provider) == False
+        and supports_httpx_timeout(custom_llm_provider) is False
     ):
         read_timeout = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
@@ -1347,7 +1345,7 @@ def run_thread(
     if (
         timeout is not None
         and isinstance(timeout, httpx.Timeout)
-        and supports_httpx_timeout(custom_llm_provider) == False
+        and supports_httpx_timeout(custom_llm_provider) is False
     ):
         read_timeout = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout

@@ -1,6 +1,6 @@
 import Image from '@theme/IdealImage';
 
-# ➡️ Create Pass Through Endpoints 
+# Create Pass Through Endpoints 
 
 Add pass through routes to LiteLLM Proxy
 

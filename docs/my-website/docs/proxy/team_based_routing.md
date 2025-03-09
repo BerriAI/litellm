@@ -1,4 +1,11 @@
-# 👥 Team-based Routing
+# [DEPRECATED] Team-based Routing
+
+:::info
+
+This is deprecated, please use [Tag Based Routing](./tag_routing.md) instead
+
+:::
+
 
 ## Routing
 Route calls to different model groups based on the team-id

@@ -19,6 +19,11 @@ Prioritize LLM API requests in high-traffic.
 - Priority - The lower the number, the higher the priority: 
     * e.g. `priority=0` > `priority=2000`
 
+Supported Router endpoints:
+- `acompletion` (`/v1/chat/completions` on Proxy)
+- `atext_completion` (`/v1/completions` on Proxy)
+
+
 ## Quick Start 
 
 ```python

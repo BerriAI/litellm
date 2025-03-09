@@ -10,7 +10,7 @@ from litellm.utils import get_model_info
 
 # Extract the number of billion parameters from the model name
 # only used for together_computer LLMs
-def get_model_params_and_category(model_name: str) -> str:
+def get_base_model_for_pricing(model_name: str) -> str:
     """
     Helper function for calculating together ai pricing.
 
@@ -43,7 +43,7 @@ def get_model_params_and_category(model_name: str) -> str:
             return "fireworks-ai-16b-80b"
 
     # If no matches, return the original model_name
-    return model_name
+    return "fireworks-ai-default"
 
 
 def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
@@ -57,10 +57,16 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    base_model = get_model_params_and_category(model_name=model)
+    ## check if model mapped, else use default pricing
+    try:
+        model_info = get_model_info(model=model, custom_llm_provider="fireworks_ai")
+    except Exception:
+        base_model = get_base_model_for_pricing(model_name=model)
 
-    ## GET MODEL INFO
-    model_info = get_model_info(model=base_model, custom_llm_provider="fireworks_ai")
+        ## GET MODEL INFO
+        model_info = get_model_info(
+            model=base_model, custom_llm_provider="fireworks_ai"
+        )
 
     ## CALCULATE INPUT COST
 

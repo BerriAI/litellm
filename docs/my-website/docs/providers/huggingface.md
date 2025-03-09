@@ -37,7 +37,7 @@ os.environ["HUGGINGFACE_API_KEY"] = "huggingface_api_key"
 messages = [{ "content": "There's a llama in my garden 😱 What should I do?","role": "user"}]
 
 # e.g. Call 'https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct' from Serverless Inference API
-response = litellm.completion(
+response = completion(
     model="huggingface/meta-llama/Meta-Llama-3.1-8B-Instruct",
     messages=[{ "content": "Hello, how are you?","role": "user"}],
     stream=True
@@ -165,14 +165,14 @@ Steps to use
 
 ```python
 import os
-import litellm
+from litellm import completion
 
 os.environ["HUGGINGFACE_API_KEY"] = ""
 
 # TGI model: Call https://huggingface.co/glaiveai/glaive-coder-7b
 # add the 'huggingface/' prefix to the model to set huggingface as the provider
 # set api base to your deployed api endpoint from hugging face
-response = litellm.completion(
+response = completion(
     model="huggingface/glaiveai/glaive-coder-7b",
     messages=[{ "content": "Hello, how are you?","role": "user"}],
     api_base="https://wjiegasee9bmqke2.us-east-1.aws.endpoints.huggingface.cloud"
@@ -383,6 +383,8 @@ def default_pt(messages):
 #### Custom prompt templates
 
 ```python
+import litellm
+
 # Create your own custom prompt template works
 litellm.register_prompt_template(
 	    model="togethercomputer/LLaMA-2-7B-32K",

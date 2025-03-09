@@ -3,7 +3,7 @@
 import importlib
 import os
 import sys
-
+import asyncio
 import pytest
 
 sys.path.insert(
@@ -12,31 +12,38 @@ sys.path.insert(
 import litellm
 
 
+@pytest.fixture(scope="session")
+def event_loop():
+    """Create an instance of the default event loop for each test session."""
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    yield loop
+    loop.close()
+
+
 @pytest.fixture(scope="function", autouse=True)
-def setup_and_teardown():
-    """
-    This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
-    """
-    curr_dir = os.getcwd()  # Get the current working directory
-    sys.path.insert(
-        0, os.path.abspath("../..")
-    )  # Adds the project directory to the system path
+def setup_and_teardown(event_loop):  # Add event_loop as a dependency
+    curr_dir = os.getcwd()
+    sys.path.insert(0, os.path.abspath("../.."))
 
     import litellm
     from litellm import Router
 
     importlib.reload(litellm)
-    import asyncio
 
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    asyncio.set_event_loop(loop)
+    # Set the event loop from the fixture
+    asyncio.set_event_loop(event_loop)
+
     print(litellm)
-    # from litellm import Router, completion, aembedding, acompletion, embedding
     yield
 
-    # Teardown code (executes after the yield point)
-    loop.close()  # Close the loop created earlier
-    asyncio.set_event_loop(None)  # Remove the reference to the loop
+    # Clean up any pending tasks
+    pending = asyncio.all_tasks(event_loop)
+    for task in pending:
+        task.cancel()
+
+    # Run the event loop until all tasks are cancelled
+    if pending:
+        event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
 
 
 def pytest_collection_modifyitems(config, items):

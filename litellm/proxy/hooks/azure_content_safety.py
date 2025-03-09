@@ -1,13 +1,11 @@
-import sys
 import traceback
-import uuid
 from typing import Optional
 
 from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 
@@ -89,7 +87,7 @@ class _PROXY_AzureContentSafety(
         # Analyze text
         try:
             response = await self.client.analyze_text(request)
-        except self.azure_http_error as e:
+        except self.azure_http_error:
             verbose_proxy_logger.debug(
                 "Error in Azure Content-Safety: %s", traceback.format_exc()
             )

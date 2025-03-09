@@ -1,18 +1,29 @@
 #### What this does ####
 #    On success, logs events to Promptlayer
-import os
 import traceback
-from datetime import datetime as datetimeObj
-from typing import Any, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
 
-import dotenv
 from pydantic import BaseModel
 
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.llms.openai import ChatCompletionRequest
-from litellm.types.services import ServiceLoggerPayload
-from litellm.types.utils import AdapterCompletionStreamWrapper, ModelResponse
+from litellm.types.integrations.argilla import ArgillaItem
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
+from litellm.types.utils import (
+    AdapterCompletionStreamWrapper,
+    EmbeddingResponse,
+    ImageResponse,
+    ModelResponse,
+    StandardCallbackDynamicParams,
+    StandardLoggingPayload,
+)
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
+    Span = _Span
+else:
+    Span = Any
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
@@ -50,12 +61,60 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         pass
 
+    #### PROMPT MANAGEMENT HOOKS ####
+
+    async def async_get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        non_default_params: dict,
+        prompt_id: str,
+        prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
+    ) -> Tuple[str, List[AllMessageValues], dict]:
+        """
+        Returns:
+        - model: str - the model to use (can be pulled from prompt management tool)
+        - messages: List[AllMessageValues] - the messages to use (can be pulled from prompt management tool)
+        - non_default_params: dict - update with any optional params (e.g. temperature, max_tokens, etc.) to use (can be pulled from prompt management tool)
+        """
+        return model, messages, non_default_params
+
+    def get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        non_default_params: dict,
+        prompt_id: str,
+        prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
+    ) -> Tuple[str, List[AllMessageValues], dict]:
+        """
+        Returns:
+        - model: str - the model to use (can be pulled from prompt management tool)
+        - messages: List[AllMessageValues] - the messages to use (can be pulled from prompt management tool)
+        - non_default_params: dict - update with any optional params (e.g. temperature, max_tokens, etc.) to use (can be pulled from prompt management tool)
+        """
+        return model, messages, non_default_params
+
     #### PRE-CALL CHECKS - router/proxy only ####
     """
     Allows usage-based-routing-v2 to run pre-call rpm checks within the picked deployment's semaphore (concurrency-safe tpm/rpm checks).
     """
 
-    async def async_pre_call_check(self, deployment: dict) -> Optional[dict]:
+    async def async_filter_deployments(
+        self,
+        model: str,
+        healthy_deployments: List,
+        messages: Optional[List[AllMessageValues]],
+        request_kwargs: Optional[dict] = None,
+        parent_otel_span: Optional[Span] = None,
+    ) -> List[dict]:
+        return healthy_deployments
+
+    async def async_pre_call_check(
+        self, deployment: dict, parent_otel_span: Optional[Span]
+    ) -> Optional[dict]:
         pass
 
     def pre_call_check(self, deployment: dict) -> Optional[dict]:
@@ -67,10 +126,14 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ):
         pass
 
-    async def log_success_fallback_event(self, original_model_group: str, kwargs: dict):
+    async def log_success_fallback_event(
+        self, original_model_group: str, kwargs: dict, original_exception: Exception
+    ):
         pass
 
-    async def log_failure_fallback_event(self, original_model_group: str, kwargs: dict):
+    async def log_failure_fallback_event(
+        self, original_model_group: str, kwargs: dict, original_exception: Exception
+    ):
         pass
 
     #### ADAPTERS #### Allow calling 100+ LLMs in custom format - https://github.com/BerriAI/litellm/pulls
@@ -98,6 +161,20 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         Translates the streaming chunk, from the OpenAI format to the custom format.
         """
         pass
+
+    ### DATASET HOOKS #### - currently only used for Argilla
+
+    async def async_dataset_hook(
+        self,
+        logged_item: ArgillaItem,
+        standard_logging_payload: Optional[StandardLoggingPayload],
+    ) -> Optional[ArgillaItem]:
+        """
+        - Decide if the result should be logged to Argilla.
+        - Modify the result before logging to Argilla.
+        - Return None if the result should not be logged to Argilla.
+        """
+        raise NotImplementedError("async_dataset_hook not implemented")
 
     #### CALL HOOKS - proxy only ####
     """
@@ -136,8 +213,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response,
-    ):
+        response: Union[Any, ModelResponse, EmbeddingResponse, ImageResponse],
+    ) -> Any:
         pass
 
     async def async_logging_hook(
@@ -163,14 +240,14 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             "moderation",
             "audio_transcription",
         ],
-    ):
+    ) -> Any:
         pass
 
     async def async_post_call_streaming_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: str,
-    ):
+    ) -> Any:
         pass
 
     #### SINGLE-USE #### - https://docs.litellm.ai/docs/observability/custom_callback#using-your-custom-callback-function
@@ -184,7 +261,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                 kwargs,
             )
             print_verbose(f"Custom Logger - model call details: {kwargs}")
-        except:
+        except Exception:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
 
     async def async_log_input_event(
@@ -198,7 +275,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                 kwargs,
             )
             print_verbose(f"Custom Logger - model call details: {kwargs}")
-        except:
+        except Exception:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
 
     def log_event(
@@ -213,7 +290,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                 start_time,
                 end_time,
             )
-        except:
+        except Exception:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
             pass
 
@@ -229,6 +306,63 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                 start_time,
                 end_time,
             )
-        except:
+        except Exception:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
             pass
+
+    # Useful helpers for custom logger classes
+
+    def truncate_standard_logging_payload_content(
+        self,
+        standard_logging_object: StandardLoggingPayload,
+    ):
+        """
+        Truncate error strings and message content in logging payload
+
+        Some loggers like DataDog/ GCS Bucket have a limit on the size of the payload. (1MB)
+
+        This function truncates the error string and the message content if they exceed a certain length.
+        """
+        MAX_STR_LENGTH = 10_000
+
+        # Truncate fields that might exceed max length
+        fields_to_truncate = ["error_str", "messages", "response"]
+        for field in fields_to_truncate:
+            self._truncate_field(
+                standard_logging_object=standard_logging_object,
+                field_name=field,
+                max_length=MAX_STR_LENGTH,
+            )
+
+    def _truncate_field(
+        self,
+        standard_logging_object: StandardLoggingPayload,
+        field_name: str,
+        max_length: int,
+    ) -> None:
+        """
+        Helper function to truncate a field in the logging payload
+
+        This converts the field to a string and then truncates it if it exceeds the max length.
+
+        Why convert to string ?
+        1. User was sending a poorly formatted list for `messages` field, we could not predict where they would send content
+            - Converting to string and then truncating the logged content catches this
+        2. We want to avoid modifying the original `messages`, `response`, and `error_str` in the logging payload since these are in kwargs and could be returned to the user
+        """
+        field_value = standard_logging_object.get(field_name)  # type: ignore
+        if field_value:
+            str_value = str(field_value)
+            if len(str_value) > max_length:
+                standard_logging_object[field_name] = self._truncate_text(  # type: ignore
+                    text=str_value, max_length=max_length
+                )
+
+    def _truncate_text(self, text: str, max_length: int) -> str:
+        """Truncate text if it exceeds max_length"""
+        return (
+            text[:max_length]
+            + "...truncated by litellm, this logger does not support large content"
+            if len(text) > max_length
+            else text
+        )

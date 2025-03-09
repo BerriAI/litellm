@@ -1,16 +1,8 @@
-import React, { useState, useEffect } from "react";
-import {
-  Button as Button2,
-  Modal,
-  Form,
-  Input,
-  Select as Select2,
-  InputNumber,
-  message,
-  Typography,
-} from "antd";
+import React from "react";
+import { Modal, message, Typography } from "antd";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { Text, Button } from "@tremor/react";
+
 export interface InvitationLink {
   id: string;
   user_id: string;
@@ -21,6 +13,7 @@ export interface InvitationLink {
   created_by: string;
   updated_at: Date;
   updated_by: string;
+  has_user_setup_sso: boolean;
 }
 
 interface OnboardingProps {
@@ -32,12 +25,12 @@ interface OnboardingProps {
   invitationLinkData: InvitationLink | null;
 }
 
-const OnboardingModal: React.FC<OnboardingProps> = ({
+export default function OnboardingModal({
   isInvitationLinkModalVisible,
   setIsInvitationLinkModalVisible,
   baseUrl,
   invitationLinkData,
-}) => {
+}: OnboardingProps) {
   const { Title, Paragraph } = Typography;
   const handleInvitationOk = () => {
     setIsInvitationLinkModalVisible(false);
@@ -45,6 +38,13 @@ const OnboardingModal: React.FC<OnboardingProps> = ({
 
   const handleInvitationCancel = () => {
     setIsInvitationLinkModalVisible(false);
+  };
+
+  const getInvitationUrl = () => {
+    if (invitationLinkData?.has_user_setup_sso) {
+      return new URL("/ui", baseUrl).toString();
+    }
+    return new URL(`/ui?invitation_id=${invitationLinkData?.id}`, baseUrl).toString();
   };
 
   return (
@@ -56,7 +56,6 @@ const OnboardingModal: React.FC<OnboardingProps> = ({
       onOk={handleInvitationOk}
       onCancel={handleInvitationCancel}
     >
-      {/* {JSON.stringify(invitationLinkData)} */}
       <Paragraph>
         Copy and send the generated link to onboard this user to the proxy.
       </Paragraph>
@@ -67,13 +66,12 @@ const OnboardingModal: React.FC<OnboardingProps> = ({
       <div className="flex justify-between pt-5 pb-2">
         <Text>Invitation Link</Text>
         <Text>
-          {baseUrl}/ui?invitation_id={invitationLinkData?.id}
+          <Text>{getInvitationUrl()}</Text>
         </Text>
       </div>
       <div className="flex justify-end mt-5">
-        <div></div>
         <CopyToClipboard
-          text={`${baseUrl}/ui?invitation_id=${invitationLinkData?.id}`}
+          text={getInvitationUrl()}
           onCopy={() => message.success("Copied!")}
         >
           <Button variant="primary">Copy invitation link</Button>
@@ -81,6 +79,4 @@ const OnboardingModal: React.FC<OnboardingProps> = ({
       </div>
     </Modal>
   );
-};
-
-export default OnboardingModal;
+}

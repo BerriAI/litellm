@@ -1,9 +1,11 @@
-import heapq
-from pydantic import BaseModel
-from typing import Optional
 import enum
-from litellm.caching import DualCache, RedisCache
+import heapq
+from typing import Optional
+
+from pydantic import BaseModel
+
 from litellm import print_verbose
+from litellm.caching.caching import DualCache, RedisCache
 
 
 class SchedulerCacheKeys(enum.Enum):

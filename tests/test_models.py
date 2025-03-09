@@ -47,6 +47,7 @@ async def get_models(session, key):
 
         if status != 200:
             raise Exception(f"Request did not return a 200 status code: {status}")
+        return await response.json()
 
 
 @pytest.mark.asyncio
@@ -88,11 +89,32 @@ async def add_models(session, model_id="123", model_name="azure-gpt-3.5"):
         return response_json
 
 
-async def get_model_info(session, key):
+async def get_model_info(session, key, litellm_model_id=None):
     """
     Make sure only models user has access to are returned
     """
-    url = "http://0.0.0.0:4000/model/info"
+    if litellm_model_id:
+        url = f"http://0.0.0.0:4000/model/info?litellm_model_id={litellm_model_id}"
+    else:
+        url = "http://0.0.0.0:4000/model/info"
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+
+    async with session.get(url, headers=headers) as response:
+        status = response.status
+        response_text = await response.text()
+        print(response_text)
+        print()
+
+        if status != 200:
+            raise Exception(f"Request did not return a 200 status code: {status}")
+        return await response.json()
+
+
+async def get_model_group_info(session, key):
+    url = "http://0.0.0.0:4000/model_group/info"
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
@@ -148,6 +170,35 @@ async def test_get_models():
             assert m == "gpt-4"
 
 
+@pytest.mark.asyncio
+async def test_get_specific_model():
+    """
+    Return specific model info
+
+    Ensure value of model_info is same as on `/model/info` (no id set)
+    """
+    async with aiohttp.ClientSession() as session:
+        key_gen = await generate_key(session=session, models=["gpt-4"])
+        key = key_gen["key"]
+        response = await get_model_info(session=session, key=key)
+        models = [m["model_name"] for m in response["data"]]
+        model_specific_info = None
+        for idx, m in enumerate(models):
+            assert m == "gpt-4"
+            litellm_model_id = response["data"][idx]["model_info"]["id"]
+            model_specific_info = response["data"][idx]
+        assert litellm_model_id is not None
+        response = await get_model_info(
+            session=session, key=key, litellm_model_id=litellm_model_id
+        )
+        assert response["data"][0]["model_info"]["id"] == litellm_model_id
+        assert (
+            response["data"][0] == model_specific_info
+        ), "Model info is not the same. Got={}, Expected={}".format(
+            response["data"][0], model_specific_info
+        )
+
+
 async def delete_model(session, model_id="123"):
     """
     Make sure only models user has access to are returned
@@ -195,7 +246,7 @@ async def test_add_and_delete_models():
         try:
             await chat_completion(session=session, key=key, model=model_name)
             pytest.fail(f"Expected call to fail.")
-        except:
+        except Exception:
             pass
 
 
@@ -362,3 +413,31 @@ async def test_add_model_run_health():
 
         # cleanup
         await delete_model(session=session, model_id=model_id)
+
+
+@pytest.mark.asyncio
+async def test_model_group_info_e2e():
+    """
+    Test /model/group/info endpoint
+    """
+    async with aiohttp.ClientSession() as session:
+        models = await get_models(session=session, key="sk-1234")
+        print(models)
+
+        expected_models = [
+            "anthropic/claude-3-5-haiku-20241022",
+            "anthropic/claude-3-opus-20240229",
+        ]
+
+        model_group_info = await get_model_group_info(session=session, key="sk-1234")
+        print(model_group_info)
+
+        has_anthropic_claude_3_5_haiku = False
+        has_anthropic_claude_3_opus = False
+        for model in model_group_info["data"]:
+            if model["model_group"] == "anthropic/claude-3-5-haiku-20241022":
+                has_anthropic_claude_3_5_haiku = True
+            if model["model_group"] == "anthropic/claude-3-opus-20240229":
+                has_anthropic_claude_3_opus = True
+
+        assert has_anthropic_claude_3_5_haiku and has_anthropic_claude_3_opus

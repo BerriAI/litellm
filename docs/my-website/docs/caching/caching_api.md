@@ -6,7 +6,7 @@ Use api.litellm.ai for caching `completion()` and `embedding()` responses
 ```python
 import litellm
 from litellm import completion
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 litellm.cache = Cache(type="hosted") # init cache to use api.litellm.ai
 
 # Make completion calls
@@ -31,7 +31,7 @@ response2 = completion(
 import time
 import litellm
 from litellm import completion, embedding
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 litellm.cache = Cache(type="hosted")
 
 start_time = time.time()
@@ -53,7 +53,7 @@ LiteLLM can cache your streamed responses for you
 import litellm
 import time
 from litellm import completion
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 
 litellm.cache = Cache(type="hosted")
 

@@ -1,7 +1,9 @@
 from os import PathLike
 from typing import IO, Any, Iterable, List, Literal, Mapping, Optional, Tuple, Union
 
-from openai._legacy_response import HttpxBinaryResponseContent
+from openai._legacy_response import (
+    HttpxBinaryResponseContent as _HttpxBinaryResponseContent,
+)
 from openai.lib.streaming._assistants import (
     AssistantEventHandler,
     AssistantStreamManager,
@@ -9,7 +11,7 @@ from openai.lib.streaming._assistants import (
     AsyncAssistantStreamManager,
 )
 from openai.pagination import AsyncCursorPage, SyncCursorPage
-from openai.types import Batch, FileObject
+from openai.types import Batch, EmbeddingCreateParams, FileObject
 from openai.types.beta.assistant import Assistant
 from openai.types.beta.assistant_tool_param import AssistantToolParam
 from openai.types.beta.thread_create_params import (
@@ -19,7 +21,16 @@ from openai.types.beta.threads.message import Message as OpenAIMessage
 from openai.types.beta.threads.message_content import MessageContent
 from openai.types.beta.threads.run import Run
 from openai.types.chat import ChatCompletionChunk
+from openai.types.chat.chat_completion_audio_param import ChatCompletionAudioParam
+from openai.types.chat.chat_completion_content_part_input_audio_param import (
+    ChatCompletionContentPartInputAudioParam,
+)
+from openai.types.chat.chat_completion_modality import ChatCompletionModality
+from openai.types.chat.chat_completion_prediction_content_param import (
+    ChatCompletionPredictionContentParam,
+)
 from openai.types.embedding import Embedding as OpenAIEmbedding
+from openai.types.fine_tuning.fine_tuning_job import FineTuningJob
 from pydantic import BaseModel, Field
 from typing_extensions import Dict, Required, TypedDict, override
 
@@ -38,6 +49,11 @@ FileTypes = Union[
 
 
 EmbeddingInput = Union[str, List[str]]
+
+
+class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
+    _hidden_params: dict = {}
+    pass
 
 
 class NotGiven:
@@ -293,6 +309,25 @@ class ListBatchRequest(TypedDict, total=False):
     timeout: Optional[float]
 
 
+BatchJobStatus = Literal[
+    "validating",
+    "failed",
+    "in_progress",
+    "finalizing",
+    "completed",
+    "expired",
+    "cancelling",
+    "cancelled",
+]
+
+
+class ChatCompletionAudioDelta(TypedDict, total=False):
+    data: str
+    transcript: str
+    expires_at: int
+    id: str
+
+
 class ChatCompletionToolCallFunctionChunk(TypedDict, total=False):
     name: Optional[str]
     arguments: str
@@ -322,6 +357,13 @@ class ChatCompletionCachedContent(TypedDict):
     type: Literal["ephemeral"]
 
 
+class ChatCompletionThinkingBlock(TypedDict, total=False):
+    type: Required[Literal["thinking"]]
+    thinking: str
+    signature: str
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+
+
 class OpenAIChatCompletionTextObject(TypedDict):
     type: Literal["text"]
     text: str
@@ -336,6 +378,7 @@ class ChatCompletionTextObject(
 class ChatCompletionImageUrlObject(TypedDict, total=False):
     url: Required[str]
     detail: str
+    format: str
 
 
 class ChatCompletionImageObject(TypedDict):
@@ -343,11 +386,63 @@ class ChatCompletionImageObject(TypedDict):
     image_url: Union[str, ChatCompletionImageUrlObject]
 
 
+class ChatCompletionVideoUrlObject(TypedDict, total=False):
+    url: Required[str]
+    detail: str
+
+
+class ChatCompletionVideoObject(TypedDict):
+    type: Literal["video_url"]
+    video_url: Union[str, ChatCompletionVideoUrlObject]
+
+
+class ChatCompletionAudioObject(ChatCompletionContentPartInputAudioParam):
+    pass
+
+
+class DocumentObject(TypedDict):
+    type: Literal["text"]
+    media_type: str
+    data: str
+
+
+class CitationsObject(TypedDict):
+    enabled: bool
+
+
+class ChatCompletionDocumentObject(TypedDict):
+    type: Literal["document"]
+    source: DocumentObject
+    title: str
+    context: str
+    citations: Optional[CitationsObject]
+
+
+OpenAIMessageContentListBlock = Union[
+    ChatCompletionTextObject,
+    ChatCompletionImageObject,
+    ChatCompletionAudioObject,
+    ChatCompletionDocumentObject,
+    ChatCompletionVideoObject,
+]
+
+OpenAIMessageContent = Union[
+    str,
+    Iterable[OpenAIMessageContentListBlock],
+]
+
+# The prompt(s) to generate completions for, encoded as a string, array of strings, array of tokens, or array of token arrays.
+AllPromptValues = Union[str, List[str], Iterable[int], Iterable[Iterable[int]], None]
+
+
 class OpenAIChatCompletionUserMessage(TypedDict):
     role: Literal["user"]
-    content: Union[
-        str, Iterable[Union[ChatCompletionTextObject, ChatCompletionImageObject]]
-    ]
+    content: OpenAIMessageContent
+
+
+class OpenAITextCompletionUserMessage(TypedDict):
+    role: Literal["user"]
+    content: AllPromptValues
 
 
 class ChatCompletionUserMessage(OpenAIChatCompletionUserMessage, total=False):
@@ -356,7 +451,11 @@ class ChatCompletionUserMessage(OpenAIChatCompletionUserMessage, total=False):
 
 class OpenAIChatCompletionAssistantMessage(TypedDict, total=False):
     role: Required[Literal["assistant"]]
-    content: Optional[Union[str, Iterable[ChatCompletionTextObject]]]
+    content: Optional[
+        Union[
+            str, Iterable[Union[ChatCompletionTextObject, ChatCompletionThinkingBlock]]
+        ]
+    ]
     name: Optional[str]
     tool_calls: Optional[List[ChatCompletionAssistantToolCall]]
     function_call: Optional[ChatCompletionToolCallFunctionChunk]
@@ -364,6 +463,7 @@ class OpenAIChatCompletionAssistantMessage(TypedDict, total=False):
 
 class ChatCompletionAssistantMessage(OpenAIChatCompletionAssistantMessage, total=False):
     cache_control: ChatCompletionCachedContent
+    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]]
 
 
 class ChatCompletionToolMessage(TypedDict):
@@ -385,9 +485,27 @@ class OpenAIChatCompletionSystemMessage(TypedDict, total=False):
     name: str
 
 
+class OpenAIChatCompletionDeveloperMessage(TypedDict, total=False):
+    role: Required[Literal["developer"]]
+    content: Required[Union[str, List]]
+    name: str
+
+
 class ChatCompletionSystemMessage(OpenAIChatCompletionSystemMessage, total=False):
     cache_control: ChatCompletionCachedContent
 
+
+class ChatCompletionDeveloperMessage(OpenAIChatCompletionDeveloperMessage, total=False):
+    cache_control: ChatCompletionCachedContent
+
+
+ValidUserMessageContentTypes = [
+    "text",
+    "image_url",
+    "input_audio",
+    "document",
+    "video_url",
+]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
 
 AllMessageValues = Union[
     ChatCompletionUserMessage,
@@ -395,6 +513,7 @@ AllMessageValues = Union[
     ChatCompletionToolMessage,
     ChatCompletionSystemMessage,
     ChatCompletionFunctionMessage,
+    ChatCompletionDeveloperMessage,
 ]
 
 
@@ -420,9 +539,13 @@ class ChatCompletionToolParamFunctionChunk(TypedDict, total=False):
     parameters: dict
 
 
-class ChatCompletionToolParam(TypedDict):
-    type: Literal["function"]
+class OpenAIChatCompletionToolParam(TypedDict):
+    type: Union[Literal["function"], str]
     function: ChatCompletionToolParamFunctionChunk
+
+
+class ChatCompletionToolParam(OpenAIChatCompletionToolParam, total=False):
+    cache_control: ChatCompletionCachedContent
 
 
 class Function(TypedDict, total=False):
@@ -469,11 +592,19 @@ class ChatCompletionDeltaChunk(TypedDict, total=False):
     role: str
 
 
+ChatCompletionAssistantContentValue = (
+    str  # keep as var, used in stream_chunk_builder as well
+)
+
+
 class ChatCompletionResponseMessage(TypedDict, total=False):
-    content: Optional[str]
-    tool_calls: List[ChatCompletionToolCallChunk]
+    content: Optional[ChatCompletionAssistantContentValue]
+    tool_calls: Optional[List[ChatCompletionToolCallChunk]]
     role: Literal["assistant"]
-    function_call: ChatCompletionToolCallFunctionChunk
+    function_call: Optional[ChatCompletionToolCallFunctionChunk]
+    provider_specific_fields: Optional[dict]
+    reasoning_content: Optional[str]
+    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]]
 
 
 class ChatCompletionUsageBlock(TypedDict):
@@ -540,3 +671,16 @@ class FineTuningJobCreate(BaseModel):
 
 class LiteLLMFineTuningJobCreate(FineTuningJobCreate):
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"]
+
+    class Config:
+        extra = "allow"  # This allows the model to accept additional fields
+
+
+AllEmbeddingInputValues = Union[str, List[str], List[int], List[List[int]]]
+
+OpenAIAudioTranscriptionOptionalParams = Literal[
+    "language", "prompt", "temperature", "response_format", "timestamp_granularities"
+]
+
+
+OpenAIImageVariationOptionalParams = Literal["n", "size", "response_format", "user"]

@@ -10,12 +10,11 @@
 from typing import Optional, Literal
 import litellm
 from litellm.proxy.utils import PrismaClient
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth, LiteLLM_EndUserTable
 from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_proxy_logger
 from fastapi import HTTPException
-import json, traceback
 
 
 class _ENTERPRISE_BlockedUserList(CustomLogger):
@@ -69,7 +68,7 @@ class _ENTERPRISE_BlockedUserList(CustomLogger):
                 - check if end-user in cache
                 - check if end-user in db
             """
-            self.print_verbose(f"Inside Blocked User List Pre-Call Hook")
+            self.print_verbose("Inside Blocked User List Pre-Call Hook")
             if "user_id" in data or "user" in data:
                 user = data.get("user_id", data.get("user", ""))
                 if (
@@ -84,7 +83,7 @@ class _ENTERPRISE_BlockedUserList(CustomLogger):
                     )
 
                 cache_key = f"litellm:end_user_id:{user}"
-                end_user_cache_obj: LiteLLM_EndUserTable = cache.get_cache(
+                end_user_cache_obj: Optional[LiteLLM_EndUserTable] = cache.get_cache(  # type: ignore
                     key=cache_key
                 )
                 if end_user_cache_obj is None and self.prisma_client is not None:

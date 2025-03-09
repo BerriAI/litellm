@@ -1,5 +1,5 @@
 # used by CI/CD testing
-openai==1.34.0
+openai==1.54.0 
 python-dotenv
 tiktoken
 importlib_metadata
@@ -9,3 +9,5 @@ anthropic
 orjson==3.9.15
 pydantic==2.7.1
 google-cloud-aiplatform==1.43.0
+fastapi-sso==0.10.0
+uvloop==0.21.0

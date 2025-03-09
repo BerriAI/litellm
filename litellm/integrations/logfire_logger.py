@@ -27,7 +27,7 @@ class LogfireLogger:
     # Class variables or attributes
     def __init__(self):
         try:
-            verbose_logger.debug(f"in init logfire logger")
+            verbose_logger.debug("in init logfire logger")
             import logfire
 
             # only setting up logfire if we are sending to logfire
@@ -116,7 +116,7 @@ class LogfireLogger:
             id = response_obj.get("id", str(uuid.uuid4()))
             try:
                 response_time = (end_time - start_time).total_seconds()
-            except:
+            except Exception:
                 response_time = None
 
             # Clean Metadata before logging - never log raw metadata

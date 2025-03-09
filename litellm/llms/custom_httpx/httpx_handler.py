@@ -1,14 +1,16 @@
-from typing import Optional
+from typing import Optional, Union
+
 import httpx
 
 try:
     from litellm._version import version
-except:
+except Exception:
     version = "0.0.0"
 
 headers = {
     "User-Agent": f"litellm/{version}",
 }
+
 
 class HTTPHandler:
     def __init__(self, concurrent_limit=1000):
@@ -34,13 +36,13 @@ class HTTPHandler:
     async def post(
         self,
         url: str,
-        data: Optional[dict] = None,
+        data: Optional[Union[dict, str]] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
     ):
         try:
             response = await self.client.post(
-                url, data=data, params=params, headers=headers
+                url, data=data, params=params, headers=headers  # type: ignore
             )
             return response
         except Exception as e:

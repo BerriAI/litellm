@@ -6,11 +6,12 @@ from datetime import datetime, timedelta
 from typing import Literal, Optional, Union
 
 import fastapi
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
+    AlertType,
     CallInfo,
     ProxyErrorTypes,
     ProxyException,
@@ -50,9 +51,8 @@ async def test_endpoint(request: Request):
     "/health/services",
     tags=["health"],
     dependencies=[Depends(user_api_key_auth)],
-    include_in_schema=False,
 )
-async def health_services_endpoint(
+async def health_services_endpoint(  # noqa: PLR0915
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     service: Union[
         Literal[
@@ -63,14 +63,19 @@ async def health_services_endpoint(
             "webhook",
             "email",
             "braintrust",
+            "datadog",
         ],
         str,
     ] = fastapi.Query(description="Specify the service being hit."),
 ):
     """
-    Hidden endpoint.
+    Use this admin-only endpoint to check if the service is healthy.
 
-    Used by the UI to let user check if slack alerting is working as expected.
+    Example:
+    ```
+    curl -L -X GET 'http://0.0.0.0:4000/health/services?service=datadog' \
+    -H 'Authorization: Bearer sk-1234'
+    ```
     """
     try:
         from litellm.proxy.proxy_server import (
@@ -83,6 +88,7 @@ async def health_services_endpoint(
             raise HTTPException(
                 status_code=400, detail={"error": "Service must be specified."}
             )
+
         if service not in [
             "slack_budget_alerts",
             "email",
@@ -94,6 +100,7 @@ async def health_services_endpoint(
             "otel",
             "custom_callback_api",
             "langsmith",
+            "datadog",
         ]:
             raise HTTPException(
                 status_code=400,
@@ -117,9 +124,21 @@ async def health_services_endpoint(
                 "status": "success",
                 "message": "Mock LLM request made - check {}.".format(service),
             }
+        elif service == "datadog":
+            from litellm.integrations.datadog.datadog import DataDogLogger
 
-        if service == "langfuse":
-            from litellm.integrations.langfuse import LangFuseLogger
+            datadog_logger = DataDogLogger()
+            response = await datadog_logger.async_health_check()
+            return {
+                "status": response["status"],
+                "message": (
+                    response["error_message"]
+                    if response["status"] == "unhealthy"
+                    else "Datadog is healthy"
+                ),
+            }
+        elif service == "langfuse":
+            from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
             langfuse_logger = LangFuseLogger()
             langfuse_logger.Langfuse.auth_check()
@@ -159,13 +178,6 @@ async def health_services_endpoint(
                     for (
                         alert_type
                     ) in proxy_logging_obj.slack_alerting_instance.alert_to_webhook_url:
-                        """
-                        "llm_exceptions",
-                        "llm_too_slow",
-                        "llm_requests_hanging",
-                        "budget_alerts",
-                        "db_exceptions",
-                        """
                         # only test alert if it's in active alert types
                         if (
                             proxy_logging_obj.slack_alerting_instance.alert_types
@@ -176,22 +188,22 @@ async def health_services_endpoint(
                             continue
 
                         test_message = "default test message"
-                        if alert_type == "llm_exceptions":
-                            test_message = f"LLM Exception test alert"
-                        elif alert_type == "llm_too_slow":
-                            test_message = f"LLM Too Slow test alert"
-                        elif alert_type == "llm_requests_hanging":
-                            test_message = f"LLM Requests Hanging test alert"
-                        elif alert_type == "budget_alerts":
-                            test_message = f"Budget Alert test alert"
-                        elif alert_type == "db_exceptions":
-                            test_message = f"DB Exception test alert"
-                        elif alert_type == "outage_alerts":
-                            test_message = f"Outage Alert Exception test alert"
-                        elif alert_type == "daily_reports":
-                            test_message = f"Daily Reports test alert"
+                        if alert_type == AlertType.llm_exceptions:
+                            test_message = "LLM Exception test alert"
+                        elif alert_type == AlertType.llm_too_slow:
+                            test_message = "LLM Too Slow test alert"
+                        elif alert_type == AlertType.llm_requests_hanging:
+                            test_message = "LLM Requests Hanging test alert"
+                        elif alert_type == AlertType.budget_alerts:
+                            test_message = "Budget Alert test alert"
+                        elif alert_type == AlertType.db_exceptions:
+                            test_message = "DB Exception test alert"
+                        elif alert_type == AlertType.outage_alerts:
+                            test_message = "Outage Alert Exception test alert"
+                        elif alert_type == AlertType.daily_reports:
+                            test_message = "Daily Reports test alert"
                         else:
-                            test_message = f"Budget Alert test alert"
+                            test_message = "Budget Alert test alert"
 
                         await proxy_logging_obj.alerting_handler(
                             message=test_message, level="Low", alert_type=alert_type
@@ -200,7 +212,7 @@ async def health_services_endpoint(
                     await proxy_logging_obj.alerting_handler(
                         message="This is a test slack alert message",
                         level="Low",
-                        alert_type="budget_alerts",
+                        alert_type=AlertType.budget_alerts,
                     )
 
                 if prisma_client is not None:
@@ -328,9 +340,9 @@ async def health_endpoint(
         _llm_model_list = copy.deepcopy(llm_model_list)
         ### FILTER MODELS FOR ONLY THOSE USER HAS ACCESS TO ###
         if len(user_api_key_dict.models) > 0:
-            allowed_model_names = user_api_key_dict.models
+            pass
         else:
-            allowed_model_names = []  #
+            pass  #
         if use_background_health_checks:
             return health_check_results
         else:
@@ -379,14 +391,40 @@ async def _db_health_readiness_check():
 
 
 @router.get(
+    "/settings",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@router.get(
     "/active/callbacks",
     tags=["health"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def active_callbacks():
     """
-    Returns a list of active callbacks on litellm.callbacks, litellm.input_callback, litellm.failure_callback, litellm.success_callback
+    Returns a list of litellm level settings
+
+    This is useful for debugging and ensuring the proxy server is configured correctly.
+
+    Response schema:
+    ```
+    {
+        "alerting": _alerting,
+        "litellm.callbacks": litellm_callbacks,
+        "litellm.input_callback": litellm_input_callbacks,
+        "litellm.failure_callback": litellm_failure_callbacks,
+        "litellm.success_callback": litellm_success_callbacks,
+        "litellm._async_success_callback": litellm_async_success_callbacks,
+        "litellm._async_failure_callback": litellm_async_failure_callbacks,
+        "litellm._async_input_callback": litellm_async_input_callbacks,
+        "all_litellm_callbacks": all_litellm_callbacks,
+        "num_callbacks": len(all_litellm_callbacks),
+        "num_alerting": _num_alerting,
+        "litellm.request_timeout": litellm.request_timeout,
+    }
+    ```
     """
+
     from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
 
     _alerting = str(general_settings.get("alerting"))
@@ -427,6 +465,7 @@ async def active_callbacks():
         "all_litellm_callbacks": all_litellm_callbacks,
         "num_callbacks": len(all_litellm_callbacks),
         "num_alerting": _num_alerting,
+        "litellm.request_timeout": litellm.request_timeout,
     }
 
 
@@ -452,7 +491,7 @@ async def health_readiness():
     """
     Unprotected endpoint for checking if worker can receive requests
     """
-    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, version
+    from litellm.proxy.proxy_server import prisma_client, version
 
     try:
         # get success callback
@@ -471,7 +510,7 @@ async def health_readiness():
         # check Cache
         cache_type = None
         if litellm.cache is not None:
-            from litellm.caching import RedisSemanticCache
+            from litellm.caching.caching import RedisSemanticCache
 
             cache_type = litellm.cache.type
 

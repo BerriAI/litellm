@@ -1,0 +1,17 @@
+model_list:
+ - model_name: gpt-4
+   litellm_params:
+     model: openai/fake
+     api_key: fake-key
+     api_base: https://exampleopenaiendpoint-production.up.railway.app/
+     tags: ["teamA"]
+   model_info:
+     id: "team-a-model"
+
+litellm_settings:
+  cache: true
+  callbacks: ["prometheus"]
+
+router_settings:
+  enable_tag_filtering: True # 👈 Key Change
+

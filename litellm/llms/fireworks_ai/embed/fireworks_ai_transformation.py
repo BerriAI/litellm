@@ -3,9 +3,6 @@ This is OpenAI compatible - no transformation is applied
 
 """
 
-import types
-from typing import Literal, Optional, Union
-
 import litellm
 
 

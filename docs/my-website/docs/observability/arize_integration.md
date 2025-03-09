@@ -19,6 +19,7 @@ Make an account on [Arize AI](https://app.arize.com/auth/login)
 ## Quick Start
 Use just 2 lines of code, to instantly log your responses **across all providers** with arize
 
+You can also use the instrumentor option instead of the callback, which you can find [here](https://docs.arize.com/arize/llm-tracing/tracing-integrations-auto/litellm).
 
 ```python
 litellm.callbacks = ["arize"]
@@ -28,7 +29,7 @@ import litellm
 import os
 
 os.environ["ARIZE_SPACE_KEY"] = ""
-os.environ["ARIZE_API_KEY"] = "" # defaults to litellm-completion
+os.environ["ARIZE_API_KEY"] = ""
 
 # LLM API Keys
 os.environ['OPENAI_API_KEY']=""
@@ -62,7 +63,8 @@ litellm_settings:
 environment_variables:
     ARIZE_SPACE_KEY: "d0*****"
     ARIZE_API_KEY: "141a****"
-    ARIZE_ENDPOINT: "https://otlp.arize.com/v1" # OPTIONAL - your custom arize api endpoint
+    ARIZE_ENDPOINT: "https://otlp.arize.com/v1" # OPTIONAL - your custom arize GRPC api endpoint
+    ARIZE_HTTP_ENDPOINT: "https://otlp.arize.com/v1" # OPTIONAL - your custom arize HTTP api endpoint. Set either this or ARIZE_ENDPOINT
 ```
 
 ## Support & Talk to Founders

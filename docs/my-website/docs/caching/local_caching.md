@@ -13,7 +13,7 @@ Keys in the cache are `model`, the following example will lead to a cache hit
 ```python
 import litellm
 from litellm import completion
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 litellm.cache = Cache()
 
 # Make completion calls
@@ -35,7 +35,7 @@ response2 = completion(
 Add custom key-value pairs to your cache. 
 
 ```python 
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 cache = Cache()
 
 cache.add_cache(cache_key="test-key", result="1234")
@@ -50,7 +50,7 @@ LiteLLM can cache your streamed responses for you
 ```python
 import litellm
 from litellm import completion
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 litellm.cache = Cache()
 
 # Make completion calls
@@ -77,7 +77,7 @@ Keys in the cache are `model`, the following example will lead to a cache hit
 import time
 import litellm
 from litellm import embedding
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 litellm.cache = Cache()
 
 start_time = time.time()

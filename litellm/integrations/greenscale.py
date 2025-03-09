@@ -1,7 +1,8 @@
-import requests  # type: ignore
 import json
 import traceback
 from datetime import datetime, timezone
+
+import litellm
 
 
 class GreenscaleLogger:
@@ -29,7 +30,7 @@ class GreenscaleLogger:
                 "%Y-%m-%dT%H:%M:%SZ"
             )
 
-            if type(end_time) == datetime and type(start_time) == datetime:
+            if type(end_time) is datetime and type(start_time) is datetime:
                 data["invocationLatency"] = int(
                     (end_time - start_time).total_seconds() * 1000
                 )
@@ -50,7 +51,10 @@ class GreenscaleLogger:
 
             data["tags"] = tags
 
-            response = requests.post(
+            if self.greenscale_logging_url is None:
+                raise Exception("Greenscale Logger Error - No logging URL found")
+
+            response = litellm.module_level_client.post(
                 self.greenscale_logging_url,
                 headers=self.headers,
                 data=json.dumps(data, default=str),

@@ -67,7 +67,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 
-## Advanced - pass Project ID 
+## Advanced - pass Project ID or name
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -79,7 +79,10 @@ response = litellm.completion(
     {"role": "user", "content": "Hi 👋 - i'm openai"}
   ], 
   metadata={
-    "project_id": "my-special-project" 
+    "project_id": "1234",
+    # passing project_name will try to find a project with that name, or create one if it doesn't exist
+    # if both project_id and project_name are passed, project_id will be used
+    # "project_name": "my-special-project" 
   }
 )
 ```

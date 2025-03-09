@@ -1,0 +1,127 @@
+model_list:
+- litellm_params:
+    api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
+    api_key: os.environ/AZURE_EUROPE_API_KEY
+    model: azure/gpt-35-turbo
+  model_name: azure-model
+- litellm_params:
+    api_base: https://my-endpoint-canada-berri992.openai.azure.com
+    api_key: os.environ/AZURE_CANADA_API_KEY
+    model: azure/gpt-35-turbo
+  model_name: azure-model
+- litellm_params:
+    api_base: https://gateway.ai.cloudflare.com/v1/0399b10e77ac6668c80404a5ff49eb37/litellm-test/azure-openai/openai-gpt-4-test-v-1
+    api_key: os.environ/AZURE_API_KEY
+    model: azure/chatgpt-v-2
+  model_name: azure-cloudflare-model
+- litellm_params:
+    api_base: https://openai-france-1234.openai.azure.com
+    api_key: os.environ/AZURE_FRANCE_API_KEY
+    model: azure/gpt-turbo
+  model_name: azure-model
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+  model_name: test_openai_models
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+    id: 56f1bd94-3b54-4b67-9ea2-7c70e9a3a709
+  model_name: test_openai_models
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+    id: 4d1ee26c-abca-450c-8744-8e87fd6755e9
+  model_name: test_openai_models
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+    id: 00e19c0f-b63d-42bb-88e9-016fb0c60764
+  model_name: test_openai_models
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+    id: 79fc75bf-8e1b-47d5-8d24-9365a854af03
+  model_name: test_openai_models
+- litellm_params:
+    api_base: os.environ/AZURE_API_BASE
+    api_key: os.environ/AZURE_API_KEY
+    api_version: 2023-07-01-preview
+    model: azure/azure-embedding-model
+  model_info:
+    mode: embedding
+  model_name: azure-embedding-model
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+    id: 55848c55-4162-40f9-a6e2-9a722b9ef404
+  model_name: test_openai_models
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+    id: 34339b1e-e030-4bcc-a531-c48559f10ce4
+  model_name: test_openai_models
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+    id: f6f74e14-ac64-4403-9365-319e584dcdc5
+  model_name: test_openai_models
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+    id: 9b1ef341-322c-410a-8992-903987fef439
+  model_name: test_openai_models
+- litellm_params:
+    model: dall-e-3
+  model_info:
+    mode: image_generation
+  model_name: dall-e-3
+- litellm_params:
+    api_base: os.environ/AZURE_SWEDEN_API_BASE
+    api_key: os.environ/AZURE_SWEDEN_API_KEY
+    api_version: 2023-12-01-preview
+    model: azure/dall-e-3-test
+  model_info:
+    mode: image_generation
+  model_name: dall-e-3
+- litellm_params:
+    api_base: os.environ/AZURE_API_BASE
+    api_key: os.environ/AZURE_API_KEY
+    api_version: 2023-06-01-preview
+    model: azure/
+  model_info:
+    mode: image_generation
+  model_name: dall-e-2
+- litellm_params:
+    api_base: os.environ/AZURE_API_BASE
+    api_key: os.environ/AZURE_API_KEY
+    api_version: 2023-07-01-preview
+    model: azure/azure-embedding-model
+  model_info:
+    base_model: text-embedding-ada-002
+    mode: embedding
+  model_name: text-embedding-ada-002
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+    id: 34cb2419-7c63-44ae-a189-53f1d1ce5953
+  model_name: test_openai_models
+- litellm_params:
+    model: amazon.titan-embed-text-v1
+  model_name: amazon-embeddings
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+    id: 753dca9a-898d-4ff7-9961-5acf7cdf38cf
+  model_name: test_openai_models
