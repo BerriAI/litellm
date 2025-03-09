@@ -213,7 +213,7 @@ class SagemakerLLM(BaseAWSLLM):
                 sync_response = sync_handler.post(
                     url=prepared_request.url,
                     headers=prepared_request.headers,  # type: ignore
-                    json=data,
+                    data=json.dumps(data),
                     stream=stream,
                 )
 
@@ -308,7 +308,7 @@ class SagemakerLLM(BaseAWSLLM):
                 sync_response = sync_handler.post(
                     url=prepared_request.url,
                     headers=prepared_request.headers,  # type: ignore
-                    json=_data,
+                    data=json.dumps(_data),
                     timeout=timeout,
                 )
 
@@ -368,7 +368,7 @@ class SagemakerLLM(BaseAWSLLM):
             response = await client.post(
                 api_base,
                 headers=headers,
-                json=data,
+                data=json.dumps(data),
                 stream=True,
             )
 
@@ -522,7 +522,7 @@ class SagemakerLLM(BaseAWSLLM):
                 response = await async_handler.post(
                     url=prepared_request.url,
                     headers=prepared_request.headers,  # type: ignore
-                    json=data,
+                    data=json.dumps(data),
                     timeout=timeout,
                 )
 
