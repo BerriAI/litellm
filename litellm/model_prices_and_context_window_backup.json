@@ -2771,7 +2771,7 @@
         "cache_creation_input_token_cost": 0.0000003,
         "cache_read_input_token_cost": 0.00000003,
         "litellm_provider": "anthropic",
-        "mode": ["chat", "anthropic_messages"],
+        "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 264,
