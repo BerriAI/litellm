@@ -187,7 +187,7 @@ def ollama_pt(
             final_prompt_value="### Response:",
             messages=messages,
         )
-    elif "llava" in model:
+    else:
         prompt = ""
         images = []
         for message in messages:
@@ -204,12 +204,6 @@ def ollama_pt(
                                 element["image_url"]["url"]
                             )
                             images.append(base64_image)
-        return {"prompt": prompt, "images": images}
-    else:
-        prompt = ""
-        for message in messages:
-            role = message["role"]
-            content = message.get("content", "")
 
             if "tool_calls" in message:
                 tool_calls = []
@@ -232,8 +226,7 @@ def ollama_pt(
             elif "tool_call_id" in message:
                 prompt += f"### User:\n{message['content']}\n\n"
 
-            elif content:
-                prompt += f"### {role.capitalize()}:\n{content}\n\n"
+        return {"prompt": prompt, "images": images}
 
     return prompt
 

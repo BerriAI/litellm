@@ -86,7 +86,7 @@ def test_ollama_vision_model():
     with patch.object(client, "post") as mock_post:
         try:
             litellm.completion(
-                model="ollama_chat/llama3.2-vision:11b",
+                model="ollama/llama3.2-vision:11b",
                 messages=[
                     {
                         "role": "user",
@@ -110,7 +110,7 @@ def test_ollama_vision_model():
         print(mock_post.call_args.kwargs)
 
         json_data = json.loads(mock_post.call_args.kwargs["data"])
-        assert json_data["model"] == "ollama/llama3.2-vision:11b"
+        assert json_data["model"] == "llama3.2-vision:11b"
         assert "images" in json_data
         assert "prompt" in json_data
 
