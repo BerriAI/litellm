@@ -151,6 +151,30 @@ async def test_anthropic_messages_streaming_with_bad_request():
 
 
 @pytest.mark.asyncio
+async def test_anthropic_messages_streaming_with_unsupported_model():
+    """
+    Test the anthropic_messages with streaming request
+    """
+    try:
+        response = await anthropic_messages(
+            messages=["hi"],
+            api_key="hi",
+            model="gpt-4o",
+            max_tokens=100,
+            stream=True,
+        )
+        print(response)
+        pytest.fail("Expected BadRequestError but no exception was raised")
+
+    except litellm.BadRequestError as e:
+        print("got exception", e)
+        print("vars", vars(e))
+        assert e.status_code == 400
+    except Exception as e:
+        pytest.fail(f"Expected BadRequestError but got {type(e).__name__}: {e}")
+
+
+@pytest.mark.asyncio
 async def test_anthropic_messages_router_streaming_with_bad_request():
     """
     Test the anthropic_messages with streaming request

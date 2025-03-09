@@ -6,7 +6,7 @@
 """
 
 import json
-from typing import Any, AsyncIterator, Dict, Optional, Union, cast
+from typing import Any, AsyncIterator, Dict, Literal, Optional, Union, cast
 
 import httpx
 
@@ -25,6 +25,11 @@ from litellm.utils import ProviderConfigManager, client
 
 
 class AnthropicMessagesHandler:
+    """
+    List of litellm providers that support Anthropic Messages
+    """
+
+    supported_messages_endpoint_providers: Literal["anthropic"] = "anthropic"
 
     @staticmethod
     async def _handle_anthropic_streaming(
@@ -58,6 +63,21 @@ class AnthropicMessagesHandler:
             url_route="/v1/messages",
         )
 
+    @staticmethod
+    def _supported_providers_check(custom_llm_provider: str, model: str):
+        """
+        Raises an exception if the `custom_llm_provider` + `model` is not supported for Anthropic Messages
+        """
+        if (
+            custom_llm_provider
+            not in AnthropicMessagesHandler.supported_messages_endpoint_providers
+        ):
+            raise litellm.BadRequestError(
+                model=model,
+                llm_provider=custom_llm_provider,
+                message=f"model={model}, custom_llm_provider={custom_llm_provider} not supported for Anthropic /v1/messages endpoint",
+            )
+
 
 @client
 async def anthropic_messages(
@@ -81,6 +101,9 @@ async def anthropic_messages(
             api_base=optional_params.api_base,
             api_key=optional_params.api_key,
         )
+    )
+    AnthropicMessagesHandler._supported_providers_check(
+        model=model, custom_llm_provider=_custom_llm_provider
     )
     anthropic_messages_provider_config: Optional[BaseAnthropicMessagesConfig] = (
         ProviderConfigManager.get_provider_anthropic_messages_config(
