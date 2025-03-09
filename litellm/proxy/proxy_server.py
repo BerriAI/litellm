@@ -179,7 +179,6 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 from litellm.proxy.hooks.prompt_injection_detection import (
     _OPTIONAL_PromptInjectionDetection,
 )
-from litellm.proxy.hooks.proxy_failure_handler import _PROXY_failure_handler
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
@@ -940,15 +939,6 @@ def cost_tracking():
     global prisma_client
     if prisma_client is not None:
         litellm.logging_callback_manager.add_litellm_callback(_ProxyDBLogger())
-
-
-def error_tracking():
-    global prisma_client
-    if prisma_client is not None:
-        if isinstance(litellm.failure_callback, list):
-            verbose_proxy_logger.debug("setting litellm failure callback to track cost")
-            if (_PROXY_failure_handler) not in litellm.failure_callback:  # type: ignore
-                litellm.logging_callback_manager.add_litellm_failure_callback(_PROXY_failure_handler)  # type: ignore
 
 
 def _set_spend_logs_payload(
@@ -3149,9 +3139,6 @@ class ProxyStartupEvent:
         """Initialize logging and alerting on startup"""
         ## COST TRACKING ##
         cost_tracking()
-
-        ## Error Tracking ##
-        error_tracking()
 
         proxy_logging_obj.startup_event(
             llm_router=llm_router, redis_usage_cache=redis_usage_cache
