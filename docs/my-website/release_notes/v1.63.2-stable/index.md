@@ -23,7 +23,7 @@ This release is primarily focused on:
 - UI improvements (Error logs now shown on UI)
 
 
-::: info
+:::info
 
 This release will be live on 03/09/2025
 
