@@ -75,7 +75,7 @@ class AnthropicMessagesHandler:
             raise litellm.BadRequestError(
                 model=model,
                 llm_provider=custom_llm_provider,
-                message=f"model={model}, custom_llm_provider={custom_llm_provider} not supported for Anthropic /v1/messages endpoint",
+                message=f"model={model}, custom_llm_provider={custom_llm_provider} not supported for Anthropic /v1/messages endpoint. Only {AnthropicMessagesHandler.supported_messages_endpoint_providers} are supported. Mode information here https://docs.litellm.ai/docs/anthropic_unified",
             )
 
 

@@ -151,7 +151,10 @@ async def test_anthropic_messages_streaming_with_bad_request():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_streaming_with_unsupported_model():
+@pytest.mark.parametrize(
+    "unsupported_model", ["gpt-4o", "gpt-3.5-turbo", "llama-3", "groq/llama-3"]
+)
+async def test_anthropic_messages_streaming_with_unsupported_model(unsupported_model):
     """
     Test that BadRequestError is raised when sending an unsupported model to anthropic messages
     """
@@ -159,7 +162,7 @@ async def test_anthropic_messages_streaming_with_unsupported_model():
         response = await anthropic_messages(
             messages=["hi"],
             api_key="hi",
-            model="gpt-4o",
+            model=unsupported_model,
             max_tokens=100,
             stream=True,
         )
