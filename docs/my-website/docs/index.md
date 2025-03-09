@@ -89,7 +89,21 @@ response = completion(
 ```
 
 </TabItem>
+<TabItem value="xai" label="xAI">
 
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["XAI_API_KEY"] = "your-api-key"
+
+response = completion(
+  model="xai/grok-2-latest",
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+</TabItem>
 <TabItem value="vertex" label="VertexAI">
 
 ```python
@@ -102,6 +116,24 @@ os.environ["VERTEX_LOCATION"] = "us-central1"
 
 response = completion(
   model="vertex_ai/gemini-1.5-pro",
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+
+</TabItem>
+
+<TabItem value="nvidia" label="NVIDIA">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["NVIDIA_NIM_API_KEY"] = "nvidia_api_key"
+os.environ["NVIDIA_NIM_API_BASE"] = "nvidia_nim_endpoint_url"
+
+response = completion(
+  model="nvidia_nim/<model_name>",
   messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
@@ -254,7 +286,22 @@ response = completion(
 ```
 
 </TabItem>
+<TabItem value="xai" label="xAI">
 
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["XAI_API_KEY"] = "your-api-key"
+
+response = completion(
+  model="xai/grok-2-latest",
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
+  stream=True,
+)
+```
+</TabItem>
 <TabItem value="vertex" label="VertexAI">
 
 ```python
@@ -272,6 +319,24 @@ response = completion(
 )
 ```
 
+</TabItem>
+
+<TabItem value="nvidia" label="NVIDIA">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["NVIDIA_NIM_API_KEY"] = "nvidia_api_key"
+os.environ["NVIDIA_NIM_API_BASE"] = "nvidia_nim_endpoint_url"
+
+response = completion(
+  model="nvidia_nim/<model_name>",
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+  stream=True,
+)
+```
 </TabItem>
 
 <TabItem value="hugging" label="HuggingFace">

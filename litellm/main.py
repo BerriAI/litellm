@@ -50,6 +50,7 @@ from litellm import (  # type: ignore
     get_litellm_params,
     get_optional_params,
 )
+from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_for_health_check
 from litellm.litellm_core_utils.health_check_utils import (
@@ -67,6 +68,8 @@ from litellm.litellm_core_utils.mock_functions import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
+from litellm.llms.base_llm.chat.transformation import BaseConfig
+from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.realtime_api.main import _realtime_health_check
 from litellm.secret_managers.main import get_secret_str
@@ -75,6 +78,7 @@ from litellm.utils import (
     CustomStreamWrapper,
     ProviderConfigManager,
     Usage,
+    add_openai_metadata,
     async_mock_completion_streaming_obj,
     convert_to_model_response_object,
     create_pretrained_tokenizer,
@@ -90,7 +94,7 @@ from litellm.utils import (
     read_config_args,
     supports_httpx_timeout,
     token_counter,
-    validate_chat_completion_messages,
+    validate_and_fix_openai_messages,
     validate_chat_completion_tool_choice,
 )
 
@@ -114,7 +118,7 @@ from .llms import baseten, maritalk, ollama_chat
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
-from .llms.azure.chat.o1_handler import AzureOpenAIO1ChatCompletion
+from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
 from .llms.azure.completion.handler import AzureTextCompletion
 from .llms.azure_ai.embed import AzureAIEmbedding
 from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
@@ -162,6 +166,7 @@ from .llms.vertex_ai.vertex_model_garden.main import VertexAIModelGardenModels
 from .llms.vllm.completion import handler as vllm_handler
 from .llms.watsonx.chat.handler import WatsonXChatHandler
 from .llms.watsonx.common_utils import IBMWatsonXMixin
+from .types.llms.anthropic import AnthropicThinkingParam
 from .types.llms.openai import (
     ChatCompletionAssistantMessage,
     ChatCompletionAudioParam,
@@ -212,7 +217,6 @@ azure_audio_transcriptions = AzureAudioTranscription()
 huggingface = Huggingface()
 predibase_chat_completions = PredibaseChatCompletion()
 codestral_text_completions = CodestralTextCompletion()
-bedrock_chat_completion = BedrockLLM()
 bedrock_converse_chat_completion = BedrockConverseLLM()
 bedrock_embedding = BedrockEmbedding()
 bedrock_image_generation = BedrockImageGeneration()
@@ -330,6 +334,7 @@ async def acompletion(
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
     deployment_id=None,
+    reasoning_effort: Optional[Literal["low", "medium", "high"]] = None,
     # set api_base, api_version, api_key
     base_url: Optional[str] = None,
     api_version: Optional[str] = None,
@@ -337,6 +342,7 @@ async def acompletion(
     model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
     extra_headers: Optional[dict] = None,
     # Optional liteLLM function params
+    thinking: Optional[AnthropicThinkingParam] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -424,8 +430,10 @@ async def acompletion(
         "api_version": api_version,
         "api_key": api_key,
         "model_list": model_list,
+        "reasoning_effort": reasoning_effort,
         "extra_headers": extra_headers,
         "acompletion": True,  # assuming this is a required parameter
+        "thinking": thinking,
     }
     if custom_llm_provider is None:
         _, custom_llm_provider, _, _ = get_llm_provider(
@@ -776,6 +784,7 @@ def completion(  # type: ignore # noqa: PLR0915
     logit_bias: Optional[dict] = None,
     user: Optional[str] = None,
     # openai v1.0+ new params
+    reasoning_effort: Optional[Literal["low", "medium", "high"]] = None,
     response_format: Optional[Union[dict, Type[BaseModel]]] = None,
     seed: Optional[int] = None,
     tools: Optional[List] = None,
@@ -794,6 +803,7 @@ def completion(  # type: ignore # noqa: PLR0915
     api_key: Optional[str] = None,
     model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
     # Optional liteLLM function params
+    thinking: Optional[AnthropicThinkingParam] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -845,7 +855,7 @@ def completion(  # type: ignore # noqa: PLR0915
     if model is None:
         raise ValueError("model param not passed in.")
     # validate messages
-    messages = validate_chat_completion_messages(messages=messages)
+    messages = validate_and_fix_openai_messages(messages=messages)
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
     ######### unpacking kwargs #####################
@@ -1045,6 +1055,19 @@ def completion(  # type: ignore # noqa: PLR0915
             if eos_token:
                 custom_prompt_dict[model]["eos_token"] = eos_token
 
+        provider_config: Optional[BaseConfig] = None
+        if custom_llm_provider is not None and custom_llm_provider in [
+            provider.value for provider in LlmProviders
+        ]:
+            provider_config = ProviderConfigManager.get_provider_chat_config(
+                model=model, provider=LlmProviders(custom_llm_provider)
+            )
+
+        if provider_config is not None:
+            messages = provider_config.translate_developer_role_to_system_role(
+                messages=messages
+            )
+
         if (
             supports_system_message is not None
             and isinstance(supports_system_message, bool)
@@ -1086,6 +1109,8 @@ def completion(  # type: ignore # noqa: PLR0915
             api_version=api_version,
             parallel_tool_calls=parallel_tool_calls,
             messages=messages,
+            reasoning_effort=reasoning_effort,
+            thinking=thinking,
             **non_default_params,
         )
 
@@ -1134,6 +1159,9 @@ def completion(  # type: ignore # noqa: PLR0915
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
             ssl_verify=ssl_verify,
+            merge_reasoning_content_in_choices=kwargs.get(
+                "merge_reasoning_content_in_choices", None
+            ),
         )
         logging.update_environment_variables(
             model=model,
@@ -1195,12 +1223,19 @@ def completion(  # type: ignore # noqa: PLR0915
                 "azure_ad_token", None
             ) or get_secret("AZURE_AD_TOKEN")
 
+            azure_ad_token_provider = litellm_params.get(
+                "azure_ad_token_provider", None
+            )
+
             headers = headers or litellm.headers
 
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
+            if max_retries is not None:
+                optional_params["max_retries"] = max_retries
 
-            if litellm.AzureOpenAIO1Config().is_o1_model(model=model):
+            if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
+
                 ## LOAD CONFIG - if set
                 config = litellm.AzureOpenAIO1Config.get_config()
                 for k, v in config.items():
@@ -1249,6 +1284,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     api_type=api_type,
                     dynamic_params=dynamic_params,
                     azure_ad_token=azure_ad_token,
+                    azure_ad_token_provider=azure_ad_token_provider,
                     model_response=model_response,
                     print_verbose=print_verbose,
                     optional_params=optional_params,
@@ -1294,6 +1330,10 @@ def completion(  # type: ignore # noqa: PLR0915
                 "azure_ad_token", None
             ) or get_secret("AZURE_AD_TOKEN")
 
+            azure_ad_token_provider = litellm_params.get(
+                "azure_ad_token_provider", None
+            )
+
             headers = headers or litellm.headers
 
             if extra_headers is not None:
@@ -1317,6 +1357,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_version=api_version,
                 api_type=api_type,
                 azure_ad_token=azure_ad_token,
+                azure_ad_token_provider=azure_ad_token_provider,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 optional_params=optional_params,
@@ -1340,6 +1381,36 @@ def completion(  # type: ignore # noqa: PLR0915
                         "api_base": api_base,
                     },
                 )
+        elif custom_llm_provider == "deepseek":
+            ## COMPLETION CALL
+            try:
+                response = base_llm_http_handler.completion(
+                    model=model,
+                    messages=messages,
+                    headers=headers,
+                    model_response=model_response,
+                    api_key=api_key,
+                    api_base=api_base,
+                    acompletion=acompletion,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    timeout=timeout,  # type: ignore
+                    client=client,
+                    custom_llm_provider=custom_llm_provider,
+                    encoding=encoding,
+                    stream=stream,
+                )
+            except Exception as e:
+                ## LOGGING - log the original exception returned
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=str(e),
+                    additional_args={"headers": headers},
+                )
+                raise e
+
         elif custom_llm_provider == "azure_ai":
             api_base = (
                 api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
@@ -1577,11 +1648,11 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "custom_openai"
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
+            or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "nvidia"
             or custom_llm_provider == "cerebras"
             or custom_llm_provider == "sambanova"
             or custom_llm_provider == "volcengine"
-            or custom_llm_provider == "deepseek"
             or custom_llm_provider == "anyscale"
             or custom_llm_provider == "mistral"
             or custom_llm_provider == "openai"
@@ -1616,6 +1687,11 @@ def completion(  # type: ignore # noqa: PLR0915
 
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
+
+            if (
+                litellm.enable_preview_features and metadata is not None
+            ):  # [PREVIEW] allow metadata to be passed to OPENAI
+                optional_params["metadata"] = add_openai_metadata(metadata)
 
             ## LOAD CONFIG - if set
             config = litellm.OpenAIConfig.get_config()
@@ -2199,7 +2275,7 @@ def completion(  # type: ignore # noqa: PLR0915
             data = {"model": model, "messages": messages, **optional_params}
 
             ## COMPLETION CALL
-            response = openai_chat_completions.completion(
+            response = openai_like_chat_completion.completion(
                 model=model,
                 messages=messages,
                 headers=headers,
@@ -2214,6 +2290,8 @@ def completion(  # type: ignore # noqa: PLR0915
                 acompletion=acompletion,
                 timeout=timeout,  # type: ignore
                 custom_llm_provider="openrouter",
+                custom_prompt_dict=custom_prompt_dict,
+                encoding=encoding,
             )
             ## LOGGING
             logging.post_call(
@@ -2506,6 +2584,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 print_verbose=print_verbose,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                timeout=timeout,
                 custom_prompt_dict=custom_prompt_dict,
                 logger_fn=logger_fn,
                 encoding=encoding,
@@ -2560,18 +2639,14 @@ def completion(  # type: ignore # noqa: PLR0915
                         aws_bedrock_client.meta.region_name
                     )
 
-            base_model = litellm.AmazonConverseConfig()._get_base_model(model)
-
-            if base_model in litellm.bedrock_converse_models or model.startswith(
-                "converse/"
-            ):
+            bedrock_route = BedrockModelInfo.get_bedrock_route(model)
+            if bedrock_route == "converse":
                 model = model.replace("converse/", "")
                 response = bedrock_converse_chat_completion.completion(
                     model=model,
                     messages=messages,
                     custom_prompt_dict=custom_prompt_dict,
                     model_response=model_response,
-                    print_verbose=print_verbose,
                     optional_params=optional_params,
                     litellm_params=litellm_params,  # type: ignore
                     logger_fn=logger_fn,
@@ -2583,36 +2658,43 @@ def completion(  # type: ignore # noqa: PLR0915
                     client=client,
                     api_base=api_base,
                 )
-            else:
-                model = model.replace("invoke/", "")
-                response = bedrock_chat_completion.completion(
+            elif bedrock_route == "converse_like":
+                model = model.replace("converse_like/", "")
+                response = base_llm_http_handler.completion(
                     model=model,
+                    stream=stream,
                     messages=messages,
-                    custom_prompt_dict=custom_prompt_dict,
+                    acompletion=acompletion,
+                    api_base=api_base,
                     model_response=model_response,
-                    print_verbose=print_verbose,
                     optional_params=optional_params,
                     litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    encoding=encoding,
-                    logging_obj=logging,
-                    extra_headers=extra_headers,
+                    custom_llm_provider="bedrock",
                     timeout=timeout,
-                    acompletion=acompletion,
+                    headers=headers,
+                    encoding=encoding,
+                    api_key=api_key,
+                    logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
                     client=client,
+                )
+            else:
+                response = base_llm_http_handler.completion(
+                    model=model,
+                    stream=stream,
+                    messages=messages,
+                    acompletion=acompletion,
                     api_base=api_base,
+                    model_response=model_response,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    custom_llm_provider="bedrock",
+                    timeout=timeout,
+                    headers=headers,
+                    encoding=encoding,
+                    api_key=api_key,
+                    logging_obj=logging,
+                    client=client,
                 )
-
-            if optional_params.get("stream", False):
-                ## LOGGING
-                logging.post_call(
-                    input=messages,
-                    api_key=None,
-                    original_response=response,
-                )
-
-            ## RESPONSE OBJECT
-            response = response
         elif custom_llm_provider == "watsonx":
             response = watsonx_chat_completion.completion(
                 model=model,
@@ -2964,8 +3046,8 @@ def completion(  # type: ignore # noqa: PLR0915
                     custom_handler = item["custom_handler"]
 
             if custom_handler is None:
-                raise ValueError(
-                    f"Unable to map your input to a model. Check your input - {args}"
+                raise LiteLLMUnknownProvider(
+                    model=model, custom_llm_provider=custom_llm_provider
                 )
 
             ## ROUTE LLM CALL ##
@@ -3003,12 +3085,13 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
 
         else:
-            raise ValueError(
-                f"Unable to map your input to a model. Check your input - {args}"
+            raise LiteLLMUnknownProvider(
+                model=model, custom_llm_provider=custom_llm_provider
             )
         return response
     except Exception as e:
         ## Map to OpenAI Exception
+        print(e, model, custom_llm_provider)
         raise exception_type(
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -3191,16 +3274,10 @@ def embedding(  # noqa: PLR0915
     """
     azure = kwargs.get("azure", None)
     client = kwargs.pop("client", None)
-    rpm = kwargs.pop("rpm", None)
-    tpm = kwargs.pop("tpm", None)
     max_retries = kwargs.get("max_retries", None)
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-    cooldown_time = kwargs.get("cooldown_time", None)
     mock_response: Optional[List[float]] = kwargs.get("mock_response", None)  # type: ignore
-    max_parallel_requests = kwargs.pop("max_parallel_requests", None)
-    model_info = kwargs.get("model_info", None)
-    metadata = kwargs.get("metadata", None)
-    proxy_server_request = kwargs.get("proxy_server_request", None)
+    azure_ad_token_provider = kwargs.pop("azure_ad_token_provider", None)
     aembedding = kwargs.get("aembedding", None)
     extra_headers = kwargs.get("extra_headers", None)
     headers = kwargs.get("headers", None)
@@ -3293,7 +3370,6 @@ def embedding(  # noqa: PLR0915
 
         if azure is True or custom_llm_provider == "azure":
             # azure configs
-            api_type = get_secret_str("AZURE_API_TYPE") or "azure"
 
             api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
 
@@ -3328,6 +3404,7 @@ def embedding(  # noqa: PLR0915
                 api_key=api_key,
                 api_version=api_version,
                 azure_ad_token=azure_ad_token,
+                azure_ad_token_provider=azure_ad_token_provider,
                 logging_obj=logging,
                 timeout=timeout,
                 model_response=EmbeddingResponse(),
@@ -3341,7 +3418,9 @@ def embedding(  # noqa: PLR0915
             model in litellm.open_ai_embedding_models
             or custom_llm_provider == "openai"
             or custom_llm_provider == "together_ai"
+            or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "nvidia"
+            or custom_llm_provider == "litellm_proxy"
         ):
             api_base = (
                 api_base
@@ -3365,7 +3444,6 @@ def embedding(  # noqa: PLR0915
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
 
-            api_type = "openai"
             api_version = None
 
             ## EMBEDDING CALL
@@ -3419,7 +3497,8 @@ def embedding(  # noqa: PLR0915
             # set API KEY
             if api_key is None:
                 api_key = (
-                    litellm.api_key
+                    api_key
+                    or litellm.api_key
                     or litellm.openai_like_key
                     or get_secret_str("OPENAI_LIKE_API_KEY")
                 )
@@ -3776,14 +3855,16 @@ def embedding(  # noqa: PLR0915
                 aembedding=aembedding,
             )
         else:
-            args = locals()
-            raise ValueError(f"No valid embedding model args passed in - {args}")
+            raise LiteLLMUnknownProvider(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
         if response is not None and hasattr(response, "_hidden_params"):
             response._hidden_params["custom_llm_provider"] = custom_llm_provider
 
         if response is None:
-            args = locals()
-            raise ValueError(f"No valid embedding model args passed in - {args}")
+            raise LiteLLMUnknownProvider(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
         return response
     except Exception as e:
         ## LOGGING
@@ -3837,6 +3918,7 @@ async def atext_completion(
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "groq"
+            or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "nvidia"
             or custom_llm_provider == "cerebras"
             or custom_llm_provider == "sambanova"
@@ -3872,6 +3954,7 @@ async def atext_completion(
                 ),
                 model=model,
                 custom_llm_provider=custom_llm_provider,
+                stream_options=kwargs.get("stream_options"),
             )
         else:
             ## OpenAI / Azure Text Completion Returns here
@@ -4403,6 +4486,7 @@ def image_generation(  # noqa: PLR0915
         logger_fn = kwargs.get("logger_fn", None)
         mock_response: Optional[str] = kwargs.get("mock_response", None)  # type: ignore
         proxy_server_request = kwargs.get("proxy_server_request", None)
+        azure_ad_token_provider = kwargs.get("azure_ad_token_provider", None)
         model_info = kwargs.get("model_info", None)
         metadata = kwargs.get("metadata", {})
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
@@ -4444,6 +4528,7 @@ def image_generation(  # noqa: PLR0915
         non_default_params = {
             k: v for k, v in kwargs.items() if k not in default_params
         }  # model-specific params - pass them straight to the model/provider
+
         optional_params = get_optional_params_image_gen(
             model=model,
             n=n,
@@ -4455,6 +4540,7 @@ def image_generation(  # noqa: PLR0915
             custom_llm_provider=custom_llm_provider,
             **non_default_params,
         )
+
         logging: Logging = litellm_logging_obj
         logging.update_environment_variables(
             model=model,
@@ -4516,6 +4602,8 @@ def image_generation(  # noqa: PLR0915
                 timeout=timeout,
                 api_key=api_key,
                 api_base=api_base,
+                azure_ad_token=azure_ad_token,
+                azure_ad_token_provider=azure_ad_token_provider,
                 logging_obj=litellm_logging_obj,
                 optional_params=optional_params,
                 model_response=model_response,
@@ -4524,7 +4612,10 @@ def image_generation(  # noqa: PLR0915
                 client=client,
                 headers=headers,
             )
-        elif custom_llm_provider == "openai":
+        elif (
+            custom_llm_provider == "openai"
+            or custom_llm_provider in litellm.openai_compatible_providers
+        ):
             model_response = openai_chat_completions.image_generation(
                 model=model,
                 prompt=prompt,
@@ -4548,6 +4639,7 @@ def image_generation(  # noqa: PLR0915
                 optional_params=optional_params,
                 model_response=model_response,
                 aimg_generation=aimg_generation,
+                client=client,
             )
         elif custom_llm_provider == "vertex_ai":
             vertex_ai_project = (
@@ -4589,8 +4681,8 @@ def image_generation(  # noqa: PLR0915
                     custom_handler = item["custom_handler"]
 
             if custom_handler is None:
-                raise ValueError(
-                    f"Unable to map your input to a model. Check your input - {args}"
+                raise LiteLLMUnknownProvider(
+                    model=model, custom_llm_provider=custom_llm_provider
                 )
 
             ## ROUTE LLM CALL ##
@@ -4970,8 +5062,7 @@ def transcription(
         )
     elif (
         custom_llm_provider == "openai"
-        or custom_llm_provider == "groq"
-        or custom_llm_provider == "fireworks_ai"
+        or custom_llm_provider in litellm.openai_compatible_providers
     ):
         api_base = (
             api_base
@@ -5129,7 +5220,10 @@ def speech(
         custom_llm_provider=custom_llm_provider,
     )
     response: Optional[HttpxBinaryResponseContent] = None
-    if custom_llm_provider == "openai":
+    if (
+        custom_llm_provider == "openai"
+        or custom_llm_provider in litellm.openai_compatible_providers
+    ):
         if voice is None or not (isinstance(voice, str)):
             raise litellm.BadRequestError(
                 message="'voice' is required to be passed as a string for OpenAI TTS",
@@ -5205,6 +5299,7 @@ def speech(
         ) or get_secret(
             "AZURE_AD_TOKEN"
         )
+        azure_ad_token_provider = kwargs.get("azure_ad_token_provider", None)
 
         if extra_headers:
             optional_params["extra_headers"] = extra_headers
@@ -5218,6 +5313,7 @@ def speech(
             api_base=api_base,
             api_version=api_version,
             azure_ad_token=azure_ad_token,
+            azure_ad_token_provider=azure_ad_token_provider,
             organization=organization,
             max_retries=max_retries,
             timeout=timeout,

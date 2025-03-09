@@ -22,7 +22,7 @@ class NvidiaConfig(OpenAIGPTConfig):
     """
     Reference: https://docs.api.nvidia.com/nim/reference/databricks-dbrx-instruct-infer
 
-    The class `NvidiaConfig` provides configuration for the Nvidia NIM's Chat Completions API interface. Below are the parameters:
+    The class `NvidiaNimConfig` provides configuration for the Nvidia NIM's Chat Completions API interface. Below are the parameters:
     """
 
     temperature: Optional[int] = None

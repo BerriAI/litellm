@@ -2,7 +2,17 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 # AWS Bedrock
-ALL Bedrock models (Anthropic, Meta, Mistral, Amazon, etc.) are Supported
+ALL Bedrock models (Anthropic, Meta, Deepseek, Mistral, Amazon, etc.) are Supported
+
+| Property | Details |
+|-------|-------|
+| Description | Amazon Bedrock is a fully managed service that offers a choice of high-performing foundation models (FMs). |
+| Provider Route on LiteLLM | `bedrock/`, [`bedrock/converse/`](#set-converse--invoke-route), [`bedrock/invoke/`](#set-invoke-route), [`bedrock/converse_like/`](#calling-via-internal-proxy), [`bedrock/llama/`](#deepseek-not-r1), [`bedrock/deepseek_r1/`](#deepseek-r1) |
+| Provider Doc | [Amazon Bedrock ↗](https://docs.aws.amazon.com/bedrock/latest/userguide/what-is-bedrock.html) |
+| Supported OpenAI Endpoints | `/chat/completions`, `/completions`, `/embeddings`, `/images/generations` |
+| Rerank Endpoint | `/rerank` |
+| Pass-through Endpoint | [Supported](../pass_through/bedrock.md) |
+
 
 LiteLLM requires `boto3` to be installed on your system for Bedrock requests
 ```shell
@@ -364,6 +374,121 @@ resp = litellm.completion(
     ],
 )
 print(f"\nResponse: {resp}")
+```
+
+
+## Usage - 'thinking' / 'reasoning content'
+
+This is currently only supported for Anthropic's Claude 3.7 Sonnet + Deepseek R1.
+
+Works on v1.61.20+.
+
+Returns 2 new fields in `message` and `delta` object:
+- `reasoning_content` - string - The reasoning content of the response
+- `thinking_blocks` - list of objects (Anthropic only) - The thinking blocks of the response
+
+Each object has the following fields:
+- `type` - Literal["thinking"] - The type of thinking block
+- `thinking` - string - The thinking of the response. Also returned in `reasoning_content`
+- `signature` - string - A base64 encoded string, returned by Anthropic.
+
+The `signature` is required by Anthropic on subsequent calls, if 'thinking' content is passed in (only required to use `thinking` with tool calling). [Learn more](https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking#understanding-thinking-blocks)
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+# set env
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+
+resp = completion(
+    model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    thinking={"type": "enabled", "budget_tokens": 1024},
+)
+
+print(resp)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: bedrock-claude-3-7
+    litellm_params:
+      model: bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0
+      thinking: {"type": "enabled", "budget_tokens": 1024} # 👈 EITHER HERE OR ON REQUEST
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "bedrock-claude-3-7",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "thinking": {"type": "enabled", "budget_tokens": 1024} # 👈 EITHER HERE OR ON CONFIG.YAML
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+
+**Expected Response**
+
+Same as [Anthropic API response](../providers/anthropic#usage---thinking--reasoning_content).
+
+```python
+{
+    "id": "chatcmpl-c661dfd7-7530-49c9-b0cc-d5018ba4727d",
+    "created": 1740640366,
+    "model": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    "object": "chat.completion",
+    "system_fingerprint": null,
+    "choices": [
+        {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+                "content": "The capital of France is Paris. It's not only the capital city but also the largest city in France, serving as the country's major cultural, economic, and political center.",
+                "role": "assistant",
+                "tool_calls": null,
+                "function_call": null,
+                "reasoning_content": "The capital of France is Paris. This is a straightforward factual question.",
+                "thinking_blocks": [
+                    {
+                        "type": "thinking",
+                        "thinking": "The capital of France is Paris. This is a straightforward factual question.",
+                        "signature": "EqoBCkgIARABGAIiQL2UoU0b1OHYi+yCHpBY7U6FQW8/FcoLewocJQPa2HnmLM+NECy50y44F/kD4SULFXi57buI9fAvyBwtyjlOiO0SDE3+r3spdg6PLOo9PBoMma2ku5OTAoR46j9VIjDRlvNmBvff7YW4WI9oU8XagaOBSxLPxElrhyuxppEn7m6bfT40dqBSTDrfiw4FYB4qEPETTI6TA6wtjGAAqmFqKTo="
+                    }
+                ]
+            }
+        }
+    ],
+    "usage": {
+        "completion_tokens": 64,
+        "prompt_tokens": 42,
+        "total_tokens": 106,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+    }
+}
 ```
 
 
@@ -792,6 +917,16 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 LiteLLM supports Document Understanding for Bedrock models - [AWS Bedrock Docs](https://docs.aws.amazon.com/nova/latest/userguide/modalities-document.html).
 
+:::info
+
+LiteLLM supports ALL Bedrock document types - 
+
+E.g.: "pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"
+
+You can also pass these as either `image_url` or `base64`
+
+:::
+
 ### url 
 
 <Tabs>
@@ -1191,11 +1326,9 @@ response = completion(
             aws_bedrock_client=bedrock,
 )
 ```
-## Calling via Proxy
+## Calling via Internal Proxy
 
-Here's how to call bedrock via your internal proxy.
-
-This example uses Cloudflare's AI Gateway.
+Use the `bedrock/converse_like/model` endpoint to call bedrock converse model via your internal proxy.
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -1204,10 +1337,11 @@ This example uses Cloudflare's AI Gateway.
 from litellm import completion
 
 response = completion(
-    model="anthropic.claude-3-sonnet-20240229-v1:0",
+    model="bedrock/converse_like/some-model",
     messages=[{"role": "user", "content": "What's AWS?"}],
-    extra_headers={"test": "hello world", "Authorization": "my-test-key"},
-    api_base="https://gateway.ai.cloudflare.com/v1/<some-id>/test/aws-bedrock/bedrock-runtime/us-east-1",
+    api_key="sk-1234",
+    api_base="https://some-api-url/models",
+    extra_headers={"test": "hello world"},
 )
 ```
 
@@ -1220,8 +1354,8 @@ response = completion(
 model_list:
     - model_name: anthropic-claude
       litellm_params:
-        model: anthropic.claude-3-sonnet-20240229-v1:0
-        api_base: https://gateway.ai.cloudflare.com/v1/<some-id>/test/aws-bedrock/bedrock-runtime/us-east-1
+        model: bedrock/converse_like/some-model
+        api_base: https://some-api-url/models
 ```
 
 2. Start proxy server
@@ -1256,8 +1390,146 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 **Expected Output URL**
 
 ```bash
-https://gateway.ai.cloudflare.com/v1/<some-id>/test/aws-bedrock/bedrock-runtime/us-east-1/model/anthropic.claude-3-sonnet-20240229-v1:0/converse
+https://some-api-url/models
 ```
+
+## Bedrock Imported Models (Deepseek, Deepseek R1)
+
+### Deepseek R1
+
+This is a separate route, as the chat template is different.
+
+| Property | Details |
+|----------|---------|
+| Provider Route | `bedrock/deepseek_r1/{model_arn}` |
+| Provider Documentation | [Bedrock Imported Models](https://docs.aws.amazon.com/bedrock/latest/userguide/model-customization-import-model.html), [Deepseek Bedrock Imported Model](https://aws.amazon.com/blogs/machine-learning/deploy-deepseek-r1-distilled-llama-models-with-amazon-bedrock-custom-model-import/) |
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+response = completion(
+    model="bedrock/deepseek_r1/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n",  # bedrock/deepseek_r1/{your-model-arn}
+    messages=[{"role": "user", "content": "Tell me a joke"}],
+)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="Proxy">
+
+
+**1. Add to config**
+
+```yaml
+model_list:
+    - model_name: DeepSeek-R1-Distill-Llama-70B
+      litellm_params:
+        model: bedrock/deepseek_r1/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n
+
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING at http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Authorization: Bearer sk-1234' \
+      --header 'Content-Type: application/json' \
+      --data '{
+            "model": "DeepSeek-R1-Distill-Llama-70B", # 👈 the 'model_name' in config
+            "messages": [
+                {
+                "role": "user",
+                "content": "what llm are you"
+                }
+            ],
+        }'
+```
+
+</TabItem>
+</Tabs>
+
+
+### Deepseek (not R1)
+
+| Property | Details |
+|----------|---------|
+| Provider Route | `bedrock/llama/{model_arn}` |
+| Provider Documentation | [Bedrock Imported Models](https://docs.aws.amazon.com/bedrock/latest/userguide/model-customization-import-model.html), [Deepseek Bedrock Imported Model](https://aws.amazon.com/blogs/machine-learning/deploy-deepseek-r1-distilled-llama-models-with-amazon-bedrock-custom-model-import/) |
+
+
+
+Use this route to call Bedrock Imported Models that follow the `llama` Invoke Request / Response spec
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+response = completion(
+    model="bedrock/llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n",  # bedrock/llama/{your-model-arn}
+    messages=[{"role": "user", "content": "Tell me a joke"}],
+)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="Proxy">
+
+
+**1. Add to config**
+
+```yaml
+model_list:
+    - model_name: DeepSeek-R1-Distill-Llama-70B
+      litellm_params:
+        model: bedrock/llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n
+
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING at http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Authorization: Bearer sk-1234' \
+      --header 'Content-Type: application/json' \
+      --data '{
+            "model": "DeepSeek-R1-Distill-Llama-70B", # 👈 the 'model_name' in config
+            "messages": [
+                {
+                "role": "user",
+                "content": "what llm are you"
+                }
+            ],
+        }'
+```
+
+</TabItem>
+</Tabs>
+
+
 
 ## Provisioned throughput models
 To use provisioned throughput Bedrock models pass 

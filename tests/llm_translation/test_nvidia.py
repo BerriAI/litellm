@@ -51,12 +51,15 @@ location_tool = {
                 },
             },
         }
+@pytest.fixture(params=["nvidia", "nvidia_nim"])
+def provider(request):
+    return request.param
 
-def test_completion_missing_key():
+def test_completion_missing_key(provider):
     with no_env_var("NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"):
         with pytest.raises(litellm.exceptions.AuthenticationError):
             completion(
-                model="nvidia/meta/llama-3.1-70b-instruct",
+                model=f"{provider}/meta/llama-3.1-70b-instruct",
                 messages=[
                     {
                         "role": "user",
@@ -67,11 +70,11 @@ def test_completion_missing_key():
                 frequency_penalty=0.1,
             )
 
-def test_completion_bogus_key():
+def test_completion_bogus_key(provider):
     with pytest.raises(litellm.exceptions.AuthenticationError):
         completion(
             api_key="bogus-key",
-            model="nvidia/meta/llama-3.1-70b-instruct",
+            model=f"{provider}/meta/llama-3.1-70b-instruct",
             messages=[
                 {
                     "role": "user",
@@ -83,7 +86,7 @@ def test_completion_bogus_key():
         )
 
 @pytest.mark.skipif(not any(key in os.environ for key in ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"]), reason="Either NVIDIA_API_KEY or NVIDIA_NIM_API_KEY environment variable is not set.")
-def test_completion_invalid_model():
+def test_completion_invalid_provider():
     with pytest.raises(litellm.exceptions.BadRequestError) as err_msg:
         completion(
             model="invalid_model",
@@ -100,15 +103,15 @@ def test_completion_invalid_model():
 
 
 @pytest.mark.respx
-def test_completion_nvidia(respx_mock: MockRouter):
+def test_completion_nvidia(respx_mock: MockRouter, provider):
     litellm.set_verbose = True
     mock_response = ModelResponse(
         id="cmpl-mock",
         choices=[Choices(message=Message(content="Mocked response", role="assistant"))],
         created=int(datetime.now().timestamp()),
-        model="nvidia/meta/llama-3.1-70b-instruct"
+        model=f"{provider}/nvidia/meta/llama-3.1-70b-instruct"
     )
-    model_name="nvidia/meta/llama-3.1-70b-instruct"
+    model_name=f"{provider}/meta/llama-3.1-70b-instruct"
 
     mock_request = respx_mock.post(
         "https://integrate.api.nvidia.com/v1/chat/completions"
@@ -152,12 +155,13 @@ def test_completion_nvidia(respx_mock: MockRouter):
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+## ---------------------------------------- Embedding test cases ----------------------------------------
 
 @pytest.mark.respx
-def test_embedding_nvidia(respx_mock: MockRouter):
+def test_embedding_nvidia(respx_mock: MockRouter, provider):
     litellm.set_verbose = True
     mock_response = EmbeddingResponse(
-        model="nvidia/meta/llama-3.1-70b-instruct",
+        model=f"{provider}/meta/llama-3.1-70b-instruct",
         data=[
             {
                 "embedding": [0.1, 0.2, 0.3],
@@ -173,33 +177,32 @@ def test_embedding_nvidia(respx_mock: MockRouter):
     mock_request = respx_mock.post(
         "https://integrate.api.nvidia.com/v1/embeddings"
     ).mock(return_value=httpx.Response(200, json=mock_response.dict()))
-    response = litellm.embedding(
+    _ = litellm.embedding(
         api_key="bogus-key",
-        model="nvidia/nvidia/nv-embedqa-e5-v5",
+        model=f"{provider}/nvidia/nv-embedqa-e5-v5",
         input="What is the meaning of life?",
         input_type="passage",
     )
     assert mock_request.called
     request_body = json.loads(mock_request.calls[0].request.content)
     print("request_body: ", request_body)
-    assert request_body == {
-        "input": "What is the meaning of life?",
-        "model": "nvidia/nv-embedqa-e5-v5",
-        "input_type": "passage",
-    }
+    
+    assert request_body["input"] == "What is the meaning of life?"
+    assert request_body["model"] == "nvidia/nv-embedqa-e5-v5"
+    assert request_body["input_type"] == "passage"
 
 
-## ---------------------------------------- ACompletion test cases ----------------------------------------
+## ---------------------------------------- aCompletion test cases ----------------------------------------
 
 @pytest.mark.asyncio
-async def test_async_completion_missing_key():
+async def test_async_completion_missing_key(provider):
     """
     Test async completion with missing API key raises AuthenticationError
     """
     with no_env_var("NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"):
         with pytest.raises(litellm.exceptions.AuthenticationError):
             await litellm.acompletion(
-                model="nvidia/meta/llama-3.1-70b-instruct",
+                model=f"{provider}/meta/llama-3.1-70b-instruct",
                 messages=[
                     {
                         "role": "user",
@@ -275,14 +278,14 @@ async def test_async_completion_nvidia(respx_mock):
         pytest.fail(f"Async completion test failed: {e}")
 
 @pytest.mark.asyncio
-async def test_async_completion_timeout():
+async def test_async_completion_timeout(provider):
     """
     Test async completion with simulated timeout
     """
     # Mock the acompletion method to raise a timeout
     with pytest.raises(litellm.exceptions.Timeout):
         await litellm.acompletion(
-            model="nvidia/meta/llama-3.1-70b-instruct",
+            model=f"{provider}/meta/llama-3.1-70b-instruct",
             messages=[
                 {
                     "role": "user",
@@ -294,7 +297,7 @@ async def test_async_completion_timeout():
 
 @pytest.mark.asyncio
 @pytest.mark.respx
-async def test_async_completion_with_stream(respx_mock: respx.MockRouter):
+async def test_async_completion_with_stream(respx_mock: respx.MockRouter, provider):
     """
     Test async streaming completion for NVIDIA API
     """
@@ -348,7 +351,7 @@ async def test_async_completion_with_stream(respx_mock: respx.MockRouter):
     try:
         response = await litellm.acompletion(
             api_key="test-async-stream-key",
-            model="nvidia/meta/llama-3.1-70b-instruct",
+            model=f"{provider}/meta/llama-3.1-70b-instruct",
             messages=[
                 {
                     "role": "user",
