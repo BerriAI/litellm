@@ -19,8 +19,8 @@ hide_table_of_contents: false
 These are the changes since `v1.61.20-stable`.
 
 This release is primarily focused on:
-- LLM Translation improvements
-- UI improvements
+- LLM Translation improvements (more `thinking` content improvements)
+- UI improvements (Error logs now shown on UI)
 
 ## Demo Instance
 
