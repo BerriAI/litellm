@@ -156,6 +156,20 @@ class RoutingArgs(enum.Enum):
     ttl = 60  # 1min (RPM/TPM expire key)
 
 
+class CopyOnAccessList(list):
+    """A list wrapper that returns deep copies of elements when accessed."""
+
+    def __getitem__(self, index):
+        """Return a deep copy when an item is accessed by index."""
+        item = super().__getitem__(index)
+        return copy.deepcopy(item)
+
+    def __iter__(self):
+        """Return an iterator that yields deep copies of elements."""
+        for item in super().__iter__():
+            yield copy.deepcopy(item)
+
+
 class Router:
     model_names: List = []
     cache_responses: Optional[bool] = False
@@ -377,6 +391,7 @@ class Router:
         self.provider_default_deployment_ids: List[str] = []
         self.pattern_router = PatternMatchRouter()
 
+        self.model_list: CopyOnAccessList = CopyOnAccessList()
         if model_list is not None:
             model_list = copy.deepcopy(model_list)
             self.set_model_list(model_list)
@@ -384,10 +399,6 @@ class Router:
             for m in model_list:
                 if "model" in m["litellm_params"]:
                     self.deployment_latency_map[m["litellm_params"]["model"]] = 0
-        else:
-            self.model_list: List = (
-                []
-            )  # initialize an empty list - to allow _add_deployment and delete_deployment to work
 
         if allowed_fails is not None:
             self.allowed_fails = allowed_fails
@@ -4262,7 +4273,7 @@ class Router:
 
     def set_model_list(self, model_list: list):
         original_model_list = copy.deepcopy(model_list)
-        self.model_list = []
+        self.model_list = CopyOnAccessList()
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
 
         for model in original_model_list:
