@@ -331,7 +331,7 @@ export function AllKeysTable({
         
         return filteredOrgs.map(org => ({
           label: `${org.organization_id || 'Unknown'} (${org.organization_id})`,
-          value: org.organization_id
+          value: org.organization_id || ''
         }));
       }
     },
