@@ -55,6 +55,13 @@ location_tool = {
 def provider(request):
     return request.param
 
+@pytest.fixture(scope="module")
+def check_nvidia_api_keys():
+    """Fixture to check if NVIDIA API keys are available and skip tests if not."""
+    if not any(key in os.environ for key in ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"]):
+        pytest.skip("Either NVIDIA_API_KEY or NVIDIA_NIM_API_KEY environment variable is not set.")
+
+
 def test_completion_missing_key(provider):
     with no_env_var("NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"):
         with pytest.raises(litellm.exceptions.AuthenticationError):
@@ -85,8 +92,7 @@ def test_completion_bogus_key(provider):
             frequency_penalty=0.1,
         )
 
-@pytest.mark.skipif(not any(key in os.environ for key in ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"]), reason="Either NVIDIA_API_KEY or NVIDIA_NIM_API_KEY environment variable is not set.")
-def test_completion_invalid_provider():
+def test_completion_invalid_provider(check_nvidia_api_keys):
     with pytest.raises(litellm.exceptions.BadRequestError) as err_msg:
         completion(
             model="invalid_model",
@@ -215,8 +221,7 @@ async def test_async_completion_missing_key(provider):
 
 @pytest.mark.asyncio
 @pytest.mark.respx
-@pytest.mark.skipif(not any(key in os.environ for key in ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"]), reason="Either NVIDIA_API_KEY or NVIDIA_NIM_API_KEY environment variable is not set.")
-async def test_async_completion_nvidia(respx_mock):
+async def test_async_completion_nvidia(respx_mock, check_nvidia_api_keys):
     """
     Test successful async completion with NVIDIA API
     """
@@ -375,8 +380,7 @@ async def test_async_completion_with_stream(respx_mock: respx.MockRouter, provid
 
 ## ---------------------------------------- Tool Calling test cases ----------------------------------------
 @pytest.mark.respx
-@pytest.mark.skipif(not any(key in os.environ for key in ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"]), reason="Either NVIDIA_API_KEY or NVIDIA_NIM_API_KEY environment variable is not set.")
-def test_nvidia_tool_use():
+def test_nvidia_tool_use(check_nvidia_api_keys):
     messages = [{"role": "user", "content": "What's the weather like in San Francisco?"}]
     tools = [location_tool]
     model="nvidia/meta/llama-3.1-70b-instruct"
@@ -397,8 +401,7 @@ def test_nvidia_tool_use():
         pass
 
 @pytest.mark.respx
-@pytest.mark.skipif(not any(key in os.environ for key in ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"]), reason="Either NVIDIA_API_KEY or NVIDIA_NIM_API_KEY environment variable is not set.")
-def test_nvidia_tool_use_stream():
+def test_nvidia_tool_use_stream(check_nvidia_api_keys):
     messages = [{"role": "user", "content": "What's the weather like in San Francisco?"}]
     tools = [location_tool]
     model="nvidia/meta/llama-3.1-70b-instruct"
@@ -424,8 +427,7 @@ def test_nvidia_tool_use_stream():
 
 @pytest.mark.asyncio
 @pytest.mark.respx
-@pytest.mark.skipif(not any(key in os.environ for key in ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"]), reason="Either NVIDIA_API_KEY or NVIDIA_NIM_API_KEY environment variable is not set.")
-async def test_async_nvidia_tool_use():
+async def test_async_nvidia_tool_use(check_nvidia_api_keys):
     messages = [{"role": "user", "content": "What's the weather like in San Francisco?"}]
     tools = [location_tool]
     model="nvidia/meta/llama-3.1-70b-instruct"
@@ -447,11 +449,10 @@ async def test_async_nvidia_tool_use():
 
 @pytest.mark.asyncio
 @pytest.mark.respx
-@pytest.mark.skipif(not any(key in os.environ for key in ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"]), reason="Either NVIDIA_API_KEY or NVIDIA_NIM_API_KEY environment variable is not set.")
-async def test_async_nvidia_tool_use_stream():
+async def test_async_nvidia_tool_use_stream(check_nvidia_api_keys):
     messages = [{"role": "user", "content": "What's the weather like in San Francisco?"}]
     tools = [location_tool]
-    model="nvidia/meta/llama-3.1-70b-instruct"
+    model="nvidia/meta/llama-3.3-70b-instruct"
 
     try:
         response = await litellm.acompletion(

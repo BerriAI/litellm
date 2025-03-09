@@ -18,7 +18,7 @@ import os
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.nvidia.statics import determine_model, MODEL_TABLE
 
-class NvidiaConfig(OpenAIGPTConfig):
+class NvidiaNimConfig(OpenAIGPTConfig):
     """
     Reference: https://docs.api.nvidia.com/nim/reference/databricks-dbrx-instruct-infer
 
