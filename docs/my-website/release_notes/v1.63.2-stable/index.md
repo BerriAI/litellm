@@ -58,7 +58,7 @@ Here's a Demo Instance to test changes:
 ## Spend Tracking Improvements
 
 1. Batches API - Fix cost calculation to run on retrieve_batch. [Get Started](https://docs.litellm.ai/docs/batches)
-2. Batches API - Log batch models in spend logs / standard logging payload. [ADD DOCS - Add to standard logging doc](https://docs.litellm.ai/docs/proxy/logging_spec)
+2. Batches API - Log batch models in spend logs / standard logging payload. [Get Started](../../docs/proxy/logging_spec.md#standardlogginghiddenparams)
 
 ## Management Endpoints / UI
 
