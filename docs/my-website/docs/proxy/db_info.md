@@ -56,7 +56,7 @@ You can disable spend_logs and error_logs by setting `disable_spend_logs` and `d
 ```yaml
 general_settings:
   disable_spend_logs: True   # Disable writing spend logs to DB
-  disable_error_logs: True   # Only disable writing error logs to DB, regular spend logs still written unless `disable_spend_logs: True`
+  disable_error_logs: True   # Only disable writing error logs to DB, regular spend logs will still be written unless `disable_spend_logs: True`
 ```
 
 ### What is the impact of disabling these logs?
