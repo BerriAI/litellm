@@ -1281,7 +1281,8 @@ response = completion(
 
 ### Passing extra headers + Custom API Endpoints
 
-This can be used to override existing headers (e.g. `Authorization`) when calling custom api endpoints
+This can be used to override existing headers (e.g. `Authorization`) when calling custom api endpoints.
+The `Authorization` header can be overridden by directly providing the bearer token in the environment variable `AWS_EXTRA_HEADERS_AUTH_BEARER_TOKEN`.
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
