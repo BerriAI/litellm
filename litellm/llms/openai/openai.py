@@ -826,6 +826,7 @@ class OpenAIChatCompletion(BaseLLM):
                     raise e
                 # e.message
             except Exception as e:
+                exception_type = getattr(e, "type", None)
                 exception_response = getattr(e, "response", None)
                 status_code = getattr(e, "status_code", 500)
                 error_headers = getattr(e, "headers", None)
@@ -834,7 +835,10 @@ class OpenAIChatCompletion(BaseLLM):
                 message = getattr(e, "message", str(e))
 
                 raise OpenAIError(
-                    status_code=status_code, message=message, headers=error_headers
+                    status_code=status_code,
+                    message=message,
+                    headers=error_headers,
+                    type=exception_type,
                 )
 
     def streaming(
@@ -2635,7 +2639,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: Optional[str],
         instructions: Optional[str],
-        metadata: Optional[object],
+        metadata: Optional[Dict[str, str]],
         model: Optional[str],
         stream: Optional[bool],
         tools: Optional[Iterable[AssistantToolParam]],
@@ -2726,7 +2730,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: Optional[str],
         instructions: Optional[str],
-        metadata: Optional[object],
+        metadata: Optional[Dict[str, str]],
         model: Optional[str],
         stream: Optional[bool],
         tools: Optional[Iterable[AssistantToolParam]],
@@ -2748,7 +2752,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: Optional[str],
         instructions: Optional[str],
-        metadata: Optional[object],
+        metadata: Optional[Dict[str, str]],
         model: Optional[str],
         stream: Optional[bool],
         tools: Optional[Iterable[AssistantToolParam]],
@@ -2771,7 +2775,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: Optional[str],
         instructions: Optional[str],
-        metadata: Optional[object],
+        metadata: Optional[Dict[str, str]],
         model: Optional[str],
         stream: Optional[bool],
         tools: Optional[Iterable[AssistantToolParam]],
