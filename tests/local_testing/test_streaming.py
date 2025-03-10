@@ -4069,7 +4069,8 @@ def test_mock_response_iterator_tool_use():
     "model",
     [
         # "deepseek/deepseek-reasoner",
-        "anthropic/claude-3-7-sonnet-20250219",
+        # "anthropic/claude-3-7-sonnet-20250219",
+        "openrouter/anthropic/claude-3.7-sonnet",
     ],
 )
 def test_reasoning_content_completion(model):
@@ -4080,7 +4081,9 @@ def test_reasoning_content_completion(model):
             model=model,
             messages=[{"role": "user", "content": "Tell me a joke."}],
             stream=True,
-            thinking={"type": "enabled", "budget_tokens": 1024},
+            # thinking={"type": "enabled", "budget_tokens": 1024},
+            reasoning={"effort": "high"},
+            drop_params=True,
         )
 
         reasoning_content_exists = False
