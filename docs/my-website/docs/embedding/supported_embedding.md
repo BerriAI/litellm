@@ -570,3 +570,27 @@ curl -X POST 'http://0.0.0.0:4000/v1/embeddings' \
 ```
 </TabItem>
 </Tabs>
+
+## Nebius AI Studio Embedding Models
+
+### Usage - Embedding
+```python
+from litellm import embedding
+import os
+
+os.environ['NEBIUS_API_KEY'] = ""
+response = embedding(
+    model="nebius/BAAI/bge-en-icl",
+    input=["Good morning from litellm!"],
+)
+print(response)
+```
+
+## Supported Models
+All supported models can be found here: https://studio.nebius.ai/models/embedding
+
+| Model Name               | Function Call                                                   |
+|--------------------------|-----------------------------------------------------------------|
+| BAAI/bge-en-icl | `embedding(model="nebius/BAAI/bge-en-icl", input)`              | 
+| BAAI/bge-multilingual-gemma2 | `embedding(model="nebius/BAAI/bge-multilingual-gemma2", input)` | 
+| intfloat/e5-mistral-7b-instruct | `embedding(model="nebius/intfloat/e5-mistral-7b-instruct", input)`      | 
