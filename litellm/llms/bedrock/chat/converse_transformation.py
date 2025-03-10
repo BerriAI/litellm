@@ -272,7 +272,7 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params["temperature"] = value
             if param == "top_p":
                 optional_params["topP"] = value
-            if param == "tools":
+            if param == "tools" and isinstance(value, list):
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=value
                 )
@@ -598,7 +598,7 @@ class AmazonConverseConfig(BaseConfig):
                 if _text is not None:
                     _thinking_block["thinking"] = _text
                 if _signature is not None:
-                    _thinking_block["signature_delta"] = _signature
+                    _thinking_block["signature"] = _signature
                 thinking_blocks_list.append(_thinking_block)
         return thinking_blocks_list
 

@@ -2,10 +2,10 @@
 
 #                          /v1/batches Endpoints
 
-import asyncio
 
 ######################################################################
-from typing import Dict, Optional
+import asyncio
+from typing import Dict, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 
@@ -199,8 +199,11 @@ async def retrieve_batch(
     ```
     """
     from litellm.proxy.proxy_server import (
+        add_litellm_data_to_request,
+        general_settings,
         get_custom_headers,
         llm_router,
+        proxy_config,
         proxy_logging_obj,
         version,
     )
@@ -212,6 +215,23 @@ async def retrieve_batch(
             batch_id=batch_id,
         )
 
+        data = cast(dict, _retrieve_batch_request)
+
+        # setup logging
+        data["litellm_call_id"] = request.headers.get(
+            "x-litellm-call-id", str(uuid.uuid4())
+        )
+
+        # Include original request and headers in the data
+        data = await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
+        )
+
         if litellm.enable_loadbalancing_on_batch_endpoints is True:
             if llm_router is None:
                 raise HTTPException(
@@ -221,7 +241,7 @@ async def retrieve_batch(
                     },
                 )
 
-            response = await llm_router.aretrieve_batch(**_retrieve_batch_request)  # type: ignore
+            response = await llm_router.aretrieve_batch(**data)  # type: ignore
         else:
             custom_llm_provider = (
                 provider
@@ -229,7 +249,7 @@ async def retrieve_batch(
                 or "openai"
             )
             response = await litellm.aretrieve_batch(
-                custom_llm_provider=custom_llm_provider, **_retrieve_batch_request  # type: ignore
+                custom_llm_provider=custom_llm_provider, **data  # type: ignore
             )
 
         ### ALERTING ###
