@@ -20,12 +20,6 @@ import Image from '@theme/IdealImage';
 # v1.61.20-stable
 
 
-:::info
-
-`v1.61.20-stable` will be live on 2025-02-04. 
-
-:::
-
 These are the changes since `v1.61.13-stable`.
 
 This release is primarily focused on:

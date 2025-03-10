@@ -195,7 +195,8 @@ class InitalizeOpenAISDKClient:
                 organization = get_secret_str(organization_env_name)
                 litellm_params["organization"] = organization
             azure_ad_token_provider: Optional[Callable[[], str]] = None
-            if litellm_params.get("tenant_id"):
+            # If we have api_key, then we have higher priority
+            if not api_key and litellm_params.get("tenant_id"):
                 verbose_router_logger.debug(
                     "Using Azure AD Token Provider for Azure Auth"
                 )
@@ -232,7 +233,7 @@ class InitalizeOpenAISDKClient:
                     if azure_ad_token.startswith("oidc/"):
                         azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
                 elif (
-                    azure_ad_token_provider is None
+                     not api_key and azure_ad_token_provider is None
                     and litellm.enable_azure_ad_token_refresh is True
                 ):
                     try:
