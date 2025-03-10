@@ -3,27 +3,6 @@ import TabItem from '@theme/TabItem';
 
 
 # Snowflake
-LiteLLM supports all Snowflake models.
-- `snowflake/deepseek-r1`
-- `snowflake/claude-3-5-sonnet`
-- `snowflake/llama3.2-1b`
-- `snowflake/llama3.2-3b`
-- `snowflake/llama3.1-8b`
-- `snowflake/llama3.1-70b`
-- `snowflake/llama3.3-70b`
-- `snowflake/snowflake-llama-3.3-70b`
-- `snowflake/llama3.1-405b`
-- `snowflake/snowflake-llama-3.1-405b`
-- `snowflake/snowflake-arctic`
-- `snowflake/reka-core`
-- `snowflake/reka-flash`
-- `snowflake/mistral-large2`
-- `snowflake/mixtral-8x7b`
-- `snowflake/mistral-7b`
-- `snowflake/jamba-instruct`
-- `snowflake/jamba-1.5-mini`
-- `snowflake/jamba-1.5-large`
-- `snowflake/gemma-7b`
 
 Currently, Snowflake's REST API does not have an endpoint for `snowflake-arctic-embed` embedding models. If you want to use these embedding models with Litellm, you can call them through our Hugging Face provider. 
 
