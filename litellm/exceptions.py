@@ -135,6 +135,7 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
         super().__init__(
             self.message, response=response, body=None
         )  # Call the base class constructor with the parameters it needs
+        self.type = "invalid_request_error"
 
     def __str__(self):
         _message = self.message
