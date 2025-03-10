@@ -23,7 +23,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
   console.log(`type of selectedProviderEnum: ${typeof selectedProviderEnum}`);
   return (
     <>
-      {selectedProviderEnum === Providers.OpenAI && (
+      {selectedProviderEnum === Providers.OpenAI || selectedProviderEnum === Providers.OpenAI_Text && (
         <>
           <Form.Item
             label="API Base"
