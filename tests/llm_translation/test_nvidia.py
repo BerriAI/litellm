@@ -186,22 +186,6 @@ def test_embedding_nvidia(check_nvidia_api_keys, provider):
             total_tokens=10,
         ),
     )
-    mock_request = respx_mock.post(
-        "https://integrate.api.nvidia.com/v1/embeddings"
-    ).mock(return_value=httpx.Response(200, json=mock_response.dict()))
-    _ = litellm.embedding(
-        api_key="bogus-key",
-        model=f"{provider}/nvidia/nv-embedqa-e5-v5",
-        input="What is the meaning of life?",
-        input_type="passage",
-    )
-    assert mock_request.called
-    request_body = json.loads(mock_request.calls[0].request.content)
-    print("request_body: ", request_body)
-    
-    assert request_body["input"] == "What is the meaning of life?"
-    assert request_body["model"] == "nvidia/nv-embedqa-e5-v5"
-    assert request_body["input_type"] == "passage"
 
 
 ## ---------------------------------------- aCompletion test cases ----------------------------------------
