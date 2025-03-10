@@ -331,6 +331,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         response=getattr(original_exception, "response", None),
                         litellm_debug_info=extra_information,
+                        body=getattr(original_exception, "body", None),
                     )
                 elif (
                     "Web server is returning an unknown error" in error_str

@@ -732,10 +732,14 @@ class OpenAIChatCompletion(BaseLLM):
             error_headers = getattr(e, "headers", None)
             error_text = getattr(e, "text", str(e))
             error_response = getattr(e, "response", None)
+            error_body = getattr(e, "body", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise OpenAIError(
-                status_code=status_code, message=error_text, headers=error_headers
+                status_code=status_code,
+                message=error_text,
+                headers=error_headers,
+                body=error_body,
             )
 
     async def acompletion(
@@ -977,6 +981,7 @@ class OpenAIChatCompletion(BaseLLM):
                 error_headers = getattr(e, "headers", None)
                 status_code = getattr(e, "status_code", 500)
                 error_response = getattr(e, "response", None)
+                exception_body = getattr(e, "body", None)
                 if error_headers is None and error_response:
                     error_headers = getattr(error_response, "headers", None)
                 if response is not None and hasattr(response, "text"):
@@ -984,6 +989,7 @@ class OpenAIChatCompletion(BaseLLM):
                         status_code=status_code,
                         message=f"{str(e)}\n\nOriginal Response: {response.text}",  # type: ignore
                         headers=error_headers,
+                        body=exception_body,
                     )
                 else:
                     if type(e).__name__ == "ReadTimeout":
@@ -991,16 +997,21 @@ class OpenAIChatCompletion(BaseLLM):
                             status_code=408,
                             message=f"{type(e).__name__}",
                             headers=error_headers,
+                            body=exception_body,
                         )
                     elif hasattr(e, "status_code"):
                         raise OpenAIError(
                             status_code=getattr(e, "status_code", 500),
                             message=str(e),
                             headers=error_headers,
+                            body=exception_body,
                         )
                     else:
                         raise OpenAIError(
-                            status_code=500, message=f"{str(e)}", headers=error_headers
+                            status_code=500,
+                            message=f"{str(e)}",
+                            headers=error_headers,
+                            body=exception_body,
                         )
 
     def get_stream_options(
