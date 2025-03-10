@@ -87,7 +87,8 @@ class BaseLLMRerankTest(ABC):
     @pytest.mark.parametrize("sync_mode", [True, False])
     async def test_basic_rerank(self, sync_mode):
         litellm._turn_on_debug()
-        litellm.model_cost = litellm.get_locally_cached_model_cost_map()
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
         rerank_call_args = self.get_base_rerank_call_args()
         custom_llm_provider = self.get_custom_llm_provider()
         if sync_mode is True:

@@ -1975,7 +1975,8 @@ def test_bedrock_converse_route():
 
 def test_bedrock_mapped_converse_models():
     litellm.set_verbose = True
-    litellm.model_cost = litellm.get_locally_cached_model_cost_map()
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
     litellm.add_known_models()
     litellm.completion(
         model="bedrock/us.amazon.nova-pro-v1:0",
@@ -2107,7 +2108,8 @@ def test_bedrock_supports_tool_call(model, expected_supports_tool_call):
 
 class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
-        litellm.model_cost = litellm.get_locally_cached_model_cost_map()
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
         litellm.add_known_models()
         return {
             "model": "bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
@@ -2135,7 +2137,8 @@ class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
         """
         Test if region models info is correctly used for cost calculation. Using the base model info for cost calculation.
         """
-        litellm.model_cost = litellm.get_locally_cached_model_cost_map()
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
         bedrock_model = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
         litellm.model_cost.pop(bedrock_model, None)
         model = f"bedrock/{bedrock_model}"
@@ -2152,7 +2155,8 @@ class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
 
 class TestBedrockConverseChatNormal(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
-        litellm.model_cost = litellm.get_locally_cached_model_cost_map()
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
         litellm.add_known_models()
         return {
             "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -2321,7 +2325,8 @@ def test_bedrock_nova_topk(top_k_param):
 def test_bedrock_cross_region_inference(monkeypatch):
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    litellm.model_cost = litellm.get_locally_cached_model_cost_map()
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
     litellm.add_known_models()
 
     litellm.set_verbose = True

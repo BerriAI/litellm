@@ -84,7 +84,8 @@ class BaseLLMEmbeddingTest(ABC):
         litellm.set_verbose = True
         from litellm.utils import supports_embedding_image_input
 
-        litellm.model_cost = litellm.get_locally_cached_model_cost_map()
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
 
         base_embedding_call_args = self.get_base_embedding_call_args()
         if not supports_embedding_image_input(base_embedding_call_args["model"], None):

@@ -58,14 +58,16 @@ def test_get_model_info_shows_correct_supports_vision():
 
 
 def test_get_model_info_shows_assistant_prefill():
-    litellm.model_cost = litellm.get_locally_cached_model_cost_map()
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
     info = litellm.get_model_info("deepseek/deepseek-chat")
     print("info", info)
     assert info.get("supports_assistant_prefill") is True
 
 
 def test_get_model_info_shows_supports_prompt_caching():
-    litellm.model_cost = litellm.get_locally_cached_model_cost_map()
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
     info = litellm.get_model_info("deepseek/deepseek-chat")
     print("info", info)
     assert info.get("supports_prompt_caching") is True
@@ -114,7 +116,8 @@ def test_get_model_info_gemini():
     """
     Tests if ALL gemini models have 'tpm' and 'rpm' in the model info
     """
-    litellm.model_cost = litellm.get_locally_cached_model_cost_map()
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model_map = litellm.model_cost
     for model, info in model_map.items():
@@ -124,7 +127,8 @@ def test_get_model_info_gemini():
 
 
 def test_get_model_info_bedrock_region():
-    litellm.model_cost = litellm.get_locally_cached_model_cost_map()
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
     args = {
         "model": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
         "custom_llm_provider": "bedrock",
@@ -208,7 +212,8 @@ def test_model_info_bedrock_converse(monkeypatch):
 
     This ensures they are automatically routed to the converse endpoint.
     """
-    litellm.model_cost = litellm.get_locally_cached_model_cost_map()
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         # Load whitelist models from file
         with open("whitelisted_bedrock_models.txt", "r") as file:
@@ -226,7 +231,8 @@ def test_model_info_bedrock_converse_enforcement(monkeypatch):
     """
     Test the enforcement of the whitelist by adding a fake model and ensuring the test fails.
     """
-    litellm.model_cost = litellm.get_locally_cached_model_cost_map()
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
 
     # Add a fake unwhitelisted model
     litellm.model_cost["fake.bedrock-chat-model"] = {
@@ -317,7 +323,8 @@ def test_get_model_info_bedrock_models():
     """
     from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
-    litellm.model_cost = litellm.get_locally_cached_model_cost_map()
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
 
     for k, v in litellm.model_cost.items():
         if v["litellm_provider"] == "bedrock":
