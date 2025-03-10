@@ -4373,10 +4373,10 @@ class Router:
         if custom_llm_provider not in litellm.provider_list:
             raise Exception(f"Unsupported provider - {custom_llm_provider}")
 
-        # init OpenAI, Azure clients
-        InitalizeOpenAISDKClient.set_client(
-            litellm_router_instance=self, model=deployment.to_json(exclude_none=True)
-        )
+        # # init OpenAI, Azure clients
+        # InitalizeOpenAISDKClient.set_client(
+        #     litellm_router_instance=self, model=deployment.to_json(exclude_none=True)
+        # )
 
         self._initialize_deployment_for_pass_through(
             deployment=deployment,
