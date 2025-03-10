@@ -437,6 +437,7 @@ const sidebars = {
       type: "category",
       label: "Contributing",
       items: [
+        "extras/contributing_code",
         {
           type: "category",
           label: "Adding Providers",
