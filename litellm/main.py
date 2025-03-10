@@ -3906,7 +3906,8 @@ async def atext_completion(
         ):  ## CACHING SCENARIO
             if isinstance(init_response, dict):
                 response = TextCompletionResponse(**init_response)
-            response = init_response
+            else:
+                response = init_response
         elif asyncio.iscoroutine(init_response):
             response = await init_response
         else:
