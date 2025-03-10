@@ -17,12 +17,6 @@ This guide walks you through connecting OpenWeb UI to LiteLLM. Using LiteLLM wit
 
 ## 1. Start LiteLLM & OpenWebUI
 
-Deploy this docker compose to deploy both OpenWebUI and LiteLLM.
-
-```bash
-docker compose up -d
-```
-
 - OpenWebUI starts running on [http://localhost:3000](http://localhost:3000)
 - LiteLLM starts running on [http://localhost:4000](http://localhost:4000)
 
