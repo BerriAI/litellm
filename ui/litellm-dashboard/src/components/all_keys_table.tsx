@@ -328,10 +328,12 @@ export function AllKeysTable({
           org.organization_id?.toLowerCase().includes(searchText.toLowerCase()) ?? false
         );
         
-        return filteredOrgs.map(org => ({
-          label: `${org.organization_id || 'Unknown'} (${org.organization_id})`,
-          value: org.organization_id
-        }));
+        return filteredOrgs
+          .filter(org => org.organization_id !== null && org.organization_id !== undefined)
+          .map(org => ({
+            label: `${org.organization_id || 'Unknown'} (${org.organization_id})`,
+            value: org.organization_id as string
+          }));
       }
     },
   ];
