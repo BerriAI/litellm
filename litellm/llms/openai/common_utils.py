@@ -20,6 +20,7 @@ class OpenAIError(BaseLLMException):
         response: Optional[httpx.Response] = None,
         headers: Optional[Union[dict, httpx.Headers]] = None,
         type: Optional[str] = None,
+        param: Optional[str] = None,
     ):
         self.status_code = status_code
         self.message = message
@@ -41,6 +42,7 @@ class OpenAIError(BaseLLMException):
             request=self.request,
             response=self.response,
             type=type,
+            param=param,
         )
 
 

@@ -827,6 +827,7 @@ class OpenAIChatCompletion(BaseLLM):
                 # e.message
             except Exception as e:
                 exception_type = getattr(e, "type", None)
+                exception_param = getattr(e, "param", None)
                 exception_response = getattr(e, "response", None)
                 status_code = getattr(e, "status_code", 500)
                 error_headers = getattr(e, "headers", None)
@@ -839,6 +840,7 @@ class OpenAIChatCompletion(BaseLLM):
                     message=message,
                     headers=error_headers,
                     type=exception_type,
+                    param=exception_param,
                 )
 
     def streaming(

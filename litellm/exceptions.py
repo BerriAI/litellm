@@ -118,7 +118,9 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
         litellm_debug_info: Optional[str] = None,
         max_retries: Optional[int] = None,
         num_retries: Optional[int] = None,
+        param: Optional[str] = None,
     ):
+
         self.status_code = 400
         self.message = "litellm.BadRequestError: {}".format(message)
         self.model = model
@@ -136,6 +138,7 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
             self.message, response=response, body=None
         )  # Call the base class constructor with the parameters it needs
         self.type = "invalid_request_error"
+        self.param = param
 
     def __str__(self):
         _message = self.message
@@ -801,7 +804,11 @@ class LiteLLMUnknownProvider(BadRequestError):
             model=model, custom_llm_provider=custom_llm_provider
         )
         super().__init__(
-            self.message, model=model, llm_provider=custom_llm_provider, response=None
+            self.message,
+            model=model,
+            llm_provider=custom_llm_provider,
+            response=None,
+            param=None,
         )
 
     def __str__(self):

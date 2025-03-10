@@ -157,7 +157,6 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 exception_type = type(original_exception).__name__
             else:
                 exception_type = ""
-
             ################################################################################
             # Common Extra information needed for all providers
             # We pass num retries, api_base, vertex_deployment etc to the exception here
@@ -331,6 +330,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         response=getattr(original_exception, "response", None),
                         litellm_debug_info=extra_information,
+                        param=getattr(original_exception, "param", None),
                     )
                 elif (
                     "Web server is returning an unknown error" in error_str
@@ -386,6 +386,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             response=getattr(original_exception, "response", None),
                             litellm_debug_info=extra_information,
+                            param=getattr(original_exception, "param", None),
                         )
                     elif original_exception.status_code == 401:
                         exception_mapping_worked = True

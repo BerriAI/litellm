@@ -52,6 +52,7 @@ class BaseLLMException(Exception):
         request: Optional[httpx.Request] = None,
         response: Optional[httpx.Response] = None,
         type: Optional[str] = None,
+        param: Optional[str] = None,
     ):
         self.status_code = status_code
         self.message: str = message
@@ -70,6 +71,7 @@ class BaseLLMException(Exception):
             )
 
         self.type = type
+        self.param = param
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
