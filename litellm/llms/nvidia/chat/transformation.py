@@ -18,7 +18,7 @@ import os
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
-class NvidiaNimConfig(OpenAIGPTConfig):
+class NvidiaConfig(OpenAIGPTConfig):
     """
     Reference: https://docs.api.nvidia.com/nim/reference/databricks-dbrx-instruct-infer
 
@@ -90,6 +90,7 @@ class NvidiaNimConfig(OpenAIGPTConfig):
 
 
         Updated on July 5th, 2024 - based on https://docs.api.nvidia.com/nim/reference
+        ToDo: Update this to use the new Nvidia NIM API
         """
         if model in [
             "google/recurrentgemma-2b",
@@ -123,28 +124,6 @@ class NvidiaNimConfig(OpenAIGPTConfig):
                 "stop",
             ]
         else:
-            # DEFAULT Case - The vast majority of Nvidia NIM Models lie here
-            # "upstage/solar-10.7b-instruct",
-            # "snowflake/arctic",
-            # "seallms/seallm-7b-v2.5",
-            # "nvidia/llama3-chatqa-1.5-8b",
-            # "nvidia/llama3-chatqa-1.5-70b",
-            # "mistralai/mistral-large",
-            # "mistralai/mixtral-8x22b-instruct-v0.1",
-            # "mistralai/mixtral-8x7b-instruct-v0.1",
-            # "mistralai/mistral-7b-instruct-v0.3",
-            # "mistralai/mistral-7b-instruct-v0.2",
-            # "mistralai/codestral-22b-instruct-v0.1",
-            # "microsoft/phi-3-small-8k-instruct",
-            # "microsoft/phi-3-small-128k-instruct",
-            # "microsoft/phi-3-mini-4k-instruct",
-            # "microsoft/phi-3-mini-128k-instruct",
-            # "microsoft/phi-3-medium-4k-instruct",
-            # "microsoft/phi-3-medium-128k-instruct",
-            # "meta/llama3-70b-instruct",
-            # "meta/llama3-8b-instruct",
-            # "meta/llama2-70b",
-            # "meta/codellama-70b",
             return [
                 "stream",
                 "temperature",

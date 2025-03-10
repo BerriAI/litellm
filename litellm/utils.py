@@ -2888,7 +2888,7 @@ def get_optional_params(  # noqa: PLR0915
             and custom_llm_provider != "anyscale"
             and custom_llm_provider != "together_ai"
             and custom_llm_provider != "groq"
-            and custom_llm_provider != "nvidia_nim"
+            and custom_llm_provider != "nvidia"
             and custom_llm_provider != "cerebras"
             and custom_llm_provider != "xai"
             and custom_llm_provider != "ai21_chat"
@@ -3435,7 +3435,7 @@ def get_optional_params(  # noqa: PLR0915
             model=model, custom_llm_provider=custom_llm_provider
         )
         _check_valid_arg(supported_params=supported_params)
-        optional_params = litellm.NvidiaNimConfig().map_openai_params(
+        optional_params = litellm.NvidiaConfig().map_openai_params(
             model=model,
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -6169,7 +6169,7 @@ class ProviderConfigManager:
         ):
             return litellm.MistralConfig()
         elif litellm.LlmProviders.NVIDIA_NIM == provider:
-            return litellm.NvidiaNimConfig()
+            return litellm.NvidiaConfig()
         elif litellm.LlmProviders.CEREBRAS == provider:
             return litellm.CerebrasConfig()
         elif litellm.LlmProviders.VOLCENGINE == provider:
