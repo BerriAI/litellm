@@ -1,12 +1,17 @@
 import moment from "moment";
-import { useQuery, useQueries, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useState, useRef, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
-import { uiSpendLogsCall, uiSpendLogDetailsCall } from "../networking";
+import { uiSpendLogsCall } from "../networking";
 import { DataTable } from "./table";
 import { columns, LogEntry } from "./columns";
-import { RequestViewer } from "./request_viewer";
+import { Row } from "@tanstack/react-table";
 import { prefetchLogDetails } from "./prefetch";
+import { RequestResponsePanel } from "./columns";
+import { ErrorViewer } from './ErrorViewer';
+import { internalUserRoles } from "../../utils/roles";
+import { ConfigInfoMessage } from './ConfigInfoMessage';
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -21,6 +26,11 @@ interface PaginatedResponse {
   page: number;
   page_size: number;
   total_pages: number;
+}
+
+interface PrefetchedLog {
+  messages: any[];
+  response: any;
 }
 
 export default function SpendLogsTable({
@@ -54,6 +64,10 @@ export default function SpendLogsTable({
   const [selectedTeamId, setSelectedTeamId] = useState("");
   const [selectedKeyHash, setSelectedKeyHash] = useState("");
   const [selectedFilter, setSelectedFilter] = useState("Team ID");
+  const [filterByCurrentUser, setFilterByCurrentUser] = useState(
+    userRole && internalUserRoles.includes(userRole)
+  );
+  const [expandedRequestId, setExpandedRequestId] = useState<string | null>(null);
 
   const queryClient = useQueryClient();
 
@@ -85,7 +99,13 @@ export default function SpendLogsTable({
       document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Update the logs query to use the imported prefetchLogDetails
+
+  useEffect(() => {
+    if (userRole && internalUserRoles.includes(userRole)) {
+      setFilterByCurrentUser(true);
+    }
+  }, [userRole]);
+
   const logs = useQuery<PaginatedResponse>({
     queryKey: [
       "logs",
@@ -96,6 +116,7 @@ export default function SpendLogsTable({
       endTime,
       selectedTeamId,
       selectedKeyHash,
+      filterByCurrentUser ? userID : null,
     ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
@@ -109,20 +130,12 @@ export default function SpendLogsTable({
         };
       }
 
-      console.log("Fetching logs with params:", {
-        startTime,
-        endTime,
-        selectedTeamId,
-        selectedKeyHash,
-        currentPage,
-        pageSize
-      });
-
       const formattedStartTime = moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss");
       const formattedEndTime = isCustomDate 
         ? moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss")
         : moment().utc().format("YYYY-MM-DD HH:mm:ss");
 
+      // Get base response from API
       const response = await uiSpendLogsCall(
         accessToken,
         selectedKeyHash || undefined,
@@ -131,13 +144,31 @@ export default function SpendLogsTable({
         formattedStartTime,
         formattedEndTime,
         currentPage,
-        pageSize
+        pageSize,
+        filterByCurrentUser ? userID : undefined
       );
 
-      console.log("Received logs response:", response);
+      // Trigger prefetch for all logs
+      await prefetchLogDetails(
+        response.data,
+        formattedStartTime,
+        accessToken,
+        queryClient
+      );
 
-      // Update prefetchLogDetails call with new parameters
-      prefetchLogDetails(response.data, formattedStartTime, accessToken, queryClient);
+      // Update logs with prefetched data if available
+      response.data = response.data.map((log: LogEntry) => {
+        const prefetchedData = queryClient.getQueryData<PrefetchedLog>(
+          ["logDetails", log.request_id, formattedStartTime]
+        );
+
+        if (prefetchedData?.messages && prefetchedData?.response) {
+          log.messages = prefetchedData.messages;
+          log.response = prefetchedData.response;
+          return log;
+        }
+        return log;
+      });
 
       return response;
     },
@@ -146,49 +177,36 @@ export default function SpendLogsTable({
     refetchIntervalInBackground: true,
   });
 
-  // Move useQueries before the early return
-  const logDetailsQueries = useQueries({
-    queries: logs.data?.data?.map((log) => ({
-      queryKey: ["logDetails", log.request_id, moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss")],
-      queryFn: () => uiSpendLogDetailsCall(accessToken!, log.request_id, moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss")),
-      staleTime: 10 * 60 * 1000,
-      cacheTime: 10 * 60 * 1000,
-      enabled: !!log.request_id,
-    })) || []
-  });
+  // Add this effect to preserve expanded state when data refreshes
+  useEffect(() => {
+    if (logs.data?.data && expandedRequestId) {
+      // Check if the expanded request ID still exists in the new data
+      const stillExists = logs.data.data.some(log => log.request_id === expandedRequestId);
+      if (!stillExists) {
+        // If the request ID no longer exists in the data, clear the expanded state
+        setExpandedRequestId(null);
+      }
+    }
+  }, [logs.data?.data, expandedRequestId]);
 
   if (!accessToken || !token || !userRole || !userID) {
-    console.log("got None values for one of accessToken, token, userRole, userID");
+    console.log(
+      "got None values for one of accessToken, token, userRole, userID",
+    );
     return null;
   }
 
-  // Consolidate log details from queries
-  const logDetails: Record<string, any> = {};
-  logDetailsQueries.forEach((q, index) => {
-    const log = logs.data?.data[index];
-    if (log && q.data) {
-      logDetails[log.request_id] = q.data;
-    }
-  });
-
-  // Modify the filtered data to include log details
   const filteredData =
-    logs.data?.data
-      ?.filter((log) => {
-        const matchesSearch =
-          !searchTerm ||
-          log.request_id.includes(searchTerm) ||
-          log.model.includes(searchTerm) ||
-          (log.user && log.user.includes(searchTerm));
-        
-        return matchesSearch;
-      })
-      .map(log => ({
-        ...log,
-        // Include messages/response from cached details
-        messages: logDetails[log.request_id]?.messages || [],
-        response: logDetails[log.request_id]?.response || {},
-      })) || [];
+    logs.data?.data?.filter((log) => {
+      const matchesSearch =
+        !searchTerm ||
+        log.request_id.includes(searchTerm) ||
+        log.model.includes(searchTerm) ||
+        (log.user && log.user.includes(searchTerm));
+      
+      // No need for additional filtering since we're now handling this in the API call
+      return matchesSearch;
+    }) || [];
 
   // Add this function to handle manual refresh
   const handleRefresh = () => {
@@ -213,6 +231,10 @@ export default function SpendLogsTable({
     if (diffHours <= 24) return 'Last 24 Hours';
     if (diffHours <= 168) return 'Last 7 Days';
     return `${start.format('MMM D')} - ${now.format('MMM D')}`;
+  };
+
+  const handleRowExpand = (requestId: string | null) => {
+    setExpandedRequestId(requestId);
   };
 
   return (
@@ -568,8 +590,239 @@ export default function SpendLogsTable({
           data={filteredData}
           renderSubComponent={RequestViewer}
           getRowCanExpand={() => true}
+          onRowExpand={handleRowExpand}
+          expandedRequestId={expandedRequestId}
         />
       </div>
+    </div>
+  );
+}
+
+function RequestViewer({ row }: { row: Row<LogEntry> }) {
+  // Helper function to clean metadata by removing specific fields
+  const getCleanedMetadata = (metadata: any) => {
+    const cleanedMetadata = {...metadata};
+    if ('proxy_server_request' in cleanedMetadata) {
+      delete cleanedMetadata.proxy_server_request;
+    }
+    return cleanedMetadata;
+  };
+
+  const formatData = (input: any) => {
+    if (typeof input === "string") {
+      try {
+        return JSON.parse(input);
+      } catch {
+        return input;
+      }
+    }
+    return input;
+  };
+
+  // New helper function to get raw request
+  const getRawRequest = () => {
+    // First check if proxy_server_request exists in metadata
+    if (row.original.metadata?.proxy_server_request) {
+      return formatData(row.original.metadata.proxy_server_request);
+    }
+    // Fall back to messages if proxy_server_request is empty
+    return formatData(row.original.messages);
+  };
+
+  // Extract error information from metadata if available
+  const hasError = row.original.metadata?.status === "failure";
+  const errorInfo = hasError ? row.original.metadata?.error_information : null;
+  
+  // Check if request/response data is missing
+  const hasMessages = row.original.messages && 
+    (Array.isArray(row.original.messages) ? row.original.messages.length > 0 : Object.keys(row.original.messages).length > 0);
+  const hasResponse = row.original.response && Object.keys(formatData(row.original.response)).length > 0;
+  const missingData = !hasMessages && !hasResponse;
+  
+  // Format the response with error details if present
+  const formattedResponse = () => {
+    if (hasError && errorInfo) {
+      return {
+        error: {
+          message: errorInfo.error_message || "An error occurred",
+          type: errorInfo.error_class || "error",
+          code: errorInfo.error_code  || "unknown",
+          param: null
+        }
+      };
+    }
+    return formatData(row.original.response);
+  };
+
+  return (
+    <div className="p-6 bg-gray-50 space-y-6">
+      {/* Combined Info Card */}
+      <div className="bg-white rounded-lg shadow">
+        <div className="p-4 border-b">
+          <h3 className="text-lg font-medium">Request Details</h3>
+        </div>
+        <div className="grid grid-cols-2 gap-4 p-4">
+          <div className="space-y-2">
+            <div className="flex">
+              <span className="font-medium w-1/3">Request ID:</span>
+              <span className="font-mono text-sm">{row.original.request_id}</span>
+            </div>
+            <div className="flex">
+              <span className="font-medium w-1/3">Model:</span>
+              <span>{row.original.model}</span>
+            </div>
+            <div className="flex">
+              <span className="font-medium w-1/3">Provider:</span>
+              <span>{row.original.custom_llm_provider || "-"}</span>
+            </div>
+            <div className="flex">
+              <span className="font-medium w-1/3">Start Time:</span>
+              <span>{row.original.startTime}</span>
+            </div>
+            <div className="flex">
+              <span className="font-medium w-1/3">End Time:</span>
+              <span>{row.original.endTime}</span>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="flex">
+              <span className="font-medium w-1/3">Tokens:</span>
+              <span>{row.original.total_tokens} ({row.original.prompt_tokens}+{row.original.completion_tokens})</span>
+            </div>
+            <div className="flex">
+              <span className="font-medium w-1/3">Cost:</span>
+              <span>${Number(row.original.spend || 0).toFixed(6)}</span>
+            </div>
+            <div className="flex">
+              <span className="font-medium w-1/3">Cache Hit:</span>
+              <span>{row.original.cache_hit}</span>
+            </div>
+            {row?.original?.requester_ip_address && (
+              <div className="flex">
+                <span className="font-medium w-1/3">IP Address:</span>
+                <span>{row?.original?.requester_ip_address}</span>
+              </div>
+            )}
+            <div className="flex">
+              <span className="font-medium w-1/3">Status:</span>
+              <span className={`px-2 py-1 rounded-md text-xs font-medium inline-block text-center w-16 ${
+                (row.original.metadata?.status || "Success").toLowerCase() !== "failure"
+                  ? 'bg-green-100 text-green-800' 
+                  : 'bg-red-100 text-red-800'
+              }`}>
+                {(row.original.metadata?.status || "Success").toLowerCase() !== "failure" ? "Success" : "Failure"}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Configuration Info Message - Show when data is missing */}
+      <ConfigInfoMessage show={missingData} />
+
+      {/* Request/Response Panel */}
+      <div className="grid grid-cols-2 gap-4">
+        {/* Request Side */}
+        <div className="bg-white rounded-lg shadow">
+          <div className="flex justify-between items-center p-4 border-b">
+            <h3 className="text-lg font-medium">Request</h3>
+            <button 
+              onClick={() => navigator.clipboard.writeText(JSON.stringify(getRawRequest(), null, 2))}
+              className="p-1 hover:bg-gray-200 rounded"
+              title="Copy request"
+              disabled={!hasMessages}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
+          </div>
+          <div className="p-4 overflow-auto max-h-96">
+            <pre className="text-xs font-mono whitespace-pre-wrap break-all">{JSON.stringify(getRawRequest(), null, 2)}</pre>
+          </div>
+        </div>
+
+        {/* Response Side */}
+        <div className="bg-white rounded-lg shadow">
+          <div className="flex justify-between items-center p-4 border-b">
+            <h3 className="text-lg font-medium">
+              Response
+              {hasError && (
+                <span className="ml-2 text-sm text-red-600">
+                  • HTTP code {errorInfo?.error_code || 400}
+                </span>
+              )}
+            </h3>
+            <button 
+              onClick={() => navigator.clipboard.writeText(JSON.stringify(formattedResponse(), null, 2))}
+              className="p-1 hover:bg-gray-200 rounded"
+              title="Copy response"
+              disabled={!hasResponse}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
+          </div>
+          <div className="p-4 overflow-auto max-h-96 bg-gray-50">
+            {hasResponse ? (
+              <pre className="text-xs font-mono whitespace-pre-wrap break-all">{JSON.stringify(formattedResponse(), null, 2)}</pre>
+            ) : (
+              <div className="text-gray-500 text-sm italic text-center py-4">Response data not available</div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Error Card - Only show for failures */}
+      {hasError && errorInfo && <ErrorViewer errorInfo={errorInfo} />}
+
+      {/* Tags Card - Only show if there are tags */}
+      {row.original.request_tags && Object.keys(row.original.request_tags).length > 0 && (
+        <div className="bg-white rounded-lg shadow">
+          <div className="flex justify-between items-center p-4 border-b">
+            <h3 className="text-lg font-medium">Request Tags</h3>
+          </div>
+          <div className="p-4">
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(row.original.request_tags).map(([key, value]) => (
+                <span key={key} className="px-2 py-1 bg-gray-100 rounded-full text-xs">
+                  {key}: {String(value)}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Metadata Card - Only show if there's metadata */}
+      {row.original.metadata && Object.keys(row.original.metadata).length > 0 && (
+        <div className="bg-white rounded-lg shadow">
+          <div className="flex justify-between items-center p-4 border-b">
+            <h3 className="text-lg font-medium">Metadata</h3>
+            <button 
+              onClick={() => {
+                const cleanedMetadata = getCleanedMetadata(row.original.metadata);
+                navigator.clipboard.writeText(JSON.stringify(cleanedMetadata, null, 2));
+              }}
+              className="p-1 hover:bg-gray-200 rounded"
+              title="Copy metadata"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
+          </div>
+          <div className="p-4 overflow-auto max-h-64">
+            <pre className="text-xs font-mono whitespace-pre-wrap break-all">
+              {JSON.stringify(getCleanedMetadata(row.original.metadata), null, 2)}
+            </pre>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

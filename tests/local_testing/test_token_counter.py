@@ -470,3 +470,62 @@ class TestTokenizerSelection(unittest.TestCase):
         mock_return_huggingface_tokenizer.assert_not_called()
         assert result["type"] == "openai_tokenizer"
         assert result["tokenizer"] == encoding
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-4o",
+        "claude-3-opus-20240229",
+    ],
+)
+@pytest.mark.parametrize(
+    "messages",
+    [
+        [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "These are some sample images from a movie. Based on these images, what do you think the tone of the movie is?",
+                    },
+                    {
+                        "type": "text",
+                        "image_url": {
+                            "url": "https://gratisography.com/wp-content/uploads/2024/11/gratisography-augmented-reality-800x525.jpg",
+                            "detail": "high",
+                        },
+                    },
+                ],
+            }
+        ],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "These are some sample images from a movie. Based on these images, what do you think the tone of the movie is?",
+                    },
+                    {
+                        "type": "text",
+                        "image_url": {
+                            "url": "https://gratisography.com/wp-content/uploads/2024/11/gratisography-augmented-reality-800x525.jpg",
+                            "detail": "high",
+                        },
+                    },
+                ],
+            }
+        ],
+    ],
+)
+def test_bad_input_token_counter(model, messages):
+    """
+    Safely handle bad input for token counter.
+    """
+    token_counter(
+        model=model,
+        messages=messages,
+        default_token_count=1000,
+    )

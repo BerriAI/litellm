@@ -125,28 +125,6 @@ def test_anthropic_pt_formatting():
     assert anthropic_pt(messages) == expected_prompt
 
 
-def test_anthropic_messages_pt():
-    # Test case: No messages (filtered system messages only)
-    litellm.modify_params = True
-    messages = []
-    expected_messages = [{"role": "user", "content": [{"type": "text", "text": "."}]}]
-    assert (
-        anthropic_messages_pt(
-            messages, model="claude-3-sonnet-20240229", llm_provider="anthropic"
-        )
-        == expected_messages
-    )
-
-    # Test case: No messages (filtered system messages only) when modify_params is False should raise error
-    litellm.modify_params = False
-    messages = []
-    with pytest.raises(Exception) as err:
-        anthropic_messages_pt(
-            messages, model="claude-3-sonnet-20240229", llm_provider="anthropic"
-        )
-    assert "Invalid first message" in str(err.value)
-
-
 def test_anthropic_messages_nested_pt():
     from litellm.types.llms.anthropic import (
         AnthopicMessagesAssistantMessageParam,
@@ -223,7 +201,7 @@ def test_convert_url_to_img():
     ],
 )
 def test_base64_image_input(url, expected_media_type):
-    response = convert_to_anthropic_image_obj(openai_image_url=url)
+    response = convert_to_anthropic_image_obj(openai_image_url=url, format=None)
 
     assert response["media_type"] == expected_media_type
 
@@ -704,7 +682,64 @@ def test_convert_generic_image_chunk_to_openai_image_obj():
     )
 
     url = "https://i.pinimg.com/736x/b4/b1/be/b4b1becad04d03a9071db2817fc9fe77.jpg"
-    image_obj = convert_to_anthropic_image_obj(url)
+    image_obj = convert_to_anthropic_image_obj(url, format=None)
     url_str = convert_generic_image_chunk_to_openai_image_obj(image_obj)
-    image_obj = convert_to_anthropic_image_obj(url_str)
+    image_obj = convert_to_anthropic_image_obj(url_str, format=None)
     print(image_obj)
+
+
+def test_hf_chat_template():
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        hf_chat_template,
+    )
+
+    model = "llama/arn:aws:bedrock:us-east-1:1234:imported-model/45d34re"
+    litellm.register_prompt_template(
+        model=model,
+        tokenizer_config={
+            "add_bos_token": True,
+            "add_eos_token": False,
+            "bos_token": {
+                "__type": "AddedToken",
+                "content": "<｜begin▁of▁sentence｜>",
+                "lstrip": False,
+                "normalized": True,
+                "rstrip": False,
+                "single_word": False,
+            },
+            "clean_up_tokenization_spaces": False,
+            "eos_token": {
+                "__type": "AddedToken",
+                "content": "<｜end▁of▁sentence｜>",
+                "lstrip": False,
+                "normalized": True,
+                "rstrip": False,
+                "single_word": False,
+            },
+            "legacy": True,
+            "model_max_length": 16384,
+            "pad_token": {
+                "__type": "AddedToken",
+                "content": "<｜end▁of▁sentence｜>",
+                "lstrip": False,
+                "normalized": True,
+                "rstrip": False,
+                "single_word": False,
+            },
+            "sp_model_kwargs": {},
+            "unk_token": None,
+            "tokenizer_class": "LlamaTokenizerFast",
+            "chat_template": "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% set ns = namespace(is_first=false, is_tool=false, is_output_first=true, system_prompt='') %}{%- for message in messages %}{%- if message['role'] == 'system' %}{% set ns.system_prompt = message['content'] %}{%- endif %}{%- endfor %}{{bos_token}}{{ns.system_prompt}}{%- for message in messages %}{%- if message['role'] == 'user' %}{%- set ns.is_tool = false -%}{{'<｜User｜>' + message['content']}}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is none %}{%- set ns.is_tool = false -%}{%- for tool in message['tool_calls']%}{%- if not ns.is_first %}{{'<｜Assistant｜><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\\n' + '```json' + '\\n' + tool['function']['arguments'] + '\\n' + '```' + '<｜tool▁call▁end｜>'}}{%- set ns.is_first = true -%}{%- else %}{{'\\n' + '<｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\\n' + '```json' + '\\n' + tool['function']['arguments'] + '\\n' + '```' + '<｜tool▁call▁end｜>'}}{{'<｜tool▁calls▁end｜><｜end▁of▁sentence｜>'}}{%- endif %}{%- endfor %}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is not none %}{%- if ns.is_tool %}{{'<｜tool▁outputs▁end｜>' + message['content'] + '<｜end▁of▁sentence｜>'}}{%- set ns.is_tool = false -%}{%- else %}{% set content = message['content'] %}{% if '</think>' in content %}{% set content = content.split('</think>')[-1] %}{% endif %}{{'<｜Assistant｜>' + content + '<｜end▁of▁sentence｜>'}}{%- endif %}{%- endif %}{%- if message['role'] == 'tool' %}{%- set ns.is_tool = true -%}{%- if ns.is_output_first %}{{'<｜tool▁outputs▁begin｜><｜tool▁output▁begin｜>' + message['content'] + '<｜tool▁output▁end｜>'}}{%- set ns.is_output_first = false %}{%- else %}{{'\\n<｜tool▁output▁begin｜>' + message['content'] + '<｜tool▁output▁end｜>'}}{%- endif %}{%- endif %}{%- endfor -%}{% if ns.is_tool %}{{'<｜tool▁outputs▁end｜>'}}{% endif %}{% if add_generation_prompt and not ns.is_tool %}{{'<｜Assistant｜><think>\\n'}}{% endif %}",
+        },
+    )
+
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is the weather in Copenhagen?"},
+    ]
+    chat_template = hf_chat_template(model=model, messages=messages)
+    print(chat_template)
+    assert (
+        chat_template.rstrip()
+        == """<｜begin▁of▁sentence｜>You are a helpful assistant.<｜User｜>What is the weather in Copenhagen?<｜Assistant｜><think>"""
+    )

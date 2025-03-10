@@ -16,14 +16,8 @@ from litellm.llms.anthropic.cost_calculation import (
 from litellm.llms.azure.cost_calculation import (
     cost_per_token as azure_openai_cost_per_token,
 )
-from litellm.llms.azure_ai.cost_calculator import (
-    cost_per_query as azure_ai_rerank_cost_per_query,
-)
 from litellm.llms.bedrock.image.cost_calculator import (
     cost_calculator as bedrock_image_cost_calculator,
-)
-from litellm.llms.cohere.cost_calculator import (
-    cost_per_query as cohere_rerank_cost_per_query,
 )
 from litellm.llms.databricks.cost_calculator import (
     cost_per_token as databricks_cost_per_token,
@@ -51,10 +45,12 @@ from litellm.llms.vertex_ai.image_generation.cost_calculator import (
     cost_calculator as vertex_ai_image_cost_calculator,
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent
-from litellm.types.rerank import RerankResponse
+from litellm.types.rerank import RerankBilledUnits, RerankResponse
 from litellm.types.utils import (
     CallTypesLiteral,
+    LlmProviders,
     LlmProvidersSet,
+    ModelInfo,
     PassthroughCallTypes,
     Usage,
 )
@@ -64,6 +60,7 @@ from litellm.utils import (
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
+    ProviderConfigManager,
     TextCompletionResponse,
     TranscriptionResponse,
     _cached_get_model_info_helper,
@@ -114,6 +111,8 @@ def cost_per_token(  # noqa: PLR0915
     number_of_queries: Optional[int] = None,
     ### USAGE OBJECT ###
     usage_object: Optional[Usage] = None,  # just read the usage object if provided
+    ### BILLED UNITS ###
+    rerank_billed_units: Optional[RerankBilledUnits] = None,
     ### CALL TYPE ###
     call_type: CallTypesLiteral = "completion",
     audio_transcription_file_duration: float = 0.0,  # for audio transcription calls - the file time in seconds
@@ -238,6 +237,16 @@ def cost_per_token(  # noqa: PLR0915
         return rerank_cost(
             model=model,
             custom_llm_provider=custom_llm_provider,
+            billed_units=rerank_billed_units,
+        )
+    elif (
+        call_type == "aretrieve_batch"
+        or call_type == "retrieve_batch"
+        or call_type == CallTypes.aretrieve_batch
+        or call_type == CallTypes.retrieve_batch
+    ):
+        return batch_cost_calculator(
+            usage=usage_block, model=model, custom_llm_provider=custom_llm_provider
         )
     elif call_type == "atranscription" or call_type == "transcription":
         return openai_cost_per_second(
@@ -399,9 +408,12 @@ def _select_model_name_for_cost_calc(
     if base_model is not None:
         return_model = base_model
 
-    completion_response_model: Optional[str] = getattr(
-        completion_response, "model", None
-    )
+    completion_response_model: Optional[str] = None
+    if completion_response is not None:
+        if isinstance(completion_response, BaseModel):
+            completion_response_model = getattr(completion_response, "model", None)
+        elif isinstance(completion_response, dict):
+            completion_response_model = completion_response.get("model", None)
     hidden_params: Optional[dict] = getattr(completion_response, "_hidden_params", None)
     if completion_response_model is None and hidden_params is not None:
         if (
@@ -552,6 +564,7 @@ def completion_cost(  # noqa: PLR0915
         cost_per_token_usage_object: Optional[Usage] = _get_usage_object(
             completion_response=completion_response
         )
+        rerank_billed_units: Optional[RerankBilledUnits] = None
         model = _select_model_name_for_cost_calc(
             model=model,
             completion_response=completion_response,
@@ -698,6 +711,11 @@ def completion_cost(  # noqa: PLR0915
                 else:
                     billed_units = {}
 
+                rerank_billed_units = RerankBilledUnits(
+                    search_units=billed_units.get("search_units"),
+                    total_tokens=billed_units.get("total_tokens"),
+                )
+
                 search_units = (
                     billed_units.get("search_units") or 1
                 )  # cohere charges per request by default.
@@ -763,6 +781,7 @@ def completion_cost(  # noqa: PLR0915
             usage_object=cost_per_token_usage_object,
             call_type=call_type,
             audio_transcription_file_duration=audio_transcription_file_duration,
+            rerank_billed_units=rerank_billed_units,
         )
         _final_cost = prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
 
@@ -836,27 +855,36 @@ def response_cost_calculator(
 def rerank_cost(
     model: str,
     custom_llm_provider: Optional[str],
+    billed_units: Optional[RerankBilledUnits] = None,
 ) -> Tuple[float, float]:
     """
     Returns
     - float or None: cost of response OR none if error.
     """
-    default_num_queries = 1
     _, custom_llm_provider, _, _ = litellm.get_llm_provider(
         model=model, custom_llm_provider=custom_llm_provider
     )
 
     try:
-        if custom_llm_provider == "cohere":
-            return cohere_rerank_cost_per_query(
-                model=model, num_queries=default_num_queries
+        config = ProviderConfigManager.get_provider_rerank_config(
+            model=model,
+            api_base=None,
+            present_version_params=[],
+            provider=LlmProviders(custom_llm_provider),
+        )
+
+        try:
+            model_info: Optional[ModelInfo] = litellm.get_model_info(
+                model=model, custom_llm_provider=custom_llm_provider
             )
-        elif custom_llm_provider == "azure_ai":
-            return azure_ai_rerank_cost_per_query(
-                model=model, num_queries=default_num_queries
-            )
-        raise ValueError(
-            f"invalid custom_llm_provider for rerank model: {model}, custom_llm_provider: {custom_llm_provider}"
+        except Exception:
+            model_info = None
+
+        return config.calculate_rerank_cost(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            billed_units=billed_units,
+            model_info=model_info,
         )
     except Exception as e:
         raise e
@@ -941,3 +969,54 @@ def default_image_cost_calculator(
             )
 
     return cost_info["input_cost_per_pixel"] * height * width * n
+
+
+def batch_cost_calculator(
+    usage: Usage,
+    model: str,
+    custom_llm_provider: Optional[str] = None,
+) -> Tuple[float, float]:
+    """
+    Calculate the cost of a batch job
+    """
+
+    _, custom_llm_provider, _, _ = litellm.get_llm_provider(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
+
+    verbose_logger.info(
+        "Calculating batch cost per token. model=%s, custom_llm_provider=%s",
+        model,
+        custom_llm_provider,
+    )
+
+    try:
+        model_info: Optional[ModelInfo] = litellm.get_model_info(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+    except Exception:
+        model_info = None
+
+    if not model_info:
+        return 0.0, 0.0
+
+    input_cost_per_token_batches = model_info.get("input_cost_per_token_batches")
+    input_cost_per_token = model_info.get("input_cost_per_token")
+    output_cost_per_token_batches = model_info.get("output_cost_per_token_batches")
+    output_cost_per_token = model_info.get("output_cost_per_token")
+    total_prompt_cost = 0.0
+    total_completion_cost = 0.0
+    if input_cost_per_token_batches:
+        total_prompt_cost = usage.prompt_tokens * input_cost_per_token_batches
+    elif input_cost_per_token:
+        total_prompt_cost = (
+            usage.prompt_tokens * (input_cost_per_token) / 2
+        )  # batch cost is usually half of the regular token cost
+    if output_cost_per_token_batches:
+        total_completion_cost = usage.completion_tokens * output_cost_per_token_batches
+    elif output_cost_per_token:
+        total_completion_cost = (
+            usage.completion_tokens * (output_cost_per_token) / 2
+        )  # batch cost is usually half of the regular token cost
+
+    return total_prompt_cost, total_completion_cost

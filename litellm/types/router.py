@@ -8,12 +8,17 @@ import uuid
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, get_type_hints
 
 import httpx
+from httpx import AsyncClient, Client
+from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Required, TypedDict
+
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 from ..exceptions import RateLimitError
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
+from .llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from .utils import ModelResponse, ProviderSpecificModelInfo
 
 
@@ -103,7 +108,15 @@ class ModelInfo(BaseModel):
         None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
     )
     tier: Optional[Literal["free", "paid"]] = None
-    team_id: Optional[str] = None  # the team id that this model belongs to
+
+    """
+    Team Model Specific Fields
+    """
+    # the team id that this model belongs to
+    team_id: Optional[str] = None
+
+    # the model_name that can be used by the team when making LLM calls
+    team_public_model_name: Optional[str] = None
 
     def __init__(self, id: Optional[Union[str, int]] = None, **params):
         if id is None:
@@ -151,6 +164,7 @@ class GenericLiteLLMParams(BaseModel):
     max_retries: Optional[int] = None
     organization: Optional[str] = None  # for openai orgs
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
+
     ## LOGGING PARAMS ##
     litellm_trace_id: Optional[str] = None
     ## UNIFIED PROJECT/REGION ##
@@ -158,7 +172,7 @@ class GenericLiteLLMParams(BaseModel):
     ## VERTEX AI ##
     vertex_project: Optional[str] = None
     vertex_location: Optional[str] = None
-    vertex_credentials: Optional[str] = None
+    vertex_credentials: Optional[Union[str, dict]] = None
     ## AWS BEDROCK / SAGEMAKER ##
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None
@@ -178,6 +192,8 @@ class GenericLiteLLMParams(BaseModel):
     budget_duration: Optional[str] = None
     use_in_pass_through: Optional[bool] = False
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
+    merge_reasoning_content_in_choices: Optional[bool] = False
+    model_info: Optional[Dict] = None
 
     def __init__(
         self,
@@ -200,7 +216,7 @@ class GenericLiteLLMParams(BaseModel):
         ## VERTEX AI ##
         vertex_project: Optional[str] = None,
         vertex_location: Optional[str] = None,
-        vertex_credentials: Optional[str] = None,
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES] = None,
         ## AWS BEDROCK / SAGEMAKER ##
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
@@ -217,6 +233,9 @@ class GenericLiteLLMParams(BaseModel):
         budget_duration: Optional[str] = None,
         # Pass through params
         use_in_pass_through: Optional[bool] = False,
+        # This will merge the reasoning content in the choices
+        merge_reasoning_content_in_choices: Optional[bool] = False,
+        model_info: Optional[Dict] = None,
         **params,
     ):
         args = locals()

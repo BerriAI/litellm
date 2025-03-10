@@ -2,16 +2,24 @@ import enum
 import json
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, Json, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    Json,
+    field_validator,
+    model_validator,
+)
 from typing_extensions import Required, TypedDict
 
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.utils import (
+    CallTypes,
     EmbeddingResponse,
     GenericBudgetConfigType,
     ImageResponse,
@@ -19,9 +27,13 @@ from litellm.types.utils import (
     ModelResponse,
     ProviderField,
     StandardCallbackDynamicParams,
+    StandardLoggingPayloadErrorInformation,
+    StandardLoggingPayloadStatus,
     StandardPassThroughResponseObject,
     TextCompletionResponse,
 )
+
+from .types_utils.utils import get_instance_fn, validate_custom_validate_return_type
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -230,6 +242,7 @@ class LiteLLMRoutes(enum.Enum):
         # rerank
         "/rerank",
         "/v1/rerank",
+        "/v2/rerank"
         # realtime
         "/realtime",
         "/v1/realtime",
@@ -269,6 +282,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model_group/info",
         "/health",
         "/key/list",
+        "/user/filter/ui",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
@@ -345,7 +359,6 @@ class LiteLLMRoutes(enum.Enum):
         "/key/info",
         "/config",
         "/spend",
-        "/user",
         "/model/info",
         "/v2/model/info",
         "/v2/key/info",
@@ -393,6 +406,7 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/info",
         "/organization/delete",
         "/organization/member_add",
+        "/organization/member_update",
     ]
 
     # All routes accesible by an Org Admin
@@ -599,6 +613,8 @@ class GenerateKeyResponse(KeyRequestBase):
     token_id: Optional[str] = None
     litellm_budget_table: Optional[Any] = None
     token: Optional[str] = None
+    created_by: Optional[str] = None
+    updated_by: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -649,6 +665,7 @@ class RegenerateKeyRequest(GenerateKeyRequest):
     duration: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
+    new_master_key: Optional[str] = None
 
 
 class KeyRequest(LiteLLMPydanticObjectBase):
@@ -671,6 +688,30 @@ class LiteLLM_ModelTable(LiteLLMPydanticObjectBase):
     updated_by: str
 
     model_config = ConfigDict(protected_namespaces=())
+
+
+class LiteLLM_ProxyModelTable(LiteLLMPydanticObjectBase):
+    model_id: str
+    model_name: str
+    litellm_params: dict
+    model_info: dict
+    created_by: str
+    updated_by: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def check_potential_json_str(cls, values):
+        if isinstance(values.get("litellm_params"), str):
+            try:
+                values["litellm_params"] = json.loads(values["litellm_params"])
+            except json.JSONDecodeError:
+                pass
+        if isinstance(values.get("model_info"), str):
+            try:
+                values["model_info"] = json.loads(values["model_info"])
+            except json.JSONDecodeError:
+                pass
+        return values
 
 
 class NewUserRequest(GenerateRequestBase):
@@ -988,6 +1029,7 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
 class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
     success_callback: Optional[List[str]] = []
     failure_callback: Optional[List[str]] = []
+    callbacks: Optional[List[str]] = []
     # for now - only supported for langfuse
     callback_vars: Optional[Dict[str, str]] = {}
 
@@ -1000,6 +1042,9 @@ class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
         failure_callback = values.get("failure_callback", [])
         if failure_callback is None:
             values.pop("failure_callback", None)
+        callbacks = values.get("callbacks", [])
+        if callbacks is None:
+            values.pop("callbacks", None)
 
         callback_vars = values.get("callback_vars", {})
         if callback_vars is None:
@@ -1008,6 +1053,7 @@ class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
             return {
                 "success_callback": [],
                 "failure_callback": [],
+                "callbacks": [],
                 "callback_vars": {},
             }
         valid_keys = set(StandardCallbackDynamicParams.__annotations__.keys())
@@ -1104,10 +1150,15 @@ class NewOrganizationRequest(LiteLLM_BudgetTable):
     organization_alias: str
     models: List = []
     budget_id: Optional[str] = None
+    metadata: Optional[dict] = None
 
 
 class OrganizationRequest(LiteLLMPydanticObjectBase):
     organizations: List[str]
+
+
+class DeleteOrganizationRequest(LiteLLMPydanticObjectBase):
+    organization_ids: List[str]  # required
 
 
 class KeyManagementSystem(enum.Enum):
@@ -1134,6 +1185,13 @@ class KeyManagementSettings(LiteLLMPydanticObjectBase):
     access_mode: Literal["read_only", "write_only", "read_and_write"] = "read_only"
     """
     Access mode for the secret manager, when write_only will only use for writing secrets
+    """
+
+    primary_secret_name: Optional[str] = None
+    """
+    If set, will read secrets from this primary secret in the secret manager
+
+    eg. on AWS you can store multiple secret values as K/V pairs in a single secret
     """
 
 
@@ -1371,7 +1429,9 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     litellm_budget_table: Optional[dict] = None
     org_id: Optional[str] = None  # org id for a given key
     created_at: Optional[datetime] = None
+    created_by: Optional[str] = None
     updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1487,15 +1547,33 @@ class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
     organization_id: Optional[str] = None
     organization_alias: Optional[str] = None
     budget_id: str
+    spend: float = 0.0
     metadata: Optional[dict] = None
     models: List[str]
     created_by: str
     updated_by: str
 
 
+class LiteLLM_OrganizationTableUpdate(LiteLLMPydanticObjectBase):
+    """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
+
+    organization_id: Optional[str] = None
+    organization_alias: Optional[str] = None
+    budget_id: Optional[str] = None
+    spend: Optional[float] = None
+    metadata: Optional[dict] = None
+    models: Optional[List[str]] = None
+    updated_by: Optional[str] = None
+
+
 class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
-    members: List[LiteLLM_OrganizationMembershipTable]
-    teams: List[LiteLLM_TeamTable]
+    """Returned by the /organization/info endpoint and /organization/list endpoint"""
+
+    members: List[LiteLLM_OrganizationMembershipTable] = []
+    teams: List[LiteLLM_TeamTable] = []
+    litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class NewOrganizationResponse(LiteLLM_OrganizationTable):
@@ -1518,6 +1596,8 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     organization_memberships: Optional[List[LiteLLM_OrganizationMembershipTable]] = None
     teams: List[str] = []
     sso_user_id: Optional[str] = None
+    budget_duration: Optional[str] = None
+    budget_reset_at: Optional[datetime] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1531,6 +1611,15 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
         return values
 
     model_config = ConfigDict(protected_namespaces=())
+
+
+class LiteLLM_UserTableFiltered(BaseModel):  # done to avoid exposing sensitive data
+    user_id: str
+    user_email: str
+
+
+class LiteLLM_UserTableWithKeyCount(LiteLLM_UserTable):
+    key_count: int = 0
 
 
 class LiteLLM_EndUserTable(LiteLLMPydanticObjectBase):
@@ -1591,7 +1680,7 @@ class LiteLLM_ErrorLogs(LiteLLMPydanticObjectBase):
 class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
     id: str
     updated_at: datetime
-    changed_by: str
+    changed_by: Optional[Any] = None
     changed_by_api_key: Optional[str] = None
     action: Literal["created", "updated", "deleted", "blocked"]
     table_name: Literal[
@@ -1603,6 +1692,13 @@ class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
     object_id: str
     before_value: Optional[Json] = None
     updated_values: Optional[Json] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def cast_changed_by_to_str(cls, values):
+        if values.get("changed_by") is not None:
+            values["changed_by"] = str(values["changed_by"])
+        return values
 
 
 class LiteLLM_SpendLogs_ResponseObject(LiteLLMPydanticObjectBase):
@@ -1656,6 +1752,7 @@ class WebhookEvent(CallInfo):
 class SpecialModelNames(enum.Enum):
     all_team_models = "all-team-models"
     all_proxy_models = "all-proxy-models"
+    no_default_models = "no-default-models"
 
 
 class InvitationNew(LiteLLMPydanticObjectBase):
@@ -1798,6 +1895,10 @@ class SpendLogsMetadata(TypedDict):
     ]  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: Optional[str]
     applied_guardrails: Optional[List[str]]
+    status: StandardLoggingPayloadStatus
+    proxy_server_request: Optional[str]
+    batch_models: Optional[List[str]]
+    error_information: Optional[StandardLoggingPayloadErrorInformation]
 
 
 class SpendLogsPayload(TypedDict):
@@ -1896,7 +1997,7 @@ class ProxyException(Exception):
         code: Optional[Union[int, str]] = None,
         headers: Optional[Dict[str, str]] = None,
     ):
-        self.message = message
+        self.message = str(message)
         self.type = type
         self.param = param
 
@@ -1938,6 +2039,9 @@ class CommonProxyErrors(str, enum.Enum):
     no_llm_router = "No models configured on proxy"
     not_allowed_access = "Admin-only endpoint. Not allowed to access this."
     not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. Get a 7 day trial key here: https://www.litellm.ai/#trial. \nPricing: https://www.litellm.ai/#pricing"
+    max_parallel_request_limit_reached = (
+        "Crossed TPM / RPM / Max Parallel Request Limit"
+    )
 
 
 class SpendCalculateRequest(LiteLLMPydanticObjectBase):
@@ -1956,6 +2060,7 @@ class ProxyErrorTypes(str, enum.Enum):
     bad_request_error = "bad_request_error"
     not_found_error = "not_found_error"
     validation_error = "bad_request_error"
+    cache_ping_error = "cache_ping_error"
 
 
 DB_CONNECTION_ERROR_TYPES = (httpx.ConnectError, httpx.ReadError, httpx.ReadTimeout)
@@ -2079,6 +2184,20 @@ class TeamMemberUpdateResponse(MemberUpdateResponse):
     max_budget_in_team: Optional[float] = None
 
 
+class TeamModelAddRequest(BaseModel):
+    """Request to add models to a team"""
+
+    team_id: str
+    models: List[str]
+
+
+class TeamModelDeleteRequest(BaseModel):
+    """Request to delete models from a team"""
+
+    team_id: str
+    models: List[str]
+
+
 # Organization Member Requests
 class OrganizationMemberAddRequest(OrgMemberAddRequest):
     organization_id: str
@@ -2091,8 +2210,26 @@ class OrganizationMemberDeleteRequest(MemberDeleteRequest):
     organization_id: str
 
 
+ROLES_WITHIN_ORG = [
+    LitellmUserRoles.ORG_ADMIN,
+    LitellmUserRoles.INTERNAL_USER,
+    LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+]
+
+
 class OrganizationMemberUpdateRequest(OrganizationMemberDeleteRequest):
-    max_budget_in_organization: float
+    max_budget_in_organization: Optional[float] = None
+    role: Optional[LitellmUserRoles] = None
+
+    @field_validator("role")
+    def validate_role(
+        cls, value: Optional[LitellmUserRoles]
+    ) -> Optional[LitellmUserRoles]:
+        if value is not None and value not in ROLES_WITHIN_ORG:
+            raise ValueError(
+                f"Invalid role. Must be one of: {[role.value for role in ROLES_WITHIN_ORG]}"
+            )
+        return value
 
 
 class OrganizationMemberUpdateResponse(MemberUpdateResponse):
@@ -2345,6 +2482,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     - public_key_ttl: Default - 600s. TTL for caching public JWT keys.
     - public_allowed_routes: list of allowed routes for authenticated but unknown litellm role jwt tokens.
     - enforce_rbac: If true, enforce RBAC for all routes.
+    - custom_validate: A custom function to validates the JWT token.
 
     See `auth_checks.py` for the specific routes
     """
@@ -2389,6 +2527,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     scope_mappings: Optional[List[ScopeMapping]] = None
     enforce_scope_based_access: bool = False
     enforce_team_based_model_access: bool = False
+    custom_validate: Optional[Callable[..., Literal[True]]] = None
 
     def __init__(self, **kwargs: Any) -> None:
         # get the attribute names for this Pydantic model
@@ -2401,6 +2540,12 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         role_mappings = kwargs.get("role_mappings")
         scope_mappings = kwargs.get("scope_mappings")
         enforce_scope_based_access = kwargs.get("enforce_scope_based_access")
+        custom_validate = kwargs.get("custom_validate")
+
+        if custom_validate is not None:
+            fn = get_instance_fn(custom_validate)
+            validate_custom_validate_return_type(fn)
+            kwargs["custom_validate"] = fn
 
         if invalid_keys:
             raise ValueError(
@@ -2436,3 +2581,8 @@ class PrismaCompatibleUpdateDBModel(TypedDict, total=False):
 
 class SpecialManagementEndpointEnums(enum.Enum):
     DEFAULT_ORGANIZATION = "default_organization"
+
+
+class TransformRequestBody(BaseModel):
+    call_type: CallTypes
+    request_body: dict

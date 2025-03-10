@@ -26,10 +26,9 @@ import {
   Select as Select2,
 } from "antd";
 import { PencilAltIcon, PlusIcon, TrashIcon } from "@heroicons/react/outline";
-import TeamMemberModal from "./edit_membership";
+import MemberModal from "./edit_membership";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
-import ModelAliasesCard from "./model_aliases_card";
 
 
 interface TeamData {
@@ -90,7 +89,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   console.log("userModels in team info", userModels);
 
-  const canManageMembers = is_team_admin || is_proxy_admin;
   const canEditTeam = is_team_admin || is_proxy_admin;
 
   const fetchTeamInfo = async () => {
@@ -202,172 +200,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     }
   };
 
-  const renderSettingsPanel = () => {
-    if (!teamData?.team_info) return null;
-    const info = teamData.team_info;
-
-    // Extract existing guardrails from team metadata
-    let existingGuardrails: string[] = [];
-    try {
-      existingGuardrails = info.metadata?.guardrails || [];
-    } catch (error) {
-      console.error("Error extracting guardrails:", error);
-    }
-
-    if (!isEditing) {
-      return (
-        <Card>
-          <div className="flex justify-between">
-            <Title>Team Settings</Title>
-            {canEditTeam && (
-              <Button type="primary" onClick={() => setIsEditing(true)}>
-                Edit Settings
-              </Button>
-            )}
-          </div>
-          <div className="mt-4 space-y-4">
-            <div>
-              <Text className="font-medium">Team Name</Text>
-              <Text>{info.team_alias}</Text>
-            </div>
-            <div>
-              <Text className="font-medium">Team ID</Text>
-              <Text className="font-mono">{info.team_id}</Text>
-            </div>
-            <div>
-              <Text className="font-medium">Created At</Text>
-              <Text>{new Date(info.created_at).toLocaleString()}</Text>
-            </div>
-            <div>
-              <Text className="font-medium">Models</Text>
-              <div className="flex flex-wrap gap-2 mt-1">
-                {info.models.map((model, index) => (
-                  <Badge key={index} color="red">
-                    {model}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-            <div>
-              <Text className="font-medium">Rate Limits</Text>
-              <Text>TPM: {info.tpm_limit || 'Unlimited'}</Text>
-              <Text>RPM: {info.rpm_limit || 'Unlimited'}</Text>
-            </div>
-            <div>
-              <Text className="font-medium">Budget</Text>
-              <Text>Max: ${info.max_budget || 'Unlimited'}</Text>
-              <Text>Reset: {info.budget_duration || 'Never'}</Text>
-            </div>
-            <div>
-              <Text className="font-medium">Status</Text>
-              <Badge color={info.blocked ? 'red' : 'green'}>
-                {info.blocked ? 'Blocked' : 'Active'}
-              </Badge>
-            </div>
-          </div>
-        </Card>
-      );
-    }
-
-    return (
-      <Card>
-        <Title>Edit Team Settings</Title>
-        <Form
-          form={form}
-          onFinish={handleTeamUpdate}
-          initialValues={{
-            ...info,
-            guardrails: existingGuardrails
-          }}
-          layout="vertical"
-          className="mt-4"
-        >
-          <Form.Item
-            label="Team Name"
-            name="team_alias"
-            rules={[{ required: true, message: "Please input a team name" }]}
-          >
-            <Input />
-          </Form.Item>
-          
-          <Form.Item label="Models" name="models">
-            <Select2
-              mode="multiple"
-              placeholder="Select models"
-              style={{ width: "100%" }}
-            >
-              <Select2.Option
-                key="all-proxy-models"
-                value="all-proxy-models"
-              >
-                All Proxy Models
-              </Select2.Option>
-              {userModels.map((model) => (
-                <Select2.Option key={model} value={model}>
-                  {getModelDisplayName(model)}
-                </Select2.Option>
-              ))}
-            </Select2>
-          </Form.Item>
-
-          <Form.Item label="Max Budget (USD)" name="max_budget">
-            <InputNumber step={0.01} precision={2} style={{ width: 200 }} />
-          </Form.Item>
-
-          <Form.Item label="Reset Budget" name="budget_duration">
-            <Select placeholder="n/a">
-              <Select.Option value="24h">daily</Select.Option>
-              <Select.Option value="7d">weekly</Select.Option>
-              <Select.Option value="30d">monthly</Select.Option>
-            </Select>
-          </Form.Item>
-
-          <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
-            <InputNumber step={1} style={{ width: "100%" }} />
-          </Form.Item>
-
-          <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
-            <InputNumber step={1} style={{ width: "100%" }} />
-          </Form.Item>
-
-          <Form.Item
-            label={
-              <span>
-                Guardrails{' '}
-                <Tooltip title="Setup your first guardrail">
-                  <a 
-                    href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                  </a>
-                </Tooltip>
-              </span>
-            }
-            name="guardrails"
-            help="Select existing guardrails or enter new ones"
-          >
-            <Select
-              mode="tags"
-              placeholder="Select or enter guardrails"
-            />
-          </Form.Item>
-
-          <div className="flex justify-end gap-2 mt-6">
-            <Button onClick={() => setIsEditing(false)}>
-              Cancel
-            </Button>
-            <Button type="primary" htmlType="submit">
-              Save Changes
-            </Button>
-          </div>
-        </Form>
-      </Card>
-    );
-  };
-
   if (loading) {
     return <div className="p-4">Loading...</div>;
   }
@@ -461,7 +293,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           <Text className="font-mono">{member.role}</Text>
                         </TableCell>
                         <TableCell>
-                          {is_team_admin && (
+                          {canEditTeam && (
                             <>
                               <Icon
                                 icon={PencilAltIcon}
@@ -516,7 +348,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     rpm_limit: info.rpm_limit,
                     max_budget: info.max_budget,
                     budget_duration: info.budget_duration,
-                    guardrails: info.metadata?.guardrails || []
+                    guardrails: info.metadata?.guardrails || [],
+                    metadata: info.metadata ? JSON.stringify(info.metadata, null, 2) : "",
                   }}
                   layout="vertical"
                 >
@@ -588,6 +421,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       placeholder="Select or enter guardrails"
                     />
                   </Form.Item>
+                  <Form.Item label="Metadata" name="metadata">
+                    <Input.TextArea rows={10} />
+                  </Form.Item>
+
 
                   <div className="flex justify-end gap-2 mt-6">
                     <Button onClick={() => setIsEditing(false)}>
@@ -641,24 +478,25 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 </div>
               )}
             </Card>
-
-            <ModelAliasesCard
-              teamId={teamId}
-              accessToken={accessToken}
-              currentAliases={teamData?.team_info?.litellm_model_table?.model_aliases || {}}
-              availableModels={userModels}
-              onUpdate={fetchTeamInfo}
-            />
           </TabPanel>
         </TabPanels>
       </TabGroup>
 
-      <TeamMemberModal
+      <MemberModal
         visible={isEditMemberModalVisible}
         onCancel={() => setIsEditMemberModalVisible(false)}
         onSubmit={handleMemberUpdate}
         initialData={selectedEditMember}
         mode="edit"
+        config={{
+          title: "Edit Member",
+          showEmail: true,
+          showUserId: true,
+          roleOptions: [
+            { label: "Admin", value: "admin" },
+            { label: "User", value: "user" }
+          ]
+        }}
       />
 
       <UserSearchModal
