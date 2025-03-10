@@ -102,6 +102,10 @@ def get_llm_provider(  # noqa: PLR0915
     """
 
     try:
+        # If model name is in the alias map
+        if model in litellm.model_alias_map:
+            model = litellm.model_alias_map[model]
+
         ## IF LITELLM PARAMS GIVEN ##
         if litellm_params is not None:
             assert (
