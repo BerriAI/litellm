@@ -828,13 +828,17 @@ class OpenAIChatCompletion(BaseLLM):
             except Exception as e:
                 exception_response = getattr(e, "response", None)
                 status_code = getattr(e, "status_code", 500)
+                exception_body = getattr(e, "body", None)
                 error_headers = getattr(e, "headers", None)
                 if error_headers is None and exception_response:
                     error_headers = getattr(exception_response, "headers", None)
                 message = getattr(e, "message", str(e))
 
                 raise OpenAIError(
-                    status_code=status_code, message=message, headers=error_headers
+                    status_code=status_code,
+                    message=message,
+                    headers=error_headers,
+                    body=exception_body,
                 )
 
     def streaming(
