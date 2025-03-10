@@ -250,11 +250,11 @@ CHAT_MODEL_TABLE = {
     "nvidia/usdcode-llama3-70b-instruct": Model(
         id="nvidia/usdcode-llama3-70b-instruct",
         model_type="chat",
-        ),
+    ),
     "mistralai/mamba-codestral-7b-v0.1": Model(
         id="mistralai/mamba-codestral-7b-v0.1",
         model_type="chat",
-        ),
+    ),
     "writer/palmyra-fin-70b-32k": Model(
         id="writer/palmyra-fin-70b-32k",
         model_type="chat",
@@ -263,7 +263,7 @@ CHAT_MODEL_TABLE = {
     "google/gemma-2-2b-it": Model(
         id="google/gemma-2-2b-it",
         model_type="chat",
-        ),
+    ),
     "mistralai/mistral-large-2-instruct": Model(
         id="mistralai/mistral-large-2-instruct",
         model_type="chat",
@@ -273,63 +273,63 @@ CHAT_MODEL_TABLE = {
     "mistralai/mathstral-7b-v0.1": Model(
         id="mistralai/mathstral-7b-v0.1",
         model_type="chat",
-        ),
+    ),
     "rakuten/rakutenai-7b-instruct": Model(
         id="rakuten/rakutenai-7b-instruct",
         model_type="chat",
-        ),
+    ),
     "rakuten/rakutenai-7b-chat": Model(
         id="rakuten/rakutenai-7b-chat",
         model_type="chat",
-        ),
+    ),
     "baichuan-inc/baichuan2-13b-chat": Model(
         id="baichuan-inc/baichuan2-13b-chat",
         model_type="chat",
-        ),
+    ),
     "thudm/chatglm3-6b": Model(
         id="thudm/chatglm3-6b",
         model_type="chat",
-        ),
+    ),
     "microsoft/phi-3.5-mini-instruct": Model(
         id="microsoft/phi-3.5-mini-instruct",
         model_type="chat",
-        ),
+    ),
     "microsoft/phi-3.5-moe-instruct": Model(
         id="microsoft/phi-3.5-moe-instruct",
         model_type="chat",
-        ),
+    ),
     "nvidia/nemotron-mini-4b-instruct": Model(
         id="nvidia/nemotron-mini-4b-instruct",
         model_type="chat",
-        ),
+    ),
     "ai21labs/jamba-1.5-large-instruct": Model(
         id="ai21labs/jamba-1.5-large-instruct",
         model_type="chat",
-        ),
+    ),
     "ai21labs/jamba-1.5-mini-instruct": Model(
         id="ai21labs/jamba-1.5-mini-instruct",
         model_type="chat",
-        ),
+    ),
     "yentinglin/llama-3-taiwan-70b-instruct": Model(
         id="yentinglin/llama-3-taiwan-70b-instruct",
         model_type="chat",
-        ),
+    ),
     "tokyotech-llm/llama-3-swallow-70b-instruct-v0.1": Model(
         id="tokyotech-llm/llama-3-swallow-70b-instruct-v0.1",
         model_type="chat",
-        ),
+    ),
     "abacusai/dracarys-llama-3.1-70b-instruct": Model(
         id="abacusai/dracarys-llama-3.1-70b-instruct",
         model_type="chat",
-        ),
+    ),
     "qwen/qwen2-7b-instruct": Model(
         id="qwen/qwen2-7b-instruct",
         model_type="chat",
-        ),
+    ),
     "nvidia/llama-3.1-nemotron-51b-instruct": Model(
         id="nvidia/llama-3.1-nemotron-51b-instruct",
         model_type="chat",
-        ),
+    ),
     "meta/llama-3.2-1b-instruct": Model(
         id="meta/llama-3.2-1b-instruct",
         model_type="chat",
@@ -359,15 +359,15 @@ CHAT_MODEL_TABLE = {
     "zyphra/zamba2-7b-instruct": Model(
         id="zyphra/zamba2-7b-instruct",
         model_type="chat",
-        ),
+    ),
     "ibm/granite-3.0-8b-instruct": Model(
         id="ibm/granite-3.0-8b-instruct",
         model_type="chat",
-        ),
+    ),
     "ibm/granite-3.0-3b-a800m-instruct": Model(
         id="ibm/granite-3.0-3b-a800m-instruct",
         model_type="chat",
-        ),
+    ),
     "nvidia/nemotron-4-mini-hindi-4b-instruct": Model(
         id="nvidia/nemotron-4-mini-hindi-4b-instruct",
         model_type="chat",
@@ -381,11 +381,28 @@ CHAT_MODEL_TABLE = {
     "nvidia/usdcode-llama-3.1-70b-instruct": Model(
         id="nvidia/usdcode-llama-3.1-70b-instruct",
         model_type="chat",
-        ),
+    ),
     "meta/llama-3.3-70b-instruct": Model(
         id="meta/llama-3.3-70b-instruct",
         model_type="chat",
+        supports_tools=True,
         supports_structured_output=True,
+    ),
+    "qwen/qwen2.5-coder-32b-instruct": Model(
+        id="qwen/qwen2.5-coder-32b-instruct",
+        model_type="chat",
+    ),
+    "qwen/qwen2.5-coder-7b-instruct": Model(
+        id="qwen/qwen2.5-coder-7b-instruct",
+        model_type="chat",
+    ),
+    "nvidia/llama-3.1-nemotron-70b-reward": Model(
+        id="nvidia/llama-3.1-nemotron-70b-reward",
+        model_type="chat",
+    ),
+    "deepseek-ai/deepseek-r1": Model(
+        id="deepseek-ai/deepseek-r1",
+        model_type="chat",
     ),
 }
 
@@ -429,7 +446,7 @@ VLM_MODEL_TABLE = {
     "microsoft/phi-3.5-vision-instruct": Model(
         id="microsoft/phi-3.5-vision-instruct",
         model_type="vlm",
-        ),
+    ),
     "nvidia/vila": Model(
         id="nvidia/vila",
         model_type="vlm",
@@ -451,12 +468,12 @@ EMBEDDING_MODEL_TABLE = {
     "snowflake/arctic-embed-l": Model(
         id="snowflake/arctic-embed-l",
         model_type="embedding",
-            aliases=["ai-arctic-embed-l"],
+        aliases=["ai-arctic-embed-l"],
     ),
     "NV-Embed-QA": Model(
         id="NV-Embed-QA",
         model_type="embedding",
-            endpoint="https://ai.api.nvidia.com/v1/retrieval/nvidia/embeddings",
+        endpoint="https://ai.api.nvidia.com/v1/retrieval/nvidia/embeddings",
         aliases=[
             "ai-embed-qa-4",
         ],
@@ -464,32 +481,32 @@ EMBEDDING_MODEL_TABLE = {
     "nvidia/nv-embed-v1": Model(
         id="nvidia/nv-embed-v1",
         model_type="embedding",
-            aliases=["ai-nv-embed-v1"],
+        aliases=["ai-nv-embed-v1"],
     ),
     "nvidia/nv-embedqa-mistral-7b-v2": Model(
         id="nvidia/nv-embedqa-mistral-7b-v2",
         model_type="embedding",
-        ),
+    ),
     "nvidia/nv-embedqa-e5-v5": Model(
         id="nvidia/nv-embedqa-e5-v5",
         model_type="embedding",
-        ),
+    ),
     "baai/bge-m3": Model(
         id="baai/bge-m3",
         model_type="embedding",
-        ),
+    ),
     "nvidia/embed-qa-4": Model(
         id="nvidia/embed-qa-4",
         model_type="embedding",
-        ),
+    ),
     "nvidia/llama-3.2-nv-embedqa-1b-v1": Model(
         id="nvidia/llama-3.2-nv-embedqa-1b-v1",
         model_type="embedding",
-        ),
+    ),
     "nvidia/llama-3.2-nv-embedqa-1b-v2": Model(
         id="nvidia/llama-3.2-nv-embedqa-1b-v2",
         model_type="embedding",
-        ),
+    ),
 }
 
 
@@ -504,7 +521,7 @@ OPENAI_MODEL_TABLE = {
 
 
 MODEL_TABLE = {
-    **CHAT_MODEL_TABLE,
+    **CHAT_MODEL_TABLE, 
     **VLM_MODEL_TABLE,
     **EMBEDDING_MODEL_TABLE,
 }
