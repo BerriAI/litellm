@@ -2239,7 +2239,7 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         elif value.get("litellm_provider") == "bedrock":
             if key not in litellm.bedrock_models:
                 litellm.bedrock_models.append(key)
-        elif value.get("litellm_provider") in ["nvidia_nim", "nvidia"]:
+        elif value.get("litellm_provider") in ("nvidia_nim", "nvidia"):
             if key not in litellm.nvidia_models:
                 litellm.nvidia_models.append(key)
     return model_cost
@@ -2538,7 +2538,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         )
         final_params = {**optional_params, **kwargs}
         return final_params
-    elif custom_llm_provider in ["nvidia_nim", "nvidia"]:
+    elif custom_llm_provider in ("nvidia_nim", "nvidia"):
         supported_params = get_supported_openai_params(
             model=model or "",
             custom_llm_provider=custom_llm_provider,
@@ -2889,7 +2889,6 @@ def get_optional_params(  # noqa: PLR0915
             and custom_llm_provider != "together_ai"
             and custom_llm_provider != "groq"
             and custom_llm_provider != "nvidia_nim"
-            and custom_llm_provider != "nvidia"
             and custom_llm_provider != "cerebras"
             and custom_llm_provider != "xai"
             and custom_llm_provider != "ai21_chat"
@@ -3431,7 +3430,7 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
-    elif custom_llm_provider in ["nvidia_nim", "nvidia"]:
+    elif custom_llm_provider in ("nvidia_nim", "nvidia"):
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
         )

@@ -51,7 +51,7 @@ def get_supported_openai_params(  # noqa: PLR0915
             )
         else:
             return litellm.FireworksAIConfig().get_supported_openai_params(model=model)
-    elif custom_llm_provider in ["nvidia_nim", "nvidia"]:
+    elif custom_llm_provider in ("nvidia_nim", "nvidia"):
         if request_type == "chat_completion":
             return litellm.nvidiaConfig.get_supported_openai_params(model=model)
         elif request_type == "embeddings":

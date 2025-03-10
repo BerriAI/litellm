@@ -58,7 +58,7 @@ def mock_models_endpoint():
         mock.get("/models").respond(200, json=response_data)
         yield mock
 
-@pytest.fixture(params=["nvidia", "nvidia_nim"])
+@pytest.fixture(params=("nvidia", "nvidia_nim"))
 def provider(request):
     return request.param
 
