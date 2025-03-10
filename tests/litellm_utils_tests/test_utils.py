@@ -907,7 +907,8 @@ def test_supports_response_schema(model, expected_bool):
     Should be true for gemini-1.5-pro on google ai studio / vertex ai AND predibase models
     Should be false otherwise
     """
-    litellm.model_cost = litellm.get_locally_cached_model_cost_map()
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
 
     from litellm.utils import supports_response_schema
 
@@ -1065,7 +1066,8 @@ def test_async_http_handler_force_ipv4(mock_async_client):
     "model, expected_bool", [("gpt-3.5-turbo", False), ("gpt-4o-audio-preview", True)]
 )
 def test_supports_audio_input(model, expected_bool):
-    litellm.model_cost = litellm.get_locally_cached_model_cost_map()
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
 
     from litellm.utils import supports_audio_input, supports_audio_output
 
@@ -1163,7 +1165,8 @@ def test_models_by_provider():
     """
     Make sure all providers from model map are in the valid providers list
     """
-    litellm.model_cost = litellm.get_locally_cached_model_cost_map()
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
 
     from litellm import models_by_provider
 
@@ -1481,7 +1484,8 @@ def test_get_valid_models_default(monkeypatch):
 
 
 def test_supports_vision_gemini():
-    litellm.model_cost = litellm.get_locally_cached_model_cost_map()
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
     from litellm.utils import supports_vision
 
     assert supports_vision("gemini-1.5-pro") is True
