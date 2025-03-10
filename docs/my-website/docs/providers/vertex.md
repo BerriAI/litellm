@@ -852,6 +852,7 @@ litellm.vertex_location = "us-central1 # Your Location
 | claude-3-5-sonnet@20240620  | `completion('vertex_ai/claude-3-5-sonnet@20240620', messages)` |
 | claude-3-sonnet@20240229   | `completion('vertex_ai/claude-3-sonnet@20240229', messages)` |
 | claude-3-haiku@20240307   | `completion('vertex_ai/claude-3-haiku@20240307', messages)` |
+| claude-3-7-sonnet@20250219   | `completion('vertex_ai/claude-3-7-sonnet@20250219', messages)` |
 
 ### Usage
 
@@ -924,6 +925,119 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 </TabItem>
 </Tabs>
+
+
+
+### Usage - `thinking` / `reasoning_content`
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+resp = completion(
+    model="vertex_ai/claude-3-7-sonnet-20250219",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    thinking={"type": "enabled", "budget_tokens": 1024},
+)
+
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+- model_name: claude-3-7-sonnet-20250219
+  litellm_params:
+    model: vertex_ai/claude-3-7-sonnet-20250219
+    vertex_ai_project: "my-test-project"
+    vertex_ai_location: "us-west-1"
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "claude-3-7-sonnet-20250219",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "thinking": {"type": "enabled", "budget_tokens": 1024}
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+
+**Expected Response**
+
+```python
+ModelResponse(
+    id='chatcmpl-c542d76d-f675-4e87-8e5f-05855f5d0f5e',
+    created=1740470510,
+    model='claude-3-7-sonnet-20250219',
+    object='chat.completion',
+    system_fingerprint=None,
+    choices=[
+        Choices(
+            finish_reason='stop',
+            index=0,
+            message=Message(
+                content="The capital of France is Paris.",
+                role='assistant',
+                tool_calls=None,
+                function_call=None,
+                provider_specific_fields={
+                    'citations': None,
+                    'thinking_blocks': [
+                        {
+                            'type': 'thinking',
+                            'thinking': 'The capital of France is Paris. This is a very straightforward factual question.',
+                            'signature': 'EuYBCkQYAiJAy6...'
+                        }
+                    ]
+                }
+            ),
+            thinking_blocks=[
+                {
+                    'type': 'thinking',
+                    'thinking': 'The capital of France is Paris. This is a very straightforward factual question.',
+                    'signature': 'EuYBCkQYAiJAy6AGB...'
+                }
+            ],
+            reasoning_content='The capital of France is Paris. This is a very straightforward factual question.'
+        )
+    ],
+    usage=Usage(
+        completion_tokens=68,
+        prompt_tokens=42,
+        total_tokens=110,
+        completion_tokens_details=None,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=None,
+            cached_tokens=0,
+            text_tokens=None,
+            image_tokens=None
+        ),
+        cache_creation_input_tokens=0,
+        cache_read_input_tokens=0
+    )
+)
+```
+
 
 
 ## Llama 3 API
@@ -1572,6 +1686,14 @@ assert isinstance(
 
 Pass any file supported by Vertex AI, through LiteLLM. 
 
+LiteLLM Supports the following image types passed in url
+
+```
+Images with Cloud Storage URIs - gs://cloud-samples-data/generative-ai/image/boats.jpeg
+Images with direct links - https://storage.googleapis.com/github-repo/img/gemini/intro/landmark3.jpg
+Videos with Cloud Storage URIs - https://storage.googleapis.com/github-repo/img/gemini/multimodality_usecases_overview/pixel8.mp4
+Base64 Encoded Local Images
+```
 
 <Tabs>
 <TabItem value="sdk" label="SDK">

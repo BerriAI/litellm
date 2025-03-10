@@ -108,6 +108,7 @@ def test_build_vertex_schema():
 
     schema = {
         "type": "object",
+        "$id": "my-special-id",
         "properties": {
             "recipes": {
                 "type": "array",
@@ -126,6 +127,7 @@ def test_build_vertex_schema():
     assert new_schema["type"] == schema["type"]
     assert new_schema["properties"] == schema["properties"]
     assert "required" in new_schema and new_schema["required"] == schema["required"]
+    assert "$id" not in new_schema
 
 
 @pytest.mark.parametrize(
@@ -1137,6 +1139,12 @@ def test_process_gemini_image():
     gcs_result = _process_gemini_image("gs://bucket/image.png")
     assert gcs_result["file_data"] == FileDataType(
         mime_type="image/png", file_uri="gs://bucket/image.png"
+    )
+
+    # Test gs url with format specified
+    gcs_result = _process_gemini_image("gs://bucket/image", format="image/jpeg")
+    assert gcs_result["file_data"] == FileDataType(
+        mime_type="image/jpeg", file_uri="gs://bucket/image"
     )
 
     # Test HTTPS JPG URL

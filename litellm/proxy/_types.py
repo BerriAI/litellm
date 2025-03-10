@@ -19,6 +19,7 @@ from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.utils import (
+    CallTypes,
     EmbeddingResponse,
     GenericBudgetConfigType,
     ImageResponse,
@@ -26,6 +27,8 @@ from litellm.types.utils import (
     ModelResponse,
     ProviderField,
     StandardCallbackDynamicParams,
+    StandardLoggingPayloadErrorInformation,
+    StandardLoggingPayloadStatus,
     StandardPassThroughResponseObject,
     TextCompletionResponse,
 )
@@ -610,6 +613,8 @@ class GenerateKeyResponse(KeyRequestBase):
     token_id: Optional[str] = None
     litellm_budget_table: Optional[Any] = None
     token: Optional[str] = None
+    created_by: Optional[str] = None
+    updated_by: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -660,6 +665,7 @@ class RegenerateKeyRequest(GenerateKeyRequest):
     duration: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
+    new_master_key: Optional[str] = None
 
 
 class KeyRequest(LiteLLMPydanticObjectBase):
@@ -682,6 +688,30 @@ class LiteLLM_ModelTable(LiteLLMPydanticObjectBase):
     updated_by: str
 
     model_config = ConfigDict(protected_namespaces=())
+
+
+class LiteLLM_ProxyModelTable(LiteLLMPydanticObjectBase):
+    model_id: str
+    model_name: str
+    litellm_params: dict
+    model_info: dict
+    created_by: str
+    updated_by: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def check_potential_json_str(cls, values):
+        if isinstance(values.get("litellm_params"), str):
+            try:
+                values["litellm_params"] = json.loads(values["litellm_params"])
+            except json.JSONDecodeError:
+                pass
+        if isinstance(values.get("model_info"), str):
+            try:
+                values["model_info"] = json.loads(values["model_info"])
+            except json.JSONDecodeError:
+                pass
+        return values
 
 
 class NewUserRequest(GenerateRequestBase):
@@ -999,6 +1029,7 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
 class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
     success_callback: Optional[List[str]] = []
     failure_callback: Optional[List[str]] = []
+    callbacks: Optional[List[str]] = []
     # for now - only supported for langfuse
     callback_vars: Optional[Dict[str, str]] = {}
 
@@ -1011,6 +1042,9 @@ class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
         failure_callback = values.get("failure_callback", [])
         if failure_callback is None:
             values.pop("failure_callback", None)
+        callbacks = values.get("callbacks", [])
+        if callbacks is None:
+            values.pop("callbacks", None)
 
         callback_vars = values.get("callback_vars", {})
         if callback_vars is None:
@@ -1019,6 +1053,7 @@ class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
             return {
                 "success_callback": [],
                 "failure_callback": [],
+                "callbacks": [],
                 "callback_vars": {},
             }
         valid_keys = set(StandardCallbackDynamicParams.__annotations__.keys())
@@ -1150,6 +1185,13 @@ class KeyManagementSettings(LiteLLMPydanticObjectBase):
     access_mode: Literal["read_only", "write_only", "read_and_write"] = "read_only"
     """
     Access mode for the secret manager, when write_only will only use for writing secrets
+    """
+
+    primary_secret_name: Optional[str] = None
+    """
+    If set, will read secrets from this primary secret in the secret manager
+
+    eg. on AWS you can store multiple secret values as K/V pairs in a single secret
     """
 
 
@@ -1387,7 +1429,9 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     litellm_budget_table: Optional[dict] = None
     org_id: Optional[str] = None  # org id for a given key
     created_at: Optional[datetime] = None
+    created_by: Optional[str] = None
     updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1574,6 +1618,10 @@ class LiteLLM_UserTableFiltered(BaseModel):  # done to avoid exposing sensitive 
     user_email: str
 
 
+class LiteLLM_UserTableWithKeyCount(LiteLLM_UserTable):
+    key_count: int = 0
+
+
 class LiteLLM_EndUserTable(LiteLLMPydanticObjectBase):
     user_id: str
     blocked: bool
@@ -1704,6 +1752,7 @@ class WebhookEvent(CallInfo):
 class SpecialModelNames(enum.Enum):
     all_team_models = "all-team-models"
     all_proxy_models = "all-proxy-models"
+    no_default_models = "no-default-models"
 
 
 class InvitationNew(LiteLLMPydanticObjectBase):
@@ -1846,6 +1895,10 @@ class SpendLogsMetadata(TypedDict):
     ]  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: Optional[str]
     applied_guardrails: Optional[List[str]]
+    status: StandardLoggingPayloadStatus
+    proxy_server_request: Optional[str]
+    batch_models: Optional[List[str]]
+    error_information: Optional[StandardLoggingPayloadErrorInformation]
 
 
 class SpendLogsPayload(TypedDict):
@@ -1944,7 +1997,7 @@ class ProxyException(Exception):
         code: Optional[Union[int, str]] = None,
         headers: Optional[Dict[str, str]] = None,
     ):
-        self.message = message
+        self.message = str(message)
         self.type = type
         self.param = param
 
@@ -2528,3 +2581,8 @@ class PrismaCompatibleUpdateDBModel(TypedDict, total=False):
 
 class SpecialManagementEndpointEnums(enum.Enum):
     DEFAULT_ORGANIZATION = "default_organization"
+
+
+class TransformRequestBody(BaseModel):
+    call_type: CallTypes
+    request_body: dict
