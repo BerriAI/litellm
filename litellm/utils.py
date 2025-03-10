@@ -119,7 +119,10 @@ from litellm.router_utils.get_retry_from_policy import (
     reset_retry_policy,
 )
 from litellm.secret_managers.main import get_secret
-from litellm.types.llms.anthropic import ANTHROPIC_API_ONLY_HEADERS
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_API_ONLY_HEADERS,
+    AnthropicThinkingParam,
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
     AllPromptValues,
@@ -153,6 +156,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     ProviderField,
     ProviderSpecificModelInfo,
+    RawRequestTypedDict,
     SelectTokenizerResponse,
     StreamingChoices,
     TextChoices,
@@ -188,6 +192,9 @@ from typing import (
 from openai import OpenAIError as OriginalError
 
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.llms.base_llm.anthropic_messages.transformation import (
+    BaseAnthropicMessagesConfig,
+)
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
@@ -448,6 +455,15 @@ def get_applied_guardrails(kwargs: Dict[str, Any]) -> List[str]:
     return applied_guardrails
 
 
+def get_dynamic_callbacks(
+    dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]]
+) -> List:
+    returned_callbacks = litellm.callbacks.copy()
+    if dynamic_callbacks:
+        returned_callbacks.extend(dynamic_callbacks)  # type: ignore
+    return returned_callbacks
+
+
 def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
@@ -472,12 +488,18 @@ def function_setup(  # noqa: PLR0915
         ## LOGGING SETUP
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
-        if len(litellm.callbacks) > 0:
-            for callback in litellm.callbacks:
+        ## DYNAMIC CALLBACKS ##
+        dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = (
+            kwargs.pop("callbacks", None)
+        )
+        all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
+
+        if len(all_callbacks) > 0:
+            for callback in all_callbacks:
                 # check if callback is a string - e.g. "lago", "openmeter"
                 if isinstance(callback, str):
                     callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
-                        callback, internal_usage_cache=None, llm_router=None
+                        callback, internal_usage_cache=None, llm_router=None  # type: ignore
                     )
                     if callback is None or any(
                         isinstance(cb, type(callback))
@@ -1030,6 +1052,7 @@ def client(original_function):  # noqa: PLR0915
                 )
 
                 if caching_handler_response.cached_result is not None:
+                    verbose_logger.debug("Cache hit!")
                     return caching_handler_response.cached_result
 
             # CHECK MAX TOKENS
@@ -1969,6 +1992,19 @@ def supports_response_schema(
     )
 
 
+def supports_parallel_function_calling(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> bool:
+    """
+    Check if the given model supports parallel tool calls and return a boolean value.
+    """
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_parallel_function_calling",
+    )
+
+
 def supports_function_calling(
     model: str, custom_llm_provider: Optional[str] = None
 ) -> bool:
@@ -2116,30 +2152,6 @@ def supports_embedding_image_input(
         custom_llm_provider=custom_llm_provider,
         key="supports_embedding_image_input",
     )
-
-
-def supports_parallel_function_calling(model: str):
-    """
-    Check if the given model supports parallel function calling and return True if it does, False otherwise.
-
-    Parameters:
-        model (str): The model to check for support of parallel function calling.
-
-    Returns:
-        bool: True if the model supports parallel function calling, False otherwise.
-
-    Raises:
-        Exception: If the model is not found in the model_cost dictionary.
-    """
-    if model in litellm.model_cost:
-        model_info = litellm.model_cost[model]
-        if model_info.get("supports_parallel_function_calling", False) is True:
-            return True
-        return False
-    else:
-        raise Exception(
-            f"Model not supports parallel function calling. You passed model={model}."
-        )
 
 
 ####### HELPER FUNCTIONS ################
@@ -2752,6 +2764,7 @@ def get_optional_params(  # noqa: PLR0915
     reasoning_effort=None,
     additional_drop_params=None,
     messages: Optional[List[AllMessageValues]] = None,
+    thinking: Optional[AnthropicThinkingParam] = None,
     **kwargs,
 ):
     # retrieve all parameters passed to the function
@@ -2836,9 +2849,11 @@ def get_optional_params(  # noqa: PLR0915
         "additional_drop_params": None,
         "messages": None,
         "reasoning_effort": None,
+        "thinking": None,
     }
 
     # filter out those parameters that were passed with non-default values
+
     non_default_params = {
         k: v
         for k, v in passed_params.items()
@@ -3245,6 +3260,7 @@ def get_optional_params(  # noqa: PLR0915
         )
     elif custom_llm_provider == "bedrock":
         bedrock_route = BedrockModelInfo.get_bedrock_route(model)
+        bedrock_base_model = BedrockModelInfo.get_base_model(model)
         if bedrock_route == "converse" or bedrock_route == "converse_like":
             optional_params = litellm.AmazonConverseConfig().map_openai_params(
                 model=model,
@@ -3258,8 +3274,9 @@ def get_optional_params(  # noqa: PLR0915
                 messages=messages,
             )
 
-        elif "anthropic" in model and bedrock_route == "invoke":
-            if model.startswith("anthropic.claude-3"):
+        elif "anthropic" in bedrock_base_model and bedrock_route == "invoke":
+            if bedrock_base_model.startswith("anthropic.claude-3"):
+
                 optional_params = (
                     litellm.AmazonAnthropicClaude3Config().map_openai_params(
                         non_default_params=non_default_params,
@@ -3272,10 +3289,17 @@ def get_optional_params(  # noqa: PLR0915
                         ),
                     )
                 )
+
             else:
                 optional_params = litellm.AmazonAnthropicConfig().map_openai_params(
                     non_default_params=non_default_params,
                     optional_params=optional_params,
+                    model=model,
+                    drop_params=(
+                        drop_params
+                        if drop_params is not None and isinstance(drop_params, bool)
+                        else False
+                    ),
                 )
         elif provider_config is not None:
             optional_params = provider_config.map_openai_params(
@@ -4383,6 +4407,12 @@ def _get_model_info_helper(  # noqa: PLR0915
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
                 input_cost_per_audio_token=_model_info.get(
                     "input_cost_per_audio_token", None
+                ),
+                input_cost_per_token_batches=_model_info.get(
+                    "input_cost_per_token_batches"
+                ),
+                output_cost_per_token_batches=_model_info.get(
+                    "output_cost_per_token_batches"
                 ),
                 output_cost_per_token=_output_cost_per_token,
                 output_cost_per_audio_token=_model_info.get(
@@ -5932,6 +5962,18 @@ def convert_to_dict(message: Union[BaseModel, dict]) -> dict:
         )
 
 
+def validate_and_fix_openai_messages(messages: List):
+    """
+    Ensures all messages are valid OpenAI chat completion messages.
+
+    Handles missing role for assistant messages.
+    """
+    for message in messages:
+        if not message.get("role"):
+            message["role"] = "assistant"
+    return validate_chat_completion_messages(messages=messages)
+
+
 def validate_chat_completion_messages(messages: List[AllMessageValues]):
     """
     Ensures all messages are valid OpenAI chat completion messages.
@@ -6151,13 +6193,19 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.BEDROCK == provider:
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
-                model
+                model=model
             )
+            base_model = BedrockModelInfo.get_base_model(model)
 
             if bedrock_route == "converse" or bedrock_route == "converse_like":
                 return litellm.AmazonConverseConfig()
             elif bedrock_invoke_provider == "amazon":  # amazon titan llms
                 return litellm.AmazonTitanConfig()
+            elif bedrock_invoke_provider == "anthropic":
+                if base_model.startswith("anthropic.claude-3"):
+                    return litellm.AmazonAnthropicClaude3Config()
+                else:
+                    return litellm.AmazonAnthropicConfig()
             elif (
                 bedrock_invoke_provider == "meta" or bedrock_invoke_provider == "llama"
             ):  # amazon / meta llms
@@ -6206,6 +6254,15 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.JINA_AI == provider:
             return litellm.JinaAIRerankConfig()
         return litellm.CohereRerankConfig()
+
+    @staticmethod
+    def get_provider_anthropic_messages_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseAnthropicMessagesConfig]:
+        if litellm.LlmProviders.ANTHROPIC == provider:
+            return litellm.AnthropicMessagesConfig()
+        return None
 
     @staticmethod
     def get_provider_audio_transcription_config(
@@ -6282,11 +6339,18 @@ def get_end_user_id_for_cost_tracking(
         return None
     return end_user_id
 
-def should_use_cohere_v1_client(api_base: Optional[str], present_version_params: List[str]):
+
+def should_use_cohere_v1_client(
+    api_base: Optional[str], present_version_params: List[str]
+):
     if not api_base:
         return False
-    uses_v1_params = ("max_chunks_per_doc" in present_version_params) and ('max_tokens_per_doc' not in present_version_params) 
-    return api_base.endswith("/v1/rerank") or (uses_v1_params and not api_base.endswith("/v2/rerank"))
+    uses_v1_params = ("max_chunks_per_doc" in present_version_params) and (
+        "max_tokens_per_doc" not in present_version_params
+    )
+    return api_base.endswith("/v1/rerank") or (
+        uses_v1_params and not api_base.endswith("/v2/rerank")
+    )
 
 
 def is_prompt_caching_valid_prompt(
@@ -6420,3 +6484,48 @@ def add_openai_metadata(metadata: dict) -> dict:
     }
 
     return visible_metadata.copy()
+
+
+def return_raw_request(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict:
+    """
+    Return the json str of the request
+
+    This is currently in BETA, and tested for `/chat/completions` -> `litellm.completion` calls.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    litellm_logging_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        litellm_call_id="1234",
+        start_time=datetime.now(),
+        function_id="1234",
+        log_raw_request_response=True,
+    )
+
+    llm_api_endpoint = getattr(litellm, endpoint.value)
+
+    received_exception = ""
+
+    try:
+        llm_api_endpoint(
+            **kwargs,
+            litellm_logging_obj=litellm_logging_obj,
+            api_key="my-fake-api-key",  # 👈 ensure the request fails
+        )
+    except Exception as e:
+        received_exception = str(e)
+
+    raw_request_typed_dict = litellm_logging_obj.model_call_details.get(
+        "raw_request_typed_dict"
+    )
+    if raw_request_typed_dict:
+        return cast(RawRequestTypedDict, raw_request_typed_dict)
+    else:
+        return RawRequestTypedDict(
+            error=received_exception,
+        )

@@ -57,6 +57,7 @@ def get_litellm_params(
     prompt_variables: Optional[dict] = None,
     async_call: Optional[bool] = None,
     ssl_verify: Optional[bool] = None,
+    merge_reasoning_content_in_choices: Optional[bool] = None,
     **kwargs,
 ) -> dict:
     litellm_params = {
@@ -75,7 +76,7 @@ def get_litellm_params(
         "model_info": model_info,
         "proxy_server_request": proxy_server_request,
         "preset_cache_key": preset_cache_key,
-        "no-log": no_log,
+        "no-log": no_log or kwargs.get("no-log"),
         "stream_response": {},  # litellm_call_id: ModelResponse Dict
         "input_cost_per_token": input_cost_per_token,
         "input_cost_per_second": input_cost_per_second,
@@ -97,5 +98,6 @@ def get_litellm_params(
         "prompt_variables": prompt_variables,
         "async_call": async_call,
         "ssl_verify": ssl_verify,
+        "merge_reasoning_content_in_choices": merge_reasoning_content_in_choices,
     }
     return litellm_params

@@ -4,9 +4,9 @@ import json
 from base64 import b64encode
 from datetime import datetime
 from typing import List, Optional
+from urllib.parse import urlparse
 
 import httpx
-from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 
@@ -26,6 +26,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
+from litellm.types.utils import StandardLoggingUserAPIKeyMetadata
 
 from .streaming_handler import PassThroughStreamingHandler
 from .success_handler import PassThroughEndpointLogging
@@ -134,7 +135,7 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
         data["model"] = (
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args
-            or data["model"]  # default passed in http request
+            or data.get("model", None)  # default passed in http request
         )
         if user_model:
             data["model"] = user_model
@@ -607,12 +608,19 @@ def _init_kwargs_for_pass_through_endpoint(
 ) -> dict:
     _parsed_body = _parsed_body or {}
     _litellm_metadata: Optional[dict] = _parsed_body.pop("litellm_metadata", None)
-    _metadata = {
-        "user_api_key": user_api_key_dict.api_key,
-        "user_api_key_user_id": user_api_key_dict.user_id,
-        "user_api_key_team_id": user_api_key_dict.team_id,
-        "user_api_key_end_user_id": user_api_key_dict.end_user_id,
-    }
+    _metadata = dict(
+        StandardLoggingUserAPIKeyMetadata(
+            user_api_key_hash=user_api_key_dict.api_key,
+            user_api_key_alias=user_api_key_dict.key_alias,
+            user_api_key_user_email=user_api_key_dict.user_email,
+            user_api_key_user_id=user_api_key_dict.user_id,
+            user_api_key_team_id=user_api_key_dict.team_id,
+            user_api_key_org_id=user_api_key_dict.org_id,
+            user_api_key_team_alias=user_api_key_dict.team_alias,
+            user_api_key_end_user_id=user_api_key_dict.end_user_id,
+        )
+    )
+    _metadata["user_api_key"] = user_api_key_dict.api_key
     if _litellm_metadata:
         _metadata.update(_litellm_metadata)
 

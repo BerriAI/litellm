@@ -816,7 +816,7 @@ def file_content(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'file_content'. Only 'openai' and 'azure' are supported.".format(
+                message="LiteLLM doesn't support {} for 'custom_llm_provider'. Supported providers are 'openai', 'azure', 'vertex_ai'.".format(
                     custom_llm_provider
                 ),
                 model="n/a",

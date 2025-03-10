@@ -161,6 +161,7 @@ def test_aaparallel_function_call(model):
     "model",
     [
         "anthropic/claude-3-7-sonnet-20250219",
+        "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
@@ -256,6 +257,8 @@ def test_aaparallel_function_call_with_anthropic_thinking(model):
                 thinking={"type": "enabled", "budget_tokens": 1024},
             )  # get a new response from the model where it can see the function response
             print("second response\n", second_response)
+
+            ## THIRD RESPONSE
     except litellm.InternalServerError as e:
         print(e)
     except litellm.RateLimitError as e:

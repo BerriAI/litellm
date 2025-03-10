@@ -23,6 +23,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionCachedContent,
     ChatCompletionSystemMessage,
+    ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
@@ -80,7 +81,7 @@ class AnthropicConfig(BaseConfig):
         return super().get_config()
 
     def get_supported_openai_params(self, model: str):
-        return [
+        params = [
             "stream",
             "stop",
             "temperature",
@@ -94,6 +95,11 @@ class AnthropicConfig(BaseConfig):
             "response_format",
             "user",
         ]
+
+        if "claude-3-7-sonnet" in model:
+            params.append("thinking")
+
+        return params
 
     def get_json_schema_from_pydantic_object(
         self, response_format: Union[Any, Dict, None]
@@ -117,21 +123,25 @@ class AnthropicConfig(BaseConfig):
         prompt_caching_set: bool = False,
         pdf_used: bool = False,
         is_vertex_request: bool = False,
+        user_anthropic_beta_headers: Optional[List[str]] = None,
     ) -> dict:
 
-        betas = []
+        betas = set()
         if prompt_caching_set:
-            betas.append("prompt-caching-2024-07-31")
+            betas.add("prompt-caching-2024-07-31")
         if computer_tool_used:
-            betas.append("computer-use-2024-10-22")
+            betas.add("computer-use-2024-10-22")
         if pdf_used:
-            betas.append("pdfs-2024-09-25")
+            betas.add("pdfs-2024-09-25")
         headers = {
             "anthropic-version": anthropic_version or "2023-06-01",
             "x-api-key": api_key,
             "accept": "application/json",
             "content-type": "application/json",
         }
+
+        if user_anthropic_beta_headers is not None:
+            betas.update(user_anthropic_beta_headers)
 
         # Don't send any beta headers to Vertex, Vertex has failed requests when they are sent
         if is_vertex_request is True:
@@ -283,18 +293,6 @@ class AnthropicConfig(BaseConfig):
                 new_stop = new_v
         return new_stop
 
-    def _add_tools_to_optional_params(
-        self, optional_params: dict, tools: List[AllAnthropicToolsValues]
-    ) -> dict:
-        if "tools" not in optional_params:
-            optional_params["tools"] = tools
-        else:
-            optional_params["tools"] = [
-                *optional_params["tools"],
-                *tools,
-            ]
-        return optional_params
-
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -335,6 +333,10 @@ class AnthropicConfig(BaseConfig):
                 optional_params["top_p"] = value
             if param == "response_format" and isinstance(value, dict):
 
+                ignore_response_format_types = ["text"]
+                if value["type"] in ignore_response_format_types:  # value is a no-op
+                    continue
+
                 json_schema: Optional[dict] = None
                 if "response_schema" in value:
                     json_schema = value["response_schema"]
@@ -358,7 +360,8 @@ class AnthropicConfig(BaseConfig):
                 optional_params["json_mode"] = True
             if param == "user":
                 optional_params["metadata"] = {"user_id": value}
-
+            if param == "thinking":
+                optional_params["thinking"] = value
         return optional_params
 
     def _create_json_tool_call_for_response_format(
@@ -584,12 +587,14 @@ class AnthropicConfig(BaseConfig):
     def extract_response_content(self, completion_response: dict) -> Tuple[
         str,
         Optional[List[Any]],
-        Optional[List[Dict[str, Any]]],
+        Optional[List[ChatCompletionThinkingBlock]],
+        Optional[str],
         List[ChatCompletionToolCallChunk],
     ]:
         text_content = ""
         citations: Optional[List[Any]] = None
-        thinking_blocks: Optional[List[Dict[str, Any]]] = None
+        thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
+        reasoning_content: Optional[str] = None
         tool_calls: List[ChatCompletionToolCallChunk] = []
         for idx, content in enumerate(completion_response["content"]):
             if content["type"] == "text":
@@ -615,8 +620,13 @@ class AnthropicConfig(BaseConfig):
             if content.get("thinking", None) is not None:
                 if thinking_blocks is None:
                     thinking_blocks = []
-                thinking_blocks.append(content)
-        return text_content, citations, thinking_blocks, tool_calls
+                thinking_blocks.append(cast(ChatCompletionThinkingBlock, content))
+        if thinking_blocks is not None:
+            reasoning_content = ""
+            for block in thinking_blocks:
+                if "thinking" in block:
+                    reasoning_content += block["thinking"]
+        return text_content, citations, thinking_blocks, reasoning_content, tool_calls
 
     def transform_response(
         self,
@@ -666,10 +676,11 @@ class AnthropicConfig(BaseConfig):
         else:
             text_content = ""
             citations: Optional[List[Any]] = None
-            thinking_blocks: Optional[List[Dict[str, Any]]] = None
+            thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
+            reasoning_content: Optional[str] = None
             tool_calls: List[ChatCompletionToolCallChunk] = []
 
-            text_content, citations, thinking_blocks, tool_calls = (
+            text_content, citations, thinking_blocks, reasoning_content, tool_calls = (
                 self.extract_response_content(completion_response=completion_response)
             )
 
@@ -680,6 +691,8 @@ class AnthropicConfig(BaseConfig):
                     "citations": citations,
                     "thinking_blocks": thinking_blocks,
                 },
+                thinking_blocks=thinking_blocks,
+                reasoning_content=reasoning_content,
             )
 
             ## HANDLE JSON MODE - anthropic returns single function call
@@ -774,6 +787,13 @@ class AnthropicConfig(BaseConfig):
             headers=cast(httpx.Headers, headers),
         )
 
+    def _get_user_anthropic_beta_headers(
+        self, anthropic_beta_header: Optional[str]
+    ) -> Optional[List[str]]:
+        if anthropic_beta_header is None:
+            return None
+        return anthropic_beta_header.split(",")
+
     def validate_environment(
         self,
         headers: dict,
@@ -794,13 +814,18 @@ class AnthropicConfig(BaseConfig):
         prompt_caching_set = self.is_cache_control_set(messages=messages)
         computer_tool_used = self.is_computer_tool_used(tools=tools)
         pdf_used = self.is_pdf_used(messages=messages)
+        user_anthropic_beta_headers = self._get_user_anthropic_beta_headers(
+            anthropic_beta_header=headers.get("anthropic-beta")
+        )
         anthropic_headers = self.get_anthropic_headers(
             computer_tool_used=computer_tool_used,
             prompt_caching_set=prompt_caching_set,
             pdf_used=pdf_used,
             api_key=api_key,
             is_vertex_request=optional_params.get("is_vertex_request", False),
+            user_anthropic_beta_headers=user_anthropic_beta_headers,
         )
 
         headers = {**headers, **anthropic_headers}
+
         return headers

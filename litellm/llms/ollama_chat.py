@@ -1,7 +1,7 @@
 import json
 import time
 import uuid
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Union
 
 import aiohttp
 import httpx
@@ -9,7 +9,11 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import verbose_logger
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    get_async_httpx_client,
+)
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.ollama import OllamaToolCall, OllamaToolCallFunction
 from litellm.types.llms.openai import ChatCompletionAssistantToolCall
@@ -205,6 +209,7 @@ def get_ollama_response(  # noqa: PLR0915
     api_key: Optional[str] = None,
     acompletion: bool = False,
     encoding=None,
+    client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
 ):
     if api_base.endswith("/api/chat"):
         url = api_base
@@ -301,7 +306,11 @@ def get_ollama_response(  # noqa: PLR0915
     headers: Optional[dict] = None
     if api_key is not None:
         headers = {"Authorization": "Bearer {}".format(api_key)}
-    response = litellm.module_level_client.post(
+
+    sync_client = litellm.module_level_client
+    if client is not None and isinstance(client, HTTPHandler):
+        sync_client = client
+    response = sync_client.post(
         url=url,
         json=data,
         headers=headers,
@@ -508,6 +517,7 @@ async def ollama_async_streaming(
         verbose_logger.exception(
             "LiteLLM.ollama(): Exception occured - {}".format(str(e))
         )
+        raise e
 
 
 async def ollama_acompletion(

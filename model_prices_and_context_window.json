@@ -76,6 +76,44 @@
         "supports_system_messages": true,
         "supports_tool_choice": true
     },
+    "gpt-4.5-preview": {
+        "max_tokens": 16384,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.000075,
+        "output_cost_per_token": 0.00015,
+        "input_cost_per_token_batches": 0.0000375,
+        "output_cost_per_token_batches": 0.000075,
+        "cache_read_input_token_cost": 0.0000375,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "gpt-4.5-preview-2025-02-27": {
+        "max_tokens": 16384,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.000075,
+        "output_cost_per_token": 0.00015,
+        "input_cost_per_token_batches": 0.0000375,
+        "output_cost_per_token_batches": 0.000075,
+        "cache_read_input_token_cost": 0.0000375,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
     "gpt-4o-audio-preview": {
         "max_tokens": 16384,
         "max_input_tokens": 128000,
@@ -1030,9 +1068,9 @@
         "max_tokens": 65536,
         "max_input_tokens": 128000,
         "max_output_tokens": 65536,
-        "input_cost_per_token": 0.000003,
-        "output_cost_per_token": 0.000012,
-        "cache_read_input_token_cost": 0.0000015,
+        "input_cost_per_token": 0.00000121,
+        "output_cost_per_token": 0.00000484,
+        "cache_read_input_token_cost": 0.000000605,
         "litellm_provider": "azure",
         "mode": "chat",
         "supports_function_calling": true,
@@ -1044,9 +1082,9 @@
         "max_tokens": 65536,
         "max_input_tokens": 128000,
         "max_output_tokens": 65536,
-        "input_cost_per_token": 0.000003,
-        "output_cost_per_token": 0.000012,
-        "cache_read_input_token_cost": 0.0000015,
+        "input_cost_per_token": 0.00000121,
+        "output_cost_per_token": 0.00000484,
+        "cache_read_input_token_cost": 0.000000605,
         "litellm_provider": "azure",
         "mode": "chat",
         "supports_function_calling": true,
@@ -1409,7 +1447,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "deprecation_date": "2025-03-31",
+        "deprecation_date": "2025-05-31",
         "supports_tool_choice": true
     },
     "azure/gpt-3.5-turbo-0125": {
@@ -2747,15 +2785,17 @@
         "max_tokens": 8192,
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 0.000001,
-        "output_cost_per_token": 0.000005,
-        "cache_creation_input_token_cost": 0.00000125,
-        "cache_read_input_token_cost": 0.0000001,
+        "input_cost_per_token": 0.0000008,
+        "output_cost_per_token": 0.000004,
+        "cache_creation_input_token_cost": 0.000001,
+        "cache_read_input_token_cost": 0.0000008,
         "litellm_provider": "anthropic",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_vision": true,
         "tool_use_system_prompt_tokens": 264,
         "supports_assistant_prefill": true,
+        "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "deprecation_date": "2025-10-01",
@@ -2772,8 +2812,10 @@
         "litellm_provider": "anthropic",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_vision": true,
         "tool_use_system_prompt_tokens": 264,
         "supports_assistant_prefill": true,
+        "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "deprecation_date": "2025-10-01",
@@ -2848,6 +2890,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159,
         "supports_assistant_prefill": true,
+        "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "deprecation_date": "2025-06-01",
@@ -2867,15 +2910,16 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159,
         "supports_assistant_prefill": true,
+        "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "deprecation_date": "2025-06-01",
         "supports_tool_choice": true
     },
     "claude-3-7-sonnet-latest": {
-        "max_tokens": 8192,
+        "max_tokens": 128000,
         "max_input_tokens": 200000,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 128000,
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000015,
         "cache_creation_input_token_cost": 0.00000375,
@@ -2886,15 +2930,16 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159,
         "supports_assistant_prefill": true,
+        "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "deprecation_date": "2025-06-01",
         "supports_tool_choice": true
     },
     "claude-3-7-sonnet-20250219": {
-        "max_tokens": 8192,
+        "max_tokens": 128000,
         "max_input_tokens": 200000,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 128000,
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000015,
         "cache_creation_input_token_cost": 0.00000375,
@@ -2905,9 +2950,10 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159,
         "supports_assistant_prefill": true,
+        "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
-        "deprecation_date": "2025-06-01",
+        "deprecation_date": "2026-02-01",
         "supports_tool_choice": true
     },
     "claude-3-5-sonnet-20241022": {
@@ -4119,6 +4165,7 @@
         "litellm_provider": "vertex_ai-anthropic_models",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_pdf_input": true,
         "supports_vision": true,
         "supports_assistant_prefill": true,
         "supports_tool_choice": true
@@ -4132,6 +4179,7 @@
         "litellm_provider": "vertex_ai-anthropic_models",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_pdf_input": true,
         "supports_vision": true,
         "supports_assistant_prefill": true,
         "supports_tool_choice": true
@@ -4145,6 +4193,7 @@
         "litellm_provider": "vertex_ai-anthropic_models",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_pdf_input": true,
         "supports_vision": true,
         "supports_assistant_prefill": true,
         "supports_tool_choice": true
@@ -4158,6 +4207,7 @@
         "litellm_provider": "vertex_ai-anthropic_models",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_pdf_input": true,
         "supports_vision": true,
         "supports_assistant_prefill": true,
         "supports_tool_choice": true
@@ -4173,6 +4223,7 @@
         "litellm_provider": "vertex_ai-anthropic_models",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_pdf_input": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159,
         "supports_assistant_prefill": true,
@@ -4216,6 +4267,7 @@
         "litellm_provider": "vertex_ai-anthropic_models",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_pdf_input": true,
         "supports_assistant_prefill": true,
         "supports_tool_choice": true
     },
@@ -4228,6 +4280,7 @@
         "litellm_provider": "vertex_ai-anthropic_models",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_pdf_input": true,
         "supports_assistant_prefill": true,
         "supports_tool_choice": true
     },
@@ -6392,6 +6445,18 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true
     },
+    "eu.amazon.nova-micro-v1:0": {
+        "max_tokens": 4096, 
+        "max_input_tokens": 300000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.000000046,
+        "output_cost_per_token": 0.000000184,
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
+    },
     "amazon.nova-lite-v1:0": {
         "max_tokens": 4096, 
         "max_input_tokens": 128000,
@@ -6412,6 +6477,20 @@
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.00000006,
         "output_cost_per_token": 0.00000024,
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
+    },
+    "eu.amazon.nova-lite-v1:0": {
+        "max_tokens": 4096, 
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.000000078,
+        "output_cost_per_token": 0.000000312,
         "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "supports_function_calling": true,
@@ -6448,6 +6527,21 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true
     },
+    "eu.amazon.nova-pro-v1:0": {
+        "max_tokens": 4096, 
+        "max_input_tokens": 300000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000105,
+        "output_cost_per_token": 0.0000042,
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
     "anthropic.claude-3-sonnet-20240229-v1:0": {
         "max_tokens": 4096, 
         "max_input_tokens": 200000,
@@ -6459,7 +6553,24 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_tool_choice": true
+    },
+    "bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0": {
+        "max_tokens": 4096, 
+        "max_input_tokens": 200000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000015,
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_tool_choice": true,
+        "metadata": {
+            "notes": "Anthropic via Invoke route does not currently support pdf input."
+        }
     },
     "anthropic.claude-3-5-sonnet-20240620-v1:0": {
         "max_tokens": 4096, 
@@ -6472,6 +6583,7 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_tool_choice": true
     },
     "anthropic.claude-3-7-sonnet-20250219-v1:0": {
@@ -6499,6 +6611,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_assistant_prefill": true,
         "supports_prompt_caching": true, 
         "supports_response_schema": true,
@@ -6515,6 +6628,7 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_tool_choice": true
     },
     "anthropic.claude-3-5-haiku-20241022-v1:0": {
@@ -6526,6 +6640,7 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_assistant_prefill": true,
+        "supports_pdf_input": true,
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_prompt_caching": true,
@@ -6555,6 +6670,7 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_tool_choice": true
     },
     "us.anthropic.claude-3-5-sonnet-20240620-v1:0": {
@@ -6568,6 +6684,7 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_tool_choice": true
     },
     "us.anthropic.claude-3-5-sonnet-20241022-v2:0": {
@@ -6580,6 +6697,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_assistant_prefill": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
@@ -6611,6 +6729,7 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_tool_choice": true
     },
     "us.anthropic.claude-3-5-haiku-20241022-v1:0": {
@@ -6622,6 +6741,7 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_assistant_prefill": true,
+        "supports_pdf_input": true,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
@@ -6651,6 +6771,7 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_tool_choice": true
     },
     "eu.anthropic.claude-3-5-sonnet-20240620-v1:0": {
@@ -6664,6 +6785,7 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_tool_choice": true
     },
     "eu.anthropic.claude-3-5-sonnet-20241022-v2:0": {
@@ -6676,6 +6798,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_assistant_prefill": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
@@ -6692,6 +6815,7 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_tool_choice": true
     },
     "eu.anthropic.claude-3-5-haiku-20241022-v1:0": {
@@ -6704,6 +6828,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
+        "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
