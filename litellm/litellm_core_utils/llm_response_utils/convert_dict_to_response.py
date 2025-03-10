@@ -239,7 +239,7 @@ def _parse_content_for_reasoning(
     return None, message_text
 
 
-def _extract_reasoning_content(message: dict) -> tuple[Optional[str], Optional[str]]:
+def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[str]]:
     """
     Extract reasoning content and main content from a message.
 
