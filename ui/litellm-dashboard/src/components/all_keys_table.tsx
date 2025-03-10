@@ -325,12 +325,11 @@ export function AllKeysTable({
         if (!allOrganizations || allOrganizations.length === 0) return [];
         
         const filteredOrgs = allOrganizations.filter(org => 
-          org.organization_id.toLowerCase().includes(searchText.toLowerCase()) || 
-          (org.organization_name && org.organization_name.toLowerCase().includes(searchText.toLowerCase()))
+          org.organization_id?.toLowerCase().includes(searchText.toLowerCase()) ?? false
         );
         
         return filteredOrgs.map(org => ({
-          label: `${org.organization_name || 'Unknown'} (${org.organization_id})`,
+          label: `${org.organization_id || 'Unknown'} (${org.organization_id})`,
           value: org.organization_id
         }));
       }
@@ -385,8 +384,8 @@ export function AllKeysTable({
           <div className="h-[75vh] overflow-auto">
             
             <DataTable
-              columns={columns.filter(col => col.id !== 'expander')}
-              data={filteredKeys}
+              columns={columns.filter(col => col.id !== 'expander') as any}
+              data={filteredKeys as any}
               isLoading={isLoading}
               getRowCanExpand={() => false}
               renderSubComponent={() => <></>}
