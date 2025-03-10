@@ -1,15 +1,15 @@
 # Contributing Code
 
+## **Checklist before submitting a PR**
+
 Here are the core requirements for any PR submitted to LiteLLM
 
-- Follow the [fork and pull request workflow](https://docs.github.com/en/get-started/exploring-projects-on-github/contributing-to-a-project)
-- Fill out the relevant issue(s) your PR solves
-- Add testing, **Adding atleast 1 test is a hard requirement**
-- Ensure your PR passes the following tests 
-    - Unit Tests
-    - Formatting / Linting Tests
-- Keep scope as isolated as possible. As a general rule, your changes should address 1 specific problem at a time
 
+- [ ] Add testing, **Adding at least 1 test is a hard requirement** - [see details](#2-adding-testing-to-your-pr)
+- [ ] Ensure your PR passes the following tests:
+    - [ ] [Unit Tests](#3-running-unit-tests)
+    - [ ] Formatting / Linting Tests
+- [ ] Keep scope as isolated as possible. As a general rule, your changes should address 1 specific problem at a time
 
 
 
@@ -26,10 +26,10 @@ Step 1: Clone the repo
 git clone https://github.com/BerriAI/litellm.git
 ```
 
-Step 2: Install dependencies:
+Step 2: Install dev dependencies:
 
 ```shell
-pip install -r requirements.txt
+poetry install --with dev --extras proxy
 ```
 
 That's it, your local dev environment is ready!
@@ -48,29 +48,15 @@ The `tests/litellm/` directory follows the same directory structure as `litellm/
 - `litellm/proxy/test_caching_routes.py` maps to `litellm/proxy/caching_routes.py`
 - `test_{filename}.py` maps to `litellm/{filename}.py`
 
+### 3. Running Unit Tests
 
-
-
-### Checklist for PRs
-
-
-
-Step 3: Test your change:
-
-a. Add a pytest test within `tests/litellm/`
-
-This folder follows the same directory structure as `litellm/`.
-
-If a corresponding test file does not exist, create one.
-
-b. Run the test
+run the following command on the root of the litellm directory
 
 ```shell
-cd tests/litellm # pwd: Documents/litellm/litellm/tests/litellm
-pytest /path/to/test_file.py
+make test-unit
 ```
 
-Step 4: Submit a PR with your changes! 🚀
+### 4. Submit a PR with your changes!
 
 - push your fork to your GitHub repo
 - submit a PR from there
