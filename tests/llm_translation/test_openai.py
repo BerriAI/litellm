@@ -391,3 +391,34 @@ def test_openai_chat_completion_streaming_handler_reasoning_content():
     )
 
     assert response.choices[0].delta.reasoning_content == "."
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("stream_mode", [True, False])
+@pytest.mark.asyncio
+async def test_exception_bubbling_up(sync_mode, stream_mode):
+    """
+    make sure code, param, and type are bubbled up
+    """
+    import litellm
+
+    litellm.set_verbose = True
+    with pytest.raises(Exception) as exc_info:
+        if sync_mode:
+            litellm.completion(
+                model="gpt-4o-mini",
+                messages=[{"role": "usera", "content": "hi"}],
+                stream=stream_mode,
+                sync_stream=sync_mode,
+            )
+        else:
+            await litellm.acompletion(
+                model="gpt-4o-mini",
+                messages=[{"role": "usera", "content": "hi"}],
+                stream=stream_mode,
+                sync_stream=sync_mode,
+            )
+
+    assert exc_info.value.code == "invalid_request_error"
+    assert exc_info.value.param == "messages"
+    assert exc_info.value.type == "invalid_request_error"
