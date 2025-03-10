@@ -1935,12 +1935,12 @@ jobs:
             pip install prisma
             pip install fastapi
             pip install jsonschema
-            pip install "httpx==0.24.1"
+            pip install "httpx==0.27.0"
             pip install "anyio==3.7.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
             pip install "google-cloud-aiplatform==1.59.0"
-            pip install "anthropic==0.21.3"
+            pip install "anthropic==0.49.0"
       # Run pytest and generate JUnit XML report
       - run:
           name: Build Docker image

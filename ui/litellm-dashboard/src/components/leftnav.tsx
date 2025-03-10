@@ -18,7 +18,8 @@ import {
   LineOutlined,
   LineChartOutlined,
   SafetyOutlined,
-  ExperimentOutlined
+  ExperimentOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import { old_admin_roles, v2_admin_role_names, all_admin_roles, rolesAllowedToSeeUsage } from '../utils/roles';
 
@@ -53,6 +54,7 @@ const menuItems: MenuItem[] = [
   { key: "14", page: "api_ref", label: "API Reference", icon: <ApiOutlined /> },
   { key: "16", page: "model-hub", label: "Model Hub", icon: <AppstoreOutlined /> },
   { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined />},
+  
 
   
   { 
@@ -65,7 +67,7 @@ const menuItems: MenuItem[] = [
       { key: "9", page: "caching", label: "Caching", icon: <DatabaseOutlined />, roles: all_admin_roles },
       { key: "10", page: "budgets", label: "Budgets", icon: <BankOutlined />, roles: all_admin_roles },
       { key: "11", page: "guardrails", label: "Guardrails", icon: <SafetyOutlined />, roles: all_admin_roles },
-      
+      { key: "18", page: "transform-request", label: "Playground", icon: <ThunderboltOutlined />, roles: all_admin_roles },
     ]
   },
   {

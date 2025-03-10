@@ -46,6 +46,7 @@ const sidebars = {
             "proxy/health",
             "proxy/debugging",
             "proxy/spending_monitoring",
+            "proxy/master_key_rotations",
           ],
         },
         "proxy/demo",
@@ -256,13 +257,19 @@ const sidebars = {
         "completion/batching",
         "completion/mock_requests",
         "completion/reliable_completions",
-        'tutorials/litellm_proxy_aporia',
 
       ]
     },
     {
       type: "category",
       label: "Supported Endpoints",
+      link: {
+        type: "generated-index",
+        title: "Supported Endpoints",
+        description:
+          "Learn how to deploy + call models from different providers on LiteLLM",
+        slug: "/supported_endpoints",
+      },
       items: [
         {
           type: "category",
@@ -281,6 +288,7 @@ const sidebars = {
         },
         "text_completion",
         "embedding/supported_embedding",
+        "anthropic_unified",
         {
           type: "category",
           label: "Image",
@@ -350,23 +358,6 @@ const sidebars = {
           label: "LangChain, LlamaIndex, Instructor Integration",
           items: ["langchain/langchain", "tutorials/instructor"],
         },
-        {
-          type: "category",
-          label: "Tutorials",
-          items: [
-
-            'tutorials/azure_openai',
-            'tutorials/instructor',
-            "tutorials/gradio_integration",
-            "tutorials/huggingface_codellama",
-            "tutorials/huggingface_tutorial",
-            "tutorials/TogetherAI_liteLLM",
-            "tutorials/finetuned_chat_gpt",
-            "tutorials/text_completion",
-            "tutorials/first_playground",
-            "tutorials/model_fallbacks",
-          ],
-        },
       ],
     },
     {
@@ -382,13 +373,6 @@ const sidebars = {
         "load_test_sdk",
         "load_test_rpm",
       ]
-    },
-    {
-      type: "category",
-      label: "Adding Providers",
-      items: [
-        "adding_provider/directory_structure",
-        "adding_provider/new_rerank_provider"],
     },
     {
       type: "category",
@@ -424,12 +408,50 @@ const sidebars = {
         "observability/opik_integration",
       ],
     },
+    {
+      type: "category",
+      label: "Tutorials",
+      items: [
+        "tutorials/openweb_ui",
+        'tutorials/litellm_proxy_aporia',
+        {
+          type: "category",
+          label: "LiteLLM Python SDK Tutorials",
+          items: [
 
+            'tutorials/azure_openai',
+            'tutorials/instructor',
+            "tutorials/gradio_integration",
+            "tutorials/huggingface_codellama",
+            "tutorials/huggingface_tutorial",
+            "tutorials/TogetherAI_liteLLM",
+            "tutorials/finetuned_chat_gpt",
+            "tutorials/text_completion",
+            "tutorials/first_playground",
+            "tutorials/model_fallbacks",
+          ],
+        },
+      ]
+    },
+    {
+      type: "category",
+      label: "Contributing",
+      items: [
+        {
+          type: "category",
+          label: "Adding Providers",
+          items: [
+            "adding_provider/directory_structure",
+            "adding_provider/new_rerank_provider"],
+        },
+        "extras/contributing",
+        "contributing",
+      ]
+    },
     {
       type: "category",
       label: "Extras",
       items: [
-        "extras/contributing",
         "data_security",
         "data_retention",
         "migration_policy",
@@ -446,6 +468,7 @@ const sidebars = {
           items: [
             "projects/smolagents",
             "projects/Docq.AI",
+            "projects/PDL",
             "projects/OpenInterpreter",
             "projects/Elroy",
             "projects/dbally",
@@ -461,9 +484,9 @@ const sidebars = {
             "projects/YiVal",
             "projects/LiteLLM Proxy",
             "projects/llm_cord",
+            "projects/pgai",
           ],
         },
-        "contributing",
         "proxy/pii_masking",
         "extras/code_quality",
         "rules",
