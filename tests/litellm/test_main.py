@@ -1,9 +1,8 @@
-import json
 import os
 import sys
 
 import pytest
-from fastapi.testclient import TestClient
+from copy import deepcopy
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -229,3 +228,39 @@ async def test_url_with_format_param_openai(model, sync_mode):
         json_str = json.dumps(mock_client.call_args.kwargs)
 
         assert "format" not in json_str
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_call_does_not_change_original_attributes():
+    """
+    Test that the chat object is created correctly and that the original attributes are not changed
+    by the completion.create calls.
+
+    This is important in order to concurrent calls to completion.create do not override each other's attributes.
+    """
+    initial_params = {"acompletion": True, "timeout": 6000, "max_retries": 0, "metadata": {"caching_groups": None}, "dynamic_param": 0}
+    default_litellm_params=deepcopy(initial_params)
+
+    chat = litellm.Chat(params=default_litellm_params, router_obj=None)
+    assert chat.params == default_litellm_params
+
+    model_name = "gpt-4o-mini"
+    prompt = "Hello, world!"
+    new_dynamic_param = 1
+
+    with patch("litellm.main.completion") as mocked_completion:
+        await chat.completions.create(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt}],
+            metadata={"generation_name": prompt},
+            dynamic_param=new_dynamic_param
+        )
+
+    mocked_completion.assert_called_once()
+
+    # We don't want to change the original chat params
+    assert default_litellm_params["dynamic_param"] == initial_params["dynamic_param"]
+
+    # We want to change the params for this completion call
+    _, ckwargs = mocked_completion.call_args
+    assert ckwargs["dynamic_param"] == new_dynamic_param
