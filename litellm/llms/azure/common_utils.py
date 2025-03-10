@@ -17,6 +17,7 @@ class AzureOpenAIError(BaseLLMException):
         request: Optional[httpx.Request] = None,
         response: Optional[httpx.Response] = None,
         headers: Optional[Union[httpx.Headers, dict]] = None,
+        body: Optional[dict] = None,
     ):
         super().__init__(
             status_code=status_code,
@@ -24,6 +25,7 @@ class AzureOpenAIError(BaseLLMException):
             request=request,
             response=response,
             headers=headers,
+            body=body,
         )
 
 
