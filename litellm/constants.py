@@ -55,7 +55,6 @@ LITELLM_CHAT_PROVIDERS = [
     "perplexity",
     "mistral",
     "groq",
-    "nvidia_nim",
     "nvidia",
     "cerebras",
     "ai21_chat",

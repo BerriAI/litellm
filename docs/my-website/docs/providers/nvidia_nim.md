@@ -13,7 +13,7 @@ https://docs.api.nvidia.com/nim/reference/
 ## API Key
 ```python
 # env variable
-os.environ['NVIDIA_API_KEY']
+os.environ['NVIDIA_NIM_API_KEY']
 ```
 
 ## Sample Usage
@@ -21,7 +21,7 @@ os.environ['NVIDIA_API_KEY']
 from litellm import completion
 import os
 
-os.environ['NVIDIA_API_KEY'] = ""
+os.environ['NVIDIA_NIM_API_KEY'] = ""
 response = completion(
     model="nvidia_nim/meta/llama3-70b-instruct",
     messages=[
@@ -45,7 +45,7 @@ print(response)
 from litellm import completion
 import os
 
-os.environ['NVIDIA_API_KEY'] = ""
+os.environ['NVIDIA_NIM_API_KEY'] = ""
 response = completion(
     model="nvidia_nim/meta/llama3-70b-instruct",
     messages=[
@@ -256,7 +256,7 @@ Here's how to call an Nvidia NIM Endpoint with the LiteLLM Proxy Server
 
 
 ## Supported Models - 💥 ALL Nvidia NIM Models Supported!
-We support ALL `nvidia_nim` models, just set `nvidia_nim/` as a prefix when sending completion requests
+We support ALL `nvidia_nim` models, just set `nvidia_nim/` or `nvidia` as a prefix when sending completion requests
 
 | Model Name | Function Call |
 |------------|---------------|
@@ -291,3 +291,6 @@ We support ALL `nvidia_nim` models, just set `nvidia_nim/` as a prefix when send
 | seallms/seallm-7b-v2.5 | `completion(model="nvidia_nim/seallms/seallm-7b-v2.5", messages)` |
 | snowflake/arctic | `completion(model="nvidia_nim/snowflake/arctic", messages)` |
 | upstage/solar-10.7b-instruct | `completion(model="nvidia_nim/upstage/solar-10.7b-instruct", messages)` |
+
+> **NOTE: If you're using `nvidia` as a prefix, you can omit the `nvidia_nim/` prefix.
+>Existing nvidia-nim implmentations will continue to work as before.

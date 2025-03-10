@@ -51,7 +51,7 @@ location_tool = {
                 },
             },
         }
-@pytest.fixture(params=["nvidia", "nvidia_nim"])
+@pytest.fixture(params=("nvidia", "nvidia_nim"))
 def provider(request):
     return request.param
 
@@ -91,6 +91,15 @@ def test_completion_bogus_key(provider):
             presence_penalty=0.5,
             frequency_penalty=0.1,
         )
+
+@pytest.fixture
+def check_nvidia_api_keys():
+    """
+    Fixture to check if NVIDIA API keys are set in environment variables.
+    Skip tests that require these keys if they're not available.
+    """
+    if not any(key in os.environ for key in ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"]):
+        pytest.skip("Either NVIDIA_API_KEY or NVIDIA_NIM_API_KEY environment variable is not set.")
 
 def test_completion_invalid_provider(check_nvidia_api_keys):
     with pytest.raises(litellm.exceptions.BadRequestError) as err_msg:
@@ -136,14 +145,11 @@ def test_completion_nvidia(respx_mock: MockRouter, provider):
             frequency_penalty=0.1,
         )
         # Add any assertions here to check the response
-        print(response)
         assert response.choices[0].message.content is not None
         assert len(response.choices[0].message.content) > 0
 
         assert mock_request.called
         request_body = json.loads(mock_request.calls[0].request.content)
-
-        print("request_body: ", request_body)
 
         assert request_body == {
             "messages": [
@@ -164,7 +170,7 @@ def test_completion_nvidia(respx_mock: MockRouter, provider):
 ## ---------------------------------------- Embedding test cases ----------------------------------------
 
 @pytest.mark.respx
-def test_embedding_nvidia(respx_mock: MockRouter, provider):
+def test_embedding_nvidia(check_nvidia_api_keys, provider):
     litellm.set_verbose = True
     mock_response = EmbeddingResponse(
         model=f"{provider}/meta/llama-3.1-70b-instruct",

@@ -16,9 +16,9 @@ import requests
 import os
 
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
-from litellm.llms.nvidia.statics import determine_model, MODEL_TABLE
 
-class NvidiaNimConfig(OpenAIGPTConfig):
+
+class NvidiaConfig(OpenAIGPTConfig):
     """
     Reference: https://docs.api.nvidia.com/nim/reference/databricks-dbrx-instruct-infer
 
@@ -47,10 +47,14 @@ class NvidiaNimConfig(OpenAIGPTConfig):
                 setattr(self.__class__, key, value)
         
         dynamic_api_key = get_secret_str("NVIDIA_API_KEY") or get_secret_str("NVIDIA_NIM_API_KEY")
-        self.dynamic_api_key = dynamic_api_key
 
-        litellm.nvidia_models = self.available_models()
-        litellm.model_list += litellm.nvidia_models
+        if dynamic_api_key:
+            ## fetch available models
+            self.dynamic_api_key = dynamic_api_key
+            litellm.nvidia_models = self.available_models()
+            litellm.model_list += litellm.nvidia_models
+        else:
+            self.dynamic_api_key = dynamic_api_key
 
     @classmethod
     def get_config(cls):
@@ -58,7 +62,24 @@ class NvidiaNimConfig(OpenAIGPTConfig):
     
     def available_models(self) -> list:
         '''Get Available NVIDIA models.'''
-        return list(MODEL_TABLE.keys())
+        api_base = (
+                    get_secret("NVIDIA_API_BASE")  
+                    or get_secret("NVIDIA_BASE_URL") 
+                    or get_secret("NVIDIA_NIM_API_BASE") 
+                    or "https://integrate.api.nvidia.com/v1" # type: ignore
+                )
+
+        headers = {
+        'Content-Type': 'application/json',
+        'Authorization': self.dynamic_api_key
+        }
+        try:
+            response = requests.request("GET", os.path.join(api_base, "models"), headers=headers)
+            response.raise_for_status()
+
+            return [item["id"] for item in json.loads(response.text)["data"]]
+        except Exception as e:
+            raise e
         
 
 
@@ -69,22 +90,17 @@ class NvidiaNimConfig(OpenAIGPTConfig):
 
 
         Updated on July 5th, 2024 - based on https://docs.api.nvidia.com/nim/reference
+        ToDo: Update this to use the new Nvidia NIM API
         """
-        parms = []
-        if model_cls := determine_model(model):
-            if model_cls.supports_tools:
-                parms += ["tools", "tool_choice"]
-            if model_cls.supports_structured_output:
-                parms += ["response_format"]
         if model in [
             "google/recurrentgemma-2b",
             "google/gemma-2-27b-it",
             "google/gemma-2-9b-it",
             "gemma-2-9b-it",
         ]:
-            parms += ["stream", "temperature", "top_p", "max_tokens", "stop", "seed"]
+            return ["stream", "temperature", "top_p", "max_tokens", "stop", "seed"]
         elif model == "nvidia/nemotron-4-340b-instruct":
-            parms += [
+            return [
                 "stream",
                 "temperature",
                 "top_p",
@@ -92,12 +108,12 @@ class NvidiaNimConfig(OpenAIGPTConfig):
                 "max_completion_tokens",
             ]
         elif model == "nvidia/nemotron-4-340b-reward":
-            parms += [
+            return [
                 "stream",
             ]
         elif model in ["google/codegemma-1.1-7b"]:
             # most params - but no 'seed' :(
-            parms += [
+            return [
                 "stream",
                 "temperature",
                 "top_p",
@@ -108,29 +124,7 @@ class NvidiaNimConfig(OpenAIGPTConfig):
                 "stop",
             ]
         else:
-            # DEFAULT Case - The vast majority of Nvidia NIM Models lie here
-            # "upstage/solar-10.7b-instruct",
-            # "snowflake/arctic",
-            # "seallms/seallm-7b-v2.5",
-            # "nvidia/llama3-chatqa-1.5-8b",
-            # "nvidia/llama3-chatqa-1.5-70b",
-            # "mistralai/mistral-large",
-            # "mistralai/mixtral-8x22b-instruct-v0.1",
-            # "mistralai/mixtral-8x7b-instruct-v0.1",
-            # "mistralai/mistral-7b-instruct-v0.3",
-            # "mistralai/mistral-7b-instruct-v0.2",
-            # "mistralai/codestral-22b-instruct-v0.1",
-            # "microsoft/phi-3-small-8k-instruct",
-            # "microsoft/phi-3-small-128k-instruct",
-            # "microsoft/phi-3-mini-4k-instruct",
-            # "microsoft/phi-3-mini-128k-instruct",
-            # "microsoft/phi-3-medium-4k-instruct",
-            # "microsoft/phi-3-medium-128k-instruct",
-            # "meta/llama3-70b-instruct",
-            # "meta/llama3-8b-instruct",
-            # "meta/llama2-70b",
-            # "meta/codellama-70b",
-            parms += [
+            return [
                 "stream",
                 "temperature",
                 "top_p",
@@ -141,7 +135,6 @@ class NvidiaNimConfig(OpenAIGPTConfig):
                 "stop",
                 "seed",
             ]
-        return parms
 
     def map_openai_params(
         self,
