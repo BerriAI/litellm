@@ -1433,8 +1433,7 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
     enforce_validation,
 ):
     load_vertex_ai_credentials()
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.model_cost = litellm.get_locally_cached_model_cost_map()
 
     litellm.set_verbose = True
     messages = [{"role": "user", "content": "List 5 cookie recipes"}]
@@ -1554,8 +1553,7 @@ async def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
     from pydantic import BaseModel
 
     load_vertex_ai_credentials()
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.model_cost = litellm.get_locally_cached_model_cost_map()
 
     litellm.set_verbose = True
 

@@ -42,8 +42,7 @@ class TestTogetherAI(BaseLLMChatTest):
     def test_get_supported_response_format_together_ai(
         self, model: str, expected_bool: bool
     ) -> None:
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.model_cost = litellm.get_locally_cached_model_cost_map()
         optional_params = litellm.get_supported_openai_params(
             model, custom_llm_provider="together_ai"
         )

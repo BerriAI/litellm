@@ -29,8 +29,7 @@ async def test_o1_handle_system_role(model):
     from openai import AsyncOpenAI
     from litellm.utils import supports_system_messages
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.model_cost = litellm.get_locally_cached_model_cost_map()
 
     litellm.set_verbose = True
 
@@ -83,8 +82,7 @@ async def test_o1_handle_tool_calling_optional_params(
     from litellm.utils import ProviderConfigManager
     from litellm.types.utils import LlmProviders
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.model_cost = litellm.get_locally_cached_model_cost_map()
 
     config = ProviderConfigManager.get_provider_chat_config(
         model=model, provider=LlmProviders.OPENAI
@@ -190,8 +188,7 @@ class TestOpenAIO3(BaseOSeriesModelsTest, BaseLLMChatTest):
 
 def test_o1_supports_vision():
     """Test that o1 supports vision"""
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.model_cost = litellm.get_locally_cached_model_cost_map()
     for k, v in litellm.model_cost.items():
         if k.startswith("o1") and v.get("litellm_provider") == "openai":
             assert v.get("supports_vision") is True, f"{k} does not support vision"
