@@ -2274,23 +2274,22 @@ def completion(  # type: ignore # noqa: PLR0915
             data = {"model": model, "messages": messages, **optional_params}
 
             ## COMPLETION CALL
-            response = openai_like_chat_completion.completion(
+            response = base_llm_http_handler.completion(
                 model=model,
+                stream=stream,
                 messages=messages,
-                headers=headers,
-                api_key=api_key,
+                acompletion=acompletion,
                 api_base=api_base,
                 model_response=model_response,
-                print_verbose=print_verbose,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                logging_obj=logging,
-                acompletion=acompletion,
-                timeout=timeout,  # type: ignore
                 custom_llm_provider="openrouter",
-                custom_prompt_dict=custom_prompt_dict,
+                timeout=timeout,
+                headers=headers,
                 encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
+                client=client,
             )
             ## LOGGING
             logging.post_call(

@@ -6,7 +6,14 @@ Calls done in OpenAI/openai.py as OpenRouter is openai-compatible.
 Docs: https://openrouter.ai/docs/parameters
 """
 
+from typing import Union
+
+import httpx
+
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+from ..common_utils import OpenRouterException
 
 
 class OpenrouterConfig(OpenAIGPTConfig):
@@ -37,3 +44,12 @@ class OpenrouterConfig(OpenAIGPTConfig):
             extra_body  # openai client supports `extra_body` param
         )
         return mapped_openai_params
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
+        return OpenRouterException(
+            message=error_message,
+            status_code=status_code,
+            headers=headers,
+        )
