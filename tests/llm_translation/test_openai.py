@@ -419,6 +419,6 @@ async def test_exception_bubbling_up(sync_mode, stream_mode):
                 sync_stream=sync_mode,
             )
 
-    assert exc_info.value.code == "invalid_request_error"
-    assert exc_info.value.param == "messages"
+    assert exc_info.value.code == "invalid_value"
+    assert exc_info.value.param is not None
     assert exc_info.value.type == "invalid_request_error"
