@@ -340,7 +340,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 
 ## Contributing
 
-Interested in contributing? Contributions to LiteLLM Python SDK, Proxy Server, and contributing LLM integrations are both accepted and highly encouraged! See our Contribution Guide for more details 
+Interested in contributing? Contributions to LiteLLM Python SDK, Proxy Server, and contributing LLM integrations are both accepted and highly encouraged! [See our Contribution Guide for more details](https://docs.litellm.ai/docs/contributing)
 
 # Enterprise
 For companies that need better security, user management and professional support
