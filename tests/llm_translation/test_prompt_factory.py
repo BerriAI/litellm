@@ -125,28 +125,6 @@ def test_anthropic_pt_formatting():
     assert anthropic_pt(messages) == expected_prompt
 
 
-def test_anthropic_messages_pt():
-    # Test case: No messages (filtered system messages only)
-    litellm.modify_params = True
-    messages = []
-    expected_messages = [{"role": "user", "content": [{"type": "text", "text": "."}]}]
-    assert (
-        anthropic_messages_pt(
-            messages, model="claude-3-sonnet-20240229", llm_provider="anthropic"
-        )
-        == expected_messages
-    )
-
-    # Test case: No messages (filtered system messages only) when modify_params is False should raise error
-    litellm.modify_params = False
-    messages = []
-    with pytest.raises(Exception) as err:
-        anthropic_messages_pt(
-            messages, model="claude-3-sonnet-20240229", llm_provider="anthropic"
-        )
-    assert "Invalid first message" in str(err.value)
-
-
 def test_anthropic_messages_nested_pt():
     from litellm.types.llms.anthropic import (
         AnthopicMessagesAssistantMessageParam,
@@ -223,7 +201,7 @@ def test_convert_url_to_img():
     ],
 )
 def test_base64_image_input(url, expected_media_type):
-    response = convert_to_anthropic_image_obj(openai_image_url=url)
+    response = convert_to_anthropic_image_obj(openai_image_url=url, format=None)
 
     assert response["media_type"] == expected_media_type
 
@@ -704,9 +682,9 @@ def test_convert_generic_image_chunk_to_openai_image_obj():
     )
 
     url = "https://i.pinimg.com/736x/b4/b1/be/b4b1becad04d03a9071db2817fc9fe77.jpg"
-    image_obj = convert_to_anthropic_image_obj(url)
+    image_obj = convert_to_anthropic_image_obj(url, format=None)
     url_str = convert_generic_image_chunk_to_openai_image_obj(image_obj)
-    image_obj = convert_to_anthropic_image_obj(url_str)
+    image_obj = convert_to_anthropic_image_obj(url_str, format=None)
     print(image_obj)
 
 

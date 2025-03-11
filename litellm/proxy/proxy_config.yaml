@@ -1,12 +1,10 @@
 model_list:
-  - model_name: fake-openai-endpoint
+  - model_name: thinking-us.anthropic.claude-3-7-sonnet-20250219-v1:0
     litellm_params:
-      model: openai/my-fake-model
-      api_key: my-fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      model: bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0
+      thinking: {"type": "enabled", "budget_tokens": 1024}
+      max_tokens: 1080
+      merge_reasoning_content_in_choices: true
 
 
-general_settings:
-  store_model_in_db: true
-  store_prompts_in_spend_logs: true
 

@@ -107,9 +107,9 @@ general_settings:
 
 By default, LiteLLM writes several types of logs to the database:
 - Every LLM API request to the `LiteLLM_SpendLogs` table
-- LLM Exceptions to the `LiteLLM_LogsErrors` table
+- LLM Exceptions to the `LiteLLM_SpendLogs` table
 
-If you're not viewing these logs on the LiteLLM UI (most users use Prometheus for monitoring), you can disable them by setting the following flags to `True`:
+If you're not viewing these logs on the LiteLLM UI, you can disable them by setting the following flags to `True`:
 
 ```yaml
 general_settings:
