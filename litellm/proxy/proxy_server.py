@@ -781,6 +781,21 @@ db_writer_client: Optional[AsyncHTTPHandler] = None
 ### logger ###
 
 
+def _safely_round_response_cost(response_cost: Optional[Union[float, str]]) -> str:
+    """
+    Safely round response cost to 6 decimal places.
+    If rounding fails, return the original response cost as a string.
+    """
+    if response_cost is None:
+        return "None"
+    
+    try:
+        return str(round(float(response_cost), 6))
+    except Exception:
+        # If rounding fails for any reason, return the original value
+        return str(response_cost)
+
+
 def get_custom_headers(
     *,
     user_api_key_dict: UserAPIKeyAuth,
@@ -806,7 +821,7 @@ def get_custom_headers(
         "x-litellm-model-api-base": api_base,
         "x-litellm-version": version,
         "x-litellm-model-region": model_region,
-        "x-litellm-response-cost": str(round(response_cost, 6)),
+        "x-litellm-response-cost": _safely_round_response_cost(response_cost),
         "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
         "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
         "x-litellm-key-max-budget": str(user_api_key_dict.max_budget),
@@ -2224,7 +2239,6 @@ class ProxyConfig:
                     )
                     if _logger is not None:
                         litellm.logging_callback_manager.add_litellm_callback(_logger)
-        pass
 
     def initialize_secret_manager(self, key_management_system: Optional[str]):
         """
