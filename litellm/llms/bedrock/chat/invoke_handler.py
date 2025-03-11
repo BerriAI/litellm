@@ -26,7 +26,6 @@ import httpx  # type: ignore
 
 import litellm
 from litellm import verbose_logger
-from litellm._logging import print_verbose
 from litellm.caching.caching import InMemoryCache
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -51,13 +50,19 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
+    ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionUsageBlock,
 )
-from litellm.types.utils import ChatCompletionMessageToolCall, Choices
+from litellm.types.utils import ChatCompletionMessageToolCall, Choices, Delta
 from litellm.types.utils import GenericStreamingChunk as GChunk
-from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
+from litellm.types.utils import (
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+    Usage,
+)
 from litellm.utils import CustomStreamWrapper, get_secret
 
 from ..base_aws_llm import BaseAWSLLM
@@ -212,7 +217,6 @@ async def make_call(
                 api_key="",
                 data=data,
                 messages=messages,
-                print_verbose=print_verbose,
                 encoding=litellm.encoding,
             )  # type: ignore
             completion_stream: Any = MockResponseIterator(
@@ -222,6 +226,7 @@ async def make_call(
             decoder: AWSEventStreamDecoder = AmazonAnthropicClaudeStreamDecoder(
                 model=model,
                 sync_stream=False,
+                json_mode=json_mode,
             )
             completion_stream = decoder.aiter_bytes(
                 response.aiter_bytes(chunk_size=1024)
@@ -298,7 +303,6 @@ def make_sync_call(
                 api_key="",
                 data=data,
                 messages=messages,
-                print_verbose=print_verbose,
                 encoding=litellm.encoding,
             )  # type: ignore
             completion_stream: Any = MockResponseIterator(
@@ -308,6 +312,7 @@ def make_sync_call(
             decoder: AWSEventStreamDecoder = AmazonAnthropicClaudeStreamDecoder(
                 model=model,
                 sync_stream=True,
+                json_mode=json_mode,
             )
             completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
         elif bedrock_invoke_provider == "deepseek_r1":
@@ -525,7 +530,7 @@ class BedrockLLM(BaseAWSLLM):
                                 ].message.tool_calls:
                                     _tool_call = {**tool_call.dict(), "index": 0}
                                     _tool_calls.append(_tool_call)
-                            delta_obj = litellm.utils.Delta(
+                            delta_obj = Delta(
                                 content=getattr(
                                     model_response.choices[0].message, "content", None
                                 ),
@@ -1147,27 +1152,6 @@ class BedrockLLM(BaseAWSLLM):
         return streaming_response
 
     @staticmethod
-    def get_bedrock_invoke_provider(
-        model: str,
-    ) -> Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL]:
-        """
-        Helper function to get the bedrock provider from the model
-
-        handles 2 scenarions:
-        1. model=anthropic.claude-3-5-sonnet-20240620-v1:0 -> Returns `anthropic`
-        2. model=llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n -> Returns `llama`
-        """
-        _split_model = model.split(".")[0]
-        if _split_model in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
-            return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, _split_model)
-
-        # If not a known provider, check for pattern with two slashes
-        provider = BedrockLLM._get_provider_from_model_path(model)
-        if provider is not None:
-            return provider
-        return None
-
-    @staticmethod
     def _get_provider_from_model_path(
         model_path: str,
     ) -> Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL]:
@@ -1258,14 +1242,40 @@ class AWSEventStreamDecoder:
             return True
         return False
 
-    def converse_chunk_parser(self, chunk_data: dict) -> GChunk:
+    def extract_reasoning_content_str(
+        self, reasoning_content_block: BedrockConverseReasoningContentBlockDelta
+    ) -> Optional[str]:
+        if "text" in reasoning_content_block:
+            return reasoning_content_block["text"]
+        return None
+
+    def translate_thinking_blocks(
+        self, thinking_block: BedrockConverseReasoningContentBlockDelta
+    ) -> Optional[List[ChatCompletionThinkingBlock]]:
+        """
+        Translate the thinking blocks to a string
+        """
+
+        thinking_blocks_list: List[ChatCompletionThinkingBlock] = []
+        _thinking_block = ChatCompletionThinkingBlock(type="thinking")
+        if "text" in thinking_block:
+            _thinking_block["thinking"] = thinking_block["text"]
+        elif "signature" in thinking_block:
+            _thinking_block["signature"] = thinking_block["signature"]
+            _thinking_block["thinking"] = ""  # consistent with anthropic response
+        thinking_blocks_list.append(_thinking_block)
+        return thinking_blocks_list
+
+    def converse_chunk_parser(self, chunk_data: dict) -> ModelResponseStream:
         try:
             verbose_logger.debug("\n\nRaw Chunk: {}\n\n".format(chunk_data))
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
-            is_finished = False
             finish_reason = ""
             usage: Optional[ChatCompletionUsageBlock] = None
+            provider_specific_fields: dict = {}
+            reasoning_content: Optional[str] = None
+            thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
 
             index = int(chunk_data.get("contentBlockIndex", 0))
             if "start" in chunk_data:
@@ -1305,6 +1315,22 @@ class AWSEventStreamDecoder:
                         },
                         "index": index,
                     }
+                elif "reasoningContent" in delta_obj:
+                    provider_specific_fields = {
+                        "reasoningContent": delta_obj["reasoningContent"],
+                    }
+                    reasoning_content = self.extract_reasoning_content_str(
+                        delta_obj["reasoningContent"]
+                    )
+                    thinking_blocks = self.translate_thinking_blocks(
+                        delta_obj["reasoningContent"]
+                    )
+                    if (
+                        thinking_blocks
+                        and len(thinking_blocks) > 0
+                        and reasoning_content is None
+                    ):
+                        reasoning_content = ""  # set to non-empty string to ensure consistency with Anthropic
             elif (
                 "contentBlockIndex" in chunk_data
             ):  # stop block, no 'start' or 'delta' object
@@ -1321,7 +1347,6 @@ class AWSEventStreamDecoder:
                     }
             elif "stopReason" in chunk_data:
                 finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
-                is_finished = True
             elif "usage" in chunk_data:
                 usage = ChatCompletionUsageBlock(
                     prompt_tokens=chunk_data.get("inputTokens", 0),
@@ -1329,18 +1354,33 @@ class AWSEventStreamDecoder:
                     total_tokens=chunk_data.get("totalTokens", 0),
                 )
 
-            response = GChunk(
-                text=text,
-                tool_use=tool_use,
-                is_finished=is_finished,
-                finish_reason=finish_reason,
-                usage=usage,
-                index=index,
-            )
-
+            model_response_provider_specific_fields = {}
             if "trace" in chunk_data:
                 trace = chunk_data.get("trace")
-                response["provider_specific_fields"] = {"trace": trace}
+                model_response_provider_specific_fields["trace"] = trace
+            response = ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        finish_reason=finish_reason,
+                        index=index,
+                        delta=Delta(
+                            content=text,
+                            role="assistant",
+                            tool_calls=[tool_use] if tool_use else None,
+                            provider_specific_fields=(
+                                provider_specific_fields
+                                if provider_specific_fields
+                                else None
+                            ),
+                            thinking_blocks=thinking_blocks,
+                            reasoning_content=reasoning_content,
+                        ),
+                    )
+                ],
+                usage=usage,
+                provider_specific_fields=model_response_provider_specific_fields,
+            )
+
             return response
         except Exception as e:
             raise Exception("Received streaming error - {}".format(str(e)))
@@ -1474,6 +1514,7 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
         self,
         model: str,
         sync_stream: bool,
+        json_mode: Optional[bool] = None,
     ) -> None:
         """
         Child class of AWSEventStreamDecoder that handles the streaming response from the Anthropic family of models
@@ -1484,9 +1525,10 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
         self.anthropic_model_response_iterator = AnthropicModelResponseIterator(
             streaming_response=None,
             sync_stream=sync_stream,
+            json_mode=json_mode,
         )
 
-    def _chunk_parser(self, chunk_data: dict) -> GChunk:
+    def _chunk_parser(self, chunk_data: dict) -> ModelResponseStream:
         return self.anthropic_model_response_iterator.chunk_parser(chunk=chunk_data)
 
 

@@ -23,6 +23,9 @@ class AthinaLogger:
             "context",
             "expected_response",
             "user_query",
+            "tags",
+            "user_feedback",
+            "model_options",
             "custom_attributes",
         ]
 
@@ -81,7 +84,6 @@ class AthinaLogger:
                 for key in self.additional_keys:
                     if key in metadata:
                         data[key] = metadata[key]
-
             response = litellm.module_level_client.post(
                 self.athina_logging_url,
                 headers=self.headers,

@@ -37,6 +37,7 @@ from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENT
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
+    LiteLLMBatch,
     ModelResponse,
     ModelResponseStream,
 )
@@ -731,10 +732,14 @@ class OpenAIChatCompletion(BaseLLM):
             error_headers = getattr(e, "headers", None)
             error_text = getattr(e, "text", str(e))
             error_response = getattr(e, "response", None)
+            error_body = getattr(e, "body", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise OpenAIError(
-                status_code=status_code, message=error_text, headers=error_headers
+                status_code=status_code,
+                message=error_text,
+                headers=error_headers,
+                body=error_body,
             )
 
     async def acompletion(
@@ -827,13 +832,17 @@ class OpenAIChatCompletion(BaseLLM):
             except Exception as e:
                 exception_response = getattr(e, "response", None)
                 status_code = getattr(e, "status_code", 500)
+                exception_body = getattr(e, "body", None)
                 error_headers = getattr(e, "headers", None)
                 if error_headers is None and exception_response:
                     error_headers = getattr(exception_response, "headers", None)
                 message = getattr(e, "message", str(e))
 
                 raise OpenAIError(
-                    status_code=status_code, message=message, headers=error_headers
+                    status_code=status_code,
+                    message=message,
+                    headers=error_headers,
+                    body=exception_body,
                 )
 
     def streaming(
@@ -972,6 +981,7 @@ class OpenAIChatCompletion(BaseLLM):
                 error_headers = getattr(e, "headers", None)
                 status_code = getattr(e, "status_code", 500)
                 error_response = getattr(e, "response", None)
+                exception_body = getattr(e, "body", None)
                 if error_headers is None and error_response:
                     error_headers = getattr(error_response, "headers", None)
                 if response is not None and hasattr(response, "text"):
@@ -979,6 +989,7 @@ class OpenAIChatCompletion(BaseLLM):
                         status_code=status_code,
                         message=f"{str(e)}\n\nOriginal Response: {response.text}",  # type: ignore
                         headers=error_headers,
+                        body=exception_body,
                     )
                 else:
                     if type(e).__name__ == "ReadTimeout":
@@ -986,16 +997,21 @@ class OpenAIChatCompletion(BaseLLM):
                             status_code=408,
                             message=f"{type(e).__name__}",
                             headers=error_headers,
+                            body=exception_body,
                         )
                     elif hasattr(e, "status_code"):
                         raise OpenAIError(
                             status_code=getattr(e, "status_code", 500),
                             message=str(e),
                             headers=error_headers,
+                            body=exception_body,
                         )
                     else:
                         raise OpenAIError(
-                            status_code=500, message=f"{str(e)}", headers=error_headers
+                            status_code=500,
+                            message=f"{str(e)}",
+                            headers=error_headers,
+                            body=exception_body,
                         )
 
     def get_stream_options(
@@ -1755,9 +1771,9 @@ class OpenAIBatchesAPI(BaseLLM):
         self,
         create_batch_data: CreateBatchRequest,
         openai_client: AsyncOpenAI,
-    ) -> Batch:
+    ) -> LiteLLMBatch:
         response = await openai_client.batches.create(**create_batch_data)
-        return response
+        return LiteLLMBatch(**response.model_dump())
 
     def create_batch(
         self,
@@ -1769,7 +1785,7 @@ class OpenAIBatchesAPI(BaseLLM):
         max_retries: Optional[int],
         organization: Optional[str],
         client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
-    ) -> Union[Batch, Coroutine[Any, Any, Batch]]:
+    ) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
         openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
@@ -1792,17 +1808,18 @@ class OpenAIBatchesAPI(BaseLLM):
             return self.acreate_batch(  # type: ignore
                 create_batch_data=create_batch_data, openai_client=openai_client
             )
-        response = openai_client.batches.create(**create_batch_data)
-        return response
+        response = cast(OpenAI, openai_client).batches.create(**create_batch_data)
+
+        return LiteLLMBatch(**response.model_dump())
 
     async def aretrieve_batch(
         self,
         retrieve_batch_data: RetrieveBatchRequest,
         openai_client: AsyncOpenAI,
-    ) -> Batch:
+    ) -> LiteLLMBatch:
         verbose_logger.debug("retrieving batch, args= %s", retrieve_batch_data)
         response = await openai_client.batches.retrieve(**retrieve_batch_data)
-        return response
+        return LiteLLMBatch(**response.model_dump())
 
     def retrieve_batch(
         self,
@@ -1837,8 +1854,8 @@ class OpenAIBatchesAPI(BaseLLM):
             return self.aretrieve_batch(  # type: ignore
                 retrieve_batch_data=retrieve_batch_data, openai_client=openai_client
             )
-        response = openai_client.batches.retrieve(**retrieve_batch_data)
-        return response
+        response = cast(OpenAI, openai_client).batches.retrieve(**retrieve_batch_data)
+        return LiteLLMBatch(**response.model_dump())
 
     async def acancel_batch(
         self,

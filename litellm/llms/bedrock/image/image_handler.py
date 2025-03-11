@@ -10,6 +10,8 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
     _get_httpx_client,
     get_async_httpx_client,
 )
@@ -51,6 +53,7 @@ class BedrockImageGeneration(BaseAWSLLM):
         aimg_generation: bool = False,
         api_base: Optional[str] = None,
         extra_headers: Optional[dict] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ):
         prepared_request = self._prepare_request(
             model=model,
@@ -69,9 +72,15 @@ class BedrockImageGeneration(BaseAWSLLM):
                 logging_obj=logging_obj,
                 prompt=prompt,
                 model_response=model_response,
+                client=(
+                    client
+                    if client is not None and isinstance(client, AsyncHTTPHandler)
+                    else None
+                ),
             )
 
-        client = _get_httpx_client()
+        if client is None or not isinstance(client, HTTPHandler):
+            client = _get_httpx_client()
         try:
             response = client.post(url=prepared_request.endpoint_url, headers=prepared_request.prepped.headers, data=prepared_request.body)  # type: ignore
             response.raise_for_status()
@@ -99,13 +108,14 @@ class BedrockImageGeneration(BaseAWSLLM):
         logging_obj: LitellmLogging,
         prompt: str,
         model_response: ImageResponse,
+        client: Optional[AsyncHTTPHandler] = None,
     ) -> ImageResponse:
         """
         Asynchronous handler for bedrock image generation
 
         Awaits the response from the bedrock image generation endpoint
         """
-        async_client = get_async_httpx_client(
+        async_client = client or get_async_httpx_client(
             llm_provider=litellm.LlmProviders.BEDROCK,
             params={"timeout": timeout},
         )

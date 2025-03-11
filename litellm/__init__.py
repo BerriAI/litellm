@@ -53,6 +53,7 @@ from litellm.constants import (
     cohere_embedding_models,
     bedrock_embedding_models,
     known_tokenizer_config,
+    BEDROCK_INVOKE_PROVIDERS_LITERAL,
 )
 from litellm.types.guardrails import GuardrailItem
 from litellm.proxy._types import (
@@ -95,6 +96,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "galileo",
     "braintrust",
     "arize",
+    "arize_phoenix",
     "langtrace",
     "gcs_bucket",
     "azure_storage",
@@ -275,8 +277,6 @@ disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 custom_prometheus_metadata_labels: List[str] = []
 #### REQUEST PRIORITIZATION ####
 priority_reservation: Optional[Dict[str, float]] = None
-
-
 force_ipv4: bool = (
     False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 )
@@ -360,17 +360,7 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-2-11b-instruct-v1:0",
     "meta.llama3-2-90b-instruct-v1:0",
 ]
-BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
-    "cohere",
-    "anthropic",
-    "mistral",
-    "amazon",
-    "meta",
-    "llama",
-    "ai21",
-    "nova",
-    "deepseek_r1",
-]
+
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models: List = []
 open_ai_text_completion_models: List = []
@@ -808,9 +798,6 @@ from .llms.oobabooga.chat.transformation import OobaboogaConfig
 from .llms.maritalk import MaritalkConfig
 from .llms.openrouter.chat.transformation import OpenrouterConfig
 from .llms.anthropic.chat.transformation import AnthropicConfig
-from .llms.anthropic.experimental_pass_through.transformation import (
-    AnthropicExperimentalPassThroughConfig,
-)
 from .llms.groq.stt.transformation import GroqSTTConfig
 from .llms.anthropic.completion.transformation import AnthropicTextConfig
 from .llms.triton.completion.transformation import TritonConfig
@@ -823,11 +810,15 @@ from .llms.predibase.chat.transformation import PredibaseConfig
 from .llms.replicate.chat.transformation import ReplicateConfig
 from .llms.cohere.completion.transformation import CohereTextConfig as CohereConfig
 from .llms.cohere.rerank.transformation import CohereRerankConfig
+from .llms.cohere.rerank_v2.transformation import CohereRerankV2Config
 from .llms.azure_ai.rerank.transformation import AzureAIRerankConfig
 from .llms.infinity.rerank.transformation import InfinityRerankConfig
 from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
+from .llms.anthropic.experimental_pass_through.messages.transformation import (
+    AnthropicMessagesConfig,
+)
 from .llms.together_ai.chat import TogetherAIConfig
 from .llms.together_ai.completion.transformation import TogetherAITextCompletionConfig
 from .llms.cloudflare.chat.transformation import CloudflareChatConfig
@@ -1018,6 +1009,7 @@ from .assistants.main import *
 from .batches.main import *
 from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
+from .llms.anthropic.experimental_pass_through.messages.handler import *
 from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
 from .files.main import *

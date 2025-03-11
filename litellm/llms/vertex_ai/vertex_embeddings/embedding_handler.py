@@ -41,7 +41,7 @@ class VertexEmbedding(VertexBase):
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
         vertex_project: Optional[str] = None,
         vertex_location: Optional[str] = None,
-        vertex_credentials: Optional[str] = None,
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES] = None,
         gemini_api_key: Optional[str] = None,
         extra_headers: Optional[dict] = None,
     ) -> EmbeddingResponse:
@@ -148,7 +148,7 @@ class VertexEmbedding(VertexBase):
         client: Optional[AsyncHTTPHandler] = None,
         vertex_project: Optional[str] = None,
         vertex_location: Optional[str] = None,
-        vertex_credentials: Optional[str] = None,
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES] = None,
         gemini_api_key: Optional[str] = None,
         extra_headers: Optional[dict] = None,
         encoding=None,
