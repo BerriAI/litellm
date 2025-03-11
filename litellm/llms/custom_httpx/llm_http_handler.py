@@ -18,8 +18,14 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIRequestParams
+from litellm.types.llms.openai import (
+    ResponseInputParam,
+    ResponsesAPIOptionalRequestParams,
+    ResponsesAPIRequestParams,
+    ResponsesAPIResponse,
+)
 from litellm.types.rerank import OptionalRerankParams, RerankResponse
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import EmbeddingResponse, FileTypes, TranscriptionResponse
 from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
 
@@ -957,14 +963,75 @@ class BaseLLMHTTPHandler:
     async def async_response_api_handler(
         self,
         model: str,
+        custom_llm_provider: str,
         input: Union[str, ResponseInputParam],
         responses_api_provider_config: BaseResponsesAPIConfig,
-        responses_api_request_params: ResponsesAPIRequestParams,
-    ) -> Any:
-        pass
+        response_api_optional_request_params: ResponsesAPIOptionalRequestParams,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: GenericLiteLLMParams,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    ) -> ResponsesAPIResponse:
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider)
+            )
+        else:
+            async_httpx_client = client
+        headers = responses_api_provider_config.validate_environment(
+            api_key=litellm_params.api_key,
+            headers=response_api_optional_request_params.get("extra_headers", {}) or {},
+            model=model,
+        )
+
+        api_base = responses_api_provider_config.get_complete_url(
+            api_base=litellm_params.api_base,
+            model=model,
+        )
+
+        data = responses_api_provider_config.transform_responses_api_request(
+            model=model,
+            input=input,
+            response_api_optional_request_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=input,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                data=json.dumps(data),
+                timeout=response_api_optional_request_params.get("timeout"),
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=responses_api_provider_config,
+            )
+
+        base_response_api_response = ResponsesAPIResponse()
+        return responses_api_provider_config.transform_response_api_response(
+            model=model,
+            raw_response=response,
+            model_response=base_response_api_response,
+            logging_obj=logging_obj,
+        )
 
     def _handle_error(
-        self, e: Exception, provider_config: Union[BaseConfig, BaseRerankConfig]
+        self,
+        e: Exception,
+        provider_config: Union[BaseConfig, BaseRerankConfig, BaseResponsesAPIConfig],
     ):
         status_code = getattr(e, "status_code", 500)
         error_headers = getattr(e, "headers", None)
