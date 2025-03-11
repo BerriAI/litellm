@@ -52,17 +52,6 @@ class BaseResponsesAPIConfig(ABC):
 
         pass
 
-    @abstractmethod
-    def validate_environment(
-        self,
-        headers: dict,
-        model: str,
-        optional_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> dict:
-        pass
-
     def get_complete_url(
         self,
         api_base: Optional[str],
@@ -81,18 +70,18 @@ class BaseResponsesAPIConfig(ABC):
             raise ValueError("api_base is required")
         return api_base
 
-    @abstractmethod
-    def transform_request(
-        self,
-        model: str,
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
-        pass
+    # @abstractmethod
+    # def transform_request(
+    #     self,
+    #     model: str,
+    #     optional_params: dict,
+    #     litellm_params: dict,
+    #     headers: dict,
+    # ) -> dict:
+    #     pass
 
-    @abstractmethod
-    def transform_response(
-        self,
-    ):
-        pass
+    # @abstractmethod
+    # def transform_response(
+    #     self,
+    # ):
+    #     pass
