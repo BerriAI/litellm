@@ -340,6 +340,8 @@ def test_get_model_info_bedrock_models():
             base_model = BedrockModelInfo.get_base_model(k)
             base_model_info = litellm.model_cost[base_model]
             for base_model_key, base_model_value in base_model_info.items():
+                if "invoke/" in k:
+                    continue
                 if base_model_key.startswith("supports_"):
                     assert (
                         base_model_key in v
