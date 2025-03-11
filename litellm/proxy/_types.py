@@ -1994,13 +1994,14 @@ class ProxyException(Exception):
         message: str,
         type: str,
         param: Optional[str],
-        code: Optional[Union[int, str]] = None,
+        code: Optional[Union[int, str]] = None,  # maps to status code
         headers: Optional[Dict[str, str]] = None,
+        openai_code: Optional[str] = None,  # maps to 'code'  in openai
     ):
         self.message = str(message)
         self.type = type
         self.param = param
-
+        self.openai_code = openai_code or code
         # If we look on official python OpenAI lib, the code should be a string:
         # https://github.com/openai/openai-python/blob/195c05a64d39c87b2dfdf1eca2d339597f1fce03/src/openai/types/shared/error_object.py#L11
         # Related LiteLLM issue: https://github.com/BerriAI/litellm/discussions/4834
