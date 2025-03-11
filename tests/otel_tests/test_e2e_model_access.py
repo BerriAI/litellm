@@ -94,7 +94,7 @@ async def test_model_access_patterns(key_models, test_model, expect_success):
             assert _error_body["type"] == "key_model_access_denied"
             assert _error_body["param"] == "model"
             assert _error_body["code"] == "401"
-            assert "API Key not allowed to access model" in _error_body["message"]
+            assert "key not allowed to access model" in _error_body["message"]
 
 
 @pytest.mark.asyncio
