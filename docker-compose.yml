@@ -32,7 +32,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data  # Persists Postgres data across container restarts
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
       interval: 1s
@@ -56,7 +56,7 @@ volumes:
   prometheus_data:
     driver: local
   postgres_data:
-    name: litellm_postgres_data
+    name: litellm_postgres_data  # Named volume for Postgres data persistence
 
 
 # ...rest of your docker-compose config if any
