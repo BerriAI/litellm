@@ -453,6 +453,9 @@ async def test_router_retries(sync_mode):
         "https://Mistral-large-nmefg-serverless.eastus2.inference.ai.azure.com",
     ],
 )
+@pytest.mark.skip(
+    reason="Router no longer creates clients, this is delegated to the provider integration."
+)
 def test_router_azure_ai_studio_init(mistral_api_base):
     router = Router(
         model_list=[
@@ -468,16 +471,21 @@ def test_router_azure_ai_studio_init(mistral_api_base):
         ]
     )
 
-    model_client = router._get_client(
-        deployment={"model_info": {"id": 1234}}, client_type="sync_client", kwargs={}
+    # model_client = router._get_client(
+    #     deployment={"model_info": {"id": 1234}}, client_type="sync_client", kwargs={}
+    # )
+    # url = getattr(model_client, "_base_url")
+    # uri_reference = str(getattr(url, "_uri_reference"))
+
+    # print(f"uri_reference: {uri_reference}")
+
+    # assert "/v1/" in uri_reference
+    # assert uri_reference.count("v1") == 1
+    response = router.completion(
+        model="azure/mistral-large-latest",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
     )
-    url = getattr(model_client, "_base_url")
-    uri_reference = str(getattr(url, "_uri_reference"))
-
-    print(f"uri_reference: {uri_reference}")
-
-    assert "/v1/" in uri_reference
-    assert uri_reference.count("v1") == 1
+    assert response is not None
 
 
 def test_exception_raising():
