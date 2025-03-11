@@ -193,7 +193,7 @@ async def test_chat_completion_with_timeout():
         start_time = time.time()
         response, headers = await chat_completion(
             session=session,
-            key="sk-PIp1h0RekR",
+            key="sk-1234",
             model=model,
             messages=messages,
             num_retries=0,
