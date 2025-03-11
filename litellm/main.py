@@ -1656,6 +1656,7 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "mistral"
             or custom_llm_provider == "openai"
             or custom_llm_provider == "together_ai"
+            or custom_llm_provider == "netmind"
             or custom_llm_provider in litellm.openai_compatible_providers
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
@@ -2077,6 +2078,35 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_key=cohere_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
+        elif custom_llm_provider == "netmind":
+            netmind_key = (
+                api_key
+                or litellm.netmind_key
+                or get_secret("NETMIND_API_KEY")
+                or litellm.api_key
+            )
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("NETMIND_API_BASE")
+                or "https://api.netmind.ai/inference-api/openai/v1"
+            )
+            model_response = openai_like_chat_completion.completion(
+                model=model,
+                messages=messages,
+                api_base=api_base,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,
+                api_key=netmind_key,
+                logging_obj=logging,
+                custom_llm_provider="maritalk",
+                custom_prompt_dict=custom_prompt_dict,
+            )
+            response = model_response
         elif custom_llm_provider == "maritalk":
             maritalk_key = (
                 api_key
@@ -3418,6 +3448,7 @@ def embedding(  # noqa: PLR0915
             or custom_llm_provider == "together_ai"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "litellm_proxy"
+            or custom_llm_provider == "netmind"
         ):
             api_base = (
                 api_base
