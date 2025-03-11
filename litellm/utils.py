@@ -66,6 +66,7 @@ from litellm.litellm_core_utils.core_helpers import (
     map_finish_reason,
     process_response_headers,
 )
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.default_encoding import encoding
 from litellm.litellm_core_utils.exception_mapping_utils import (
     _get_response_headers,
@@ -141,6 +142,7 @@ from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
     CostPerToken,
+    CredentialItem,
     CustomHuggingfaceTokenizer,
     Delta,
     Embedding,
@@ -455,6 +457,18 @@ def get_applied_guardrails(kwargs: Dict[str, Any]) -> List[str]:
     return applied_guardrails
 
 
+def load_credentials_from_list(kwargs: dict):
+    """
+    Updates kwargs with the credentials if credential_name in kwarg
+    """
+    credential_name = kwargs.get("litellm_credential_name")
+    if credential_name and litellm.credential_list:
+        credential_accessor = CredentialAccessor.get_credential_values(credential_name)
+        for key, value in credential_accessor.items():
+            if key not in kwargs:
+                kwargs[key] = value
+
+
 def get_dynamic_callbacks(
     dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]]
 ) -> List:
@@ -484,6 +498,9 @@ def function_setup(  # noqa: PLR0915
 
         ## GET APPLIED GUARDRAILS
         applied_guardrails = get_applied_guardrails(kwargs)
+
+        ## LOAD CREDENTIALS
+        load_credentials_from_list(kwargs)
 
         ## LOGGING SETUP
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
