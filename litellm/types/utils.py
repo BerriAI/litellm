@@ -117,6 +117,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_second: Optional[float]  # for OpenAI Speech models
+    input_cost_per_token_batches: Optional[float]
+    output_cost_per_token_batches: Optional[float]
     output_cost_per_token: Required[float]
     output_cost_per_character: Optional[float]  # only for vertex ai models
     output_cost_per_audio_token: Optional[float]
@@ -213,6 +215,8 @@ CallTypesLiteral = Literal[
     "acreate_batch",
     "pass_through_endpoint",
     "anthropic_messages",
+    "aretrieve_batch",
+    "retrieve_batch",
 ]
 
 
@@ -825,6 +829,9 @@ class StreamingChoices(OpenAIObject):
         enhancements=None,
         **params,
     ):
+        # Fix Perplexity return both delta and message cause OpenWebUI repect text
+        # https://github.com/BerriAI/litellm/issues/8455
+        params.pop("message", None)
         super(StreamingChoices, self).__init__(**params)
         if finish_reason:
             self.finish_reason = map_finish_reason(finish_reason)
@@ -832,6 +839,7 @@ class StreamingChoices(OpenAIObject):
             self.finish_reason = None
         self.index = index
         if delta is not None:
+
             if isinstance(delta, Delta):
                 self.delta = delta
             elif isinstance(delta, dict):
@@ -1585,6 +1593,7 @@ class StandardLoggingHiddenParams(TypedDict):
     response_cost: Optional[str]
     litellm_overhead_time_ms: Optional[float]
     additional_headers: Optional[StandardLoggingAdditionalHeaders]
+    batch_models: Optional[List[str]]
 
 
 class StandardLoggingModelInformation(TypedDict):
@@ -1995,3 +2004,10 @@ class LiteLLMBatch(Batch):
         except Exception:
             # if using pydantic v1
             return self.dict()
+
+
+class RawRequestTypedDict(TypedDict, total=False):
+    raw_request_api_base: Optional[str]
+    raw_request_body: Optional[dict]
+    raw_request_headers: Optional[dict]
+    error: Optional[str]
