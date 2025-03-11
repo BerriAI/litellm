@@ -274,7 +274,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         if modelId is not None:
             modelId = self.encode_model_id(model_id=modelId)
         else:
-            modelId = model
+            modelId = self.encode_model_id(model_id=model)
 
         if stream is True and "ai21" in modelId:
             fake_stream = True
