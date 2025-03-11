@@ -71,7 +71,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             timeout=optional_params.get("timeout"),
         )
 
-    def transform_request(
+    def transform_responses_api_request(
         self,
         model: str,
         input: Union[str, ResponseInputParam],

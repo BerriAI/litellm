@@ -2,10 +2,13 @@ import types
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Optional, Union
 
+import httpx
+
 from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIRequestParams,
+    ResponsesAPIResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelInfo
@@ -85,7 +88,7 @@ class BaseResponsesAPIConfig(ABC):
         return api_base
 
     @abstractmethod
-    def transform_request(
+    def transform_responses_api_request(
         self,
         model: str,
         input: Union[str, ResponseInputParam],
@@ -95,8 +98,12 @@ class BaseResponsesAPIConfig(ABC):
     ) -> ResponsesAPIRequestParams:
         pass
 
-    # @abstractmethod
-    # def transform_response(
-    #     self,
-    # ):
-    #     pass
+    @abstractmethod
+    def transform_response_api_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ResponsesAPIResponse,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIResponse:
+        return model_response
