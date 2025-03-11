@@ -69,11 +69,13 @@ class TritonConfig(BaseConfig):
 
     def get_complete_url(
         self,
-        api_base: str,
+        api_base: Optional[str],
         model: str,
         optional_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
+        if api_base is None:
+            raise ValueError("api_base is required")
         llm_type = self._get_triton_llm_type(api_base)
         if llm_type == "generate" and stream:
             return api_base + "_stream"
