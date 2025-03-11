@@ -31,6 +31,7 @@ from ...types.llms.openai import HttpxBinaryResponseContent
 from ..base import BaseLLM
 from .common_utils import (
     AzureOpenAIError,
+    BaseAzureLLM,
     get_azure_ad_token_from_oidc,
     process_azure_headers,
     select_azure_base_url_or_endpoint,
@@ -120,7 +121,7 @@ def _check_dynamic_azure_params(
     return False
 
 
-class AzureChatCompletion(BaseLLM):
+class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     def __init__(self) -> None:
         super().__init__()
 
@@ -348,6 +349,7 @@ class AzureChatCompletion(BaseLLM):
                         logging_obj=logging_obj,
                         max_retries=max_retries,
                         convert_tool_call_to_json_mode=json_mode,
+                        litellm_params=litellm_params,
                     )
             elif "stream" in optional_params and optional_params["stream"] is True:
                 return self.streaming(
@@ -476,29 +478,18 @@ class AzureChatCompletion(BaseLLM):
         azure_ad_token_provider: Optional[Callable] = None,
         convert_tool_call_to_json_mode: Optional[bool] = None,
         client=None,  # this is the AsyncAzureOpenAI
+        litellm_params: Optional[dict] = None,
     ):
         response = None
         try:
             # init AzureOpenAI Client
-            azure_client_params = {
-                "api_version": api_version,
-                "azure_endpoint": api_base,
-                "azure_deployment": model,
-                "http_client": litellm.aclient_session,
-                "max_retries": max_retries,
-                "timeout": timeout,
-            }
-            azure_client_params = select_azure_base_url_or_endpoint(
-                azure_client_params=azure_client_params
+            azure_client_params = self.initialize_azure_sdk_client(
+                litellm_params=litellm_params or {},
+                api_key=api_key,
+                api_base=api_base,
+                model_name=model,
+                api_version=api_version,
             )
-            if api_key is not None:
-                azure_client_params["api_key"] = api_key
-            elif azure_ad_token is not None:
-                if azure_ad_token.startswith("oidc/"):
-                    azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
-                azure_client_params["azure_ad_token"] = azure_ad_token
-            elif azure_ad_token_provider is not None:
-                azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
 
             # setting Azure client
             if client is None or dynamic_params:

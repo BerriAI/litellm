@@ -275,68 +275,73 @@ def select_azure_base_url_or_endpoint(azure_client_params: dict):
     return azure_client_params
 
 
-def initialize_azure_sdk_client(
-    litellm_params: dict,
-    api_key: Optional[str],
-    api_base: Optional[str],
-    model_name: str,
-    api_version: Optional[str],
-) -> dict:
-    azure_ad_token_provider: Optional[Callable[[], str]] = None
-    # If we have api_key, then we have higher priority
-    azure_ad_token = litellm_params.get("azure_ad_token")
-    tenant_id = litellm_params.get("tenant_id")
-    client_id = litellm_params.get("client_id")
-    client_secret = litellm_params.get("client_secret")
-    azure_username = litellm_params.get("azure_username")
-    azure_password = litellm_params.get("azure_password")
-    if not api_key and tenant_id and client_id and client_secret:
-        verbose_logger.debug("Using Azure AD Token Provider for Azure Auth")
-        azure_ad_token_provider = get_azure_ad_token_from_entrata_id(
-            tenant_id=tenant_id,
-            client_id=client_id,
-            client_secret=client_secret,
+class BaseAzureLLM:
+    def initialize_azure_sdk_client(
+        self,
+        litellm_params: dict,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        model_name: str,
+        api_version: Optional[str],
+    ) -> dict:
+
+        azure_ad_token_provider: Optional[Callable[[], str]] = None
+        # If we have api_key, then we have higher priority
+        azure_ad_token = litellm_params.get("azure_ad_token")
+        tenant_id = litellm_params.get("tenant_id")
+        client_id = litellm_params.get("client_id")
+        client_secret = litellm_params.get("client_secret")
+        azure_username = litellm_params.get("azure_username")
+        azure_password = litellm_params.get("azure_password")
+        if not api_key and tenant_id and client_id and client_secret:
+            verbose_logger.debug("Using Azure AD Token Provider for Azure Auth")
+            azure_ad_token_provider = get_azure_ad_token_from_entrata_id(
+                tenant_id=tenant_id,
+                client_id=client_id,
+                client_secret=client_secret,
+            )
+        if azure_username and azure_password and client_id:
+            azure_ad_token_provider = get_azure_ad_token_from_username_password(
+                azure_username=azure_username,
+                azure_password=azure_password,
+                client_id=client_id,
+            )
+
+        if azure_ad_token is not None and azure_ad_token.startswith("oidc/"):
+            azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
+        elif (
+            not api_key
+            and azure_ad_token_provider is None
+            and litellm.enable_azure_ad_token_refresh is True
+        ):
+            try:
+                azure_ad_token_provider = get_azure_ad_token_provider()
+            except ValueError:
+                verbose_logger.debug("Azure AD Token Provider could not be used.")
+        if api_version is None:
+            api_version = os.getenv(
+                "AZURE_API_VERSION", litellm.AZURE_DEFAULT_API_VERSION
+            )
+
+        _api_key = api_key
+        if _api_key is not None and isinstance(_api_key, str):
+            # only show first 5 chars of api_key
+            _api_key = _api_key[:8] + "*" * 15
+        verbose_logger.debug(
+            f"Initializing Azure OpenAI Client for {model_name}, Api Base: {str(api_base)}, Api Key:{_api_key}"
         )
-    if azure_username and azure_password and client_id:
-        azure_ad_token_provider = get_azure_ad_token_from_username_password(
-            azure_username=azure_username,
-            azure_password=azure_password,
-            client_id=client_id,
-        )
+        azure_client_params = {
+            "api_key": api_key,
+            "azure_endpoint": api_base,
+            "api_version": api_version,
+            "azure_ad_token": azure_ad_token,
+            "azure_ad_token_provider": azure_ad_token_provider,
+        }
 
-    if azure_ad_token is not None and azure_ad_token.startswith("oidc/"):
-        azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
-    elif (
-        not api_key
-        and azure_ad_token_provider is None
-        and litellm.enable_azure_ad_token_refresh is True
-    ):
-        try:
-            azure_ad_token_provider = get_azure_ad_token_provider()
-        except ValueError:
-            verbose_logger.debug("Azure AD Token Provider could not be used.")
-    if api_version is None:
-        api_version = os.getenv("AZURE_API_VERSION", litellm.AZURE_DEFAULT_API_VERSION)
+        if azure_ad_token_provider is not None:
+            azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
+        # this decides if we should set azure_endpoint or base_url on Azure OpenAI Client
+        # required to support GPT-4 vision enhancements, since base_url needs to be set on Azure OpenAI Client
+        azure_client_params = select_azure_base_url_or_endpoint(azure_client_params)
 
-    _api_key = api_key
-    if _api_key is not None and isinstance(_api_key, str):
-        # only show first 5 chars of api_key
-        _api_key = _api_key[:8] + "*" * 15
-    verbose_logger.debug(
-        f"Initializing Azure OpenAI Client for {model_name}, Api Base: {str(api_base)}, Api Key:{_api_key}"
-    )
-    azure_client_params = {
-        "api_key": api_key,
-        "azure_endpoint": api_base,
-        "api_version": api_version,
-        "azure_ad_token": azure_ad_token,
-        "azure_ad_token_provider": azure_ad_token_provider,
-    }
-
-    if azure_ad_token_provider is not None:
-        azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
-    # this decides if we should set azure_endpoint or base_url on Azure OpenAI Client
-    # required to support GPT-4 vision enhancements, since base_url needs to be set on Azure OpenAI Client
-    azure_client_params = select_azure_base_url_or_endpoint(azure_client_params)
-
-    return azure_client_params
+        return azure_client_params

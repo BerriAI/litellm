@@ -10,7 +10,8 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
 import litellm
-from litellm.llms.azure.common_utils import initialize_azure_sdk_client
+from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.types.utils import CallTypes
 
 
 # Mock the necessary dependencies
@@ -58,7 +59,7 @@ def setup_mocks():
 
 def test_initialize_with_api_key(setup_mocks):
     # Test with api_key provided
-    result = initialize_azure_sdk_client(
+    result = BaseAzureLLM().initialize_azure_sdk_client(
         litellm_params={},
         api_key="test-api-key",
         api_base="https://test.openai.azure.com",
@@ -76,7 +77,7 @@ def test_initialize_with_api_key(setup_mocks):
 
 def test_initialize_with_tenant_credentials(setup_mocks):
     # Test with tenant_id, client_id, and client_secret provided
-    result = initialize_azure_sdk_client(
+    result = BaseAzureLLM().initialize_azure_sdk_client(
         litellm_params={
             "tenant_id": "test-tenant-id",
             "client_id": "test-client-id",
@@ -103,7 +104,7 @@ def test_initialize_with_tenant_credentials(setup_mocks):
 
 def test_initialize_with_username_password(setup_mocks):
     # Test with azure_username, azure_password, and client_id provided
-    result = initialize_azure_sdk_client(
+    result = BaseAzureLLM().initialize_azure_sdk_client(
         litellm_params={
             "azure_username": "test-username",
             "azure_password": "test-password",
@@ -128,7 +129,7 @@ def test_initialize_with_username_password(setup_mocks):
 
 def test_initialize_with_oidc_token(setup_mocks):
     # Test with azure_ad_token that starts with "oidc/"
-    result = initialize_azure_sdk_client(
+    result = BaseAzureLLM().initialize_azure_sdk_client(
         litellm_params={"azure_ad_token": "oidc/test-token"},
         api_key=None,
         api_base="https://test.openai.azure.com",
@@ -148,7 +149,7 @@ def test_initialize_with_enable_token_refresh(setup_mocks):
     setup_mocks["litellm"].enable_azure_ad_token_refresh = True
 
     # Test with token refresh enabled
-    result = initialize_azure_sdk_client(
+    result = BaseAzureLLM().initialize_azure_sdk_client(
         litellm_params={},
         api_key=None,
         api_base="https://test.openai.azure.com",
@@ -169,7 +170,7 @@ def test_initialize_with_token_refresh_error(setup_mocks):
     setup_mocks["token_provider"].side_effect = ValueError("Token provider error")
 
     # Test with token refresh enabled but raising error
-    result = initialize_azure_sdk_client(
+    result = BaseAzureLLM().initialize_azure_sdk_client(
         litellm_params={},
         api_key=None,
         api_base="https://test.openai.azure.com",
@@ -186,7 +187,7 @@ def test_initialize_with_token_refresh_error(setup_mocks):
 def test_api_version_from_env_var(setup_mocks):
     # Test api_version from environment variable
     with patch.dict(os.environ, {"AZURE_API_VERSION": "2023-07-01"}):
-        result = initialize_azure_sdk_client(
+        result = BaseAzureLLM().initialize_azure_sdk_client(
             litellm_params={},
             api_key="test-api-key",
             api_base="https://test.openai.azure.com",
@@ -200,7 +201,7 @@ def test_api_version_from_env_var(setup_mocks):
 
 def test_select_azure_base_url_called(setup_mocks):
     # Test that select_azure_base_url_or_endpoint is called
-    result = initialize_azure_sdk_client(
+    result = BaseAzureLLM().initialize_azure_sdk_client(
         litellm_params={},
         api_key="test-api-key",
         api_base="https://test.openai.azure.com",
@@ -210,3 +211,78 @@ def test_select_azure_base_url_called(setup_mocks):
 
     # Verify that select_azure_base_url_or_endpoint was called
     setup_mocks["select_url"].assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "call_type",
+    [
+        CallTypes.acompletion,
+        CallTypes.atext_completion,
+        CallTypes.aembedding,
+        CallTypes.arerank,
+        CallTypes.atranscription,
+    ],
+)
+@pytest.mark.asyncio
+async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
+    from litellm.router import Router
+
+    # Create a router with an Azure model
+    azure_model_name = "azure/chatgpt-v-2"
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": azure_model_name,
+                    "api_key": "test-api-key",
+                    "api_version": os.getenv("AZURE_API_VERSION", "2023-05-15"),
+                    "api_base": os.getenv(
+                        "AZURE_API_BASE", "https://test.openai.azure.com"
+                    ),
+                },
+            }
+        ],
+    )
+
+    # Prepare test input based on call type
+    test_inputs = {
+        "acompletion": {
+            "messages": [{"role": "user", "content": "Hello, how are you?"}]
+        },
+        "atext_completion": {"prompt": "Hello, how are you?"},
+        "aimage_generation": {"prompt": "Hello, how are you?"},
+        "aembedding": {"input": "Hello, how are you?"},
+        "arerank": {"input": "Hello, how are you?"},
+        "atranscription": {"file": "path/to/file"},
+    }
+
+    # Get appropriate input for this call type
+    input_kwarg = test_inputs.get(call_type.value, {})
+
+    # Mock the initialize_azure_sdk_client function
+    with patch(
+        "litellm.main.azure_chat_completions.initialize_azure_sdk_client"
+    ) as mock_init_azure:
+        # Also mock async_function_with_fallbacks to prevent actual API calls
+        # Call the appropriate router method
+        try:
+            await getattr(router, call_type.value)(
+                model="gpt-3.5-turbo",
+                **input_kwarg,
+                num_retries=0,
+            )
+        except Exception as e:
+            print(e)
+
+        # Verify initialize_azure_sdk_client was called
+        mock_init_azure.assert_called_once()
+
+        # Verify it was called with the right model name
+        calls = mock_init_azure.call_args_list
+        azure_calls = [call for call in calls]
+
+        # More detailed verification (optional)
+        for call in azure_calls:
+            assert "api_key" in call.kwargs, "api_key not found in parameters"
+            assert "api_base" in call.kwargs, "api_base not found in parameters"
