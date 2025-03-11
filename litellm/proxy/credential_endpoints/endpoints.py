@@ -20,17 +20,19 @@ from litellm.types.utils import CredentialItem
 router = APIRouter()
 
 
-def encrypt_credential_values(credential: CredentialItem) -> CredentialItem:
-    """Encrypt values in credential.credential_values and add to DB"""
-    encrypted_credential_values = {}
-    for key, value in credential.credential_values.items():
-        encrypted_credential_values[key] = encrypt_value_helper(value)
-    credential.credential_values = encrypted_credential_values
-    return credential
+class CredentialHelperUtils:
+    @staticmethod
+    def encrypt_credential_values(credential: CredentialItem) -> CredentialItem:
+        """Encrypt values in credential.credential_values and add to DB"""
+        encrypted_credential_values = {}
+        for key, value in credential.credential_values.items():
+            encrypted_credential_values[key] = encrypt_value_helper(value)
+        credential.credential_values = encrypted_credential_values
+        return credential
 
 
 @router.post(
-    "/v1/credentials",
+    "/credentials",
     dependencies=[Depends(user_api_key_auth)],
     tags=["credential management"],
 )
@@ -53,7 +55,7 @@ async def create_credential(
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
 
-        credential = encrypt_credential_values(credential)
+        credential = CredentialHelperUtils.encrypt_credential_values(credential)
         credentials_dict = credential.model_dump()
         credentials_dict_jsonified = jsonify_object(credentials_dict)
         await prisma_client.db.litellm_credentialstable.create(
@@ -71,7 +73,7 @@ async def create_credential(
 
 
 @router.get(
-    "/v1/credentials",
+    "/credentials",
     dependencies=[Depends(user_api_key_auth)],
     tags=["credential management"],
 )
@@ -87,7 +89,7 @@ async def get_credentials(
 
 
 @router.get(
-    "/v1/credentials/{credential_name}",
+    "/credentials/{credential_name}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["credential management"],
 )
@@ -107,7 +109,7 @@ async def get_credential(
 
 
 @router.delete(
-    "/v1/credentials/{credential_name}",
+    "/credentials/{credential_name}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["credential management"],
 )
@@ -134,7 +136,7 @@ async def delete_credential(
 
 
 @router.put(
-    "/v1/credentials/{credential_name}",
+    "/credentials/{credential_name}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["credential management"],
 )

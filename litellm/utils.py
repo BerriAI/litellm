@@ -499,9 +499,6 @@ def function_setup(  # noqa: PLR0915
         ## GET APPLIED GUARDRAILS
         applied_guardrails = get_applied_guardrails(kwargs)
 
-        ## LOAD CREDENTIALS
-        load_credentials_from_list(kwargs)
-
         ## LOGGING SETUP
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
@@ -1000,6 +997,8 @@ def client(original_function):  # noqa: PLR0915
                 logging_obj, kwargs = function_setup(
                     original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
+            ## LOAD CREDENTIALS
+            load_credentials_from_list(kwargs)
             kwargs["litellm_logging_obj"] = logging_obj
             _llm_caching_handler: LLMCachingHandler = LLMCachingHandler(
                 original_function=original_function,
@@ -1256,6 +1255,8 @@ def client(original_function):  # noqa: PLR0915
                     original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
             kwargs["litellm_logging_obj"] = logging_obj
+            ## LOAD CREDENTIALS
+            load_credentials_from_list(kwargs)
             logging_obj._llm_caching_handler = _llm_caching_handler
             # [OPTIONAL] CHECK BUDGET
             if litellm.max_budget:
