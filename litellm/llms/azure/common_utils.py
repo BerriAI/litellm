@@ -58,6 +58,7 @@ def get_azure_openai_client(
                 data[k] = v
         if "api_version" not in data:
             data["api_version"] = litellm.AZURE_DEFAULT_API_VERSION
+
         if _is_async is True:
             openai_client = AsyncAzureOpenAI(**data)
         else:

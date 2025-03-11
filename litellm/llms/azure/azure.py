@@ -153,27 +153,16 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         timeout: Union[float, httpx.Timeout],
         client: Optional[Any],
         client_type: Literal["sync", "async"],
+        litellm_params: Optional[dict] = None,
     ):
         # init AzureOpenAI Client
-        azure_client_params: Dict[str, Any] = {
-            "api_version": api_version,
-            "azure_endpoint": api_base,
-            "azure_deployment": model,
-            "http_client": litellm.client_session,
-            "max_retries": max_retries,
-            "timeout": timeout,
-        }
-        azure_client_params = select_azure_base_url_or_endpoint(
-            azure_client_params=azure_client_params
+        azure_client_params: Dict[str, Any] = self.initialize_azure_sdk_client(
+            litellm_params=litellm_params or {},
+            api_key=api_key,
+            model_name=model,
+            api_version=api_version,
+            api_base=api_base,
         )
-        if api_key is not None:
-            azure_client_params["api_key"] = api_key
-        elif azure_ad_token is not None:
-            if azure_ad_token.startswith("oidc/"):
-                azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
-            azure_client_params["azure_ad_token"] = azure_ad_token
-        elif azure_ad_token_provider is not None:
-            azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
         if client is None:
             if client_type == "sync":
                 azure_client = AzureOpenAI(**azure_client_params)  # type: ignore
@@ -780,6 +769,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         client=None,
         aembedding=None,
         headers: Optional[dict] = None,
+        litellm_params: Optional[dict] = None,
     ) -> EmbeddingResponse:
         if headers:
             optional_params["extra_headers"] = headers
@@ -795,29 +785,14 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 )
 
             # init AzureOpenAI Client
-            azure_client_params = {
-                "api_version": api_version,
-                "azure_endpoint": api_base,
-                "azure_deployment": model,
-                "max_retries": max_retries,
-                "timeout": timeout,
-            }
-            azure_client_params = select_azure_base_url_or_endpoint(
-                azure_client_params=azure_client_params
-            )
-            if aembedding:
-                azure_client_params["http_client"] = litellm.aclient_session
-            else:
-                azure_client_params["http_client"] = litellm.client_session
-            if api_key is not None:
-                azure_client_params["api_key"] = api_key
-            elif azure_ad_token is not None:
-                if azure_ad_token.startswith("oidc/"):
-                    azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
-                azure_client_params["azure_ad_token"] = azure_ad_token
-            elif azure_ad_token_provider is not None:
-                azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
 
+            azure_client_params = self.initialize_azure_sdk_client(
+                litellm_params=litellm_params or {},
+                api_key=api_key,
+                model_name=model,
+                api_version=api_version,
+                api_base=api_base,
+            )
             ## LOGGING
             logging_obj.pre_call(
                 input=input,
@@ -1282,6 +1257,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         azure_ad_token_provider: Optional[Callable] = None,
         aspeech: Optional[bool] = None,
         client=None,
+        litellm_params: Optional[dict] = None,
     ) -> HttpxBinaryResponseContent:
 
         max_retries = optional_params.pop("max_retries", 2)
@@ -1300,6 +1276,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 max_retries=max_retries,
                 timeout=timeout,
                 client=client,
+                litellm_params=litellm_params,
             )  # type: ignore
 
         azure_client: AzureOpenAI = self._get_sync_azure_client(
@@ -1313,6 +1290,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             timeout=timeout,
             client=client,
             client_type="sync",
+            litellm_params=litellm_params,
         )  # type: ignore
 
         response = azure_client.audio.speech.create(
@@ -1337,6 +1315,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         max_retries: int,
         timeout: Union[float, httpx.Timeout],
         client=None,
+        litellm_params: Optional[dict] = None,
     ) -> HttpxBinaryResponseContent:
 
         azure_client: AsyncAzureOpenAI = self._get_sync_azure_client(
@@ -1350,6 +1329,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             timeout=timeout,
             client=client,
             client_type="async",
+            litellm_params=litellm_params,
         )  # type: ignore
 
         azure_response = await azure_client.audio.speech.create(
