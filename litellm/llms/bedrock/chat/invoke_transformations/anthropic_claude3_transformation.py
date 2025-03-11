@@ -54,11 +54,17 @@ class AmazonAnthropicClaude3Config(AmazonInvokeConfig, AnthropicConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        # Create a copy of optional_params without AWS parameters
+        filtered_optional_params = {
+            k: v for k, v in optional_params.items()
+            if k not in self.aws_authentication_params
+        }
+
         _anthropic_request = AnthropicConfig.transform_request(
             self,
             model=model,
             messages=messages,
-            optional_params=optional_params,
+            optional_params=filtered_optional_params,
             litellm_params=litellm_params,
             headers=headers,
         )
