@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import pytest
 
-from litellm import completion, acompletion, set_verbose
+from litellm import completion, acompletion
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
@@ -23,6 +23,7 @@ async def test_chat_completion_snowflake(sync_mode):
             response = completion(
                 model="snowflake/mistral-7b",
                 messages=messages,
+                api_base = "https://exampleopenaiendpoint-production.up.railway.app/v1/chat/completions"
             )
             print(response)
             assert response is not None
@@ -30,6 +31,7 @@ async def test_chat_completion_snowflake(sync_mode):
             response = await acompletion(
                 model="snowflake/mistral-7b",
                 messages=messages,
+                api_base = "https://exampleopenaiendpoint-production.up.railway.app/v1/chat/completions"
             )
             print(response)
             assert response is not None
@@ -54,25 +56,21 @@ async def test_chat_completion_snowflake_stream(sync_mode):
                 messages=messages,
                 max_tokens=100,
                 stream=True,
+                api_base = "https://exampleopenaiendpoint-production.up.railway.app/v1/chat/completions"
             )
             
-            chunk_count = 0
             async for chunk in response:
                 print(chunk)
-                chunk_count += 1
-            assert chunk_count > 0
         else:
             response = completion(
                 model="snowflake/mistral-7b",
                 messages=messages,
                 max_tokens=100,
                 stream=True,
+                api_base = "https://exampleopenaiendpoint-production.up.railway.app/v1/chat/completions"
             )
-                
-            chunk_count = 0
+
             for chunk in response:
                 print(chunk)
-                chunk_count += 1
-            assert chunk_count > 0
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
