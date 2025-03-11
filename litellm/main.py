@@ -3900,42 +3900,19 @@ async def atext_completion(
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(
-            model=model, api_base=kwargs.get("api_base", None)
-        )
-
-        if (
-            custom_llm_provider == "openai"
-            or custom_llm_provider == "azure"
-            or custom_llm_provider == "azure_text"
-            or custom_llm_provider == "custom_openai"
-            or custom_llm_provider == "anyscale"
-            or custom_llm_provider == "mistral"
-            or custom_llm_provider == "openrouter"
-            or custom_llm_provider == "deepinfra"
-            or custom_llm_provider == "perplexity"
-            or custom_llm_provider == "groq"
-            or custom_llm_provider == "nvidia_nim"
-            or custom_llm_provider == "cerebras"
-            or custom_llm_provider == "sambanova"
-            or custom_llm_provider == "ai21_chat"
-            or custom_llm_provider == "ai21"
-            or custom_llm_provider == "volcengine"
-            or custom_llm_provider == "text-completion-codestral"
-            or custom_llm_provider == "deepseek"
-            or custom_llm_provider == "text-completion-openai"
-            or custom_llm_provider == "huggingface"
-            or custom_llm_provider == "ollama"
-            or custom_llm_provider == "vertex_ai"
-            or custom_llm_provider in litellm.openai_compatible_providers
-        ):  # currently implemented aiohttp calls for just azure and openai, soon all.
-            # Await normally
-            response = await loop.run_in_executor(None, func_with_context)
-            if asyncio.iscoroutine(response):
-                response = await response
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if isinstance(init_response, dict) or isinstance(
+            init_response, TextCompletionResponse
+        ):  ## CACHING SCENARIO
+            if isinstance(init_response, dict):
+                response = TextCompletionResponse(**init_response)
+            else:
+                response = init_response
+        elif asyncio.iscoroutine(init_response):
+            response = await init_response
         else:
-            # Call the synchronous function using run_in_executor
-            response = await loop.run_in_executor(None, func_with_context)
+            response = init_response  # type: ignore
+
         if (
             kwargs.get("stream", False) is True
             or isinstance(response, TextCompletionStreamWrapper)
