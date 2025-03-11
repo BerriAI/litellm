@@ -43,6 +43,7 @@ async def create_credential(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
+    [BETA] endpoint. This might change unexpectedly.
     Stores credential in DB.
     Reloads credentials in memory.
     """
@@ -82,8 +83,18 @@ async def get_credentials(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    [BETA] endpoint. This might change unexpectedly.
+    """
     try:
-        return {"success": True, "credentials": litellm.credential_list}
+        masked_credentials = [
+            {
+                "credential_name": credential.credential_name,
+                "credential_values": credential.credential_values,
+            }
+            for credential in litellm.credential_list
+        ]
+        return {"success": True, "credentials": masked_credentials}
     except Exception as e:
         return handle_exception_on_proxy(e)
 
@@ -99,10 +110,17 @@ async def get_credential(
     credential_name: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    [BETA] endpoint. This might change unexpectedly.
+    """
     try:
         for credential in litellm.credential_list:
             if credential.credential_name == credential_name:
-                return {"success": True, "credential": credential}
+                masked_credential = {
+                    "credential_name": credential.credential_name,
+                    "credential_values": credential.credential_values,
+                }
+                return {"success": True, "credential": masked_credential}
         return {"success": False, "message": "Credential not found"}
     except Exception as e:
         return handle_exception_on_proxy(e)
@@ -119,6 +137,9 @@ async def delete_credential(
     credential_name: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    [BETA] endpoint. This might change unexpectedly.
+    """
     from litellm.proxy.proxy_server import prisma_client
 
     try:
@@ -147,6 +168,9 @@ async def update_credential(
     credential: CredentialItem,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    [BETA] endpoint. This might change unexpectedly.
+    """
     from litellm.proxy.proxy_server import prisma_client
 
     try:
