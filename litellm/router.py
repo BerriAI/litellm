@@ -619,7 +619,7 @@ class Router:
     @staticmethod
     def _create_redis_cache(
         cache_config: Dict[str, Any]
-    ) -> RedisCache | RedisClusterCache:
+    ) -> Union[RedisCache, RedisClusterCache]:
         if cache_config.get("startup_nodes"):
             return RedisClusterCache(**cache_config)
         else:
