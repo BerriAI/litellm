@@ -1,4 +1,5 @@
 from typing import Any, List, Optional, Tuple, cast
+from urllib.parse import urlparse
 
 import httpx
 from httpx import Response
@@ -28,16 +29,29 @@ class AzureAIStudioConfig(OpenAIConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        if api_base and "services.ai.azure.com" in api_base:
+        if api_base and self._should_use_api_key_header(api_base):
             headers["api-key"] = api_key
         else:
             headers["Authorization"] = f"Bearer {api_key}"
 
         return headers
 
+    def _should_use_api_key_header(self, api_base: str) -> bool:
+        """
+        Returns True if the request should use `api-key` header for authentication.
+        """
+        parsed_url = urlparse(api_base)
+        host = parsed_url.hostname
+        if host and (
+            host.endswith(".services.ai.azure.com")
+            or host.endswith(".openai.azure.com")
+        ):
+            return True
+        return False
+
     def get_complete_url(
         self,
-        api_base: str,
+        api_base: Optional[str],
         model: str,
         optional_params: dict,
         stream: Optional[bool] = None,
@@ -58,6 +72,10 @@ class AzureAIStudioConfig(OpenAIConfig):
         - A complete URL string, e.g.,
         "https://litellm8397336933.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview"
         """
+        if api_base is None:
+            raise ValueError(
+                f"api_base is required for Azure AI Studio. Please set the api_base parameter. Passed `api_base={api_base}`"
+            )
         original_url = httpx.URL(api_base)
 
         # Extract api_version or use default

@@ -28,13 +28,21 @@ class SourceBlock(TypedDict):
     bytes: Optional[str]  # base 64 encoded string
 
 
+BedrockImageTypes = Literal["png", "jpeg", "gif", "webp"]
+
+
 class ImageBlock(TypedDict):
-    format: Literal["png", "jpeg", "gif", "webp"]
+    format: Union[BedrockImageTypes, str]
     source: SourceBlock
 
 
+BedrockDocumentTypes = Literal[
+    "pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"
+]
+
+
 class DocumentBlock(TypedDict):
-    format: Literal["pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"]
+    format: Union[BedrockDocumentTypes, str]
     source: SourceBlock
     name: str
 
@@ -58,6 +66,22 @@ class ToolUseBlock(TypedDict):
     toolUseId: str
 
 
+class BedrockConverseReasoningTextBlock(TypedDict, total=False):
+    text: Required[str]
+    signature: str
+
+
+class BedrockConverseReasoningContentBlock(TypedDict, total=False):
+    reasoningText: BedrockConverseReasoningTextBlock
+    redactedContent: str
+
+
+class BedrockConverseReasoningContentBlockDelta(TypedDict, total=False):
+    signature: str
+    redactedContent: str
+    text: str
+
+
 class ContentBlock(TypedDict, total=False):
     text: str
     image: ImageBlock
@@ -65,6 +89,7 @@ class ContentBlock(TypedDict, total=False):
     toolResult: ToolResultBlock
     toolUse: ToolUseBlock
     cachePoint: CachePointBlock
+    reasoningContent: BedrockConverseReasoningContentBlock
 
 
 class MessageBlock(TypedDict):
@@ -159,6 +184,7 @@ class ContentBlockDeltaEvent(TypedDict, total=False):
 
     text: str
     toolUse: ToolBlockDeltaEvent
+    reasoningContent: BedrockConverseReasoningContentBlockDelta
 
 
 class CommonRequestObject(
@@ -174,6 +200,18 @@ class CommonRequestObject(
 
 class RequestObject(CommonRequestObject, total=False):
     messages: Required[List[MessageBlock]]
+
+
+class BedrockInvokeNovaRequest(TypedDict, total=False):
+    """
+    Request object for sending `nova` requests to `/bedrock/invoke/`
+    """
+
+    messages: List[MessageBlock]
+    inferenceConfig: InferenceConfig
+    system: List[SystemContentBlock]
+    toolConfig: ToolConfigBlock
+    guardrailConfig: Optional[GuardrailConfigBlock]
 
 
 class GenericStreamingChunk(TypedDict):
@@ -393,3 +431,10 @@ class BedrockRerankRequest(TypedDict):
     queries: List[BedrockRerankQuery]
     rerankingConfiguration: BedrockRerankConfiguration
     sources: List[BedrockRerankSource]
+
+
+class AmazonDeepSeekR1StreamingResponse(TypedDict):
+    generation: str
+    generation_token_count: int
+    stop_reason: Optional[str]
+    prompt_token_count: int

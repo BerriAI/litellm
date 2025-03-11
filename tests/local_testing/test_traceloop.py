@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 
 
 @pytest.fixture()
+@pytest.mark.skip(reason="Traceloop use `otel` integration instead")
 def exporter():
     from traceloop.sdk import Traceloop
 
@@ -26,7 +27,9 @@ def exporter():
     return exporter
 
 
+@pytest.mark.skip(reason="moved to using 'otel' for logging")
 @pytest.mark.parametrize("model", ["claude-3-5-haiku-20241022", "gpt-3.5-turbo"])
+@pytest.mark.skip(reason="Traceloop use `otel` integration instead")
 def test_traceloop_logging(exporter, model):
     litellm.completion(
         model=model,

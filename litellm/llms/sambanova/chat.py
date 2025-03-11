@@ -11,7 +11,7 @@ from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 class SambanovaConfig(OpenAIGPTConfig):
     """
-    Reference: https://community.sambanova.ai/t/create-chat-completion-api/
+    Reference: https://docs.sambanova.ai/cloud/api-reference/
 
     Below are the parameters:
     """

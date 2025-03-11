@@ -1,3 +1,7 @@
+import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Logging
 
 Log Proxy input, output, and exceptions using:
@@ -13,9 +17,7 @@ Log Proxy input, output, and exceptions using:
 - DynamoDB
 - etc.
 
-import Image from '@theme/IdealImage';
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
+
 
 ## Getting the LiteLLM Call ID
 
@@ -77,10 +79,13 @@ litellm_settings:
 
 ### Redact Messages, Response Content
 
-Set `litellm.turn_off_message_logging=True` This will prevent the messages and responses from being logged to your logging provider, but request metadata will still be logged.
+Set `litellm.turn_off_message_logging=True` This will prevent the messages and responses from being logged to your logging provider, but request metadata - e.g. spend, will still be tracked.
 
+<Tabs>
 
-Example config.yaml
+<TabItem value="global" label="Global">
+
+**1. Setup config.yaml **
 ```yaml
 model_list:
  - model_name: gpt-3.5-turbo
@@ -91,8 +96,86 @@ litellm_settings:
   turn_off_message_logging: True # 👈 Key Change
 ```
 
-If you have this feature turned on, you can override it for specific requests by
+**2. Send request**
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+}'
+```
+
+
+
+</TabItem>
+<TabItem value="dynamic" label="Per Request">
+
+:::info
+
+Dynamic request message redaction is in BETA. 
+
+:::
+
+Pass in a request header to enable message redaction for a request.
+
+```
+x-litellm-enable-message-redaction: true
+```
+
+Example config.yaml
+
+**1. Setup config.yaml **
+
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+```
+
+**2. Setup per request header**
+
+```shell
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-zV5HlSIm8ihj1F9C_ZbB1g' \
+-H 'x-litellm-enable-message-redaction: true' \
+-d '{
+  "model": "gpt-3.5-turbo-testing",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hey, how'\''s it going 1234?"
+    }
+  ]
+}'
+```
+
+</TabItem>
+</Tabs>
+
+**3. Check Logging Tool + Spend Logs**
+
+**Logging Tool**
+
+<Image img={require('../../img/message_redaction_logging.png')}/>
+
+**Spend Logs**
+
+<Image img={require('../../img/message_redaction_spend_logs.png')} />
+
+
+### Disable Message Redaction
+
+If you have `litellm.turn_on_message_logging` turned on, you can override it for specific requests by
 setting a request header `LiteLLM-Disable-Message-Redaction: true`.
+
 
 ```shell
 curl --location 'http://0.0.0.0:4000/chat/completions' \
@@ -109,12 +192,20 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 
-Removes any field with `user_api_key_*` from metadata.
-
 
 ### Turn off all tracking/logging
 
 For some use cases, you may want to turn off all tracking/logging. You can do this by passing `no-log=True` in the request body.
+
+:::info
+
+Disable this by setting `global_disable_no_log_param:true` in your config.yaml file.
+
+```yaml
+litellm_settings:
+  global_disable_no_log_param: True
+```
+:::
 
 <Tabs>
 <TabItem value="Curl" label="Curl Request">
@@ -1025,6 +1116,74 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 6. Save the JSON file and add the path to `GCS_PATH_SERVICE_ACCOUNT`
 
 
+
+## Google Cloud Storage - PubSub Topic
+
+Log LLM Logs/SpendLogs to [Google Cloud Storage PubSub Topic](https://cloud.google.com/pubsub/docs/reference/rest)
+
+:::info
+
+✨ This is an Enterprise only feature [Get Started with Enterprise here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+:::
+
+
+| Property | Details |
+|----------|---------|
+| Description | Log LiteLLM `SpendLogs Table` to Google Cloud Storage PubSub Topic |
+
+When to use `gcs_pubsub`?
+
+- If your LiteLLM Database has crossed 1M+ spend logs and you want to send `SpendLogs` to a PubSub Topic that can be consumed by GCS BigQuery
+
+
+#### Usage
+
+1. Add `gcs_pubsub` to LiteLLM Config.yaml
+```yaml
+model_list:
+- litellm_params:
+    api_base: https://exampleopenaiendpoint-production.up.railway.app/
+    api_key: my-fake-key
+    model: openai/my-fake-model
+  model_name: fake-openai-endpoint
+
+litellm_settings:
+  callbacks: ["gcs_pubsub"] # 👈 KEY CHANGE # 👈 KEY CHANGE
+```
+
+2. Set required env variables
+
+```shell
+GCS_PUBSUB_TOPIC_ID="litellmDB"
+GCS_PUBSUB_PROJECT_ID="reliableKeys"
+```
+
+3. Start Proxy
+
+```
+litellm --config /path/to/config.yaml
+```
+
+4. Test it! 
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "fake-openai-endpoint",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ],
+    }
+'
+```
+
+
+
 ## s3 Buckets
 
 We will use the `--config` to set 
@@ -1301,7 +1460,7 @@ LiteLLM supports customizing the following Datadog environment variables
 
 
 ## Lunary
-### Step1: Install dependencies and set your environment variables 
+#### Step1: Install dependencies and set your environment variables 
 Install the dependencies
 ```shell
 pip install litellm lunary
@@ -1312,7 +1471,7 @@ Get you Lunary public key from from https://app.lunary.ai/settings
 export LUNARY_PUBLIC_KEY="<your-public-key>"
 ```
 
-### Step 2: Create a `config.yaml` and set `lunary` callbacks
+#### Step 2: Create a `config.yaml` and set `lunary` callbacks
 
 ```yaml
 model_list:
@@ -1324,12 +1483,12 @@ litellm_settings:
   failure_callback: ["lunary"]
 ```
 
-### Step 3: Start the LiteLLM proxy
+#### Step 3: Start the LiteLLM proxy
 ```shell
 litellm --config config.yaml
 ```
 
-### Step 4: Make a request
+#### Step 4: Make a request
 
 ```shell
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
@@ -1352,14 +1511,14 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 ## MLflow
 
 
-### Step1: Install dependencies
+#### Step1: Install dependencies
 Install the dependencies.
 
 ```shell
 pip install litellm mlflow
 ```
 
-### Step 2: Create a `config.yaml` with `mlflow` callback
+#### Step 2: Create a `config.yaml` with `mlflow` callback
 
 ```yaml
 model_list:
@@ -1371,12 +1530,12 @@ litellm_settings:
   failure_callback: ["mlflow"]
 ```
 
-### Step 3: Start the LiteLLM proxy
+#### Step 3: Start the LiteLLM proxy
 ```shell
 litellm --config config.yaml
 ```
 
-### Step 4: Make a request
+#### Step 4: Make a request
 
 ```shell
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
@@ -1392,7 +1551,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 
-### Step 5: Review traces
+#### Step 5: Review traces
 
 Run the following command to start MLflow UI and review recorded traces.
 
@@ -1426,9 +1585,6 @@ class MyCustomHandler(CustomLogger):
     
     def log_post_api_call(self, kwargs, response_obj, start_time, end_time): 
         print(f"Post-API Call")
-
-    def log_stream_event(self, kwargs, response_obj, start_time, end_time):
-        print(f"On Stream")
         
     def log_success_event(self, kwargs, response_obj, start_time, end_time): 
         print("On Success")

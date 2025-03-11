@@ -97,6 +97,14 @@ model_list:
       rpm: 1000
     model_info:
       health_check_timeout: 1
+  - model_name: good-model
+    litellm_params:
+      model: openai/bad-model
+      api_key: os.environ/OPENAI_API_KEY
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      rpm: 1000
+    model_info:
+      health_check_timeout: 1
   - model_name: "*"
     litellm_params:
       model: openai/*
@@ -108,6 +116,9 @@ model_list:
     litellm_params:
       model: "anthropic/*"
       api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: "bedrock/*"
+    litellm_params:
+      model: "bedrock/*"
   - model_name: "groq/*"
     litellm_params:
       model: "groq/*"
@@ -124,6 +135,13 @@ model_list:
       api_key: my-fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
       timeout: 1
+  - model_name: badly-configured-openai-endpoint
+    litellm_params:
+      model: openai/my-fake-model
+      api_key: my-fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.appxxxx/
+
+
 litellm_settings:
   # set_verbose: True  # Uncomment this if you want to see verbose logs; not recommended in production
   drop_params: True

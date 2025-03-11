@@ -481,3 +481,6 @@ class VertexBatchPredictionResponse(TypedDict, total=False):
     createTime: str
     updateTime: str
     modelVersionId: str
+
+
+VERTEX_CREDENTIALS_TYPES = Union[str, Dict[str, str]]
