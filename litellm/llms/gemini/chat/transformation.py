@@ -114,12 +114,16 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                     if element.get("type") == "image_url":
                         img_element = element
                         _image_url: Optional[str] = None
+                        format: Optional[str] = None
                         if isinstance(img_element.get("image_url"), dict):
                             _image_url = img_element["image_url"].get("url")  # type: ignore
+                            format = img_element["image_url"].get("format")  # type: ignore
                         else:
                             _image_url = img_element.get("image_url")  # type: ignore
                         if _image_url and "https://" in _image_url:
-                            image_obj = convert_to_anthropic_image_obj(_image_url)
+                            image_obj = convert_to_anthropic_image_obj(
+                                _image_url, format=format
+                            )
                             img_element["image_url"] = (  # type: ignore
                                 convert_generic_image_chunk_to_openai_image_obj(
                                     image_obj

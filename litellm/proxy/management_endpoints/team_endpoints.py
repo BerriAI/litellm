@@ -14,7 +14,7 @@ import json
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, List, Optional, Tuple, Union, cast
+from typing import List, Optional, Tuple, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -57,7 +57,10 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
+from litellm.proxy.management_endpoints.common_utils import (
+    _is_user_team_admin,
+    _set_object_metadata_field,
+)
 from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
@@ -283,8 +286,8 @@ async def new_team(  # noqa: PLR0915
         # Set Management Endpoint Metadata Fields
         for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
             if getattr(data, field) is not None:
-                _set_team_metadata_field(
-                    team_data=complete_team_data,
+                _set_object_metadata_field(
+                    object_data=complete_team_data,
                     field_name=field,
                     value=getattr(data, field),
                 )
@@ -1274,9 +1277,13 @@ async def team_info(
             )
 
         try:
-            team_info: BaseModel = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": team_id}
+            team_info: Optional[BaseModel] = (
+                await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id}
+                )
             )
+            if team_info is None:
+                raise Exception
         except Exception:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1671,23 +1678,6 @@ def _update_team_metadata_field(updated_kv: dict, field_name: str) -> None:
             updated_kv["metadata"][field_name] = _value
         else:
             updated_kv["metadata"] = {field_name: _value}
-
-
-def _set_team_metadata_field(
-    team_data: LiteLLM_TeamTable, field_name: str, value: Any
-) -> None:
-    """
-    Helper function to set metadata fields that require premium user checks
-
-    Args:
-        team_data: The team data object to modify
-        field_name: Name of the metadata field to set
-        value: Value to set for the field
-    """
-    if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-        _premium_user_check()
-    team_data.metadata = team_data.metadata or {}
-    team_data.metadata[field_name] = value
 
 
 @router.get(
