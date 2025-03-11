@@ -240,3 +240,18 @@ class RouteChecks:
             RouteChecks._route_matches_pattern(route=route, pattern=allowed_route)
             for allowed_route in allowed_routes
         )  # Check pattern match
+
+    @staticmethod
+    def _is_assistants_api_request(request: Request) -> bool:
+        """
+        Returns True if `thread` or `assistant` is in the request path
+
+        Args:
+            request (Request): The request object
+
+        Returns:
+            bool: True if `thread` or `assistant` is in the request path, False otherwise
+        """
+        if "thread" in request.url.path or "assistant" in request.url.path:
+            return True
+        return False

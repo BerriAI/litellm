@@ -24,6 +24,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
+from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
@@ -33,15 +35,24 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
+from litellm.proxy.management_endpoints.common_utils import (
+    _is_user_team_admin,
+    _set_object_metadata_field,
+)
+from litellm.proxy.management_endpoints.model_management_endpoints import (
+    _add_model_to_db,
+)
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+from litellm.proxy.spend_tracking.spend_tracking_utils import _is_master_key
 from litellm.proxy.utils import (
     PrismaClient,
     _hash_token_if_needed,
-    duration_in_seconds,
     handle_exception_on_proxy,
+    jsonify_object,
 )
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret
+from litellm.types.router import Deployment
 from litellm.types.utils import (
     BudgetConfig,
     PersonalUIKeyGenerationConfig,
@@ -168,6 +179,8 @@ def _team_key_generation_check(
     user_api_key_dict: UserAPIKeyAuth,
     data: GenerateKeyRequest,
 ):
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return True
     if (
         litellm.key_generation_settings is not None
         and "team_key_generation" in litellm.key_generation_settings
@@ -503,6 +516,17 @@ async def generate_key_fn(  # noqa: PLR0915
                 }
             )
             _budget_id = getattr(_budget, "budget_id", None)
+
+        # ADD METADATA FIELDS
+        # Set Management Endpoint Metadata Fields
+        for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+            if getattr(data, field) is not None:
+                _set_object_metadata_field(
+                    object_data=data,
+                    field_name=field,
+                    value=getattr(data, field),
+                )
+
         data_json = data.model_dump(exclude_unset=True, exclude_none=True)  # type: ignore
 
         # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
@@ -514,6 +538,10 @@ async def generate_key_fn(  # noqa: PLR0915
         if "budget_duration" in data_json:
             data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
 
+        if user_api_key_dict.user_id is not None:
+            data_json["created_by"] = user_api_key_dict.user_id
+            data_json["updated_by"] = user_api_key_dict.user_id
+
         # Set tags on the new key
         if "tags" in data_json:
             from litellm.proxy.proxy_server import premium_user
@@ -523,7 +551,8 @@ async def generate_key_fn(  # noqa: PLR0915
                     f"Only premium users can add tags to keys. {CommonProxyErrors.not_premium_user.value}"
                 )
 
-            if data_json["metadata"] is None:
+            _metadata = data_json.get("metadata")
+            if not _metadata:
                 data_json["metadata"] = {"tags": data_json["tags"]}
             else:
                 data_json["metadata"]["tags"] = data_json["tags"]
@@ -1118,6 +1147,8 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     organization_id: Optional[str] = None,
     table_name: Optional[Literal["key", "user"]] = None,
     send_invite_email: Optional[bool] = None,
+    created_by: Optional[str] = None,
+    updated_by: Optional[str] = None,
 ):
     from litellm.proxy.proxy_server import (
         litellm_proxy_budget_name,
@@ -1221,6 +1252,8 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "model_max_budget": model_max_budget_json,
             "budget_id": budget_id,
             "blocked": blocked,
+            "created_by": created_by,
+            "updated_by": updated_by,
         }
 
         if (
@@ -1498,14 +1531,98 @@ async def delete_key_aliases(
     )
 
 
+async def _rotate_master_key(
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+    current_master_key: str,
+    new_master_key: str,
+) -> None:
+    """
+    Rotate the master key
+
+    1. Get the values from the DB
+        - Get models from DB
+        - Get config from DB
+    2. Decrypt the values
+        - ModelTable
+            - [{"model_name": "str", "litellm_params": {}}]
+        - ConfigTable
+    3. Encrypt the values with the new master key
+    4. Update the values in the DB
+    """
+    from litellm.proxy.proxy_server import proxy_config
+
+    try:
+        models: Optional[List] = (
+            await prisma_client.db.litellm_proxymodeltable.find_many()
+        )
+    except Exception:
+        models = None
+    # 2. process model table
+    if models:
+        decrypted_models = proxy_config.decrypt_model_list_from_db(new_models=models)
+        verbose_proxy_logger.info(
+            "ABLE TO DECRYPT MODELS - len(decrypted_models): %s", len(decrypted_models)
+        )
+        new_models = []
+        for model in decrypted_models:
+            new_model = await _add_model_to_db(
+                model_params=Deployment(**model),
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+                new_encryption_key=new_master_key,
+                should_create_model_in_db=False,
+            )
+            if new_model:
+                new_models.append(jsonify_object(new_model.model_dump()))
+        verbose_proxy_logger.info("Resetting proxy model table")
+        await prisma_client.db.litellm_proxymodeltable.delete_many()
+        verbose_proxy_logger.info("Creating %s models", len(new_models))
+        await prisma_client.db.litellm_proxymodeltable.create_many(
+            data=new_models,
+        )
+    # 3. process config table
+    try:
+        config = await prisma_client.db.litellm_config.find_many()
+    except Exception:
+        config = None
+
+    if config:
+        """If environment_variables is found, decrypt it and encrypt it with the new master key"""
+        environment_variables_dict = {}
+        for c in config:
+            if c.param_name == "environment_variables":
+                environment_variables_dict = c.param_value
+
+        if environment_variables_dict:
+            decrypted_env_vars = proxy_config._decrypt_and_set_db_env_variables(
+                environment_variables=environment_variables_dict
+            )
+            encrypted_env_vars = proxy_config._encrypt_env_variables(
+                environment_variables=decrypted_env_vars,
+                new_encryption_key=new_master_key,
+            )
+
+            if encrypted_env_vars:
+                await prisma_client.db.litellm_config.update(
+                    where={"param_name": "environment_variables"},
+                    data={"param_value": jsonify_object(encrypted_env_vars)},
+                )
+
+
 @router.post(
     "/key/{key:path}/regenerate",
     tags=["key management"],
     dependencies=[Depends(user_api_key_auth)],
 )
+@router.post(
+    "/key/regenerate",
+    tags=["key management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
 @management_endpoint_wrapper
 async def regenerate_key_fn(
-    key: str,
+    key: Optional[str] = None,
     data: Optional[RegenerateKeyRequest] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     litellm_changed_by: Optional[str] = Header(
@@ -1563,6 +1680,7 @@ async def regenerate_key_fn(
 
         from litellm.proxy.proxy_server import (
             hash_token,
+            master_key,
             premium_user,
             prisma_client,
             proxy_logging_obj,
@@ -1575,7 +1693,9 @@ async def regenerate_key_fn(
             )
 
         # Check if key exists, raise exception if key is not in the DB
-
+        key = data.key if data and data.key else key
+        if not key:
+            raise HTTPException(status_code=400, detail={"error": "No key passed in."})
         ### 1. Create New copy that is duplicate of existing key
         ######################################################################
 
@@ -1588,6 +1708,27 @@ async def regenerate_key_fn(
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": "DB not connected. prisma_client is None"},
+            )
+
+        _is_master_key_valid = _is_master_key(api_key=key, _master_key=master_key)
+
+        if master_key is not None and data and _is_master_key_valid:
+            if data.new_master_key is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={"error": "New master key is required."},
+                )
+            await _rotate_master_key(
+                prisma_client=prisma_client,
+                user_api_key_dict=user_api_key_dict,
+                current_master_key=master_key,
+                new_master_key=data.new_master_key,
+            )
+            return GenerateKeyResponse(
+                key=data.new_master_key,
+                token=data.new_master_key,
+                key_name=data.new_master_key,
+                expires=None,
             )
 
         if "sk" not in key:
@@ -1671,7 +1812,110 @@ async def regenerate_key_fn(
 
         return response
     except Exception as e:
+        verbose_proxy_logger.exception("Error regenerating key: %s", e)
         raise handle_exception_on_proxy(e)
+
+
+async def validate_key_list_check(
+    user_api_key_dict: UserAPIKeyAuth,
+    user_id: Optional[str],
+    team_id: Optional[str],
+    organization_id: Optional[str],
+    key_alias: Optional[str],
+    prisma_client: PrismaClient,
+) -> Optional[LiteLLM_UserTable]:
+
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return None
+
+    if user_api_key_dict.user_id is None:
+        raise ProxyException(
+            message="You are not authorized to access this endpoint. No 'user_id' is associated with your API key.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="user_id",
+            code=status.HTTP_403_FORBIDDEN,
+        )
+    complete_user_info_db_obj: Optional[BaseModel] = (
+        await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": user_api_key_dict.user_id},
+            include={"organization_memberships": True},
+        )
+    )
+
+    if complete_user_info_db_obj is None:
+        raise ProxyException(
+            message="You are not authorized to access this endpoint. No 'user_id' is associated with your API key.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="user_id",
+            code=status.HTTP_403_FORBIDDEN,
+        )
+
+    complete_user_info = LiteLLM_UserTable(**complete_user_info_db_obj.model_dump())
+
+    # internal user can only see their own keys
+    if user_id:
+        if complete_user_info.user_id != user_id:
+            raise ProxyException(
+                message="You are not authorized to check another user's keys",
+                type=ProxyErrorTypes.bad_request_error,
+                param="user_id",
+                code=status.HTTP_403_FORBIDDEN,
+            )
+
+    if team_id:
+        if team_id not in complete_user_info.teams:
+            raise ProxyException(
+                message="You are not authorized to check this team's keys",
+                type=ProxyErrorTypes.bad_request_error,
+                param="team_id",
+                code=status.HTTP_403_FORBIDDEN,
+            )
+
+    if organization_id:
+        if (
+            complete_user_info.organization_memberships is None
+            or organization_id
+            not in [
+                membership.organization_id
+                for membership in complete_user_info.organization_memberships
+            ]
+        ):
+            raise ProxyException(
+                message="You are not authorized to check this organization's keys",
+                type=ProxyErrorTypes.bad_request_error,
+                param="organization_id",
+                code=status.HTTP_403_FORBIDDEN,
+            )
+    return complete_user_info
+
+
+async def get_admin_team_ids(
+    complete_user_info: Optional[LiteLLM_UserTable],
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+) -> List[str]:
+    """
+    Get all team IDs where the user is an admin.
+    """
+    if complete_user_info is None:
+        return []
+    # Get all teams that user is an admin of
+    teams: Optional[List[BaseModel]] = (
+        await prisma_client.db.litellm_teamtable.find_many(
+            where={"team_id": {"in": complete_user_info.teams}}
+        )
+    )
+    if teams is None:
+        return []
+
+    teams_pydantic_obj = [LiteLLM_TeamTable(**team.model_dump()) for team in teams]
+
+    admin_team_ids = [
+        team.team_id
+        for team in teams_pydantic_obj
+        if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)
+    ]
+    return admin_team_ids
 
 
 @router.get(
@@ -1687,14 +1931,21 @@ async def list_keys(
     size: int = Query(10, description="Page size", ge=1, le=100),
     user_id: Optional[str] = Query(None, description="Filter keys by user ID"),
     team_id: Optional[str] = Query(None, description="Filter keys by team ID"),
+    organization_id: Optional[str] = Query(
+        None, description="Filter keys by organization ID"
+    ),
     key_alias: Optional[str] = Query(None, description="Filter keys by key alias"),
+    return_full_object: bool = Query(False, description="Return full key object"),
+    include_team_keys: bool = Query(
+        False, description="Include all keys for teams that user is an admin of."
+    ),
 ) -> KeyListResponseObject:
     """
-    List all keys for a given user or team.
+    List all keys for a given user / team / organization.
 
     Returns:
         {
-            "keys": List[str],
+            "keys": List[str] or List[UserAPIKeyAuth],
             "total_count": int,
             "current_page": int,
             "total_pages": int,
@@ -1703,22 +1954,35 @@ async def list_keys(
     try:
         from litellm.proxy.proxy_server import prisma_client
 
-        # Check for unsupported parameters
-        supported_params = {"page", "size", "user_id", "team_id", "key_alias"}
-        unsupported_params = set(request.query_params.keys()) - supported_params
-        if unsupported_params:
-            raise ProxyException(
-                message=f"Unsupported parameter(s): {', '.join(unsupported_params)}. Supported parameters: {', '.join(supported_params)}",
-                type=ProxyErrorTypes.bad_request_error,
-                param=", ".join(unsupported_params),
-                code=status.HTTP_400_BAD_REQUEST,
-            )
-
         verbose_proxy_logger.debug("Entering list_keys function")
 
         if prisma_client is None:
             verbose_proxy_logger.error("Database not connected")
             raise Exception("Database not connected")
+
+        complete_user_info = await validate_key_list_check(
+            user_api_key_dict=user_api_key_dict,
+            user_id=user_id,
+            team_id=team_id,
+            organization_id=organization_id,
+            key_alias=key_alias,
+            prisma_client=prisma_client,
+        )
+
+        if include_team_keys:
+            admin_team_ids = await get_admin_team_ids(
+                complete_user_info=complete_user_info,
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+            )
+        else:
+            admin_team_ids = None
+
+        if user_id is None and user_api_key_dict.user_role not in [
+            LitellmUserRoles.PROXY_ADMIN.value,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+        ]:
+            user_id = user_api_key_dict.user_id
 
         response = await _list_key_helper(
             prisma_client=prisma_client,
@@ -1727,6 +1991,9 @@ async def list_keys(
             user_id=user_id,
             team_id=team_id,
             key_alias=key_alias,
+            return_full_object=return_full_object,
+            organization_id=organization_id,
+            admin_team_ids=admin_team_ids,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -1734,6 +2001,7 @@ async def list_keys(
         return response
 
     except Exception as e:
+        verbose_proxy_logger.exception(f"Error in list_keys: {e}")
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"error({str(e)})"),
@@ -1757,9 +2025,13 @@ async def _list_key_helper(
     size: int,
     user_id: Optional[str],
     team_id: Optional[str],
+    organization_id: Optional[str],
     key_alias: Optional[str],
     exclude_team_id: Optional[str] = None,
     return_full_object: bool = False,
+    admin_team_ids: Optional[
+        List[str]
+    ] = None,  # New parameter for teams where user is admin
 ) -> KeyListResponseObject:
     """
     Helper function to list keys
@@ -1771,6 +2043,7 @@ async def _list_key_helper(
         key_alias: Optional[str]
         exclude_team_id: Optional[str] # exclude a specific team_id
         return_full_object: bool # when true, will return UserAPIKeyAuth objects instead of just the token
+        admin_team_ids: Optional[List[str]] # list of team IDs where the user is an admin
 
     Returns:
         KeyListResponseObject
@@ -1783,15 +2056,37 @@ async def _list_key_helper(
     """
 
     # Prepare filter conditions
-    where: Dict[str, Union[str, Dict[str, str]]] = {}
+    where: Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]] = {}
+    where.update(_get_condition_to_filter_out_ui_session_tokens())
+
+    # Build the OR conditions for user's keys and admin team keys
+    or_conditions: List[Dict[str, Any]] = []
+
+    # Base conditions for user's own keys
+    user_condition: Dict[str, Any] = {}
     if user_id and isinstance(user_id, str):
-        where["user_id"] = user_id
+        user_condition["user_id"] = user_id
     if team_id and isinstance(team_id, str):
-        where["team_id"] = team_id
+        user_condition["team_id"] = team_id
     if key_alias and isinstance(key_alias, str):
-        where["key_alias"] = key_alias
+        user_condition["key_alias"] = key_alias
     if exclude_team_id and isinstance(exclude_team_id, str):
-        where["team_id"] = {"not": exclude_team_id}
+        user_condition["team_id"] = {"not": exclude_team_id}
+    if organization_id and isinstance(organization_id, str):
+        user_condition["organization_id"] = organization_id
+
+    if user_condition:
+        or_conditions.append(user_condition)
+
+    # Add condition for admin team keys if provided
+    if admin_team_ids:
+        or_conditions.append({"team_id": {"in": admin_team_ids}})
+
+    # Combine conditions with OR if we have multiple conditions
+    if len(or_conditions) > 1:
+        where["OR"] = or_conditions
+    elif len(or_conditions) == 1:
+        where.update(or_conditions[0])
 
     verbose_proxy_logger.debug(f"Filter conditions: {where}")
 
@@ -1805,6 +2100,10 @@ async def _list_key_helper(
         where=where,  # type: ignore
         skip=skip,  # type: ignore
         take=size,  # type: ignore
+        order=[
+            {"created_at": "desc"},
+            {"token": "desc"},  # fallback sort
+        ],
     )
 
     verbose_proxy_logger.debug(f"Fetched {len(keys)} keys")
@@ -1834,6 +2133,20 @@ async def _list_key_helper(
         current_page=page,
         total_pages=total_pages,
     )
+
+
+def _get_condition_to_filter_out_ui_session_tokens() -> Dict[str, Any]:
+    """
+    Condition to filter out UI session tokens
+    """
+    return {
+        "OR": [
+            {"team_id": None},  # Include records where team_id is null
+            {
+                "team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}
+            },  # Include records where team_id != UI_SESSION_TOKEN_TEAM_ID
+        ]
+    }
 
 
 @router.post(

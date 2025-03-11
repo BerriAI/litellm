@@ -30,6 +30,7 @@ import os
 # Set OpenAI API key
 os.environ["OPENAI_API_KEY"] = "Your API Key"
 os.environ["ANTHROPIC_API_KEY"] = "Your API Key"
+os.environ["XAI_API_KEY"] = "Your API Key"
 os.environ["REPLICATE_API_KEY"] = "Your API Key"
 os.environ["TOGETHERAI_API_KEY"] = "Your API Key"
 ```

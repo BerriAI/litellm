@@ -170,6 +170,9 @@ def _build_vertex_schema(parameters: dict):
     strip_field(
         parameters, field_name="$schema"
     )  # 5. Remove $schema - json schema value, not supported by OpenAPI - causes vertex errors.
+    strip_field(
+        parameters, field_name="$id"
+    )  # 6. Remove id - json schema value, not supported by OpenAPI - causes vertex errors.
 
     return parameters
 
