@@ -31,6 +31,14 @@ from openai.types.chat.chat_completion_prediction_content_param import (
 )
 from openai.types.embedding import Embedding as OpenAIEmbedding
 from openai.types.fine_tuning.fine_tuning_job import FineTuningJob
+from openai.types.responses.response_create_params import (
+    Reasoning,
+    ResponseIncludable,
+    ResponseInputParam,
+    ResponseTextConfigParam,
+    ToolChoice,
+    ToolParam,
+)
 from pydantic import BaseModel, Field
 from typing_extensions import Dict, Required, TypedDict, override
 
