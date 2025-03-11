@@ -600,28 +600,6 @@ ollama_models = ["llama2"]
 
 maritalk_models = ["maritalk"]
 
-snowflake_models = [
-    "snowflake/deepseek-r1",
-    "snowflake/claude-3-5-sonnet",
-    "snowflake/llama3.2-1b",
-    "snowflake/llama3.2-3b",
-    "snowflake/llama3.1-8b",
-    "snowflake/llama3.1-70b",
-    "snowflake/llama3.3-70b",
-    "snowflake/snowflake-llama-3.3-70b",
-    "snowflake/llama3.1-405b",
-    "snowflake/snowflake-llama-3.1-405b",
-    "snowflake/snowflake-arctic",
-    "snowflake/reka-core",
-    "snowflake/reka-flash",
-    "snowflake/mistral-large2",
-    "snowflake/mixtral-8x7b",
-    "snowflake/mistral-7b",
-    "snowflake/jamba-instruct",
-    "snowflake/jamba-1.5-mini",
-    "snowflake/jamba-1.5-large",
-    "snowflake/gemma-7b"
-]
 
 model_list = (
     open_ai_chat_completion_models
