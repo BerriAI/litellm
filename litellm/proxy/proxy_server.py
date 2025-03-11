@@ -114,6 +114,7 @@ from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
 )
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.proxy._types import *
@@ -2187,7 +2188,11 @@ class ProxyConfig:
             )
 
         ## CREDENTIALS
-        litellm.credential_list = config.get("credential_list")
+        credential_list_dict = config.get("credential_list")
+        if credential_list_dict:
+            litellm.credential_list = [
+                CredentialItem(**cred) for cred in credential_list_dict
+            ]
         return router, router.get_model_list(), general_settings
 
     def _load_alerting_settings(self, general_settings: dict):
@@ -2834,6 +2839,32 @@ class ProxyConfig:
                 )
             )
 
+    def decrypt_credentials(self, credential: Union[dict, BaseModel]) -> CredentialItem:
+        if isinstance(credential, dict):
+            credential_object = CredentialItem(**credential)
+        elif isinstance(credential, BaseModel):
+            credential_object = CredentialItem(**credential.model_dump())
+
+        decrypted_credential_values = {}
+        for k, v in credential_object.credential_values.items():
+            decrypted_credential_values[k] = decrypt_value_helper(v) or v
+
+        credential_object.credential_values = decrypted_credential_values
+        return credential_object
+
+    async def get_credentials(self, prisma_client: PrismaClient):
+        try:
+            credentials = await prisma_client.db.litellm_credentialstable.find_many()
+            credentials = [self.decrypt_credentials(cred) for cred in credentials]
+            CredentialAccessor.upsert_credentials(credentials)
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy_server.py::get_credentials() - Error getting credentials from DB - {}".format(
+                    str(e)
+                )
+            )
+            return []
+
 
 proxy_config = ProxyConfig()
 
@@ -3255,6 +3286,14 @@ class ProxyStartupEvent:
                 prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
             )
 
+        ### GET STORED CREDENTIALS ###
+        scheduler.add_job(
+            proxy_config.get_credentials,
+            "interval",
+            seconds=10,
+            args=[prisma_client],
+        )
+        await proxy_config.get_credentials(prisma_client=prisma_client)
         if (
             proxy_logging_obj is not None
             and proxy_logging_obj.slack_alerting_instance.alerting is not None
