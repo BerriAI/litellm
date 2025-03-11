@@ -10,6 +10,8 @@ import { Row } from "@tanstack/react-table";
 import { prefetchLogDetails } from "./prefetch";
 import { RequestResponsePanel } from "./columns";
 import { ErrorViewer } from './ErrorViewer';
+import { internalUserRoles } from "../../utils/roles";
+import { ConfigInfoMessage } from './ConfigInfoMessage';
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -62,6 +64,10 @@ export default function SpendLogsTable({
   const [selectedTeamId, setSelectedTeamId] = useState("");
   const [selectedKeyHash, setSelectedKeyHash] = useState("");
   const [selectedFilter, setSelectedFilter] = useState("Team ID");
+  const [filterByCurrentUser, setFilterByCurrentUser] = useState(
+    userRole && internalUserRoles.includes(userRole)
+  );
+  const [expandedRequestId, setExpandedRequestId] = useState<string | null>(null);
 
   const queryClient = useQueryClient();
 
@@ -93,6 +99,13 @@ export default function SpendLogsTable({
       document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+
+  useEffect(() => {
+    if (userRole && internalUserRoles.includes(userRole)) {
+      setFilterByCurrentUser(true);
+    }
+  }, [userRole]);
+
   const logs = useQuery<PaginatedResponse>({
     queryKey: [
       "logs",
@@ -103,6 +116,7 @@ export default function SpendLogsTable({
       endTime,
       selectedTeamId,
       selectedKeyHash,
+      filterByCurrentUser ? userID : null,
     ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
@@ -130,7 +144,8 @@ export default function SpendLogsTable({
         formattedStartTime,
         formattedEndTime,
         currentPage,
-        pageSize
+        pageSize,
+        filterByCurrentUser ? userID : undefined
       );
 
       // Trigger prefetch for all logs
@@ -161,6 +176,18 @@ export default function SpendLogsTable({
     refetchInterval: 5000,
     refetchIntervalInBackground: true,
   });
+
+  // Add this effect to preserve expanded state when data refreshes
+  useEffect(() => {
+    if (logs.data?.data && expandedRequestId) {
+      // Check if the expanded request ID still exists in the new data
+      const stillExists = logs.data.data.some(log => log.request_id === expandedRequestId);
+      if (!stillExists) {
+        // If the request ID no longer exists in the data, clear the expanded state
+        setExpandedRequestId(null);
+      }
+    }
+  }, [logs.data?.data, expandedRequestId]);
 
   if (!accessToken || !token || !userRole || !userID) {
     console.log(
@@ -204,6 +231,10 @@ export default function SpendLogsTable({
     if (diffHours <= 24) return 'Last 24 Hours';
     if (diffHours <= 168) return 'Last 7 Days';
     return `${start.format('MMM D')} - ${now.format('MMM D')}`;
+  };
+
+  const handleRowExpand = (requestId: string | null) => {
+    setExpandedRequestId(requestId);
   };
 
   return (
@@ -559,6 +590,8 @@ export default function SpendLogsTable({
           data={filteredData}
           renderSubComponent={RequestViewer}
           getRowCanExpand={() => true}
+          onRowExpand={handleRowExpand}
+          expandedRequestId={expandedRequestId}
         />
       </div>
     </div>
@@ -599,6 +632,12 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
   // Extract error information from metadata if available
   const hasError = row.original.metadata?.status === "failure";
   const errorInfo = hasError ? row.original.metadata?.error_information : null;
+  
+  // Check if request/response data is missing
+  const hasMessages = row.original.messages && 
+    (Array.isArray(row.original.messages) ? row.original.messages.length > 0 : Object.keys(row.original.messages).length > 0);
+  const hasResponse = row.original.response && Object.keys(formatData(row.original.response)).length > 0;
+  const missingData = !hasMessages && !hasResponse;
   
   // Format the response with error details if present
   const formattedResponse = () => {
@@ -678,6 +717,9 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
         </div>
       </div>
 
+      {/* Configuration Info Message - Show when data is missing */}
+      <ConfigInfoMessage show={missingData} />
+
       {/* Request/Response Panel */}
       <div className="grid grid-cols-2 gap-4">
         {/* Request Side */}
@@ -688,6 +730,7 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
               onClick={() => navigator.clipboard.writeText(JSON.stringify(getRawRequest(), null, 2))}
               className="p-1 hover:bg-gray-200 rounded"
               title="Copy request"
+              disabled={!hasMessages}
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
@@ -715,6 +758,7 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
               onClick={() => navigator.clipboard.writeText(JSON.stringify(formattedResponse(), null, 2))}
               className="p-1 hover:bg-gray-200 rounded"
               title="Copy response"
+              disabled={!hasResponse}
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
@@ -723,15 +767,17 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
             </button>
           </div>
           <div className="p-4 overflow-auto max-h-96 bg-gray-50">
-            <pre className="text-xs font-mono whitespace-pre-wrap break-all">{JSON.stringify(formattedResponse(), null, 2)}</pre>
+            {hasResponse ? (
+              <pre className="text-xs font-mono whitespace-pre-wrap break-all">{JSON.stringify(formattedResponse(), null, 2)}</pre>
+            ) : (
+              <div className="text-gray-500 text-sm italic text-center py-4">Response data not available</div>
+            )}
           </div>
         </div>
       </div>
 
-
       {/* Error Card - Only show for failures */}
       {hasError && errorInfo && <ErrorViewer errorInfo={errorInfo} />}
-
 
       {/* Tags Card - Only show if there are tags */}
       {row.original.request_tags && Object.keys(row.original.request_tags).length > 0 && (

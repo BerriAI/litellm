@@ -34,6 +34,9 @@ class _ProxyDBLogger(CustomLogger):
     ):
         from litellm.proxy.proxy_server import update_database
 
+        if _ProxyDBLogger._should_track_errors_in_db() is False:
+            return
+
         _metadata = dict(
             StandardLoggingUserAPIKeyMetadata(
                 user_api_key_hash=user_api_key_dict.api_key,
@@ -201,6 +204,21 @@ class _ProxyDBLogger(CustomLogger):
             verbose_proxy_logger.exception(
                 "Error in tracking cost callback - %s", str(e)
             )
+
+    @staticmethod
+    def _should_track_errors_in_db():
+        """
+        Returns True if errors should be tracked in the database
+
+        By default, errors are tracked in the database
+
+        If users want to disable error tracking, they can set the disable_error_logs flag in the general_settings
+        """
+        from litellm.proxy.proxy_server import general_settings
+
+        if general_settings.get("disable_error_logs") is True:
+            return False
+        return
 
 
 def _should_track_cost_callback(

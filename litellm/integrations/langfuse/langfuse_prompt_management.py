@@ -40,6 +40,7 @@ in_memory_dynamic_logger_cache = DynamicLoggingCache()
 def langfuse_client_init(
     langfuse_public_key=None,
     langfuse_secret=None,
+    langfuse_secret_key=None,
     langfuse_host=None,
     flush_interval=1,
 ) -> LangfuseClass:
@@ -67,7 +68,10 @@ def langfuse_client_init(
         )
 
     # Instance variables
-    secret_key = langfuse_secret or os.getenv("LANGFUSE_SECRET_KEY")
+
+    secret_key = (
+        langfuse_secret or langfuse_secret_key or os.getenv("LANGFUSE_SECRET_KEY")
+    )
     public_key = langfuse_public_key or os.getenv("LANGFUSE_PUBLIC_KEY")
     langfuse_host = langfuse_host or os.getenv(
         "LANGFUSE_HOST", "https://cloud.langfuse.com"
@@ -190,6 +194,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         langfuse_client = langfuse_client_init(
             langfuse_public_key=dynamic_callback_params.get("langfuse_public_key"),
             langfuse_secret=dynamic_callback_params.get("langfuse_secret"),
+            langfuse_secret_key=dynamic_callback_params.get("langfuse_secret_key"),
             langfuse_host=dynamic_callback_params.get("langfuse_host"),
         )
         langfuse_prompt_client = self._get_prompt_from_id(
@@ -206,6 +211,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         langfuse_client = langfuse_client_init(
             langfuse_public_key=dynamic_callback_params.get("langfuse_public_key"),
             langfuse_secret=dynamic_callback_params.get("langfuse_secret"),
+            langfuse_secret_key=dynamic_callback_params.get("langfuse_secret_key"),
             langfuse_host=dynamic_callback_params.get("langfuse_host"),
         )
         langfuse_prompt_client = self._get_prompt_from_id(
