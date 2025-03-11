@@ -61,7 +61,6 @@ def test_model_prices_and_context_window_json_is_valid():
                         "embedding",
                         "image_generation",
                         "moderation",
-                        "moderations",
                         "rerank"
                     ],
                 },
