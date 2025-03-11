@@ -187,53 +187,125 @@ def ollama_pt(
             final_prompt_value="### Response:",
             messages=messages,
         )
-    elif "llava" in model:
-        prompt = ""
-        images = []
-        for message in messages:
-            if isinstance(message["content"], str):
-                prompt += message["content"]
-            elif isinstance(message["content"], list):
-                # see https://docs.litellm.ai/docs/providers/openai#openai-vision-models
-                for element in message["content"]:
-                    if isinstance(element, dict):
-                        if element["type"] == "text":
-                            prompt += element["text"]
-                        elif element["type"] == "image_url":
-                            base64_image = convert_to_ollama_image(
-                                element["image_url"]["url"]
-                            )
-                            images.append(base64_image)
-        return {"prompt": prompt, "images": images}
     else:
+        user_message_types = {"user", "tool", "function"}
+        msg_i = 0
+        images = []
         prompt = ""
-        for message in messages:
-            role = message["role"]
-            content = message.get("content", "")
+        while msg_i < len(messages):
+            init_msg_i = msg_i
+            user_content_str = ""
+            ## MERGE CONSECUTIVE USER CONTENT ##
+            while (
+                msg_i < len(messages) and messages[msg_i]["role"] in user_message_types
+            ):
+                msg_content = messages[msg_i].get("content")
+                if msg_content:
+                    if isinstance(msg_content, list):
+                        for m in msg_content:
+                            if m.get("type", "") == "image_url":
+                                if isinstance(m["image_url"], str):
+                                    images.append(m["image_url"])
+                                elif isinstance(m["image_url"], dict):
+                                    images.append(m["image_url"]["url"])
+                            elif m.get("type", "") == "text":
+                                user_content_str += m["text"]
+                    else:
+                        # Tool message content will always be a string
+                        user_content_str += msg_content
 
-            if "tool_calls" in message:
-                tool_calls = []
+                msg_i += 1
 
-                for call in message["tool_calls"]:
-                    call_id: str = call["id"]
-                    function_name: str = call["function"]["name"]
-                    arguments = json.loads(call["function"]["arguments"])
+            if user_content_str:
+                prompt += f"### User:\n{user_content_str}\n\n"
 
-                    tool_calls.append(
-                        {
-                            "id": call_id,
-                            "type": "function",
-                            "function": {"name": function_name, "arguments": arguments},
-                        }
+            assistant_content_str = ""
+            ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
+            while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
+                msg_content = messages[msg_i].get("content")
+                if msg_content:
+                    if isinstance(msg_content, list):
+                        for m in msg_content:
+                            if m.get("type", "") == "text":
+                                assistant_content_str += m["text"]
+                    elif isinstance(msg_content, str):
+                        # Tool message content will always be a string
+                        assistant_content_str += msg_content
+
+                tool_calls = messages[msg_i].get("tool_calls")
+                ollama_tool_calls = []
+                if tool_calls:
+                    for call in tool_calls:
+                        call_id: str = call["id"]
+                        function_name: str = call["function"]["name"]
+                        arguments = json.loads(call["function"]["arguments"])
+
+                        ollama_tool_calls.append(
+                            {
+                                "id": call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": function_name,
+                                    "arguments": arguments,
+                                },
+                            }
+                        )
+
+                if ollama_tool_calls:
+                    assistant_content_str += (
+                        f"Tool Calls: {json.dumps(ollama_tool_calls, indent=2)}"
                     )
 
-                prompt += f"### Assistant:\nTool Calls: {json.dumps(tool_calls, indent=2)}\n\n"
+                msg_i += 1
 
-            elif "tool_call_id" in message:
-                prompt += f"### User:\n{message['content']}\n\n"
+            if assistant_content_str:
+                prompt += f"### Assistant:\n{assistant_content_str}\n\n"
 
-            elif content:
-                prompt += f"### {role.capitalize()}:\n{content}\n\n"
+            if msg_i == init_msg_i:  # prevent infinite loops
+                raise litellm.BadRequestError(
+                    message=BAD_MESSAGE_ERROR_STR + f"passed in {messages[msg_i]}",
+                    model=model,
+                    llm_provider="ollama",
+                )
+        # prompt = ""
+        # images = []
+        # for message in messages:
+        #     if isinstance(message["content"], str):
+        #         prompt += message["content"]
+        #     elif isinstance(message["content"], list):
+        #         # see https://docs.litellm.ai/docs/providers/openai#openai-vision-models
+        #         for element in message["content"]:
+        #             if isinstance(element, dict):
+        #                 if element["type"] == "text":
+        #                     prompt += element["text"]
+        #                 elif element["type"] == "image_url":
+        #                     base64_image = convert_to_ollama_image(
+        #                         element["image_url"]["url"]
+        #                     )
+        #                     images.append(base64_image)
+
+        #     if "tool_calls" in message:
+        #         tool_calls = []
+
+        #         for call in message["tool_calls"]:
+        #             call_id: str = call["id"]
+        #             function_name: str = call["function"]["name"]
+        #             arguments = json.loads(call["function"]["arguments"])
+
+        #             tool_calls.append(
+        #                 {
+        #                     "id": call_id,
+        #                     "type": "function",
+        #                     "function": {"name": function_name, "arguments": arguments},
+        #                 }
+        #             )
+
+        #         prompt += f"### Assistant:\nTool Calls: {json.dumps(tool_calls, indent=2)}\n\n"
+
+        #     elif "tool_call_id" in message:
+        #         prompt += f"### User:\n{message['content']}\n\n"
+
+        return {"prompt": prompt, "images": images}
 
     return prompt
 

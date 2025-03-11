@@ -256,3 +256,24 @@ def test_multi_chunk_reasoning_and_content(
     # Verify final state
     assert initialized_custom_stream_wrapper.sent_first_thinking_block is True
     assert initialized_custom_stream_wrapper.sent_last_thinking_block is True
+
+
+def test_strip_sse_data_from_chunk():
+    """Test the static method that strips 'data: ' prefix from SSE chunks"""
+    # Test with string inputs
+    assert CustomStreamWrapper._strip_sse_data_from_chunk("data: content") == "content"
+    assert (
+        CustomStreamWrapper._strip_sse_data_from_chunk("data:  spaced content")
+        == " spaced content"
+    )
+    assert (
+        CustomStreamWrapper._strip_sse_data_from_chunk("regular content")
+        == "regular content"
+    )
+    assert (
+        CustomStreamWrapper._strip_sse_data_from_chunk("regular content with data:")
+        == "regular content with data:"
+    )
+
+    # Test with None input
+    assert CustomStreamWrapper._strip_sse_data_from_chunk(None) is None

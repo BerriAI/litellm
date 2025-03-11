@@ -19,6 +19,7 @@ from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.utils import (
+    CallTypes,
     EmbeddingResponse,
     GenericBudgetConfigType,
     ImageResponse,
@@ -1896,6 +1897,7 @@ class SpendLogsMetadata(TypedDict):
     applied_guardrails: Optional[List[str]]
     status: StandardLoggingPayloadStatus
     proxy_server_request: Optional[str]
+    batch_models: Optional[List[str]]
     error_information: Optional[StandardLoggingPayloadErrorInformation]
 
 
@@ -1992,13 +1994,14 @@ class ProxyException(Exception):
         message: str,
         type: str,
         param: Optional[str],
-        code: Optional[Union[int, str]] = None,
+        code: Optional[Union[int, str]] = None,  # maps to status code
         headers: Optional[Dict[str, str]] = None,
+        openai_code: Optional[str] = None,  # maps to 'code'  in openai
     ):
         self.message = str(message)
         self.type = type
         self.param = param
-
+        self.openai_code = openai_code or code
         # If we look on official python OpenAI lib, the code should be a string:
         # https://github.com/openai/openai-python/blob/195c05a64d39c87b2dfdf1eca2d339597f1fce03/src/openai/types/shared/error_object.py#L11
         # Related LiteLLM issue: https://github.com/BerriAI/litellm/discussions/4834
@@ -2052,6 +2055,7 @@ class ProxyErrorTypes(str, enum.Enum):
     budget_exceeded = "budget_exceeded"
     key_model_access_denied = "key_model_access_denied"
     team_model_access_denied = "team_model_access_denied"
+    user_model_access_denied = "user_model_access_denied"
     expired_key = "expired_key"
     auth_error = "auth_error"
     internal_server_error = "internal_server_error"
@@ -2059,6 +2063,20 @@ class ProxyErrorTypes(str, enum.Enum):
     not_found_error = "not_found_error"
     validation_error = "bad_request_error"
     cache_ping_error = "cache_ping_error"
+
+    @classmethod
+    def get_model_access_error_type_for_object(
+        cls, object_type: Literal["key", "user", "team"]
+    ) -> "ProxyErrorTypes":
+        """
+        Get the model access error type for object_type
+        """
+        if object_type == "key":
+            return cls.key_model_access_denied
+        elif object_type == "team":
+            return cls.team_model_access_denied
+        elif object_type == "user":
+            return cls.user_model_access_denied
 
 
 DB_CONNECTION_ERROR_TYPES = (httpx.ConnectError, httpx.ReadError, httpx.ReadTimeout)
@@ -2579,3 +2597,8 @@ class PrismaCompatibleUpdateDBModel(TypedDict, total=False):
 
 class SpecialManagementEndpointEnums(enum.Enum):
     DEFAULT_ORGANIZATION = "default_organization"
+
+
+class TransformRequestBody(BaseModel):
+    call_type: CallTypes
+    request_body: dict

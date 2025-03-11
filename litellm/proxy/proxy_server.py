@@ -179,7 +179,6 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 from litellm.proxy.hooks.prompt_injection_detection import (
     _OPTIONAL_PromptInjectionDetection,
 )
-from litellm.proxy.hooks.proxy_failure_handler import _PROXY_failure_handler
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
@@ -290,7 +289,7 @@ from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import RouterGeneralSettings, updateDeployment
 from litellm.types.utils import CustomHuggingfaceTokenizer
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import RawRequestTypedDict, StandardLoggingPayload
 from litellm.utils import _add_custom_logger_callback_to_specific_event
 
 try:
@@ -940,15 +939,6 @@ def cost_tracking():
     global prisma_client
     if prisma_client is not None:
         litellm.logging_callback_manager.add_litellm_callback(_ProxyDBLogger())
-
-
-def error_tracking():
-    global prisma_client
-    if prisma_client is not None:
-        if isinstance(litellm.failure_callback, list):
-            verbose_proxy_logger.debug("setting litellm failure callback to track cost")
-            if (_PROXY_failure_handler) not in litellm.failure_callback:  # type: ignore
-                litellm.logging_callback_manager.add_litellm_failure_callback(_PROXY_failure_handler)  # type: ignore
 
 
 def _set_spend_logs_payload(
@@ -3150,9 +3140,6 @@ class ProxyStartupEvent:
         ## COST TRACKING ##
         cost_tracking()
 
-        ## Error Tracking ##
-        error_tracking()
-
         proxy_logging_obj.startup_event(
             llm_router=llm_router, redis_usage_cache=redis_usage_cache
         )
@@ -3729,6 +3716,7 @@ async def chat_completion(  # noqa: PLR0915
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
+            openai_code=getattr(e, "code", None),
             code=getattr(e, "status_code", 500),
             headers=headers,
         )
@@ -3942,6 +3930,7 @@ async def completion(  # noqa: PLR0915
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
+            openai_code=getattr(e, "code", None),
             code=getattr(e, "status_code", 500),
         )
 
@@ -4151,6 +4140,7 @@ async def embeddings(  # noqa: PLR0915
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
+                openai_code=getattr(e, "code", None),
                 code=getattr(e, "status_code", 500),
             )
 
@@ -4270,6 +4260,7 @@ async def image_generation(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
+                openai_code=getattr(e, "code", None),
                 code=getattr(e, "status_code", 500),
             )
 
@@ -4531,6 +4522,7 @@ async def audio_transcriptions(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
+                openai_code=getattr(e, "code", None),
                 code=getattr(e, "status_code", 500),
             )
 
@@ -4680,6 +4672,7 @@ async def get_assistants(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
+                openai_code=getattr(e, "code", None),
                 code=getattr(e, "status_code", 500),
             )
 
@@ -4778,7 +4771,7 @@ async def create_assistant(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                code=getattr(e, "code", getattr(e, "status_code", 500)),
             )
 
 
@@ -4875,7 +4868,7 @@ async def delete_assistant(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                code=getattr(e, "code", getattr(e, "status_code", 500)),
             )
 
 
@@ -4972,7 +4965,7 @@ async def create_threads(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                code=getattr(e, "code", getattr(e, "status_code", 500)),
             )
 
 
@@ -5068,7 +5061,7 @@ async def get_thread(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                code=getattr(e, "code", getattr(e, "status_code", 500)),
             )
 
 
@@ -5167,7 +5160,7 @@ async def add_messages(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                code=getattr(e, "code", getattr(e, "status_code", 500)),
             )
 
 
@@ -5262,7 +5255,7 @@ async def get_messages(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                code=getattr(e, "code", getattr(e, "status_code", 500)),
             )
 
 
@@ -5371,7 +5364,7 @@ async def run_thread(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                code=getattr(e, "code", getattr(e, "status_code", 500)),
             )
 
 
@@ -5602,6 +5595,18 @@ async def supported_openai_params(model: str):
         raise HTTPException(
             status_code=400, detail={"error": "Could not map model={}".format(model)}
         )
+
+
+@router.post(
+    "/utils/transform_request",
+    tags=["llm utils"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=RawRequestTypedDict,
+)
+async def transform_request(request: TransformRequestBody):
+    from litellm.utils import return_raw_request
+
+    return return_raw_request(endpoint=request.call_type, kwargs=request.request_body)
 
 
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
