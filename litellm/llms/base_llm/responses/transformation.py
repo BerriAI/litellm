@@ -52,6 +52,16 @@ class BaseResponsesAPIConfig(ABC):
 
         pass
 
+    @abstractmethod
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        api_key: Optional[str] = None,
+    ) -> dict:
+        return {}
+
+    @abstractmethod
     def get_complete_url(
         self,
         api_base: Optional[str],
