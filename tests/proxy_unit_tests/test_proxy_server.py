@@ -2208,3 +2208,34 @@ def test_get_timeout_from_request():
     }
     timeout = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
     assert timeout == 90.5
+
+
+@pytest.mark.parametrize(
+    "response_cost,expected_rounded_cost",
+    [
+        (0.1234567891234, "0.123457"),  # Test rounding up
+        (0.1234564, "0.123456"),        # Test exact 6 decimal places
+        (0.000001234, "0.000001"),      # Test very small number
+        (123.456789, "123.456789"),     # Test larger number
+    ],
+)
+def test_response_cost_rounding(response_cost, expected_rounded_cost):
+    """Test that response cost is rounded to 6 decimal places in headers"""
+    from litellm.proxy.proxy_server import get_custom_headers
+    from litellm.proxy.utils import UserAPIKeyAuth
+    
+    # Create a mock UserAPIKeyAuth object
+    user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
+    
+    # Call get_custom_headers with the test response cost
+    headers = get_custom_headers(
+        user_api_key_dict=user_api_key_dict,
+        response_cost=response_cost
+    )
+    
+    # For very small numbers, Python might use scientific notation (e.g., 1e-06)
+    # Convert both to float and compare the values instead of the string representation
+    actual_cost = float(headers["x-litellm-response-cost"])
+    expected_cost = float(expected_rounded_cost)
+    
+    assert abs(actual_cost - expected_cost) < 1e-10, f"Expected {expected_rounded_cost}, got {headers['x-litellm-response-cost']}"
