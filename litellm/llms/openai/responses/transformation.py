@@ -1,4 +1,8 @@
+from typing import Optional
+
+import litellm
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import ResponsesAPIRequestParams
 
 
@@ -61,3 +65,44 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             extra_body=optional_params.get("extra_body"),
             timeout=optional_params.get("timeout"),
         )
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        api_key: Optional[str] = None,
+    ) -> dict:
+        api_key = (
+            api_key
+            or litellm.api_key
+            or litellm.openai_key
+            or get_secret_str("OPENAI_API_KEY")
+        )
+        headers.update(
+            {
+                "Authorization": f"Bearer {api_key}",
+            }
+        )
+        return headers
+
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        model: str,
+        optional_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        """
+        Get the endpoint for OpenAI responses API
+        """
+        api_base = (
+            api_base
+            or litellm.api_base
+            or get_secret_str("OPENAI_API_BASE")
+            or "https://api.openai.com/v1"
+        )
+
+        # Remove trailing slashes
+        api_base = api_base.rstrip("/")
+
+        return f"{api_base}/responses"
