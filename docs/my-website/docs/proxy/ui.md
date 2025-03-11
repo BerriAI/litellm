@@ -6,11 +6,6 @@ import TabItem from '@theme/TabItem';
 
 Create keys, track spend, add models without worrying about the config / CRUD endpoints.
 
-:::info
-
-This is in beta, so things may change. If you have feedback, [let us know](https://discord.com/invite/wuPM9dRgDw)
-
-:::
 
 <Image img={require('../../img/litellm_ui_create_key.png')} />  
 

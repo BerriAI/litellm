@@ -14,6 +14,7 @@ from typing import (
     Union,
     cast,
 )
+from urllib.parse import urlparse
 
 import httpx
 import openai
@@ -26,6 +27,7 @@ from typing_extensions import overload
 import litellm
 from litellm import LlmProviders
 from litellm._logging import verbose_logger
+from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -35,6 +37,7 @@ from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENT
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
+    LiteLLMBatch,
     ModelResponse,
     ModelResponseStream,
 )
@@ -46,7 +49,10 @@ from litellm.utils import (
 
 from ...types.llms.openai import *
 from ..base import BaseLLM
+from .chat.o_series_transformation import OpenAIOSeriesConfig
 from .common_utils import OpenAIError, drop_params_from_unprocessable_entity_error
+
+openaiOSeriesConfig = OpenAIOSeriesConfig()
 
 
 class MistralEmbeddingConfig:
@@ -173,8 +179,8 @@ class OpenAIConfig(BaseConfig):
         Returns:
             list: List of supported openai parameters
         """
-        if litellm.openAIO1Config.is_model_o1_reasoning_model(model=model):
-            return litellm.openAIO1Config.get_supported_openai_params(model=model)
+        if openaiOSeriesConfig.is_model_o_series_model(model=model):
+            return openaiOSeriesConfig.get_supported_openai_params(model=model)
         elif litellm.openAIGPTAudioConfig.is_model_gpt_audio_model(model=model):
             return litellm.openAIGPTAudioConfig.get_supported_openai_params(model=model)
         else:
@@ -202,8 +208,8 @@ class OpenAIConfig(BaseConfig):
         drop_params: bool,
     ) -> dict:
         """ """
-        if litellm.openAIO1Config.is_model_o1_reasoning_model(model=model):
-            return litellm.openAIO1Config.map_openai_params(
+        if openaiOSeriesConfig.is_model_o_series_model(model=model):
+            return openaiOSeriesConfig.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=model,
@@ -316,6 +322,17 @@ class OpenAIChatCompletion(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
 
+    def _set_dynamic_params_on_client(
+        self,
+        client: Union[OpenAI, AsyncOpenAI],
+        organization: Optional[str] = None,
+        max_retries: Optional[int] = None,
+    ):
+        if organization is not None:
+            client.organization = organization
+        if max_retries is not None:
+            client.max_retries = max_retries
+
     def _get_openai_client(
         self,
         is_async: bool,
@@ -323,11 +340,10 @@ class OpenAIChatCompletion(BaseLLM):
         api_base: Optional[str] = None,
         api_version: Optional[str] = None,
         timeout: Union[float, httpx.Timeout] = httpx.Timeout(None),
-        max_retries: Optional[int] = 2,
+        max_retries: Optional[int] = DEFAULT_MAX_RETRIES,
         organization: Optional[str] = None,
         client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
     ):
-        args = locals()
         if client is None:
             if not isinstance(max_retries, int):
                 raise OpenAIError(
@@ -360,7 +376,6 @@ class OpenAIChatCompletion(BaseLLM):
                     organization=organization,
                 )
             else:
-
                 _new_client = OpenAI(
                     api_key=api_key,
                     base_url=api_base,
@@ -379,6 +394,11 @@ class OpenAIChatCompletion(BaseLLM):
             return _new_client
 
         else:
+            self._set_dynamic_params_on_client(
+                client=client,
+                organization=organization,
+                max_retries=max_retries,
+            )
             return client
 
     @track_llm_api_timing()
@@ -712,10 +732,14 @@ class OpenAIChatCompletion(BaseLLM):
             error_headers = getattr(e, "headers", None)
             error_text = getattr(e, "text", str(e))
             error_response = getattr(e, "response", None)
+            error_body = getattr(e, "body", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise OpenAIError(
-                status_code=status_code, message=error_text, headers=error_headers
+                status_code=status_code,
+                message=error_text,
+                headers=error_headers,
+                body=error_body,
             )
 
     async def acompletion(
@@ -808,13 +832,17 @@ class OpenAIChatCompletion(BaseLLM):
             except Exception as e:
                 exception_response = getattr(e, "response", None)
                 status_code = getattr(e, "status_code", 500)
+                exception_body = getattr(e, "body", None)
                 error_headers = getattr(e, "headers", None)
                 if error_headers is None and exception_response:
                     error_headers = getattr(exception_response, "headers", None)
                 message = getattr(e, "message", str(e))
 
                 raise OpenAIError(
-                    status_code=status_code, message=message, headers=error_headers
+                    status_code=status_code,
+                    message=message,
+                    headers=error_headers,
+                    body=exception_body,
                 )
 
     def streaming(
@@ -833,8 +861,9 @@ class OpenAIChatCompletion(BaseLLM):
         stream_options: Optional[dict] = None,
     ):
         data["stream"] = True
-        if stream_options is not None:
-            data["stream_options"] = stream_options
+        data.update(
+            self.get_stream_options(stream_options=stream_options, api_base=api_base)
+        )
 
         openai_client: OpenAI = self._get_openai_client(  # type: ignore
             is_async=False,
@@ -893,8 +922,9 @@ class OpenAIChatCompletion(BaseLLM):
     ):
         response = None
         data["stream"] = True
-        if stream_options is not None:
-            data["stream_options"] = stream_options
+        data.update(
+            self.get_stream_options(stream_options=stream_options, api_base=api_base)
+        )
         for _ in range(2):
             try:
                 openai_aclient: AsyncOpenAI = self._get_openai_client(  # type: ignore
@@ -951,6 +981,7 @@ class OpenAIChatCompletion(BaseLLM):
                 error_headers = getattr(e, "headers", None)
                 status_code = getattr(e, "status_code", 500)
                 error_response = getattr(e, "response", None)
+                exception_body = getattr(e, "body", None)
                 if error_headers is None and error_response:
                     error_headers = getattr(error_response, "headers", None)
                 if response is not None and hasattr(response, "text"):
@@ -958,6 +989,7 @@ class OpenAIChatCompletion(BaseLLM):
                         status_code=status_code,
                         message=f"{str(e)}\n\nOriginal Response: {response.text}",  # type: ignore
                         headers=error_headers,
+                        body=exception_body,
                     )
                 else:
                     if type(e).__name__ == "ReadTimeout":
@@ -965,17 +997,36 @@ class OpenAIChatCompletion(BaseLLM):
                             status_code=408,
                             message=f"{type(e).__name__}",
                             headers=error_headers,
+                            body=exception_body,
                         )
                     elif hasattr(e, "status_code"):
                         raise OpenAIError(
                             status_code=getattr(e, "status_code", 500),
                             message=str(e),
                             headers=error_headers,
+                            body=exception_body,
                         )
                     else:
                         raise OpenAIError(
-                            status_code=500, message=f"{str(e)}", headers=error_headers
+                            status_code=500,
+                            message=f"{str(e)}",
+                            headers=error_headers,
+                            body=exception_body,
                         )
+
+    def get_stream_options(
+        self, stream_options: Optional[dict], api_base: Optional[str]
+    ) -> dict:
+        """
+        Pass `stream_options` to the data dict for OpenAI requests
+        """
+        if stream_options is not None:
+            return {"stream_options": stream_options}
+        else:
+            # by default litellm will include usage for openai endpoints
+            if api_base is None or urlparse(api_base).hostname == "api.openai.com":
+                return {"stream_options": {"include_usage": True}}
+        return {}
 
     # Embedding
     @track_llm_api_timing()
@@ -1720,9 +1771,9 @@ class OpenAIBatchesAPI(BaseLLM):
         self,
         create_batch_data: CreateBatchRequest,
         openai_client: AsyncOpenAI,
-    ) -> Batch:
+    ) -> LiteLLMBatch:
         response = await openai_client.batches.create(**create_batch_data)
-        return response
+        return LiteLLMBatch(**response.model_dump())
 
     def create_batch(
         self,
@@ -1734,7 +1785,7 @@ class OpenAIBatchesAPI(BaseLLM):
         max_retries: Optional[int],
         organization: Optional[str],
         client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
-    ) -> Union[Batch, Coroutine[Any, Any, Batch]]:
+    ) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
         openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
@@ -1757,17 +1808,18 @@ class OpenAIBatchesAPI(BaseLLM):
             return self.acreate_batch(  # type: ignore
                 create_batch_data=create_batch_data, openai_client=openai_client
             )
-        response = openai_client.batches.create(**create_batch_data)
-        return response
+        response = cast(OpenAI, openai_client).batches.create(**create_batch_data)
+
+        return LiteLLMBatch(**response.model_dump())
 
     async def aretrieve_batch(
         self,
         retrieve_batch_data: RetrieveBatchRequest,
         openai_client: AsyncOpenAI,
-    ) -> Batch:
+    ) -> LiteLLMBatch:
         verbose_logger.debug("retrieving batch, args= %s", retrieve_batch_data)
         response = await openai_client.batches.retrieve(**retrieve_batch_data)
-        return response
+        return LiteLLMBatch(**response.model_dump())
 
     def retrieve_batch(
         self,
@@ -1802,8 +1854,8 @@ class OpenAIBatchesAPI(BaseLLM):
             return self.aretrieve_batch(  # type: ignore
                 retrieve_batch_data=retrieve_batch_data, openai_client=openai_client
             )
-        response = openai_client.batches.retrieve(**retrieve_batch_data)
-        return response
+        response = cast(OpenAI, openai_client).batches.retrieve(**retrieve_batch_data)
+        return LiteLLMBatch(**response.model_dump())
 
     async def acancel_batch(
         self,

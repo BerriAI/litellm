@@ -4,7 +4,7 @@
 import asyncio
 import sys
 from datetime import datetime, timedelta
-from typing import List, Optional, cast
+from typing import Any, Awaitable, Callable, List, Literal, Optional, Tuple, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -423,6 +423,7 @@ class PrometheusLogger(CustomLogger):
             team=user_api_team,
             team_alias=user_api_team_alias,
             user=user_id,
+            user_email=standard_logging_payload["metadata"]["user_api_key_user_email"],
             status_code="200",
             model=model,
             litellm_model_name=model,
@@ -690,14 +691,14 @@ class PrometheusLogger(CustomLogger):
         start_time: Optional[datetime] = kwargs.get("start_time")
         api_call_start_time = kwargs.get("api_call_start_time", None)
         completion_start_time = kwargs.get("completion_start_time", None)
+        time_to_first_token_seconds = self._safe_duration_seconds(
+            start_time=api_call_start_time,
+            end_time=completion_start_time,
+        )
         if (
-            completion_start_time is not None
-            and isinstance(completion_start_time, datetime)
+            time_to_first_token_seconds is not None
             and kwargs.get("stream", False) is True  # only emit for streaming requests
         ):
-            time_to_first_token_seconds = (
-                completion_start_time - api_call_start_time
-            ).total_seconds()
             self.litellm_llm_api_time_to_first_token_metric.labels(
                 model,
                 user_api_key,
@@ -709,11 +710,12 @@ class PrometheusLogger(CustomLogger):
             verbose_logger.debug(
                 "Time to first token metric not emitted, stream option in model_parameters is not True"
             )
-        if api_call_start_time is not None and isinstance(
-            api_call_start_time, datetime
-        ):
-            api_call_total_time: timedelta = end_time - api_call_start_time
-            api_call_total_time_seconds = api_call_total_time.total_seconds()
+
+        api_call_total_time_seconds = self._safe_duration_seconds(
+            start_time=api_call_start_time,
+            end_time=end_time,
+        )
+        if api_call_total_time_seconds is not None:
             _labels = prometheus_label_factory(
                 supported_enum_labels=PrometheusMetricLabels.get_labels(
                     label_name="litellm_llm_api_latency_metric"
@@ -725,9 +727,11 @@ class PrometheusLogger(CustomLogger):
             )
 
         # total request latency
-        if start_time is not None and isinstance(start_time, datetime):
-            total_time: timedelta = end_time - start_time
-            total_time_seconds = total_time.total_seconds()
+        total_time_seconds = self._safe_duration_seconds(
+            start_time=start_time,
+            end_time=end_time,
+        )
+        if total_time_seconds is not None:
             _labels = prometheus_label_factory(
                 supported_enum_labels=PrometheusMetricLabels.get_labels(
                     label_name="litellm_request_total_latency_metric"
@@ -806,6 +810,7 @@ class PrometheusLogger(CustomLogger):
             enum_values = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
+                user_email=user_api_key_dict.user_email,
                 hashed_api_key=user_api_key_dict.api_key,
                 api_key_alias=user_api_key_dict.key_alias,
                 team=user_api_key_dict.team_id,
@@ -853,6 +858,7 @@ class PrometheusLogger(CustomLogger):
                 team=user_api_key_dict.team_id,
                 team_alias=user_api_key_dict.team_alias,
                 user=user_api_key_dict.user_id,
+                user_email=user_api_key_dict.user_email,
                 status_code="200",
             )
             _labels = prometheus_label_factory(
@@ -1321,6 +1327,10 @@ class PrometheusLogger(CustomLogger):
 
         Helper to create tasks for initializing metrics that are required on startup - eg. remaining budget metrics
         """
+        if litellm.prometheus_initialize_budget_metrics is not True:
+            verbose_logger.debug("Prometheus: skipping budget metrics initialization")
+            return
+
         try:
             if asyncio.get_running_loop():
                 asyncio.create_task(self._initialize_remaining_budget_metrics())
@@ -1329,15 +1339,20 @@ class PrometheusLogger(CustomLogger):
                 f"No running event loop - skipping budget metrics initialization: {str(e)}"
             )
 
-    async def _initialize_remaining_budget_metrics(self):
+    async def _initialize_budget_metrics(
+        self,
+        data_fetch_function: Callable[..., Awaitable[Tuple[List[Any], Optional[int]]]],
+        set_metrics_function: Callable[[List[Any]], Awaitable[None]],
+        data_type: Literal["teams", "keys"],
+    ):
         """
-        Initialize remaining budget metrics for all teams to avoid metric discrepancies.
+        Generic method to initialize budget metrics for teams or API keys.
 
-        Runs when prometheus logger starts up.
+        Args:
+            data_fetch_function: Function to fetch data with pagination.
+            set_metrics_function: Function to set metrics for the fetched data.
+            data_type: String representing the type of data ("teams" or "keys") for logging purposes.
         """
-        from litellm.proxy.management_endpoints.team_endpoints import (
-            get_paginated_teams,
-        )
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
@@ -1346,27 +1361,120 @@ class PrometheusLogger(CustomLogger):
         try:
             page = 1
             page_size = 50
-            teams, total_count = await get_paginated_teams(
-                prisma_client=prisma_client, page_size=page_size, page=page
+            data, total_count = await data_fetch_function(
+                page_size=page_size, page=page
             )
+
+            if total_count is None:
+                total_count = len(data)
 
             # Calculate total pages needed
             total_pages = (total_count + page_size - 1) // page_size
 
-            # Set metrics for first page of teams
-            await self._set_team_list_budget_metrics(teams)
+            # Set metrics for first page of data
+            await set_metrics_function(data)
 
             # Get and set metrics for remaining pages
             for page in range(2, total_pages + 1):
-                teams, _ = await get_paginated_teams(
-                    prisma_client=prisma_client, page_size=page_size, page=page
-                )
-                await self._set_team_list_budget_metrics(teams)
+                data, _ = await data_fetch_function(page_size=page_size, page=page)
+                await set_metrics_function(data)
 
         except Exception as e:
             verbose_logger.exception(
-                f"Error initializing team budget metrics: {str(e)}"
+                f"Error initializing {data_type} budget metrics: {str(e)}"
             )
+
+    async def _initialize_team_budget_metrics(self):
+        """
+        Initialize team budget metrics by reusing the generic pagination logic.
+        """
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            get_paginated_teams,
+        )
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            verbose_logger.debug(
+                "Prometheus: skipping team metrics initialization, DB not initialized"
+            )
+            return
+
+        async def fetch_teams(
+            page_size: int, page: int
+        ) -> Tuple[List[LiteLLM_TeamTable], Optional[int]]:
+            teams, total_count = await get_paginated_teams(
+                prisma_client=prisma_client, page_size=page_size, page=page
+            )
+            if total_count is None:
+                total_count = len(teams)
+            return teams, total_count
+
+        await self._initialize_budget_metrics(
+            data_fetch_function=fetch_teams,
+            set_metrics_function=self._set_team_list_budget_metrics,
+            data_type="teams",
+        )
+
+    async def _initialize_api_key_budget_metrics(self):
+        """
+        Initialize API key budget metrics by reusing the generic pagination logic.
+        """
+        from typing import Union
+
+        from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _list_key_helper,
+        )
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            verbose_logger.debug(
+                "Prometheus: skipping key metrics initialization, DB not initialized"
+            )
+            return
+
+        async def fetch_keys(
+            page_size: int, page: int
+        ) -> Tuple[List[Union[str, UserAPIKeyAuth]], Optional[int]]:
+            key_list_response = await _list_key_helper(
+                prisma_client=prisma_client,
+                page=page,
+                size=page_size,
+                user_id=None,
+                team_id=None,
+                key_alias=None,
+                exclude_team_id=UI_SESSION_TOKEN_TEAM_ID,
+                return_full_object=True,
+                organization_id=None,
+            )
+            keys = key_list_response.get("keys", [])
+            total_count = key_list_response.get("total_count")
+            if total_count is None:
+                total_count = len(keys)
+            return keys, total_count
+
+        await self._initialize_budget_metrics(
+            data_fetch_function=fetch_keys,
+            set_metrics_function=self._set_key_list_budget_metrics,
+            data_type="keys",
+        )
+
+    async def _initialize_remaining_budget_metrics(self):
+        """
+        Initialize remaining budget metrics for all teams to avoid metric discrepancies.
+
+        Runs when prometheus logger starts up.
+        """
+        await self._initialize_team_budget_metrics()
+        await self._initialize_api_key_budget_metrics()
+
+    async def _set_key_list_budget_metrics(
+        self, keys: List[Union[str, UserAPIKeyAuth]]
+    ):
+        """Helper function to set budget metrics for a list of keys"""
+        for key in keys:
+            if isinstance(key, UserAPIKeyAuth):
+                self._set_key_budget_metrics(key)
 
     async def _set_team_list_budget_metrics(self, teams: List[LiteLLM_TeamTable]):
         """Helper function to set budget metrics for a list of teams"""
@@ -1431,7 +1539,7 @@ class PrometheusLogger(CustomLogger):
                 user_api_key_cache=user_api_key_cache,
             )
         except Exception as e:
-            verbose_logger.exception(
+            verbose_logger.debug(
                 f"[Non-Blocking] Prometheus: Error getting team info: {str(e)}"
             )
             return team_object
@@ -1452,10 +1560,18 @@ class PrometheusLogger(CustomLogger):
         - Max Budget
         - Budget Reset At
         """
-        self.litellm_remaining_team_budget_metric.labels(
-            team.team_id,
-            team.team_alias or "",
-        ).set(
+        enum_values = UserAPIKeyLabelValues(
+            team=team.team_id,
+            team_alias=team.team_alias or "",
+        )
+
+        _labels = prometheus_label_factory(
+            supported_enum_labels=PrometheusMetricLabels.get_labels(
+                label_name="litellm_remaining_team_budget_metric"
+            ),
+            enum_values=enum_values,
+        )
+        self.litellm_remaining_team_budget_metric.labels(**_labels).set(
             self._safe_get_remaining_budget(
                 max_budget=team.max_budget,
                 spend=team.spend,
@@ -1463,16 +1579,22 @@ class PrometheusLogger(CustomLogger):
         )
 
         if team.max_budget is not None:
-            self.litellm_team_max_budget_metric.labels(
-                team.team_id,
-                team.team_alias or "",
-            ).set(team.max_budget)
+            _labels = prometheus_label_factory(
+                supported_enum_labels=PrometheusMetricLabels.get_labels(
+                    label_name="litellm_team_max_budget_metric"
+                ),
+                enum_values=enum_values,
+            )
+            self.litellm_team_max_budget_metric.labels(**_labels).set(team.max_budget)
 
         if team.budget_reset_at is not None:
-            self.litellm_team_budget_remaining_hours_metric.labels(
-                team.team_id,
-                team.team_alias or "",
-            ).set(
+            _labels = prometheus_label_factory(
+                supported_enum_labels=PrometheusMetricLabels.get_labels(
+                    label_name="litellm_team_budget_remaining_hours_metric"
+                ),
+                enum_values=enum_values,
+            )
+            self.litellm_team_budget_remaining_hours_metric.labels(**_labels).set(
                 self._get_remaining_hours_for_budget_reset(
                     budget_reset_at=team.budget_reset_at
                 )
@@ -1486,9 +1608,17 @@ class PrometheusLogger(CustomLogger):
         - Max Budget
         - Budget Reset At
         """
-        self.litellm_remaining_api_key_budget_metric.labels(
-            user_api_key_dict.token, user_api_key_dict.key_alias
-        ).set(
+        enum_values = UserAPIKeyLabelValues(
+            hashed_api_key=user_api_key_dict.token,
+            api_key_alias=user_api_key_dict.key_alias or "",
+        )
+        _labels = prometheus_label_factory(
+            supported_enum_labels=PrometheusMetricLabels.get_labels(
+                label_name="litellm_remaining_api_key_budget_metric"
+            ),
+            enum_values=enum_values,
+        )
+        self.litellm_remaining_api_key_budget_metric.labels(**_labels).set(
             self._safe_get_remaining_budget(
                 max_budget=user_api_key_dict.max_budget,
                 spend=user_api_key_dict.spend,
@@ -1496,14 +1626,18 @@ class PrometheusLogger(CustomLogger):
         )
 
         if user_api_key_dict.max_budget is not None:
-            self.litellm_api_key_max_budget_metric.labels(
-                user_api_key_dict.token, user_api_key_dict.key_alias
-            ).set(user_api_key_dict.max_budget)
+            _labels = prometheus_label_factory(
+                supported_enum_labels=PrometheusMetricLabels.get_labels(
+                    label_name="litellm_api_key_max_budget_metric"
+                ),
+                enum_values=enum_values,
+            )
+            self.litellm_api_key_max_budget_metric.labels(**_labels).set(
+                user_api_key_dict.max_budget
+            )
 
         if user_api_key_dict.budget_reset_at is not None:
-            self.litellm_api_key_budget_remaining_hours_metric.labels(
-                user_api_key_dict.token, user_api_key_dict.key_alias
-            ).set(
+            self.litellm_api_key_budget_remaining_hours_metric.labels(**_labels).set(
                 self._get_remaining_hours_for_budget_reset(
                     budget_reset_at=user_api_key_dict.budget_reset_at
                 )
@@ -1558,7 +1692,7 @@ class PrometheusLogger(CustomLogger):
                 if key_object:
                     user_api_key_dict.budget_reset_at = key_object.budget_reset_at
         except Exception as e:
-            verbose_logger.exception(
+            verbose_logger.debug(
                 f"[Non-Blocking] Prometheus: Error getting key info: {str(e)}"
             )
 
@@ -1571,6 +1705,21 @@ class PrometheusLogger(CustomLogger):
         return (
             budget_reset_at - datetime.now(budget_reset_at.tzinfo)
         ).total_seconds() / 3600
+
+    def _safe_duration_seconds(
+        self,
+        start_time: Any,
+        end_time: Any,
+    ) -> Optional[float]:
+        """
+        Compute the duration in seconds between two objects.
+
+        Returns the duration as a float if both start and end are instances of datetime,
+        otherwise returns None.
+        """
+        if isinstance(start_time, datetime) and isinstance(end_time, datetime):
+            return (end_time - start_time).total_seconds()
+        return None
 
 
 def prometheus_label_factory(

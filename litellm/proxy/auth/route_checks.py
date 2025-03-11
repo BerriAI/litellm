@@ -180,23 +180,10 @@ class RouteChecks:
         if RouteChecks._is_azure_openai_route(route=route):
             return True
 
-        # Pass through Bedrock, VertexAI, and Cohere Routes
-        if "/bedrock/" in route:
-            return True
-        if "/vertex-ai/" in route:
-            return True
-        if "/gemini/" in route:
-            return True
-        if "/cohere/" in route:
-            return True
-        if "/langfuse/" in route:
-            return True
-        if "/anthropic/" in route:
-            return True
-        if "/azure/" in route:
-            return True
-        if "/openai/" in route:
-            return True
+        for _llm_passthrough_route in LiteLLMRoutes.mapped_pass_through_routes.value:
+            if _llm_passthrough_route in route:
+                return True
+
         return False
 
     @staticmethod
@@ -253,3 +240,18 @@ class RouteChecks:
             RouteChecks._route_matches_pattern(route=route, pattern=allowed_route)
             for allowed_route in allowed_routes
         )  # Check pattern match
+
+    @staticmethod
+    def _is_assistants_api_request(request: Request) -> bool:
+        """
+        Returns True if `thread` or `assistant` is in the request path
+
+        Args:
+            request (Request): The request object
+
+        Returns:
+            bool: True if `thread` or `assistant` is in the request path, False otherwise
+        """
+        if "thread" in request.url.path or "assistant" in request.url.path:
+            return True
+        return False

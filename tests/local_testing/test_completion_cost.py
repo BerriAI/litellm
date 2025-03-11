@@ -1423,7 +1423,9 @@ def test_cost_azure_openai_prompt_caching():
     print("_expected_cost2", _expected_cost2)
     print("cost_2", cost_2)
 
-    assert cost_2 == _expected_cost2
+    assert (
+        abs(cost_2 - _expected_cost2) < 1e-5
+    )  # Allow for small floating-point differences
 
 
 def test_completion_cost_vertex_llama3():
@@ -1574,7 +1576,11 @@ def test_completion_cost_azure_ai_rerank(model):
                 "relevance_score": 0.990732,
             },
         ],
-        meta={},
+        meta={
+            "billed_units": {
+                "search_units": 1,
+            }
+        },
     )
     print("response", response)
     model = model
@@ -2766,9 +2772,282 @@ def test_add_known_models():
 def test_bedrock_cost_calc_with_region():
     from litellm import completion
 
-    response = completion(
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+    from litellm import ModelResponse
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    litellm.add_known_models()
+
+    hidden_params = {
+        "custom_llm_provider": "bedrock",
+        "region_name": "us-east-1",
+        "optional_params": {},
+        "litellm_call_id": "cf371a5d-679b-410f-b862-8084676d6d59",
+        "model_id": None,
+        "api_base": None,
+        "response_cost": 0.0005639999999999999,
+        "additional_headers": {},
+    }
+
+    litellm.set_verbose = True
+
+    bedrock_models = litellm.bedrock_models + litellm.bedrock_converse_models
+
+    for model in bedrock_models:
+        if litellm.model_cost[model]["mode"] == "chat":
+            response = {
+                "id": "cmpl-55db75e0b05344058b0bd8ee4e00bf84",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "index": 0,
+                        "logprobs": None,
+                        "message": {
+                            "content": 'Here\'s one:\n\nWhy did the Linux kernel go to therapy?\n\nBecause it had a lot of "core" issues!\n\nHope that one made you laugh!',
+                            "refusal": None,
+                            "role": "assistant",
+                            "audio": None,
+                            "function_call": None,
+                            "tool_calls": [],
+                        },
+                    }
+                ],
+                "created": 1729243714,
+                "model": model,
+                "object": "chat.completion",
+                "service_tier": None,
+                "system_fingerprint": None,
+                "usage": {
+                    "completion_tokens": 32,
+                    "prompt_tokens": 16,
+                    "total_tokens": 48,
+                    "completion_tokens_details": None,
+                    "prompt_tokens_details": None,
+                },
+            }
+
+            model_response = ModelResponse(**response)
+            model_response._hidden_params = hidden_params
+            cost = completion_cost(model_response, custom_llm_provider="bedrock")
+
+            assert cost > 0
+
+
+# @pytest.mark.parametrize(
+#     "base_model_arg", [
+#         {"base_model": "bedrock/anthropic.claude-3-sonnet-20240229-v1:0"},
+#         {"model_info": "anthropic.claude-3-sonnet-20240229-v1:0"},
+#     ]
+# )
+def test_cost_calculator_with_base_model():
+    resp = litellm.completion(
+        model="bedrock/random-model",
         messages=[{"role": "user", "content": "Hello, how are you?"}],
-        aws_region_name="us-east-1",
+        base_model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        mock_response="Hello, how are you?",
     )
-    assert response._hidden_params["response_cost"] > 0
+    assert resp.model == "random-model"
+    assert resp._hidden_params["response_cost"] > 0
+
+
+@pytest.fixture
+def model_item():
+    return {
+        "model_name": "random-model",
+        "litellm_params": {
+            "model": "openai/my-fake-model",
+            "api_key": "my-fake-key",
+            "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+        },
+        "model_info": {},
+    }
+
+
+@pytest.mark.parametrize("base_model_arg", ["litellm_param", "model_info"])
+def test_cost_calculator_with_base_model_with_router(base_model_arg, model_item):
+    from litellm import Router
+
+
+@pytest.mark.parametrize("base_model_arg", ["litellm_param", "model_info"])
+def test_cost_calculator_with_base_model_with_router(base_model_arg):
+    from litellm import Router
+
+    model_item = {
+        "model_name": "random-model",
+        "litellm_params": {
+            "model": "bedrock/random-model",
+        },
+    }
+
+    if base_model_arg == "litellm_param":
+        model_item["litellm_params"][
+            "base_model"
+        ] = "bedrock/anthropic.claude-3-sonnet-20240229-v1:0"
+    elif base_model_arg == "model_info":
+        model_item["model_info"] = {
+            "base_model": "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        }
+
+    router = Router(model_list=[model_item])
+    resp = router.completion(
+        model="random-model",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        mock_response="Hello, how are you?",
+    )
+    assert resp.model == "random-model"
+    assert resp._hidden_params["response_cost"] > 0
+
+
+@pytest.mark.parametrize("base_model_arg", ["litellm_param", "model_info"])
+def test_cost_calculator_with_base_model_with_router_embedding(base_model_arg):
+    from litellm import Router
+
+    litellm._turn_on_debug()
+
+    model_item = {
+        "model_name": "random-model",
+        "litellm_params": {
+            "model": "bedrock/random-model",
+        },
+    }
+
+    if base_model_arg == "litellm_param":
+        model_item["litellm_params"]["base_model"] = "cohere.embed-english-v3"
+    elif base_model_arg == "model_info":
+        model_item["model_info"] = {
+            "base_model": "cohere.embed-english-v3",
+        }
+
+    router = Router(model_list=[model_item])
+    resp = router.embedding(
+        model="random-model",
+        input="Hello, how are you?",
+        mock_response=[1, 2, 3],
+    )
+    assert resp.model == "random-model"
+    assert resp._hidden_params["response_cost"] > 0
+
+
+def test_cost_calculator_with_custom_pricing():
+    resp = litellm.completion(
+        model="bedrock/random-model",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        mock_response="Hello, how are you?",
+        input_cost_per_token=0.0000008,
+        output_cost_per_token=0.0000032,
+    )
+    assert resp.model == "random-model"
+    assert resp._hidden_params["response_cost"] > 0
+
+
+@pytest.mark.parametrize(
+    "custom_pricing",
+    [
+        "litellm_params",
+        "model_info",
+    ],
+)
+@pytest.mark.asyncio
+async def test_cost_calculator_with_custom_pricing_router(model_item, custom_pricing):
+    from litellm import Router
+
+    litellm._turn_on_debug()
+
+    if custom_pricing == "litellm_params":
+        model_item["litellm_params"]["input_cost_per_token"] = 0.0000008
+        model_item["litellm_params"]["output_cost_per_token"] = 0.0000032
+    elif custom_pricing == "model_info":
+        model_item["model_info"]["input_cost_per_token"] = 0.0000008
+        model_item["model_info"]["output_cost_per_token"] = 0.0000032
+
+    router = Router(model_list=[model_item])
+    resp = await router.acompletion(
+        model="random-model",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        mock_response="Hello, how are you?",
+    )
+    # assert resp.model == "random-model"
+    assert resp._hidden_params["response_cost"] > 0
+
+
+def test_json_valid_model_cost_map():
+    import json
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+
+    model_cost = litellm.get_model_cost_map(url="")
+
+    try:
+        # Attempt to serialize and deserialize the JSON
+        json_str = json.dumps(model_cost)
+        json.loads(json_str)
+    except json.JSONDecodeError as e:
+        assert False, f"Invalid JSON format: {str(e)}"
+
+
+def test_batch_cost_calculator():
+
+    args = {
+        "completion_response": {
+            "choices": [
+                {
+                    "content_filter_results": {
+                        "hate": {"filtered": False, "severity": "safe"},
+                        "protected_material_code": {
+                            "filtered": False,
+                            "detected": False,
+                        },
+                        "protected_material_text": {
+                            "filtered": False,
+                            "detected": False,
+                        },
+                        "self_harm": {"filtered": False, "severity": "safe"},
+                        "sexual": {"filtered": False, "severity": "safe"},
+                        "violence": {"filtered": False, "severity": "safe"},
+                    },
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "logprobs": None,
+                    "message": {
+                        "content": 'As of my last update in October 2023, there are eight recognized planets in the solar system. They are:\n\n1. **Mercury** - The closest planet to the Sun, known for its extreme temperature fluctuations.\n2. **Venus** - Similar in size to Earth but with a thick atmosphere rich in carbon dioxide, leading to a greenhouse effect that makes it the hottest planet.\n3. **Earth** - The only planet known to support life, with a diverse environment and liquid water.\n4. **Mars** - Known as the Red Planet, it has the largest volcano and canyon in the solar system and features signs of past water.\n5. **Jupiter** - The largest planet in the solar system, known for its Great Red Spot and numerous moons.\n6. **Saturn** - Famous for its stunning rings, it is a gas giant also known for its extensive moon system.\n7. **Uranus** - An ice giant with a unique tilt, it rotates on its side and has a blue color due to methane in its atmosphere.\n8. **Neptune** - Another ice giant, known for its deep blue color and strong winds, it is the farthest planet from the Sun.\n\nPluto was previously classified as the ninth planet but was reclassified as a "dwarf planet" in 2006 by the International Astronomical Union.',
+                        "refusal": None,
+                        "role": "assistant",
+                    },
+                }
+            ],
+            "created": 1741135408,
+            "id": "chatcmpl-B7X96teepFM4ILP7cm4Ga62eRuV8p",
+            "model": "gpt-4o-mini-2024-07-18",
+            "object": "chat.completion",
+            "prompt_filter_results": [
+                {
+                    "prompt_index": 0,
+                    "content_filter_results": {
+                        "hate": {"filtered": False, "severity": "safe"},
+                        "jailbreak": {"filtered": False, "detected": False},
+                        "self_harm": {"filtered": False, "severity": "safe"},
+                        "sexual": {"filtered": False, "severity": "safe"},
+                        "violence": {"filtered": False, "severity": "safe"},
+                    },
+                }
+            ],
+            "system_fingerprint": "fp_b705f0c291",
+            "usage": {
+                "completion_tokens": 278,
+                "completion_tokens_details": {
+                    "accepted_prediction_tokens": 0,
+                    "audio_tokens": 0,
+                    "reasoning_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+                "prompt_tokens": 20,
+                "prompt_tokens_details": {"audio_tokens": 0, "cached_tokens": 0},
+                "total_tokens": 298,
+            },
+        },
+        "model": None,
+    }
+
+    cost = completion_cost(**args)
+    assert cost > 0

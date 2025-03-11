@@ -1,11 +1,17 @@
-import copy
+from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import RedisCache
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.types.caching import CachePingResponse, HealthCheckCacheParams
+
+masker = SensitiveDataMasker()
 
 router = APIRouter(
     prefix="/cache",
@@ -13,42 +19,62 @@ router = APIRouter(
 )
 
 
+def _extract_cache_params() -> Dict[str, Any]:
+    """
+    Safely extracts and cleans cache parameters.
+
+    The health check UI needs to display specific cache parameters, to show users how they set up their cache.
+
+    eg.
+        {
+            "host": "localhost",
+            "port": 6379,
+            "redis_kwargs": {"db": 0},
+            "namespace": "test",
+        }
+
+    Returns:
+        Dict containing cleaned and masked cache parameters
+    """
+    if litellm.cache is None:
+        return {}
+    try:
+        cache_params = vars(litellm.cache.cache)
+        cleaned_params = (
+            HealthCheckCacheParams(**cache_params).model_dump() if cache_params else {}
+        )
+        return masker.mask_dict(cleaned_params)
+    except (AttributeError, TypeError) as e:
+        verbose_proxy_logger.debug(f"Error extracting cache params: {str(e)}")
+        return {}
+
+
 @router.get(
     "/ping",
+    response_model=CachePingResponse,
     dependencies=[Depends(user_api_key_auth)],
 )
 async def cache_ping():
     """
     Endpoint for checking if cache can be pinged
     """
-    litellm_cache_params = {}
-    specific_cache_params = {}
+    litellm_cache_params: Dict[str, Any] = {}
+    cleaned_cache_params: Dict[str, Any] = {}
     try:
-
         if litellm.cache is None:
             raise HTTPException(
                 status_code=503, detail="Cache not initialized. litellm.cache is None"
             )
+        litellm_cache_params = masker.mask_dict(vars(litellm.cache))
+        # remove field that might reference itself
+        litellm_cache_params.pop("cache", None)
+        cleaned_cache_params = _extract_cache_params()
 
-        for k, v in vars(litellm.cache).items():
-            try:
-                if k == "cache":
-                    continue
-                litellm_cache_params[k] = str(copy.deepcopy(v))
-            except Exception:
-                litellm_cache_params[k] = "<unable to copy or convert>"
-        for k, v in vars(litellm.cache.cache).items():
-            try:
-                specific_cache_params[k] = str(v)
-            except Exception:
-                specific_cache_params[k] = "<unable to copy or convert>"
         if litellm.cache.type == "redis":
-            # ping the redis cache
             ping_response = await litellm.cache.ping()
             verbose_proxy_logger.debug(
                 "/cache/ping: ping_response: " + str(ping_response)
             )
-            # making a set cache call
             # add cache does not return anything
             await litellm.cache.async_add_cache(
                 result="test_key",
@@ -56,24 +82,36 @@ async def cache_ping():
                 messages=[{"role": "user", "content": "test from litellm"}],
             )
             verbose_proxy_logger.debug("/cache/ping: done with set_cache()")
-            return {
-                "status": "healthy",
-                "cache_type": litellm.cache.type,
-                "ping_response": True,
-                "set_cache_response": "success",
-                "litellm_cache_params": litellm_cache_params,
-                "redis_cache_params": specific_cache_params,
-            }
+
+            return CachePingResponse(
+                status="healthy",
+                cache_type=str(litellm.cache.type),
+                ping_response=True,
+                set_cache_response="success",
+                litellm_cache_params=safe_dumps(litellm_cache_params),
+                health_check_cache_params=cleaned_cache_params,
+            )
         else:
-            return {
-                "status": "healthy",
-                "cache_type": litellm.cache.type,
-                "litellm_cache_params": litellm_cache_params,
-            }
+            return CachePingResponse(
+                status="healthy",
+                cache_type=str(litellm.cache.type),
+                litellm_cache_params=safe_dumps(litellm_cache_params),
+            )
     except Exception as e:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Service Unhealthy ({str(e)}).Cache parameters: {litellm_cache_params}.specific_cache_params: {specific_cache_params}",
+        import traceback
+
+        traceback.print_exc()
+        error_message = {
+            "message": f"Service Unhealthy ({str(e)})",
+            "litellm_cache_params": safe_dumps(litellm_cache_params),
+            "health_check_cache_params": safe_dumps(cleaned_cache_params),
+            "traceback": traceback.format_exc(),
+        }
+        raise ProxyException(
+            message=safe_dumps(error_message),
+            type=ProxyErrorTypes.cache_ping_error,
+            param="cache_ping",
+            code=503,
         )
 
 

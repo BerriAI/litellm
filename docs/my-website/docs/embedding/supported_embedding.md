@@ -323,6 +323,40 @@ response = embedding(
 | embed-english-light-v2.0 | `embedding(model="embed-english-light-v2.0", input=["good morning from litellm", "this is another item"])` |
 | embed-multilingual-v2.0  | `embedding(model="embed-multilingual-v2.0", input=["good morning from litellm", "this is another item"])` |
 
+## NVIDIA NIM Embedding Models
+
+### API keys
+This can be set as env variables or passed as **params to litellm.embedding()**
+```python
+import os
+os.environ["NVIDIA_NIM_API_KEY"] = ""  # api key
+os.environ["NVIDIA_NIM_API_BASE"] = "" # nim endpoint url
+```
+
+### Usage
+```python
+from litellm import embedding
+import os
+os.environ['NVIDIA_NIM_API_KEY'] = ""
+response = embedding(
+    model='nvidia_nim/<model_name>', 
+    input=["good morning from litellm"]
+)
+```
+All models listed [here](https://build.nvidia.com/explore/retrieval) are supported:
+
+| Model Name         | Function Call                                         |
+| :---               | :---                                                  |
+| NV-Embed-QA | `embedding(model="nvidia_nim/NV-Embed-QA", input)` |
+| nvidia/nv-embed-v1 | `embedding(model="nvidia_nim/nvidia/nv-embed-v1", input)` |
+| nvidia/nv-embedqa-mistral-7b-v2 | `embedding(model="nvidia_nim/nvidia/nv-embedqa-mistral-7b-v2", input)` |
+| nvidia/nv-embedqa-e5-v5 | `embedding(model="nvidia_nim/nvidia/nv-embedqa-e5-v5", input)` |
+| nvidia/embed-qa-4 | `embedding(model="nvidia_nim/nvidia/embed-qa-4", input)` |
+| nvidia/llama-3.2-nv-embedqa-1b-v1 | `embedding(model="nvidia_nim/nvidia/llama-3.2-nv-embedqa-1b-v1", input)` |
+| nvidia/llama-3.2-nv-embedqa-1b-v2 | `embedding(model="nvidia_nim/nvidia/llama-3.2-nv-embedqa-1b-v2", input)` |
+| snowflake/arctic-embed-l | `embedding(model="nvidia_nim/snowflake/arctic-embed-l", input)` |
+| baai/bge-m3 | `embedding(model="nvidia_nim/baai/bge-m3", input)` |
+
 ## HuggingFace Embedding Models
 LiteLLM supports all Feature-Extraction + Sentence Similarity Embedding models: https://huggingface.co/models?pipeline_tag=feature-extraction
 
