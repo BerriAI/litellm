@@ -1,5 +1,4 @@
-import os
-import litellm
+import json
 from jsonschema import validate
 
 def test_model_prices_and_context_window_json_is_valid():
@@ -100,8 +99,8 @@ def test_model_prices_and_context_window_json_is_valid():
         },
     }
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    actual_json = litellm.get_model_cost_map(url='')
+    with open("./model_prices_and_context_window.json", "r") as model_prices_file:
+        actual_json = json.load(model_prices_file)
     assert isinstance(actual_json, dict)
     temporarily_removed = actual_json.pop('sample_spec', None) # remove the sample, whose schema is inconsistent with the real data
 
