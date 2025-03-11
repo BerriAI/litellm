@@ -1,9 +1,14 @@
-from typing import Optional
+from typing import Optional, Union
 
 import litellm
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import ResponsesAPIRequestParams
+from litellm.types.llms.openai import (
+    ResponseInputParam,
+    ResponsesAPIOptionalRequestParams,
+    ResponsesAPIRequestParams,
+)
+from litellm.types.router import GenericLiteLLMParams
 
 
 class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
@@ -41,9 +46,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> ResponsesAPIRequestParams:
+    ) -> ResponsesAPIOptionalRequestParams:
 
-        return ResponsesAPIRequestParams(
+        return ResponsesAPIOptionalRequestParams(
             include=optional_params.get("include"),
             instructions=optional_params.get("instructions"),
             max_output_tokens=optional_params.get("max_output_tokens"),
@@ -64,6 +69,18 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             extra_query=optional_params.get("extra_query"),
             extra_body=optional_params.get("extra_body"),
             timeout=optional_params.get("timeout"),
+        )
+
+    def transform_request(
+        self,
+        model: str,
+        input: Union[str, ResponseInputParam],
+        response_api_optional_request_params: ResponsesAPIOptionalRequestParams,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> ResponsesAPIRequestParams:
+        return ResponsesAPIRequestParams(
+            model=model, input=input, **response_api_optional_request_params
         )
 
     def validate_environment(
@@ -89,7 +106,6 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         self,
         api_base: Optional[str],
         model: str,
-        optional_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         """

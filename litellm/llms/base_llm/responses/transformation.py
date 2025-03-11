@@ -1,8 +1,13 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, Union
 
-from litellm.types.llms.openai import ResponsesAPIRequestParams
+from litellm.types.llms.openai import (
+    ResponseInputParam,
+    ResponsesAPIOptionalRequestParams,
+    ResponsesAPIRequestParams,
+)
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelInfo
 
 from ..chat.transformation import BaseLLMException
@@ -48,7 +53,7 @@ class BaseResponsesAPIConfig(ABC):
         optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> ResponsesAPIRequestParams:
+    ) -> ResponsesAPIOptionalRequestParams:
 
         pass
 
@@ -66,7 +71,6 @@ class BaseResponsesAPIConfig(ABC):
         self,
         api_base: Optional[str],
         model: str,
-        optional_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         """
@@ -80,15 +84,16 @@ class BaseResponsesAPIConfig(ABC):
             raise ValueError("api_base is required")
         return api_base
 
-    # @abstractmethod
-    # def transform_request(
-    #     self,
-    #     model: str,
-    #     optional_params: dict,
-    #     litellm_params: dict,
-    #     headers: dict,
-    # ) -> dict:
-    #     pass
+    @abstractmethod
+    def transform_request(
+        self,
+        model: str,
+        input: Union[str, ResponseInputParam],
+        response_api_optional_request_params: ResponsesAPIOptionalRequestParams,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> ResponsesAPIRequestParams:
+        pass
 
     # @abstractmethod
     # def transform_response(
