@@ -16,8 +16,10 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import LiteLLMBatch
 
+from ..common_utils import BaseAzureLLM
 
-class AzureBatchesAPI:
+
+class AzureBatchesAPI(BaseAzureLLM):
     """
     Azure methods to support for batches
     - create_batch()
@@ -34,28 +36,25 @@ class AzureBatchesAPI:
         api_key: Optional[str],
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
+        litellm_params: dict,
         max_retries: Optional[int],
         api_version: Optional[str] = None,
         client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None,
         _is_async: bool = False,
     ) -> Optional[Union[AzureOpenAI, AsyncAzureOpenAI]]:
-        received_args = locals()
         openai_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None
         if client is None:
-            data = {}
-            for k, v in received_args.items():
-                if k == "self" or k == "client" or k == "_is_async":
-                    pass
-                elif k == "api_base" and v is not None:
-                    data["azure_endpoint"] = v
-                elif v is not None:
-                    data[k] = v
-            if "api_version" not in data:
-                data["api_version"] = litellm.AZURE_DEFAULT_API_VERSION
+            azure_client_params = self.initialize_azure_sdk_client(
+                litellm_params=litellm_params,
+                api_key=api_key,
+                model_name="",
+                api_version=api_version,
+                api_base=api_base,
+            )
             if _is_async is True:
-                openai_client = AsyncAzureOpenAI(**data)
+                openai_client = AsyncAzureOpenAI(**azure_client_params)
             else:
-                openai_client = AzureOpenAI(**data)  # type: ignore
+                openai_client = AzureOpenAI(**azure_client_params)  # type: ignore
         else:
             openai_client = client
 
@@ -79,6 +78,7 @@ class AzureBatchesAPI:
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
         client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None,
+        litellm_params: Optional[dict] = None,
     ) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
         azure_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = (
             self.get_azure_openai_client(
@@ -89,6 +89,7 @@ class AzureBatchesAPI:
                 max_retries=max_retries,
                 client=client,
                 _is_async=_is_async,
+                litellm_params=litellm_params or {},
             )
         )
         if azure_client is None:
@@ -125,6 +126,7 @@ class AzureBatchesAPI:
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
         client: Optional[AzureOpenAI] = None,
+        litellm_params: Optional[dict] = None,
     ):
         azure_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = (
             self.get_azure_openai_client(
@@ -135,6 +137,7 @@ class AzureBatchesAPI:
                 max_retries=max_retries,
                 client=client,
                 _is_async=_is_async,
+                litellm_params=litellm_params or {},
             )
         )
         if azure_client is None:
@@ -173,6 +176,7 @@ class AzureBatchesAPI:
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
         client: Optional[AzureOpenAI] = None,
+        litellm_params: Optional[dict] = None,
     ):
         azure_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = (
             self.get_azure_openai_client(
@@ -183,6 +187,7 @@ class AzureBatchesAPI:
                 max_retries=max_retries,
                 client=client,
                 _is_async=_is_async,
+                litellm_params=litellm_params or {},
             )
         )
         if azure_client is None:
@@ -212,6 +217,7 @@ class AzureBatchesAPI:
         after: Optional[str] = None,
         limit: Optional[int] = None,
         client: Optional[AzureOpenAI] = None,
+        litellm_params: Optional[dict] = None,
     ):
         azure_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = (
             self.get_azure_openai_client(
@@ -222,6 +228,7 @@ class AzureBatchesAPI:
                 api_version=api_version,
                 client=client,
                 _is_async=_is_async,
+                litellm_params=litellm_params or {},
             )
         )
         if azure_client is None:
