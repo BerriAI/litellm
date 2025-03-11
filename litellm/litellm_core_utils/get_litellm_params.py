@@ -60,6 +60,7 @@ def get_litellm_params(
     merge_reasoning_content_in_choices: Optional[bool] = None,
     **kwargs,
 ) -> dict:
+
     litellm_params = {
         "acompletion": acompletion,
         "api_key": api_key,
@@ -99,5 +100,11 @@ def get_litellm_params(
         "async_call": async_call,
         "ssl_verify": ssl_verify,
         "merge_reasoning_content_in_choices": merge_reasoning_content_in_choices,
+        "azure_ad_token": kwargs.get("azure_ad_token"),
+        "tenant_id": kwargs.get("tenant_id"),
+        "client_id": kwargs.get("client_id"),
+        "client_secret": kwargs.get("client_secret"),
+        "azure_username": kwargs.get("azure_username"),
+        "azure_password": kwargs.get("azure_password"),
     }
     return litellm_params
