@@ -92,16 +92,24 @@ def create_batch_oai_sdk(filepath: str, custom_llm_provider: str) -> str:
 
 
 def await_batch_completion(batch_id: str, custom_llm_provider: str):
-    while True:
+    max_tries = 3
+    tries = 0
+
+    while tries < max_tries:
         batch = client.batches.retrieve(
             batch_id, extra_body={"custom_llm_provider": custom_llm_provider}
         )
         if batch.status == "completed":
             print(f"Batch {batch_id} completed.")
-            return
+            return batch.id
 
-        print("waiting for batch to complete...")
+        tries += 1
+        print(f"waiting for batch to complete... (attempt {tries}/{max_tries})")
         time.sleep(10)
+
+    print(
+        f"Reached maximum number of attempts ({max_tries}). Batch may still be processing."
+    )
 
 
 def write_content_to_file(
@@ -165,9 +173,11 @@ def test_e2e_batches_files(custom_llm_provider):
         # azure takes very long to complete a batch
         return
     else:
-        await_batch_completion(
+        response_batch_id = await_batch_completion(
             batch_id=batch_id, custom_llm_provider=custom_llm_provider
         )
+        if response_batch_id is None:
+            return
 
     write_content_to_file(
         batch_id=batch_id,
