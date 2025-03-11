@@ -2,6 +2,7 @@ import types
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Optional
 
+from litellm.types.llms.openai import ResponsesAPIRequestParams
 from litellm.types.utils import ModelInfo
 
 from ..chat.transformation import BaseLLMException
@@ -44,11 +45,11 @@ class BaseResponsesAPIConfig(ABC):
     @abstractmethod
     def map_openai_params(
         self,
-        non_default_params: dict,
         optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> ResponsesAPIRequestParams:
+
         pass
 
     @abstractmethod

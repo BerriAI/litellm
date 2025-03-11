@@ -1,6 +1,7 @@
 from os import PathLike
 from typing import IO, Any, Iterable, List, Literal, Mapping, Optional, Tuple, Union
 
+import httpx
 from openai._legacy_response import (
     HttpxBinaryResponseContent as _HttpxBinaryResponseContent,
 )
@@ -692,3 +693,30 @@ OpenAIAudioTranscriptionOptionalParams = Literal[
 
 
 OpenAIImageVariationOptionalParams = Literal["n", "size", "response_format", "user"]
+
+
+class ResponsesAPIRequestParams(TypedDict, total=False):
+    """TypedDict for parameters supported by the responses API."""
+
+    input: Union[str, ResponseInputParam]
+    model: str
+    include: Optional[List[ResponseIncludable]]
+    instructions: Optional[str]
+    max_output_tokens: Optional[int]
+    metadata: Optional[Dict[str, Any]]
+    parallel_tool_calls: Optional[bool]
+    previous_response_id: Optional[str]
+    reasoning: Optional[Reasoning]
+    store: Optional[bool]
+    stream: Optional[bool]
+    temperature: Optional[float]
+    text: Optional[ResponseTextConfigParam]
+    tool_choice: Optional[ToolChoice]
+    tools: Optional[Iterable[ToolParam]]
+    top_p: Optional[float]
+    truncation: Optional[Literal["auto", "disabled"]]
+    user: Optional[str]
+    extra_headers: Optional[Dict[str, Any]]
+    extra_query: Optional[Dict[str, Any]]
+    extra_body: Optional[Dict[str, Any]]
+    timeout: Optional[Union[float, httpx.Timeout]]
