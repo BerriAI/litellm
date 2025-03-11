@@ -2054,6 +2054,7 @@ class ProxyErrorTypes(str, enum.Enum):
     budget_exceeded = "budget_exceeded"
     key_model_access_denied = "key_model_access_denied"
     team_model_access_denied = "team_model_access_denied"
+    user_model_access_denied = "user_model_access_denied"
     expired_key = "expired_key"
     auth_error = "auth_error"
     internal_server_error = "internal_server_error"
@@ -2061,6 +2062,20 @@ class ProxyErrorTypes(str, enum.Enum):
     not_found_error = "not_found_error"
     validation_error = "bad_request_error"
     cache_ping_error = "cache_ping_error"
+
+    @classmethod
+    def get_model_access_error_type_for_object(
+        cls, object_type: Literal["key", "user", "team"]
+    ) -> "ProxyErrorTypes":
+        """
+        Get the model access error type for object_type
+        """
+        if object_type == "key":
+            return cls.key_model_access_denied
+        elif object_type == "team":
+            return cls.team_model_access_denied
+        elif object_type == "user":
+            return cls.user_model_access_denied
 
 
 DB_CONNECTION_ERROR_TYPES = (httpx.ConnectError, httpx.ReadError, httpx.ReadTimeout)
