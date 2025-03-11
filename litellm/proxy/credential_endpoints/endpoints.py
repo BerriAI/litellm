@@ -12,10 +12,20 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
 from litellm.types.utils import CredentialItem
 
 router = APIRouter()
+
+
+def encrypt_credential_values(credential: CredentialItem) -> CredentialItem:
+    """Encrypt values in credential.credential_values and add to DB"""
+    encrypted_credential_values = {}
+    for key, value in credential.credential_values.items():
+        encrypted_credential_values[key] = encrypt_value_helper(value)
+    credential.credential_values = encrypted_credential_values
+    return credential
 
 
 @router.post(
@@ -42,6 +52,7 @@ async def create_credential(
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
 
+        credential = encrypt_credential_values(credential)
         credentials_dict = credential.model_dump()
         credentials_dict_jsonified = jsonify_object(credentials_dict)
         await prisma_client.db.litellm_credentialstable.create(
