@@ -51,9 +51,9 @@ spec:
           {{- with .Values.volumeMounts }}
           volumeMounts:
             {{- toYaml . | nindent 12 }}
+          {{- end }}
           resources:
             {{- toYaml .Values.migrationJob.resources | nindent 12 }}
-          {{- end }}
       {{- with .Values.volumes }}
       volumes:
         {{- toYaml . | nindent 8 }}
