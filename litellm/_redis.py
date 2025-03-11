@@ -183,7 +183,7 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
             )
 
     verbose_logger.debug(
-        "init_redis_cluster: startup nodes: ", redis_kwargs["startup_nodes"]
+        "init_redis_cluster: startup nodes are being initialized."
     )
     from redis.cluster import ClusterNode
 
@@ -266,7 +266,9 @@ def get_redis_client(**env_overrides):
     return redis.Redis(**redis_kwargs)
 
 
-def get_redis_async_client(**env_overrides) -> async_redis.Redis:
+def get_redis_async_client(
+    **env_overrides,
+) -> async_redis.Redis:
     redis_kwargs = _get_redis_client_logic(**env_overrides)
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         args = _get_redis_url_kwargs(client=async_redis.Redis.from_url)
