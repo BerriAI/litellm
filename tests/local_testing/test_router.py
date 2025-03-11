@@ -194,6 +194,9 @@ def test_router_specific_model_via_id():
     router.completion(model="1234", messages=[{"role": "user", "content": "Hey!"}])
 
 
+@pytest.mark.skip(
+    reason="Router no longer creates clients, this is delegated to the provider integration."
+)
 def test_router_azure_ai_client_init():
 
     _deployment = {
@@ -219,6 +222,9 @@ def test_router_azure_ai_client_init():
     assert not isinstance(_client, AsyncAzureOpenAI)
 
 
+@pytest.mark.skip(
+    reason="Router no longer creates clients, this is delegated to the provider integration."
+)
 def test_router_azure_ad_token_provider():
     _deployment = {
         "model_name": "gpt-4o_2024-05-13",
@@ -247,8 +253,10 @@ def test_router_azure_ad_token_provider():
         assert isinstance(_client, AsyncAzureOpenAI)
         assert _client._azure_ad_token_provider is not None
         assert isinstance(_client._azure_ad_token_provider.__closure__, tuple)
-        assert isinstance(_client._azure_ad_token_provider.__closure__[0].cell_contents._credential,
-                        getattr(identity, os.environ["AZURE_CREDENTIAL"]))
+        assert isinstance(
+            _client._azure_ad_token_provider.__closure__[0].cell_contents._credential,
+            getattr(identity, os.environ["AZURE_CREDENTIAL"]),
+        )
 
 
 def test_router_sensitive_keys():
