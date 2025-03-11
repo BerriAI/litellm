@@ -6,12 +6,13 @@ import asyncio
 import traceback
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 import litellm
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
 from litellm.types.utils import CredentialItem
 
 router = APIRouter()
@@ -28,11 +29,33 @@ async def create_credential(
     credential: CredentialItem,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Stores credential in DB.
+    Reloads credentials in memory.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
     try:
-        litellm.credential_list.append(credential)
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+
+        credentials_dict = credential.model_dump()
+        credentials_dict_jsonified = jsonify_object(credentials_dict)
+        await prisma_client.db.litellm_credentialstable.create(
+            data={
+                **credentials_dict_jsonified,
+                "created_by": user_api_key_dict.user_id,
+                "updated_by": user_api_key_dict.user_id,
+            }
+        )
+
         return {"success": True, "message": "Credential created successfully"}
     except Exception as e:
-        return handle_exception_on_proxy(e)
+        verbose_proxy_logger.exception(e)
+        raise handle_exception_on_proxy(e)
 
 
 @router.get(
