@@ -35,7 +35,9 @@ def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
 
 
 def _get_spend_logs_metadata(
-    metadata: Optional[dict], applied_guardrails: Optional[List[str]] = None
+    metadata: Optional[dict],
+    applied_guardrails: Optional[List[str]] = None,
+    batch_models: Optional[List[str]] = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -52,6 +54,7 @@ def _get_spend_logs_metadata(
             status=None or "success",
             error_information=None,
             proxy_server_request=None,
+            batch_models=None,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -67,7 +70,7 @@ def _get_spend_logs_metadata(
         }
     )
     clean_metadata["applied_guardrails"] = applied_guardrails
-
+    clean_metadata["batch_models"] = batch_models
     return clean_metadata
 
 
@@ -189,6 +192,11 @@ def get_logging_payload(  # noqa: PLR0915
         metadata,
         applied_guardrails=(
             standard_logging_payload["metadata"].get("applied_guardrails", None)
+            if standard_logging_payload is not None
+            else None
+        ),
+        batch_models=(
+            standard_logging_payload.get("hidden_params", {}).get("batch_models", None)
             if standard_logging_payload is not None
             else None
         ),
