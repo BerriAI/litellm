@@ -4,8 +4,9 @@ from typing import Dict
 from litellm.llms.vertex_ai.common_utils import (
     _convert_vertex_datetime_to_openai_datetime,
 )
-from litellm.types.llms.openai import Batch, BatchJobStatus, CreateBatchRequest
+from litellm.types.llms.openai import BatchJobStatus, CreateBatchRequest
 from litellm.types.llms.vertex_ai import *
+from litellm.types.utils import LiteLLMBatch
 
 
 class VertexAIBatchTransformation:
@@ -47,8 +48,8 @@ class VertexAIBatchTransformation:
     @classmethod
     def transform_vertex_ai_batch_response_to_openai_batch_response(
         cls, response: VertexBatchPredictionResponse
-    ) -> Batch:
-        return Batch(
+    ) -> LiteLLMBatch:
+        return LiteLLMBatch(
             id=cls._get_batch_id_from_vertex_ai_batch_response(response),
             completion_window="24hrs",
             created_at=_convert_vertex_datetime_to_openai_datetime(
