@@ -9,7 +9,7 @@ class OpenAILikeError(Exception):
         self.message = message
         self.request = request
         self.response = response
-        super().__init__(self.message)  # Call the base class constructor with the parameters it needs
+        super().__init__(message)  # Call the base class constructor with the parameters it needs
 
 
 class OpenAILikeBase:
