@@ -164,6 +164,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
+from litellm.proxy.credential_endpoints.endpoints import router as credential_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
 from litellm.proxy.guardrails.guardrail_endpoints import router as guardrails_router
@@ -8595,6 +8596,7 @@ app.include_router(router)
 app.include_router(batches_router)
 app.include_router(rerank_router)
 app.include_router(fine_tuning_router)
+app.include_router(credential_router)
 app.include_router(vertex_router)
 app.include_router(llm_passthrough_router)
 app.include_router(anthropic_router)
