@@ -146,7 +146,6 @@ from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
 from .llms.petals.completion import handler as petals_handler
 from .llms.predibase.chat.handler import PredibaseChatCompletion
 from .llms.replicate.chat.handler import completion as replicate_chat_completion
-from .llms.snowflake.completion.handler import SnowflakeChatCompletion
 from .llms.sagemaker.chat.handler import SagemakerChatHandler
 from .llms.sagemaker.completion.handler import SagemakerLLM
 from .llms.vertex_ai import vertex_ai_non_gemini
@@ -237,7 +236,6 @@ databricks_embedding = DatabricksEmbeddingHandler()
 base_llm_http_handler = BaseLLMHTTPHandler()
 base_llm_aiohttp_handler = BaseLLMAIOHTTPHandler()
 sagemaker_chat_completion = SagemakerChatHandler()
-snow_flake_chat_completion = SnowflakeChatCompletion()
 ####### COMPLETION ENDPOINTS ################
 
 
@@ -2977,27 +2975,37 @@ def completion(  # type: ignore # noqa: PLR0915
                 return response
             response = model_response
         elif custom_llm_provider == "snowflake" or model in litellm.snowflake_models: 
-            api_base = (
-                    api_base
-                    or f"""https://{get_secret("SNOWFLAKE_ACCOUNT_ID")}.snowflakecomputing.com/api/v2/cortex/inference:complete"""
-                    or get_secret("SNOWFLAKE_API_BASE")
-                ) 
-            response = snow_flake_chat_completion.completion(
-                model=model,
-                messages=messages,
-                api_base=api_base,
-                acompletion=acompletion,
-                custom_prompt_dict=litellm.custom_prompt_dict,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                encoding=encoding,
-                JWT=api_key,
-                logging_obj=logging,
-                headers=headers,
-            )
+            try:
+                client = HTTPHandler(timeout=timeout) if stream is False else None # Keep this here, otherwise, the httpx.client closes and streaming is impossible
+                response = base_llm_http_handler.completion(
+                    model=model,
+                    messages=messages,
+                    headers=headers,
+                    model_response=model_response,
+                    api_key=api_key,
+                    api_base=api_base,
+                    acompletion=acompletion,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    timeout=timeout,  # type: ignore
+                    client= client,
+                    custom_llm_provider=custom_llm_provider,
+                    encoding=encoding,
+                    stream=stream,
+                )   
+
+
+            except Exception as e:
+                ## LOGGING - log the original exception returned
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=str(e),
+                    additional_args={"headers": headers},
+                )
+                raise e
+            
         elif custom_llm_provider == "custom":
             url = litellm.api_base or api_base or ""
             if url is None or url == "":
