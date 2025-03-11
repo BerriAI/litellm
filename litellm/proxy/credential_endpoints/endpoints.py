@@ -3,6 +3,7 @@ CRUD endpoints for storing reusable credentials.
 """
 
 import asyncio
+import json
 import traceback
 from typing import Optional
 
@@ -116,12 +117,17 @@ async def delete_credential(
     credential_name: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    from litellm.proxy.proxy_server import prisma_client
+
     try:
-        litellm.credential_list = [
-            credential
-            for credential in litellm.credential_list
-            if credential.credential_name != credential_name
-        ]
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+        await prisma_client.db.litellm_credentialstable.delete(
+            where={"credential_name": credential_name}
+        )
         return {"success": True, "message": "Credential deleted successfully"}
     except Exception as e:
         return handle_exception_on_proxy(e)
@@ -139,11 +145,22 @@ async def update_credential(
     credential: CredentialItem,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    from litellm.proxy.proxy_server import prisma_client
+
     try:
-        for i, c in enumerate(litellm.credential_list):
-            if c.credential_name == credential_name:
-                litellm.credential_list[i] = credential
-                return {"success": True, "message": "Credential updated successfully"}
-        return {"success": False, "message": "Credential not found"}
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+        credential_object_jsonified = jsonify_object(credential.model_dump())
+        await prisma_client.db.litellm_credentialstable.update(
+            where={"credential_name": credential_name},
+            data={
+                **credential_object_jsonified,
+                "updated_by": user_api_key_dict.user_id,
+            },
+        )
+        return {"success": True, "message": "Credential updated successfully"}
     except Exception as e:
         return handle_exception_on_proxy(e)
