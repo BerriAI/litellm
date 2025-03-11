@@ -4544,6 +4544,8 @@ def image_generation(  # noqa: PLR0915
             **non_default_params,
         )
 
+        litellm_params_dict = get_litellm_params(**kwargs)
+
         logging: Logging = litellm_logging_obj
         logging.update_environment_variables(
             model=model,
@@ -4614,6 +4616,7 @@ def image_generation(  # noqa: PLR0915
                 aimg_generation=aimg_generation,
                 client=client,
                 headers=headers,
+                litellm_params=litellm_params_dict,
             )
         elif (
             custom_llm_provider == "openai"
