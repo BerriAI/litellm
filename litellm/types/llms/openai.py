@@ -32,6 +32,16 @@ from openai.types.chat.chat_completion_prediction_content_param import (
 )
 from openai.types.embedding import Embedding as OpenAIEmbedding
 from openai.types.fine_tuning.fine_tuning_job import FineTuningJob
+from openai.types.responses.response import (
+    IncompleteDetails,
+    Reasoning,
+    Response,
+    ResponseOutputItem,
+    ResponseTextConfig,
+    ResponseUsage,
+    Tool,
+    ToolChoice,
+)
 from openai.types.responses.response_create_params import (
     Reasoning,
     ResponseIncludable,
@@ -725,3 +735,28 @@ class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
 
     input: Union[str, ResponseInputParam]
     model: str
+
+
+class ResponsesAPIResponse(TypedDict, total=False):
+    id: str
+    created_at: float
+    error: Optional[dict]
+    incomplete_details: Optional[IncompleteDetails]
+    instructions: Optional[str]
+    metadata: Optional[Dict]
+    model: Optional[str]
+    object: Optional[str]
+    output: List[ResponseOutputItem]
+    parallel_tool_calls: bool
+    temperature: Optional[float]
+    tool_choice: ToolChoice
+    tools: List[Tool]
+    top_p: Optional[float]
+    max_output_tokens: Optional[int]
+    previous_response_id: Optional[str]
+    reasoning: Optional[Reasoning]
+    status: Optional[str]
+    text: Optional[ResponseTextConfig]
+    truncation: Optional[Literal["auto", "disabled"]]
+    usage: Optional[ResponseUsage]
+    user: Optional[str]
