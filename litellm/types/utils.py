@@ -2011,3 +2011,9 @@ class RawRequestTypedDict(TypedDict, total=False):
     raw_request_body: Optional[dict]
     raw_request_headers: Optional[dict]
     error: Optional[str]
+
+
+class CredentialItem(BaseModel):
+    credential_name: str
+    credential_values: dict
+    credential_info: dict
