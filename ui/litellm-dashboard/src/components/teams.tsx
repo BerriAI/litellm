@@ -285,6 +285,7 @@ const Teams: React.FC<TeamProps> = ({
         }
         console.log(`response for team create call: ${response}`);
         message.success("Team created");
+        form.resetFields();
         setIsTeamModalVisible(false);
       }
     } catch (error) {
@@ -613,14 +614,35 @@ const Teams: React.FC<TeamProps> = ({
                   <TextInput placeholder="" />
                 </Form.Item>
                 <Form.Item
-                  label="Organization"
+                  label={
+                    <span>
+                      Organization{' '}
+                      <Tooltip title={
+                        <span>
+                          Organizations can have multiple teams. Learn more about{' '}
+                          <a 
+                            href="https://docs.litellm.ai/docs/proxy/user_management_heirarchy"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ color: '#1890ff', textDecoration: 'underline' }}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            user management hierarchy
+                          </a>
+                        </span>
+                      }>
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </span>
+                  }
                   name="organization_id"
                   initialValue={currentOrg ? currentOrg.organization_id : null}
                   className="mt-8"
                 >
                   <Select2
                     showSearch
-                    placeholder="Search or select a team"
+                    allowClear
+                    placeholder="Search or select an Organization"
                     onChange={(value) => {
                       form.setFieldValue('organization_id', value);
                       setCurrentOrgForCreateTeam(organizations?.find((org) => org.organization_id === value) || null);

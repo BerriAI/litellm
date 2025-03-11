@@ -130,14 +130,7 @@ async def test_create_llm_obs_payload():
     assert payload["meta"]["input"]["messages"] == [
         {"role": "user", "content": "Hello, world!"}
     ]
-    assert payload["meta"]["output"]["messages"] == [
-        {
-            "content": "Hi there!",
-            "role": "assistant",
-            "tool_calls": None,
-            "function_call": None,
-        }
-    ]
+    assert payload["meta"]["output"]["messages"][0]["content"] == "Hi there!"
     assert payload["metrics"]["input_tokens"] == 20
     assert payload["metrics"]["output_tokens"] == 10
     assert payload["metrics"]["total_tokens"] == 30

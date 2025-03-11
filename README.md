@@ -40,7 +40,7 @@ LiteLLM manages:
 [**Jump to LiteLLM Proxy (LLM Gateway) Docs**](https://github.com/BerriAI/litellm?tab=readme-ov-file#openai-proxy---docs) <br>
 [**Jump to Supported LLM Providers**](https://github.com/BerriAI/litellm?tab=readme-ov-file#supported-providers-docs)
 
-🚨 **Stable Release:** Use docker images with the `-stable` tag. These have undergone 12 hour load tests, before being published. 
+🚨 **Stable Release:** Use docker images with the `-stable` tag. These have undergone 12 hour load tests, before being published. [More information about the release cycle here](https://docs.litellm.ai/docs/proxy/release_cycle)
 
 Support for more providers. Missing a provider or LLM Platform, raise a [feature request](https://github.com/BerriAI/litellm/issues/new?assignees=&labels=enhancement&projects=&template=feature_request.yml&title=%5BFeature%5D%3A+).
 
@@ -340,71 +340,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 
 ## Contributing
 
-To contribute: Clone the repo locally -> Make a change -> Submit a PR with the change.
-
-Here's how to modify the repo locally:
-
-Step 1: Clone the repo
-
-```
-git clone https://github.com/BerriAI/litellm.git
-```
-
-Step 2: Install dependencies:
-
-```
-pip install -r requirements.txt
-```
-
-Step 3: Test your change:
-
-a. Add a pytest test within `tests/litellm/`
-
-This folder follows the same directory structure as `litellm/`.
-
-If a corresponding test file does not exist, create one.
-
-b. Run the test
-
-```
-cd tests/litellm # pwd: Documents/litellm/litellm/tests/litellm
-pytest /path/to/test_file.py
-```
-
-Step 4: Submit a PR with your changes! 🚀
-
-- push your fork to your GitHub repo
-- submit a PR from there
-
-### Building LiteLLM Docker Image 
-
-Follow these instructions if you want to build / run the LiteLLM Docker Image yourself.
-
-Step 1: Clone the repo
-
-```
-git clone https://github.com/BerriAI/litellm.git
-```
-
-Step 2: Build the Docker Image
-
-Build using Dockerfile.non_root
-```
-docker build -f docker/Dockerfile.non_root -t litellm_test_image .
-```
-
-Step 3: Run the Docker Image
-
-Make sure config.yaml is present in the root directory. This is your litellm proxy config file.
-```
-docker run \
-    -v $(pwd)/proxy_config.yaml:/app/config.yaml \
-    -e DATABASE_URL="postgresql://xxxxxxxx" \
-    -e LITELLM_MASTER_KEY="sk-1234" \
-    -p 4000:4000 \
-    litellm_test_image \
-    --config /app/config.yaml --detailed_debug
-```
+Interested in contributing? Contributions to LiteLLM Python SDK, Proxy Server, and contributing LLM integrations are both accepted and highly encouraged! [See our Contribution Guide for more details](https://docs.litellm.ai/docs/extras/contributing_code)
 
 # Enterprise
 For companies that need better security, user management and professional support
