@@ -21,7 +21,7 @@ import {
   ExperimentOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
-import { old_admin_roles, v2_admin_role_names, all_admin_roles, rolesAllowedToSeeUsage } from '../utils/roles';
+import { old_admin_roles, v2_admin_role_names, all_admin_roles, rolesAllowedToSeeUsage, rolesWithWriteAccess } from '../utils/roles';
 
 const { Sider } = Layout;
 
@@ -45,7 +45,7 @@ interface MenuItem {
 // Note: If a menu item does not have a role, it is visible to all roles.
 const menuItems: MenuItem[] = [
   { key: "1", page: "api-keys", label: "Virtual Keys", icon: <KeyOutlined /> },
-  { key: "3", page: "llm-playground", label: "Test Key", icon: <PlayCircleOutlined /> },
+  { key: "3", page: "llm-playground", label: "Test Key", icon: <PlayCircleOutlined />, roles: rolesWithWriteAccess },
   { key: "2", page: "models", label: "Models", icon: <BlockOutlined />, roles: all_admin_roles },
   { key: "4", page: "usage", label: "Usage", icon: <BarChartOutlined /> },
   { key: "6", page: "teams", label: "Teams", icon: <TeamOutlined /> },
