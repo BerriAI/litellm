@@ -1,7 +1,11 @@
+import OpenAI from "openai";
 import React from "react";
 
 export enum Providers {
     OpenAI = "OpenAI",
+    OpenAI_Compatible = "OpenAI-Compatible Endpoints (Together AI, etc.)",
+    OpenAI_Text = "OpenAI Text Completion",
+    OpenAI_Text_Compatible = "OpenAI-Compatible Text Completion Models (Together AI, etc.)",
     Azure = "Azure",
     Azure_AI_Studio = "Azure AI Foundry (Studio)",
     Anthropic = "Anthropic",
@@ -11,7 +15,6 @@ export enum Providers {
     Groq = "Groq",
     MistralAI = "Mistral AI",
     Deepseek = "Deepseek",
-    OpenAI_Compatible = "OpenAI-Compatible Endpoints (Together AI, etc.)",
     Cohere = "Cohere",
     Databricks = "Databricks",
     Ollama = "Ollama",
@@ -28,6 +31,7 @@ export enum Providers {
   
 export const provider_map: Record<string, string> = {
     OpenAI: "openai",
+    OpenAI_Text: "text-completion-openai",
     Azure: "azure",
     Azure_AI_Studio: "azure_ai",
     Anthropic: "anthropic",
@@ -37,6 +41,7 @@ export const provider_map: Record<string, string> = {
     MistralAI: "mistral",
     Cohere: "cohere_chat",
     OpenAI_Compatible: "openai",
+    OpenAI_Text_Compatible: "text-completion-openai",
     Vertex_AI: "vertex_ai",
     Databricks: "databricks",
     xAI: "xai",
@@ -53,6 +58,9 @@ export const provider_map: Record<string, string> = {
 
 export const providerLogoMap: Record<string, string> = {
     [Providers.OpenAI]: "https://artificialanalysis.ai/img/logos/openai_small.svg",
+    [Providers.OpenAI_Text]: "https://artificialanalysis.ai/img/logos/openai_small.svg",
+    [Providers.OpenAI_Text_Compatible]: "https://artificialanalysis.ai/img/logos/openai_small.svg",
+    [Providers.OpenAI_Compatible]: "https://artificialanalysis.ai/img/logos/openai_small.svg",
     [Providers.Azure]: "https://upload.wikimedia.org/wikipedia/commons/a/a8/Microsoft_Azure_Logo.svg",
     [Providers.Azure_AI_Studio]: "https://upload.wikimedia.org/wikipedia/commons/a/a8/Microsoft_Azure_Logo.svg",
     [Providers.Anthropic]: "https://artificialanalysis.ai/img/logos/anthropic_small.svg",
@@ -61,7 +69,6 @@ export const providerLogoMap: Record<string, string> = {
     [Providers.Groq]: "https://artificialanalysis.ai/img/logos/groq_small.png",
     [Providers.MistralAI]: "https://artificialanalysis.ai/img/logos/mistral_small.png",
     [Providers.Cohere]: "https://artificialanalysis.ai/img/logos/cohere_small.png",
-    [Providers.OpenAI_Compatible]: "https://upload.wikimedia.org/wikipedia/commons/4/4e/OpenAI_Logo.svg",
     [Providers.Vertex_AI]: "https://artificialanalysis.ai/img/logos/google_small.svg",
     [Providers.Databricks]: "https://artificialanalysis.ai/img/logos/databricks_small.png",
     [Providers.Ollama]: "https://artificialanalysis.ai/img/logos/ollama_small.svg",
