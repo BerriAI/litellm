@@ -342,6 +342,8 @@ class HuggingFaceEmbedding(BaseLLM):
             optional_params=optional_params,
             messages=[],
         )
+        task_type = optional_params.pop("input_type", None)
+        task = get_hf_task_embedding_for_model(model=model, task_type=task_type, api_base=HF_HUB_URL)
         # print_verbose(f"{model}, {task}")
         embed_url = ""
         if "https" in model:
@@ -353,7 +355,7 @@ class HuggingFaceEmbedding(BaseLLM):
         elif "HUGGINGFACE_API_BASE" in os.environ:
             embed_url = os.getenv("HUGGINGFACE_API_BASE", "")
         else:
-            embed_url = f"https://router.huggingface.co/hf-inference/models/{model}"
+            embed_url = f"https://router.huggingface.co/hf-inference/pipeline/{task}/{model}"
 
         ## ROUTING ##
         if aembedding is True:
