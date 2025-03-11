@@ -11,12 +11,14 @@ import litellm.types.utils
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
+from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     _get_httpx_client,
     get_async_httpx_client,
 )
+from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIRequestParams
 from litellm.types.rerank import OptionalRerankParams, RerankResponse
 from litellm.types.utils import EmbeddingResponse, FileTypes, TranscriptionResponse
 from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
@@ -951,6 +953,15 @@ class BaseLLMHTTPHandler:
             )
             return returned_response
         return model_response
+
+    async def async_response_api_handler(
+        self,
+        model: str,
+        input: Union[str, ResponseInputParam],
+        responses_api_provider_config: BaseResponsesAPIConfig,
+        responses_api_request_params: ResponsesAPIRequestParams,
+    ) -> Any:
+        pass
 
     def _handle_error(
         self, e: Exception, provider_config: Union[BaseConfig, BaseRerankConfig]
