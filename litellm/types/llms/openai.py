@@ -695,11 +695,9 @@ OpenAIAudioTranscriptionOptionalParams = Literal[
 OpenAIImageVariationOptionalParams = Literal["n", "size", "response_format", "user"]
 
 
-class ResponsesAPIRequestParams(TypedDict, total=False):
-    """TypedDict for parameters supported by the responses API."""
+class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
+    """TypedDict for Optional parameters supported by the responses API."""
 
-    input: Union[str, ResponseInputParam]
-    model: str
     include: Optional[List[ResponseIncludable]]
     instructions: Optional[str]
     max_output_tokens: Optional[int]
@@ -720,3 +718,10 @@ class ResponsesAPIRequestParams(TypedDict, total=False):
     extra_query: Optional[Dict[str, Any]]
     extra_body: Optional[Dict[str, Any]]
     timeout: Optional[Union[float, httpx.Timeout]]
+
+
+class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
+    """TypedDict for request parameters supported by the responses API."""
+
+    input: Union[str, ResponseInputParam]
+    model: str
