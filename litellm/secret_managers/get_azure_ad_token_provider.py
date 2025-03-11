@@ -30,7 +30,7 @@ def get_azure_ad_token_provider() -> Callable[[], str]:
             client_secret=os.environ["AZURE_CLIENT_SECRET"],
             tenant_id=os.environ["AZURE_TENANT_ID"],
         )
-    if cred == "ManagedIdentityCredential":
+    elif cred == "ManagedIdentityCredential":
         credential = cred_cls(client_id=os.environ["AZURE_CLIENT_ID"])
     else:
         credential = cred_cls()
