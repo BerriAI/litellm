@@ -2,11 +2,6 @@
 CRUD endpoints for storing reusable credentials.
 """
 
-import asyncio
-import json
-import traceback
-from typing import Optional
-
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 import litellm
