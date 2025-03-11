@@ -5066,6 +5066,7 @@ def transcription(
             api_version=api_version,
             azure_ad_token=azure_ad_token,
             max_retries=max_retries,
+            litellm_params=litellm_params_dict,
         )
     elif (
         custom_llm_provider == "openai"

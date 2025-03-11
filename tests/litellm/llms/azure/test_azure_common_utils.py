@@ -220,7 +220,7 @@ def test_select_azure_base_url_called(setup_mocks):
         CallTypes.atext_completion,
         CallTypes.aembedding,
         # CallTypes.arerank,
-        # CallTypes.atranscription,
+        CallTypes.atranscription,
         CallTypes.aspeech,
         CallTypes.aimage_generation,
         # BATCHES ENDPOINTS
