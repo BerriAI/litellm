@@ -1029,7 +1029,7 @@ async def _can_object_call_model(
     if (len(filtered_models) == 0 and len(models) == 0) or "*" in filtered_models:
         all_model_access = True
 
-    if SpecialModelNames.all_proxy_models in filtered_models:
+    if SpecialModelNames.all_proxy_models.value in filtered_models:
         all_model_access = True
 
     if model is not None and model not in filtered_models and all_model_access is False:
