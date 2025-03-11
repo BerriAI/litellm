@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Literal
 
 ROUTER_MAX_FALLBACKS = 5
 DEFAULT_BATCH_SIZE = 512
@@ -120,6 +120,7 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "top_logprobs",
     "reasoning_effort",
     "extra_headers",
+    "thinking",
 ]
 
 openai_compatible_endpoints: List = [
@@ -319,6 +320,17 @@ baseten_models: List = [
     "31dxrj3",
 ]  # FALCON 7B  # WizardLM  # Mosaic ML
 
+BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
+    "cohere",
+    "anthropic",
+    "mistral",
+    "amazon",
+    "meta",
+    "llama",
+    "ai21",
+    "nova",
+    "deepseek_r1",
+]
 
 open_ai_embedding_models: List = ["text-embedding-ada-002"]
 cohere_embedding_models: List = [
