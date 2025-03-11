@@ -1815,6 +1815,7 @@ all_litellm_params = [
     "budget_duration",
     "use_in_pass_through",
     "merge_reasoning_content_in_choices",
+    "litellm_credential_name",
 ] + list(StandardCallbackDynamicParams.__annotations__.keys())
 
 
