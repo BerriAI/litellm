@@ -3,6 +3,15 @@ import TabItem from '@theme/TabItem';
 
 
 # Snowflake
+| Property | Details |
+|-------|-------|
+| Description | The Snowflake Cortex LLM REST API lets you access the COMPLETE function via HTTP POST requests|
+| Provider Route on LiteLLM | `snowflake/` |
+| Link to Provider Doc | [Vertex AI ↗](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-llm-rest-api) |
+| Base URL | [https://{account-id}.snowflakecomputing.com/api/v2/cortex/inference:complete/](https://{account-id}.snowflakecomputing.com/api/v2/cortex/inference:complete) |
+| Supported Operations | `/completions`|
+
+
 
 Currently, Snowflake's REST API does not have an endpoint for `snowflake-arctic-embed` embedding models. If you want to use these embedding models with Litellm, you can call them through our Hugging Face provider. 
 
