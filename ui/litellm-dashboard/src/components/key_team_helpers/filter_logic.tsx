@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { KeyResponse } from "../key_team_helpers/key_list";
-import { Team, Organization } from "../networking";
+import { Organization } from "../networking";
+import { Team } from "../key_team_helpers/key_list";
 
 export interface FilterState {
   'Team ID': string;

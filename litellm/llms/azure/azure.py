@@ -540,10 +540,14 @@ class AzureChatCompletion(BaseLLM):
             status_code = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
             error_response = getattr(e, "response", None)
+            error_body = getattr(e, "body", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise AzureOpenAIError(
-                status_code=status_code, message=str(e), headers=error_headers
+                status_code=status_code,
+                message=str(e),
+                headers=error_headers,
+                body=error_body,
             )
 
     async def acompletion(
@@ -649,6 +653,7 @@ class AzureChatCompletion(BaseLLM):
             raise AzureOpenAIError(status_code=500, message=str(e))
         except Exception as e:
             message = getattr(e, "message", str(e))
+            body = getattr(e, "body", None)
             ## LOGGING
             logging_obj.post_call(
                 input=data["messages"],
@@ -659,7 +664,7 @@ class AzureChatCompletion(BaseLLM):
             if hasattr(e, "status_code"):
                 raise e
             else:
-                raise AzureOpenAIError(status_code=500, message=message)
+                raise AzureOpenAIError(status_code=500, message=message, body=body)
 
     def streaming(
         self,
@@ -805,10 +810,14 @@ class AzureChatCompletion(BaseLLM):
             error_headers = getattr(e, "headers", None)
             error_response = getattr(e, "response", None)
             message = getattr(e, "message", str(e))
+            error_body = getattr(e, "body", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise AzureOpenAIError(
-                status_code=status_code, message=message, headers=error_headers
+                status_code=status_code,
+                message=message,
+                headers=error_headers,
+                body=error_body,
             )
 
     async def aembedding(
