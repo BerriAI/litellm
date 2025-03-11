@@ -955,6 +955,7 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
+
             _timeout_debug_deployment_dict = deployment
             end_time = time.time()
             _duration = end_time - start_time
