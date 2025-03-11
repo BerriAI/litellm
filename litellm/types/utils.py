@@ -18,12 +18,10 @@ from openai.types.moderation import (
     CategoryScores,
 )
 from openai.types.moderation_create_response import Moderation, ModerationCreateResponse
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, Secret
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 import litellm
-
-SecretDict = Secret[dict]
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
 from .guardrails import GuardrailEventHooks
@@ -2018,5 +2016,5 @@ class RawRequestTypedDict(TypedDict, total=False):
 
 class CredentialItem(BaseModel):
     credential_name: str
-    credential_values: SecretDict
+    credential_values: dict
     credential_info: dict
