@@ -9,7 +9,7 @@ from typing import Any, Optional, List, Literal
 async def generate_key(
     session, models: Optional[List[str]] = None, team_id: Optional[str] = None
 ):
-    """Helper function to generate a key with specific model access"""
+    """Helper function to generate a key with specific model access controls"""
     url = "http://0.0.0.0:4000/key/generate"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {}
