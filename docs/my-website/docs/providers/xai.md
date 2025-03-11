@@ -1,13 +1,13 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# XAI
+# xAI
 
 https://docs.x.ai/docs
 
 :::tip
 
-**We support ALL XAI models, just set `model=xai/<any-model-on-xai>` as a prefix when sending litellm requests**
+**We support ALL xAI models, just set `model=xai/<any-model-on-xai>` as a prefix when sending litellm requests**
 
 :::
 

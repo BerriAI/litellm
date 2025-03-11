@@ -384,3 +384,37 @@ def test_router_get_model_access_groups(potential_access_group, expected_result)
         model_access_group=potential_access_group
     )
     assert access_groups == expected_result
+
+
+def test_router_redis_cache():
+    router = Router(
+        model_list=[{"model_name": "gemini/*", "litellm_params": {"model": "gemini/*"}}]
+    )
+
+    redis_cache = MagicMock()
+
+    router._update_redis_cache(cache=redis_cache)
+
+    assert router.cache.redis_cache == redis_cache
+
+
+def test_router_handle_clientside_credential():
+    deployment = {
+        "model_name": "gemini/*",
+        "litellm_params": {"model": "gemini/*"},
+        "model_info": {
+            "id": "1",
+        },
+    }
+    router = Router(model_list=[deployment])
+
+    new_deployment = router._handle_clientside_credential(
+        deployment=deployment,
+        kwargs={
+            "api_key": "123",
+            "metadata": {"model_group": "gemini/gemini-1.5-flash"},
+        },
+    )
+
+    assert new_deployment.litellm_params.api_key == "123"
+    assert len(router.get_model_list()) == 2

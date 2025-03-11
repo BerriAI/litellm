@@ -10,7 +10,7 @@ import {
   InputNumber,
   Select as Select2,
 } from "antd";
-import { Button as Button2, Text, TextInput, SelectItem } from "@tremor/react";
+import { Button as Button2, Text, TextInput, SelectItem, Accordion, AccordionHeader, AccordionBody, Title, } from "@tremor/react";
 import OnboardingModal from "./onboarding_link";
 import { InvitationLink } from "./onboarding_link";
 import {
@@ -19,13 +19,19 @@ import {
   invitationCreateCall,
   getProxyUISettings,
 } from "./networking";
+import BulkCreateUsers from "./bulk_create_users_button";
 const { Option } = Select;
+import { Tooltip } from "antd";
+import { InfoCircleOutlined } from '@ant-design/icons';
+import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 
 interface CreateuserProps {
   userID: string;
   accessToken: string;
   teams: any[] | null;
   possibleUIRoles: null | Record<string, Record<string, string>>;
+  onUserCreated?: (userId: string) => void;
+  isEmbedded?: boolean;
 }
 
 // Define an interface for the UI settings
@@ -41,6 +47,8 @@ const Createuser: React.FC<CreateuserProps> = ({
   accessToken,
   teams,
   possibleUIRoles,
+  onUserCreated,
+  isEmbedded = false,
 }) => {
   const [uiSettings, setUISettings] = useState<UISettings | null>(null);
   const [form] = Form.useForm();
@@ -109,15 +117,28 @@ const Createuser: React.FC<CreateuserProps> = ({
     form.resetFields();
   };
 
-  const handleCreate = async (formValues: { user_id: string }) => {
+  const handleCreate = async (formValues: { user_id: string, models?: string[] }) => {
     try {
       message.info("Making API Call");
-      setIsModalVisible(true);
+      if (!isEmbedded) {
+        setIsModalVisible(true);
+      }
+      if (!formValues.models || formValues.models.length === 0) {
+        // If models is empty or undefined, set it to "no-default-models"
+        formValues.models = ["no-default-models"];
+      }
       console.log("formValues in create user:", formValues);
       const response = await userCreateCall(accessToken, null, formValues);
       console.log("user create Response:", response);
       setApiuser(response["key"]);
       const user_id = response.data?.user_id || response.user_id;
+
+      // Call the callback if provided (for embedded mode)
+      if (onUserCreated && isEmbedded) {
+        onUserCreated(user_id);
+        form.resetFields();
+        return; // Skip the invitation flow when embedded
+      }
 
       // only do invite link flow if sso is not enabled
       if (!uiSettings?.SSO_ENABLED) {
@@ -148,16 +169,84 @@ const Createuser: React.FC<CreateuserProps> = ({
       message.success("API user Created");
       form.resetFields();
       localStorage.removeItem("userData" + userID);
-    } catch (error) {
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.detail || error?.message || "Error creating the user";
+      message.error(errorMessage);
       console.error("Error creating the user:", error);
     }
   };
 
+  // Modify the return statement to handle embedded mode
+  if (isEmbedded) {
+    return (
+      <Form
+        form={form}
+        onFinish={handleCreate}
+        labelCol={{ span: 8 }}
+        wrapperCol={{ span: 16 }}
+        labelAlign="left"
+      >
+        <Form.Item label="User Email" name="user_email">
+          <TextInput placeholder="" />
+        </Form.Item>
+        <Form.Item label="User Role" name="user_role">
+          <Select2>
+            {possibleUIRoles &&
+              Object.entries(possibleUIRoles).map(
+                ([role, { ui_label, description }]) => (
+                  <SelectItem key={role} value={role} title={ui_label}>
+                    <div className="flex">
+                      {ui_label}{" "}
+                      <p
+                        className="ml-2"
+                        style={{ color: "gray", fontSize: "12px" }}
+                      >
+                        {description}
+                      </p>
+                    </div>
+                  </SelectItem>
+                ),
+              )}
+          </Select2>
+        </Form.Item>
+        <Form.Item label="Team ID" name="team_id">
+          <Select placeholder="Select Team ID" style={{ width: "100%" }}>
+            {teams ? (
+              teams.map((team: any) => (
+                <Option key={team.team_id} value={team.team_id}>
+                  {team.team_alias}
+                </Option>
+              ))
+            ) : (
+              <Option key="default" value={null}>
+                Default Team
+              </Option>
+            )}
+          </Select>
+        </Form.Item>
+
+        <Form.Item label="Metadata" name="metadata">
+          <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
+        </Form.Item>
+        
+        <div style={{ textAlign: "right", marginTop: "10px" }}>
+          <Button htmlType="submit">Create User</Button>
+        </div>
+      </Form>
+    );
+  }
+
+  // Original return for standalone mode
   return (
-    <div>
+    <div className="flex gap-2">
       <Button2 className="mx-auto mb-0" onClick={() => setIsModalVisible(true)}>
         + Invite User
       </Button2>
+      <BulkCreateUsers 
+        accessToken={accessToken}
+        teams={teams}
+        possibleUIRoles={possibleUIRoles}
+      />
       <Modal
         title="Invite User"
         visible={isModalVisible}
@@ -177,7 +266,15 @@ const Createuser: React.FC<CreateuserProps> = ({
           <Form.Item label="User Email" name="user_email">
             <TextInput placeholder="" />
           </Form.Item>
-          <Form.Item label="User Role" name="user_role">
+          <Form.Item label={
+                  <span>
+                    Global Proxy Role{' '}
+                    <Tooltip title="This is the role that the user will globally on the proxy. This role is independent of any team/org specific roles.">
+                      <InfoCircleOutlined/>
+                    </Tooltip>
+                  </span>
+                } 
+              name="user_role">
             <Select2>
               {possibleUIRoles &&
                 Object.entries(possibleUIRoles).map(
@@ -197,7 +294,8 @@ const Createuser: React.FC<CreateuserProps> = ({
                 )}
             </Select2>
           </Form.Item>
-          <Form.Item label="Team ID" name="team_id">
+          
+          <Form.Item label="Team ID" className="gap-2" name="team_id" help="If selected, user will be added as a 'user' role to the team.">
             <Select placeholder="Select Team ID" style={{ width: "100%" }}>
               {teams ? (
                 teams.map((team: any) => (
@@ -216,6 +314,39 @@ const Createuser: React.FC<CreateuserProps> = ({
           <Form.Item label="Metadata" name="metadata">
             <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
           </Form.Item>
+          <Accordion>
+          <AccordionHeader>
+            <Title>Personal Key Creation</Title>
+          </AccordionHeader>
+          <AccordionBody>
+            <Form.Item className="gap-2" label={
+                <span>
+                  Models{' '}
+                  <Tooltip title="Models user has access to, outside of team scope.">
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              } name="models" help="Models user has access to, outside of team scope.">
+              <Select2
+                mode="multiple"
+                placeholder="Select models"
+                style={{ width: "100%" }}
+              >
+                <Select2.Option
+                  key="all-proxy-models"
+                  value="all-proxy-models"
+                >
+                  All Proxy Models
+                </Select2.Option>
+                {userModels.map((model) => (
+                  <Select2.Option key={model} value={model}>
+                    {getModelDisplayName(model)}
+                  </Select2.Option>
+                ))}
+              </Select2>
+            </Form.Item>
+          </AccordionBody>
+        </Accordion>
           <div style={{ textAlign: "right", marginTop: "10px" }}>
             <Button htmlType="submit">Create User</Button>
           </div>

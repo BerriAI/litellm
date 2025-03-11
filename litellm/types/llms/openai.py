@@ -357,6 +357,13 @@ class ChatCompletionCachedContent(TypedDict):
     type: Literal["ephemeral"]
 
 
+class ChatCompletionThinkingBlock(TypedDict, total=False):
+    type: Required[Literal["thinking"]]
+    thinking: str
+    signature: str
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+
+
 class OpenAIChatCompletionTextObject(TypedDict):
     type: Literal["text"]
     text: str
@@ -371,6 +378,7 @@ class ChatCompletionTextObject(
 class ChatCompletionImageUrlObject(TypedDict, total=False):
     url: Required[str]
     detail: str
+    format: str
 
 
 class ChatCompletionImageObject(TypedDict):
@@ -378,14 +386,44 @@ class ChatCompletionImageObject(TypedDict):
     image_url: Union[str, ChatCompletionImageUrlObject]
 
 
+class ChatCompletionVideoUrlObject(TypedDict, total=False):
+    url: Required[str]
+    detail: str
+
+
+class ChatCompletionVideoObject(TypedDict):
+    type: Literal["video_url"]
+    video_url: Union[str, ChatCompletionVideoUrlObject]
+
+
 class ChatCompletionAudioObject(ChatCompletionContentPartInputAudioParam):
     pass
+
+
+class DocumentObject(TypedDict):
+    type: Literal["text"]
+    media_type: str
+    data: str
+
+
+class CitationsObject(TypedDict):
+    enabled: bool
+
+
+class ChatCompletionDocumentObject(TypedDict):
+    type: Literal["document"]
+    source: DocumentObject
+    title: str
+    context: str
+    citations: Optional[CitationsObject]
 
 
 OpenAIMessageContentListBlock = Union[
     ChatCompletionTextObject,
     ChatCompletionImageObject,
     ChatCompletionAudioObject,
+    ChatCompletionDocumentObject,
+    ChatCompletionVideoObject,
 ]
 
 OpenAIMessageContent = Union[
@@ -413,7 +451,11 @@ class ChatCompletionUserMessage(OpenAIChatCompletionUserMessage, total=False):
 
 class OpenAIChatCompletionAssistantMessage(TypedDict, total=False):
     role: Required[Literal["assistant"]]
-    content: Optional[Union[str, Iterable[ChatCompletionTextObject]]]
+    content: Optional[
+        Union[
+            str, Iterable[Union[ChatCompletionTextObject, ChatCompletionThinkingBlock]]
+        ]
+    ]
     name: Optional[str]
     tool_calls: Optional[List[ChatCompletionAssistantToolCall]]
     function_call: Optional[ChatCompletionToolCallFunctionChunk]
@@ -421,6 +463,7 @@ class OpenAIChatCompletionAssistantMessage(TypedDict, total=False):
 
 class ChatCompletionAssistantMessage(OpenAIChatCompletionAssistantMessage, total=False):
     cache_control: ChatCompletionCachedContent
+    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]]
 
 
 class ChatCompletionToolMessage(TypedDict):
@@ -460,6 +503,8 @@ ValidUserMessageContentTypes = [
     "text",
     "image_url",
     "input_audio",
+    "document",
+    "video_url",
 ]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
 
 AllMessageValues = Union[
@@ -557,6 +602,9 @@ class ChatCompletionResponseMessage(TypedDict, total=False):
     tool_calls: Optional[List[ChatCompletionToolCallChunk]]
     role: Literal["assistant"]
     function_call: Optional[ChatCompletionToolCallFunctionChunk]
+    provider_specific_fields: Optional[dict]
+    reasoning_content: Optional[str]
+    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]]
 
 
 class ChatCompletionUsageBlock(TypedDict):
