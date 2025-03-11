@@ -28,6 +28,7 @@ from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
 from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
+from litellm.integrations.gcs_pubsub.pub_sub import GcsPubSubLogger
 from litellm.integrations.opik.opik import OpikLogger
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.integrations.mlflow import MlflowLogger
@@ -65,11 +66,13 @@ callback_class_str_to_classType = {
     # OTEL compatible loggers
     "logfire": OpenTelemetry,
     "arize": OpenTelemetry,
+    "arize_phoenix": OpenTelemetry,
     "langtrace": OpenTelemetry,
     "mlflow": MlflowLogger,
     "langfuse": LangfusePromptManagement,
     "otel": OpenTelemetry,
     "pagerduty": PagerDutyAlerting,
+    "gcs_pubsub": GcsPubSubLogger,
 }
 
 expected_env_vars = {
@@ -88,8 +91,11 @@ expected_env_vars = {
     "LOGFIRE_TOKEN": "logfire_token",
     "ARIZE_SPACE_KEY": "arize_space_key",
     "ARIZE_API_KEY": "arize_api_key",
+    "PHOENIX_API_KEY": "phoenix_api_key",
     "ARGILLA_API_KEY": "argilla_api_key",
     "PAGERDUTY_API_KEY": "pagerduty_api_key",
+    "GCS_PUBSUB_TOPIC_ID": "gcs_pubsub_topic_id",
+    "GCS_PUBSUB_PROJECT_ID": "gcs_pubsub_project_id",
 }
 
 

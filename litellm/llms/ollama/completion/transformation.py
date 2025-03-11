@@ -117,7 +117,7 @@ class OllamaConfig(BaseConfig):
         system: Optional[str] = None,
         template: Optional[str] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -353,7 +353,7 @@ class OllamaConfig(BaseConfig):
 
     def get_complete_url(
         self,
-        api_base: str,
+        api_base: Optional[str],
         model: str,
         optional_params: dict,
         stream: Optional[bool] = None,
@@ -365,6 +365,8 @@ class OllamaConfig(BaseConfig):
 
         Some providers need `model` in `api_base`
         """
+        if api_base is None:
+            api_base = "http://localhost:11434"
         if api_base.endswith("/api/generate"):
             url = api_base
         else:

@@ -8,7 +8,7 @@ Has all /sso/* routes
 import asyncio
 import os
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
@@ -17,6 +17,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAX_SPENDLOG_ROWS_TO_QUERY
 from litellm.proxy._types import (
+    LiteLLM_UserTable,
     LitellmUserRoles,
     Member,
     NewUserRequest,
@@ -27,6 +28,7 @@ from litellm.proxy._types import (
     TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_checks import get_user_object
 from litellm.proxy.auth.auth_utils import _has_user_setup_sso
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -368,7 +370,9 @@ async def create_team_member_add_task(team_id, user_info):
         )
 
 
-async def add_missing_team_member(user_info: NewUserResponse, sso_teams: List[str]):
+async def add_missing_team_member(
+    user_info: Union[NewUserResponse, LiteLLM_UserTable], sso_teams: List[str]
+):
     """
     - Get missing teams (diff b/w user_info.team_ids and sso_teams)
     - Add missing user to missing teams
@@ -414,7 +418,9 @@ async def auth_callback(request: Request):  # noqa: PLR0915
         master_key,
         premium_user,
         prisma_client,
+        proxy_logging_obj,
         ui_access_mode,
+        user_api_key_cache,
         user_custom_sso,
     )
 
@@ -557,20 +563,30 @@ async def auth_callback(request: Request):  # noqa: PLR0915
     user_role = None
     try:
         if prisma_client is not None:
-            user_info = await prisma_client.get_data(user_id=user_id, table_name="user")
+            try:
+                user_info = await get_user_object(
+                    user_id=user_id,
+                    user_email=user_email,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    user_id_upsert=False,
+                    parent_otel_span=None,
+                    proxy_logging_obj=proxy_logging_obj,
+                    sso_user_id=user_id,
+                )
+            except Exception as e:
+                verbose_proxy_logger.debug(f"Error getting user object: {e}")
+                user_info = None
+
             verbose_proxy_logger.debug(
                 f"user_info: {user_info}; litellm.default_internal_user_params: {litellm.default_internal_user_params}"
             )
-            if user_info is None:
-                ## check if user-email in db ##
-                user_info = await prisma_client.db.litellm_usertable.find_first(
-                    where={"user_email": user_email}
-                )
 
-            if user_info is not None and user_id is not None:
+            if user_info is not None:
+                user_id = user_info.user_id
                 user_defined_values = SSOUserDefinedValues(
                     models=getattr(user_info, "models", user_id_models),
-                    user_id=user_id,
+                    user_id=user_info.user_id,
                     user_email=getattr(user_info, "user_email", user_email),
                     user_role=getattr(user_info, "user_role", None),
                     max_budget=getattr(
@@ -588,6 +604,9 @@ async def auth_callback(request: Request):  # noqa: PLR0915
                     where={"user_email": user_email}, data={"user_id": user_id}  # type: ignore
                 )
             else:
+                verbose_proxy_logger.info(
+                    "user not in DB, inserting user into LiteLLM DB"
+                )
                 # user not in DB, insert User into LiteLLM DB
                 user_info = await insert_sso_user(
                     result_openid=result,
@@ -624,9 +643,6 @@ async def auth_callback(request: Request):  # noqa: PLR0915
     key = response["token"]  # type: ignore
     user_id = response["user_id"]  # type: ignore
 
-    # This should always be true
-    # User_id on SSO == user_id in the LiteLLM_VerificationToken Table
-    assert user_id == _user_id_from_sso
     litellm_dashboard_ui = "/ui/"
     user_role = user_role or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
     if (

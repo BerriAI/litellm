@@ -27,7 +27,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.proxy.auth.auth_checks import (
-    _team_model_access_check,
+    can_team_access_model,
     _virtual_key_soft_budget_check,
 )
 from litellm.proxy.utils import ProxyLogging
@@ -110,7 +110,10 @@ async def test_handle_failed_db_connection():
 
 @pytest.mark.parametrize(
     "model, expect_to_work",
-    [("openai/gpt-4o-mini", True), ("openai/gpt-4o", False)],
+    [
+        ("openai/gpt-4o-mini", True),
+        ("openai/gpt-4o", False),
+    ],
 )
 @pytest.mark.asyncio
 async def test_can_key_call_model(model, expect_to_work):
@@ -210,6 +213,82 @@ async def test_can_team_call_model(model, expect_to_work):
         assert model_in_access_group(**args)
     else:
         assert not model_in_access_group(**args)
+
+
+@pytest.mark.parametrize(
+    "key_models, model, expect_to_work",
+    [
+        (["openai/*"], "openai/gpt-4o", True),
+        (["openai/*"], "openai/gpt-4o-mini", True),
+        (["openai/*"], "openaiz/gpt-4o-mini", False),
+        (["bedrock/*"], "bedrock/anthropic.claude-3-5-sonnet-20240620", True),
+        (["bedrock/*"], "bedrockz/anthropic.claude-3-5-sonnet-20240620", False),
+        (["bedrock/us.*"], "bedrock/us.amazon.nova-micro-v1:0", True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_can_key_call_model_wildcard_access(key_models, model, expect_to_work):
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+    from fastapi import HTTPException
+
+    llm_model_list = [
+        {
+            "model_name": "openai/*",
+            "litellm_params": {
+                "model": "openai/*",
+                "api_key": "test-api-key",
+            },
+            "model_info": {
+                "id": "e6e7006f83029df40ebc02ddd068890253f4cd3092bcb203d3d8e6f6f606f30f",
+                "db_model": False,
+            },
+        },
+        {
+            "model_name": "bedrock/*",
+            "litellm_params": {
+                "model": "bedrock/*",
+                "api_key": "test-api-key",
+            },
+            "model_info": {
+                "id": "e6e7006f83029df40ebc02ddd068890253f4cd3092bcb203d3d8e6f6f606f30f",
+                "db_model": False,
+            },
+        },
+        {
+            "model_name": "openai/gpt-4o",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_key": "test-api-key",
+            },
+            "model_info": {
+                "id": "0cfcd87f2cb12a783a466888d05c6c89df66db23e01cecd75ec0b83aed73c9ad",
+                "db_model": False,
+            },
+        },
+    ]
+    router = litellm.Router(model_list=llm_model_list)
+
+    user_api_key_object = UserAPIKeyAuth(
+        models=key_models,
+    )
+
+    if expect_to_work:
+        await can_key_call_model(
+            model=model,
+            llm_model_list=llm_model_list,
+            valid_token=user_api_key_object,
+            llm_router=router,
+        )
+    else:
+        with pytest.raises(Exception) as e:
+            await can_key_call_model(
+                model=model,
+                llm_model_list=llm_model_list,
+                valid_token=user_api_key_object,
+                llm_router=router,
+            )
+
+            print(e)
 
 
 @pytest.mark.asyncio
@@ -348,9 +427,9 @@ async def test_virtual_key_max_budget_check(
     ],
 )
 @pytest.mark.asyncio
-async def test_team_model_access_check(model, team_models, expect_to_work):
+async def test_can_team_access_model(model, team_models, expect_to_work):
     """
-    Test cases for _team_model_access_check:
+    Test cases for can_team_access_model:
     1. Exact model match
     2. all-proxy-models access
     3. Wildcard (*) access
@@ -359,16 +438,16 @@ async def test_team_model_access_check(model, team_models, expect_to_work):
     6. Empty model list
     7. None model list
     """
-    team_object = LiteLLM_TeamTable(
-        team_id="test-team",
-        models=team_models,
-    )
-
     try:
-        _team_model_access_check(
+        team_object = LiteLLM_TeamTable(
+            team_id="test-team",
+            models=team_models,
+        )
+        result = await can_team_access_model(
             model=model,
             team_object=team_object,
             llm_router=None,
+            team_model_aliases=None,
         )
         if not expect_to_work:
             pytest.fail(
@@ -429,3 +508,201 @@ async def test_virtual_key_soft_budget_check(spend, soft_budget, expect_alert):
     assert (
         alert_triggered == expect_alert
     ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+
+
+@pytest.mark.asyncio
+async def test_can_user_call_model():
+    from litellm.proxy.auth.auth_checks import can_user_call_model
+    from litellm.proxy._types import ProxyException
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "anthropic-claude",
+                "litellm_params": {"model": "anthropic/anthropic-claude"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "test-api-key"},
+            },
+        ]
+    )
+
+    args = {
+        "model": "anthropic-claude",
+        "llm_router": router,
+        "user_object": LiteLLM_UserTable(
+            user_id="testuser21@mycompany.com",
+            max_budget=None,
+            spend=0.0042295,
+            model_max_budget={},
+            model_spend={},
+            user_email="testuser@mycompany.com",
+            models=["gpt-3.5-turbo"],
+        ),
+    }
+
+    with pytest.raises(ProxyException) as e:
+        await can_user_call_model(**args)
+
+    args["model"] = "gpt-3.5-turbo"
+    await can_user_call_model(**args)
+
+
+@pytest.mark.asyncio
+async def test_can_user_call_model_with_no_default_models():
+    from litellm.proxy.auth.auth_checks import can_user_call_model
+    from litellm.proxy._types import ProxyException, SpecialModelNames
+    from unittest.mock import MagicMock
+
+    args = {
+        "model": "anthropic-claude",
+        "llm_router": MagicMock(),
+        "user_object": LiteLLM_UserTable(
+            user_id="testuser21@mycompany.com",
+            max_budget=None,
+            spend=0.0042295,
+            model_max_budget={},
+            model_spend={},
+            user_email="testuser@mycompany.com",
+            models=[SpecialModelNames.no_default_models.value],
+        ),
+    }
+
+    with pytest.raises(ProxyException) as e:
+        await can_user_call_model(**args)
+
+
+@pytest.mark.asyncio
+async def test_get_fuzzy_user_object():
+    from litellm.proxy.auth.auth_checks import _get_fuzzy_user_object
+    from litellm.proxy.utils import PrismaClient
+    from unittest.mock import AsyncMock, MagicMock
+
+    # Setup mock Prisma client
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.litellm_usertable = MagicMock()
+
+    # Mock user data
+    test_user = LiteLLM_UserTable(
+        user_id="test_123",
+        sso_user_id="sso_123",
+        user_email="test@example.com",
+        organization_memberships=[],
+        max_budget=None,
+    )
+
+    # Test 1: Find user by SSO ID
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=test_user)
+    result = await _get_fuzzy_user_object(
+        prisma_client=mock_prisma, sso_user_id="sso_123", user_email="test@example.com"
+    )
+    assert result == test_user
+    mock_prisma.db.litellm_usertable.find_unique.assert_called_with(
+        where={"sso_user_id": "sso_123"}, include={"organization_memberships": True}
+    )
+
+    # Test 2: SSO ID not found, find by email
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=test_user)
+    mock_prisma.db.litellm_usertable.update = AsyncMock()
+
+    result = await _get_fuzzy_user_object(
+        prisma_client=mock_prisma,
+        sso_user_id="new_sso_456",
+        user_email="test@example.com",
+    )
+    assert result == test_user
+    mock_prisma.db.litellm_usertable.find_first.assert_called_with(
+        where={"user_email": "test@example.com"},
+        include={"organization_memberships": True},
+    )
+
+    # Test 3: Verify background SSO update task when user found by email
+    await asyncio.sleep(0.1)  # Allow time for background task
+    mock_prisma.db.litellm_usertable.update.assert_called_with(
+        where={"user_id": "test_123"}, data={"sso_user_id": "new_sso_456"}
+    )
+
+    # Test 4: User not found by either method
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+
+    result = await _get_fuzzy_user_object(
+        prisma_client=mock_prisma,
+        sso_user_id="unknown_sso",
+        user_email="unknown@example.com",
+    )
+    assert result is None
+
+    # Test 5: Only email provided (no SSO ID)
+    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=test_user)
+    result = await _get_fuzzy_user_object(
+        prisma_client=mock_prisma, user_email="test@example.com"
+    )
+    assert result == test_user
+    mock_prisma.db.litellm_usertable.find_first.assert_called_with(
+        where={"user_email": "test@example.com"},
+        include={"organization_memberships": True},
+    )
+
+    # Test 6: Only SSO ID provided (no email)
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=test_user)
+    result = await _get_fuzzy_user_object(
+        prisma_client=mock_prisma, sso_user_id="sso_123"
+    )
+    assert result == test_user
+    mock_prisma.db.litellm_usertable.find_unique.assert_called_with(
+        where={"sso_user_id": "sso_123"}, include={"organization_memberships": True}
+    )
+
+
+@pytest.mark.parametrize(
+    "model, alias_map, expect_to_work",
+    [
+        ("gpt-4", {"gpt-4": "gpt-4-team1"}, True),  # model matches alias value
+        ("gpt-5", {"gpt-4": "gpt-4-team1"}, False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_can_key_call_model_with_aliases(model, alias_map, expect_to_work):
+    """
+    Test if can_key_call_model correctly handles model aliases in the token
+    """
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    llm_model_list = [
+        {
+            "model_name": "gpt-4-team1",
+            "litellm_params": {
+                "model": "gpt-4",
+                "api_key": "test-api-key",
+            },
+        }
+    ]
+    router = litellm.Router(model_list=llm_model_list)
+
+    user_api_key_object = UserAPIKeyAuth(
+        models=[
+            "gpt-4-team1",
+        ],
+        team_model_aliases=alias_map,
+    )
+
+    if expect_to_work:
+        await can_key_call_model(
+            model=model,
+            llm_model_list=llm_model_list,
+            valid_token=user_api_key_object,
+            llm_router=router,
+        )
+    else:
+        with pytest.raises(Exception) as e:
+            await can_key_call_model(
+                model=model,
+                llm_model_list=llm_model_list,
+                valid_token=user_api_key_object,
+                llm_router=router,
+            )
