@@ -1994,8 +1994,8 @@
         "max_tokens": 8191,
         "max_input_tokens": 32000,
         "max_output_tokens": 8191,
-        "input_cost_per_token": 0.000001,
-        "output_cost_per_token": 0.000003,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0000003,
         "litellm_provider": "mistral",
         "supports_function_calling": true,
         "mode": "chat",
@@ -2006,8 +2006,8 @@
         "max_tokens": 8191,
         "max_input_tokens": 32000,
         "max_output_tokens": 8191,
-        "input_cost_per_token": 0.000001,
-        "output_cost_per_token": 0.000003,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0000003,
         "litellm_provider": "mistral",
         "supports_function_calling": true,
         "mode": "chat",
@@ -6057,26 +6057,6 @@
         "mode": "chat",
         "supports_tool_choice": true
     },
-    "jamba-large-1.6": {
-        "max_tokens": 256000,
-        "max_input_tokens": 256000,
-        "max_output_tokens": 256000,
-        "input_cost_per_token": 0.000002,
-        "output_cost_per_token": 0.000008,
-        "litellm_provider": "ai21",
-        "mode": "chat",
-        "supports_tool_choice": true
-    },
-    "jamba-mini-1.6": {
-        "max_tokens": 256000,
-        "max_input_tokens": 256000,
-        "max_output_tokens": 256000,
-        "input_cost_per_token": 0.0000002,
-        "output_cost_per_token": 0.0000004,
-        "litellm_provider": "ai21",
-        "mode": "chat",
-        "supports_tool_choice": true
-    },
     "jamba-1.5-mini": {
         "max_tokens": 256000,
         "max_input_tokens": 256000,
@@ -6093,6 +6073,26 @@
         "max_output_tokens": 256000,
         "input_cost_per_token": 0.000002,
         "output_cost_per_token": 0.000008,
+        "litellm_provider": "ai21",
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
+    "jamba-large-1.6": {
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000008,
+        "litellm_provider": "ai21",
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
+    "jamba-mini-1.6": {
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.0000004,
         "litellm_provider": "ai21",
         "mode": "chat",
         "supports_tool_choice": true
