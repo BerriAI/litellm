@@ -102,10 +102,7 @@ def test_model_prices_and_context_window_json_is_valid():
     with open("./model_prices_and_context_window.json", "r") as model_prices_file:
         actual_json = json.load(model_prices_file)
     assert isinstance(actual_json, dict)
-    temporarily_removed = actual_json.pop('sample_spec', None) # remove the sample, whose schema is inconsistent with the real data
+    actual_json.pop('sample_spec', None) # remove the sample, whose schema is inconsistent with the real data
 
     validate(actual_json, INTENDED_SCHEMA)
 
-    if temporarily_removed is not None:
-        # put back the sample spec that we removed
-        actual_json.update({'sample_spec': temporarily_removed})
