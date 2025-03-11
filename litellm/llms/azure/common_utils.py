@@ -12,7 +12,6 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
-from litellm.secret_managers.get_secret import get_secret
 from litellm.secret_managers.main import get_secret_str
 
 azure_ad_cache = DualCache()
@@ -202,7 +201,7 @@ def get_azure_ad_token_from_oidc(azure_ad_token: str):
             message="AZURE_CLIENT_ID and AZURE_TENANT_ID must be set",
         )
 
-    oidc_token = get_secret(azure_ad_token)
+    oidc_token = get_secret_str(azure_ad_token)
 
     if oidc_token is None:
         raise AzureOpenAIError(
@@ -262,6 +261,18 @@ def get_azure_ad_token_from_oidc(azure_ad_token: str):
     )
 
     return azure_ad_token_access_token
+
+
+def select_azure_base_url_or_endpoint(azure_client_params: dict):
+    azure_endpoint = azure_client_params.get("azure_endpoint", None)
+    if azure_endpoint is not None:
+        # see : https://github.com/openai/openai-python/blob/3d61ed42aba652b547029095a7eb269ad4e1e957/src/openai/lib/azure.py#L192
+        if "/openai/deployments" in azure_endpoint:
+            # this is base_url, not an azure_endpoint
+            azure_client_params["base_url"] = azure_endpoint
+            azure_client_params.pop("azure_endpoint")
+
+    return azure_client_params
 
 
 def initialize_azure_sdk_client(
@@ -324,8 +335,6 @@ def initialize_azure_sdk_client(
 
     if azure_ad_token_provider is not None:
         azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
-    from litellm.llms.azure.azure import select_azure_base_url_or_endpoint
-
     # this decides if we should set azure_endpoint or base_url on Azure OpenAI Client
     # required to support GPT-4 vision enhancements, since base_url needs to be set on Azure OpenAI Client
     azure_client_params = select_azure_base_url_or_endpoint(azure_client_params)
