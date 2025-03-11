@@ -1408,7 +1408,8 @@ class ModelResponseIterator:
         return self.chunk_parser(chunk=json_chunk)
 
     def handle_accumulated_json_chunk(self, chunk: str) -> GenericStreamingChunk:
-        message = chunk.replace("data:", "").replace("\n\n", "")
+        chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
+        message = chunk.replace("\n\n", "")
 
         # Accumulate JSON data
         self.accumulated_json += message
@@ -1431,7 +1432,7 @@ class ModelResponseIterator:
 
     def _common_chunk_parsing_logic(self, chunk: str) -> GenericStreamingChunk:
         try:
-            chunk = chunk.replace("data:", "")
+            chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
             if len(chunk) > 0:
                 """
                 Check if initial chunk valid json

@@ -23,10 +23,22 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
   console.log(`type of selectedProviderEnum: ${typeof selectedProviderEnum}`);
   return (
     <>
-      {selectedProviderEnum === Providers.OpenAI && (
-        <Form.Item label="OpenAI Organization ID" name="organization">
-          <TextInput placeholder="[OPTIONAL] my-unique-org" />
-        </Form.Item>
+      {selectedProviderEnum === Providers.OpenAI || selectedProviderEnum === Providers.OpenAI_Text && (
+        <>
+          <Form.Item
+            label="API Base"
+            name="api_base"
+          >
+            <Select placeholder="Select API Base" defaultValue="https://api.openai.com/v1">
+              <Select.Option value="https://api.openai.com/v1">https://api.openai.com/v1</Select.Option>
+              <Select.Option value="https://eu.api.openai.com">https://eu.api.openai.com</Select.Option>
+            </Select>
+          </Form.Item>
+          
+          <Form.Item label="OpenAI Organization ID" name="organization">
+            <TextInput placeholder="[OPTIONAL] my-unique-org" />
+          </Form.Item>
+        </>
       )}
 
       {selectedProviderEnum === Providers.Vertex_AI && (
@@ -87,7 +99,8 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
 
       {(selectedProviderEnum === Providers.Azure ||
         selectedProviderEnum === Providers.Azure_AI_Studio ||
-        selectedProviderEnum === Providers.OpenAI_Compatible
+        selectedProviderEnum === Providers.OpenAI_Compatible ||
+        selectedProviderEnum === Providers.OpenAI_Text_Compatible
       ) && (
         <Form.Item
           rules={[{ required: true, message: "Required" }]}
