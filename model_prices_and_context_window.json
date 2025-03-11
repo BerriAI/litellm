@@ -1587,13 +1587,23 @@
         "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 0.0,
-        "input_cost_per_token_cache_hit": 0.0,
-        "output_cost_per_token": 0.0,
+        "input_cost_per_token": 0.00000135,
+        "output_cost_per_token": 0.0000054,
         "litellm_provider": "azure_ai",
         "mode": "chat",
-        "supports_prompt_caching": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "source": "https://techcommunity.microsoft.com/blog/machinelearningblog/deepseek-r1-improved-performance-higher-limits-and-transparent-pricing/4386367"
+    },
+    "azure_ai/deepseek-v3": {
+        "max_tokens": 8192,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.00000114,
+        "output_cost_per_token": 0.00000456,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "supports_tool_choice": true,
+        "source": "https://techcommunity.microsoft.com/blog/machinelearningblog/announcing-deepseek-v3-on-azure-ai-foundry-and-github/4390438"
     },
     "azure_ai/jamba-instruct": {
         "max_tokens": 4096,
