@@ -89,7 +89,7 @@ class ModelResponseIterator:
             raise RuntimeError(f"Error receiving chunk from stream: {e}")
 
         try:
-            chunk = chunk.replace("data:", "")
+            chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
             chunk = chunk.strip()
             if len(chunk) > 0:
                 json_chunk = json.loads(chunk)
@@ -134,7 +134,7 @@ class ModelResponseIterator:
             raise RuntimeError(f"Error receiving chunk from stream: {e}")
 
         try:
-            chunk = chunk.replace("data:", "")
+            chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
             chunk = chunk.strip()
             if chunk == "[DONE]":
                 raise StopAsyncIteration

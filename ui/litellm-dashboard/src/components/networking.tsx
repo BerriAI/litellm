@@ -1806,8 +1806,7 @@ export const uiSpendLogsCall = async (
   end_date?: string,
   page?: number,
   page_size?: number,
-  min_spend?: number,
-  max_spend?: number,
+  user_id?: string,
 ) => {
   try {
     // Construct base URL
@@ -1817,13 +1816,12 @@ export const uiSpendLogsCall = async (
     const queryParams = new URLSearchParams();
     if (api_key) queryParams.append('api_key', api_key);
     if (team_id) queryParams.append('team_id', team_id);
-    if (min_spend) queryParams.append('min_spend', min_spend.toString());
-    if (max_spend) queryParams.append('max_spend', max_spend.toString());
     if (request_id) queryParams.append('request_id', request_id);
     if (start_date) queryParams.append('start_date', start_date);
     if (end_date) queryParams.append('end_date', end_date);
     if (page) queryParams.append('page', page.toString());
     if (page_size) queryParams.append('page_size', page_size.toString());
+    if (user_id) queryParams.append('user_id', user_id);
 
     // Append query parameters to URL if any exist
     const queryString = queryParams.toString();

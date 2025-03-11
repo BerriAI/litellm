@@ -20,7 +20,11 @@ from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionImageObject,
+    ChatCompletionImageUrlObject,
+)
 from litellm.types.utils import ModelResponse, ModelResponseStream
 from litellm.utils import convert_to_model_response_object
 
@@ -178,6 +182,27 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str
     ) -> List[AllMessageValues]:
+        """OpenAI no longer supports image_url as a string, so we need to convert it to a dict"""
+        for message in messages:
+            message_content = message.get("content")
+            if message_content and isinstance(message_content, list):
+                for content_item in message_content:
+                    if content_item.get("type") == "image_url":
+                        content_item = cast(ChatCompletionImageObject, content_item)
+                        if isinstance(content_item["image_url"], str):
+                            content_item["image_url"] = {
+                                "url": content_item["image_url"],
+                            }
+                        elif isinstance(content_item["image_url"], dict):
+                            litellm_specific_params = {"format"}
+                            new_image_url_obj = ChatCompletionImageUrlObject(
+                                **{  # type: ignore
+                                    k: v
+                                    for k, v in content_item["image_url"].items()
+                                    if k not in litellm_specific_params
+                                }
+                            )
+                            content_item["image_url"] = new_image_url_obj
         return messages
 
     def transform_request(
