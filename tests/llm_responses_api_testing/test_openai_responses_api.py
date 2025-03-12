@@ -503,3 +503,99 @@ async def test_openai_responses_api_streaming_validation(sync_mode):
     assert not missing_events, f"Missing required event types: {missing_events}"
 
     print(f"Successfully validated all event types: {event_types_seen}")
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_openai_responses_litellm_router(sync_mode):
+    """
+    Test the OpenAI responses API with LiteLLM Router in both sync and async modes
+    """
+    litellm._turn_on_debug()
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt4o-special-alias",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            }
+        ]
+    )
+
+    # Call the handler
+    if sync_mode:
+        response = router.responses(
+            model="gpt4o-special-alias",
+            input="Hello, can you tell me a short joke?",
+            max_output_tokens=100,
+        )
+        print("SYNC MODE RESPONSE=", response)
+    else:
+        response = await router.aresponses(
+            model="gpt4o-special-alias",
+            input="Hello, can you tell me a short joke?",
+            max_output_tokens=100,
+        )
+
+    print(
+        f"Router {'sync' if sync_mode else 'async'} response=",
+        json.dumps(response, indent=4, default=str),
+    )
+
+    # Use the helper function to validate the response
+    validate_responses_api_response(response, final_chunk=True)
+
+    return response
+
+
+# @pytest.mark.parametrize("sync_mode", [True, False])
+# @pytest.mark.asyncio
+# async def test_openai_responses_litellm_router_streaming(sync_mode):
+#     """
+#     Test the OpenAI responses API with streaming through LiteLLM Router
+#     """
+#     litellm._turn_on_debug()
+#     router = litellm.Router(
+#         model_list=[
+#             {
+#                 "model_name": "gpt4o-special-alias",
+#                 "litellm_params": {
+#                     "model": "gpt-4o",
+#                     "api_key": os.getenv("OPENAI_API_KEY"),
+#                 },
+#             }
+#         ]
+#     )
+
+#     event_types_seen = set()
+
+#     if sync_mode:
+#         response = router.responses(
+#             model="gpt4o-special-alias",
+#             input="Tell me about artificial intelligence in 2 sentences.",
+#             stream=True,
+#         )
+#         for event in response:
+#             print(f"Validating event type: {event.type}")
+#             validate_stream_event(event)
+#             event_types_seen.add(event.type)
+#     else:
+#         response = await router.aresponses(
+#             model="gpt4o-special-alias",
+#             input="Tell me about artificial intelligence in 2 sentences.",
+#             stream=True,
+#         )
+#         async for event in response:
+#             print(f"Validating event type: {event.type}")
+#             validate_stream_event(event)
+#             event_types_seen.add(event.type)
+
+#     # At minimum, we should see these core event types
+#     required_events = {"response.created", "response.completed"}
+
+#     missing_events = required_events - event_types_seen
+#     assert not missing_events, f"Missing required event types: {missing_events}"
+
+#     print(f"Successfully validated all event types: {event_types_seen}")

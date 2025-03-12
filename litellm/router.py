@@ -470,7 +470,7 @@ class Router:
         self.default_litellm_params = default_litellm_params
         self.default_litellm_params.setdefault("timeout", timeout)
         self.default_litellm_params.setdefault("max_retries", 0)
-        self.default_litellm_params.setdefault("metadata", {}).update(
+        self.default_litellm_params.setdefault("litellm_metadata", {}).update(
             {"caching_groups": caching_groups}
         )
 
@@ -581,13 +581,7 @@ class Router:
             self._initialize_alerting()
 
         self.initialize_assistants_endpoint()
-
-        self.amoderation = self.factory_function(
-            litellm.amoderation, call_type="moderation"
-        )
-        self.aanthropic_messages = self.factory_function(
-            litellm.anthropic_messages, call_type="anthropic_messages"
-        )
+        self.initialize_router_endpoints()
 
     def discard(self):
         """
@@ -652,6 +646,18 @@ class Router:
         self.a_add_message = self.factory_function(litellm.a_add_message)
         self.aget_messages = self.factory_function(litellm.aget_messages)
         self.arun_thread = self.factory_function(litellm.arun_thread)
+
+    def initialize_router_endpoints(self):
+        self.amoderation = self.factory_function(
+            litellm.amoderation, call_type="moderation"
+        )
+        self.aanthropic_messages = self.factory_function(
+            litellm.anthropic_messages, call_type="anthropic_messages"
+        )
+        self.aresponses = self.factory_function(
+            litellm.aresponses, call_type="aresponses"
+        )
+        self.responses = self.factory_function(litellm.responses, call_type="responses")
 
     def routing_strategy_init(
         self, routing_strategy: Union[RoutingStrategy, str], routing_strategy_args: dict
@@ -1077,7 +1083,7 @@ class Router:
         """
         kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
         kwargs.setdefault("litellm_trace_id", str(uuid.uuid4()))
-        kwargs.setdefault("metadata", {}).update({"model_group": model})
+        kwargs.setdefault("litellm_metadata", {}).update({"model_group": model})
 
     def _update_kwargs_with_default_litellm_params(self, kwargs: dict) -> None:
         """
@@ -1088,7 +1094,7 @@ class Router:
                 k not in kwargs and v is not None
             ):  # prioritize model-specific params > default router params
                 kwargs[k] = v
-            elif k == "metadata":
+            elif k == "litellm_metadata":
                 kwargs[k].update(v)
 
     def _handle_clientside_credential(
@@ -1102,7 +1108,7 @@ class Router:
         dynamic_litellm_params = get_dynamic_litellm_params(
             litellm_params=litellm_params, request_kwargs=kwargs
         )
-        metadata = kwargs.get("metadata", {})
+        metadata = kwargs.get("litellm_metadata", {})
         model_group = cast(str, metadata.get("model_group"))
         _model_id = self._generate_model_id(
             model_group=model_group, litellm_params=dynamic_litellm_params
@@ -1123,7 +1129,7 @@ class Router:
     def _update_kwargs_with_deployment(self, deployment: dict, kwargs: dict) -> None:
         """
         2 jobs:
-        - Adds selected deployment, model_info and api_base to kwargs["metadata"] (used for logging)
+        - Adds selected deployment, model_info and api_base to kwargs["litellm_metadata"] (used for logging)
         - Adds default litellm params to kwargs, if set.
         """
         model_info = deployment.get("model_info", {}).copy()
@@ -1137,7 +1143,7 @@ class Router:
             deployment_model_name = deployment_pydantic_obj.litellm_params.model
             deployment_api_base = deployment_pydantic_obj.litellm_params.api_base
 
-        kwargs.setdefault("metadata", {}).update(
+        kwargs.setdefault("litellm_metadata", {}).update(
             {
                 "deployment": deployment_model_name,
                 "model_info": model_info,
@@ -1685,7 +1691,7 @@ class Router:
             kwargs["prompt"] = prompt
             kwargs["original_function"] = self._image_generation
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            kwargs.setdefault("litellm_metadata", {}).update({"model_group": model})
             response = self.function_with_fallbacks(**kwargs)
 
             return response
@@ -1993,7 +1999,7 @@ class Router:
                     k not in kwargs
                 ):  # prioritize model-specific params > default router params
                     kwargs[k] = v
-                elif k == "metadata":
+                elif k == "litellm_metadata":
                     kwargs[k].update(v)
 
             potential_model_client = self._get_client(
@@ -2113,7 +2119,7 @@ class Router:
                     k not in kwargs
                 ):  # prioritize model-specific params > default router params
                     kwargs[k] = v
-                elif k == "metadata":
+                elif k == "litellm_metadata":
                     kwargs[k].update(v)
 
             return await litellm._arealtime(**{**data, "caching": self.cache_responses, **kwargs})  # type: ignore
@@ -2140,7 +2146,7 @@ class Router:
             kwargs["model"] = model
             kwargs["prompt"] = prompt
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            kwargs.setdefault("litellm_metadata", {}).update({"model_group": model})
 
             # pick the one that is available (lowest TPM/RPM)
             deployment = self.get_available_deployment(
@@ -2155,7 +2161,7 @@ class Router:
                     k not in kwargs
                 ):  # prioritize model-specific params > default router params
                     kwargs[k] = v
-                elif k == "metadata":
+                elif k == "litellm_metadata":
                     kwargs[k].update(v)
 
             # call via litellm.completion()
@@ -2284,7 +2290,7 @@ class Router:
             kwargs["adapter_id"] = adapter_id
             kwargs["original_function"] = self._aadapter_completion
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            kwargs.setdefault("litellm_metadata", {}).update({"model_group": model})
             response = await self.async_function_with_fallbacks(**kwargs)
 
             return response
@@ -2452,6 +2458,65 @@ class Router:
                 self.fail_calls[model] += 1
             raise e
 
+    def _generic_api_call_with_fallbacks(
+        self, model: str, original_function: Callable, **kwargs
+    ):
+        """
+        Make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router
+
+        Args:
+            model: The model to use
+            original_function: The handler function to call (e.g., litellm.completion)
+            **kwargs: Additional arguments to pass to the handler function
+
+        Returns:
+            The response from the handler function
+        """
+        handler_name = original_function.__name__
+        try:
+            verbose_router_logger.debug(
+                f"Inside _generic_api_call() - handler: {handler_name}, model: {model}; kwargs: {kwargs}"
+            )
+            deployment = self.get_available_deployment(
+                model=model,
+                messages=kwargs.get("messages", None),
+                specific_deployment=kwargs.pop("specific_deployment", None),
+            )
+            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+            data = deployment["litellm_params"].copy()
+            model_name = data["model"]
+
+            model_client = self._get_client(
+                deployment=deployment, kwargs=kwargs, client_type="sync"
+            )
+            self.total_calls[model_name] += 1
+
+            # Perform pre-call checks for routing strategy
+            self.routing_strategy_pre_call_checks(deployment=deployment)
+
+            response = original_function(
+                **{
+                    **data,
+                    "caching": self.cache_responses,
+                    "client": model_client,
+                    **kwargs,
+                }
+            )
+
+            self.success_calls[model_name] += 1
+            verbose_router_logger.info(
+                f"{handler_name}(model={model_name})\033[32m 200 OK\033[0m"
+            )
+            return response
+        except Exception as e:
+            verbose_router_logger.info(
+                f"{handler_name}(model={model})\033[31m Exception {str(e)}\033[0m"
+            )
+            if model is not None:
+                self.fail_calls[model] += 1
+            raise e
+
     def embedding(
         self,
         model: str,
@@ -2464,7 +2529,7 @@ class Router:
             kwargs["input"] = input
             kwargs["original_function"] = self._embedding
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            kwargs.setdefault("litellm_metadata", {}).update({"model_group": model})
             response = self.function_with_fallbacks(**kwargs)
             return response
         except Exception as e:
@@ -2973,14 +3038,42 @@ class Router:
         self,
         original_function: Callable,
         call_type: Literal[
-            "assistants", "moderation", "anthropic_messages"
+            "assistants",
+            "moderation",
+            "anthropic_messages",
+            "aresponses",
+            "responses",
         ] = "assistants",
     ):
-        async def new_function(
+        """
+        Creates appropriate wrapper functions for different API call types.
+
+        Returns:
+            - A synchronous function for synchronous call types
+            - An asynchronous function for asynchronous call types
+        """
+        # Handle synchronous call types
+        if call_type == "responses":
+
+            def sync_wrapper(
+                custom_llm_provider: Optional[
+                    Literal["openai", "azure", "anthropic"]
+                ] = None,
+                client: Optional[Any] = None,
+                **kwargs,
+            ):
+                return self._generic_api_call_with_fallbacks(
+                    original_function=original_function, **kwargs
+                )
+
+            return sync_wrapper
+
+        # Handle asynchronous call types
+        async def async_wrapper(
             custom_llm_provider: Optional[
                 Literal["openai", "azure", "anthropic"]
             ] = None,
-            client: Optional["AsyncOpenAI"] = None,
+            client: Optional[Any] = None,
             **kwargs,
         ):
             if call_type == "assistants":
@@ -2991,18 +3084,16 @@ class Router:
                     **kwargs,
                 )
             elif call_type == "moderation":
-
-                return await self._pass_through_moderation_endpoint_factory(  # type: ignore
-                    original_function=original_function,
-                    **kwargs,
+                return await self._pass_through_moderation_endpoint_factory(
+                    original_function=original_function, **kwargs
                 )
-            elif call_type == "anthropic_messages":
-                return await self._ageneric_api_call_with_fallbacks(  # type: ignore
+            elif call_type in ("anthropic_messages", "aresponses"):
+                return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
                     **kwargs,
                 )
 
-        return new_function
+        return async_wrapper
 
     async def _pass_through_assistants_endpoint_factory(
         self,
@@ -3313,7 +3404,7 @@ class Router:
         num_retries = kwargs.pop("num_retries")
 
         ## ADD MODEL GROUP SIZE TO METADATA - used for model_group_rate_limit_error tracking
-        _metadata: dict = kwargs.get("metadata") or {}
+        _metadata: dict = kwargs.get("litellm_metadata") or {}
         if "model_group" in _metadata and isinstance(_metadata["model_group"], str):
             model_list = self.get_model_list(model_name=_metadata["model_group"])
             if model_list is not None:
@@ -3652,10 +3743,10 @@ class Router:
             )
             if standard_logging_object is None:
                 raise ValueError("standard_logging_object is None")
-            if kwargs["litellm_params"].get("metadata") is None:
+            if kwargs["litellm_params"].get("litellm_metadata") is None:
                 pass
             else:
-                deployment_name = kwargs["litellm_params"]["metadata"].get(
+                deployment_name = kwargs["litellm_params"]["litellm_metadata"].get(
                     "deployment", None
                 )  # stable name - works for wildcard routes as well
                 model_group = standard_logging_object.get("model_group", None)
@@ -3733,10 +3824,12 @@ class Router:
         - None: if no key is found
         """
         id = None
-        if kwargs["litellm_params"].get("metadata") is None:
+        if kwargs["litellm_params"].get("litellm_metadata") is None:
             pass
         else:
-            model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
+            model_group = kwargs["litellm_params"]["litellm_metadata"].get(
+                "model_group", None
+            )
             model_info = kwargs["litellm_params"].get("model_info", {}) or {}
             id = model_info.get("id", None)
             if model_group is None or id is None:
@@ -3825,10 +3918,12 @@ class Router:
         """
         Update RPM usage for a deployment
         """
-        deployment_name = kwargs["litellm_params"]["metadata"].get(
+        deployment_name = kwargs["litellm_params"]["litellm_metadata"].get(
             "deployment", None
         )  # handles wildcard routes - by giving the original name sent to `litellm.completion`
-        model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
+        model_group = kwargs["litellm_params"]["litellm_metadata"].get(
+            "model_group", None
+        )
         model_info = kwargs["litellm_params"].get("model_info", {}) or {}
         id = model_info.get("id", None)
         if model_group is None or id is None:
@@ -3869,11 +3964,11 @@ class Router:
             ) in (
                 kwargs.items()
             ):  # log everything in kwargs except the old previous_models value - prevent nesting
-                if k not in ["metadata", "messages", "original_function"]:
+                if k not in ["litellm_metadata", "messages", "original_function"]:
                     previous_model[k] = v
-                elif k == "metadata" and isinstance(v, dict):
-                    previous_model["metadata"] = {}  # type: ignore
-                    for metadata_k, metadata_v in kwargs["metadata"].items():
+                elif k == "litellm_metadata" and isinstance(v, dict):
+                    previous_model["litellm_metadata"] = {}  # type: ignore
+                    for metadata_k, metadata_v in kwargs["litellm_metadata"].items():
                         if metadata_k != "previous_models":
                             previous_model[k][metadata_k] = metadata_v  # type: ignore
 
@@ -3882,7 +3977,7 @@ class Router:
                 self.previous_models.pop(0)
 
             self.previous_models.append(previous_model)
-            kwargs["metadata"]["previous_models"] = self.previous_models
+            kwargs["litellm_metadata"]["previous_models"] = self.previous_models
             return kwargs
         except Exception as e:
             raise e
