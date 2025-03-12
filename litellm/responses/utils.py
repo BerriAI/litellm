@@ -4,9 +4,11 @@ from typing import Any, Dict
 import litellm
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.types.llms.openai import (
+    ResponseAPIUsage,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIRequestParams,
 )
+from litellm.types.utils import Usage
 
 
 def get_optional_params_responses_api(
@@ -49,3 +51,24 @@ def get_optional_params_responses_api(
     )
 
     return mapped_params
+
+
+class ResponseAPILoggingUtils:
+    @staticmethod
+    def _is_response_api_usage(usage: dict) -> bool:
+        """returns True if usage is from OpenAI Response API"""
+        if "input_tokens" in usage and "output_tokens" in usage:
+            return True
+        return False
+
+    @staticmethod
+    def _transform_response_api_usage_to_chat_usage(usage: dict) -> Usage:
+        """Tranforms the ResponseAPIUsage object to a Usage object"""
+        response_api_usage: ResponseAPIUsage = ResponseAPIUsage(**usage)
+        prompt_tokens: int = response_api_usage.input_tokens or 0
+        completion_tokens: int = response_api_usage.output_tokens or 0
+        return Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        )
