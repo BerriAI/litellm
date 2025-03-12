@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.types.llms.openai import (
     ResponsesAPIResponse,
+    ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
 )
 from litellm.utils import CustomStreamWrapper
@@ -82,21 +83,20 @@ class ResponsesAPIStreamingIterator:
                     if (
                         openai_responses_api_chunk
                         and openai_responses_api_chunk.type
-                        == COMPLETED_OPENAI_CHUNK_TYPE
+                        == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
                     ):
                         self.completed_response = openai_responses_api_chunk
-                        await self.logging_obj.async_success_handler(
-                            result=self.completed_response,
-                            start_time=self.start_time,
-                            end_time=datetime.now(),
-                            cache_hit=None,
+                        asyncio.create_task(
+                            self.logging_obj.async_success_handler(
+                                result=self.completed_response,
+                                start_time=self.start_time,
+                                end_time=datetime.now(),
+                                cache_hit=None,
+                            )
                         )
                     return openai_responses_api_chunk
 
-                return ResponsesAPIStreamingResponse(
-                    type="response", response=parsed_chunk
-                )
-
+                return await self.__anext__()
             except json.JSONDecodeError:
                 # If we can't parse the chunk, continue to the next one
                 return await self.__anext__()
