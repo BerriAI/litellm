@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -138,4 +139,5 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         Transform a parsed streaming response chunk into a ResponsesAPIStreamingResponse
         """
         # Convert the dictionary to a properly typed ResponsesAPIStreamingResponse
+        verbose_logger.debug("Raw OpenAI Chunk=%s", parsed_chunk)
         return ResponsesAPIStreamingResponse(**parsed_chunk)
