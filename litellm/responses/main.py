@@ -9,7 +9,7 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.responses.utils import get_optional_params_responses_api
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     Reasoning,
     ResponseIncludable,
@@ -29,23 +29,6 @@ from .streaming_iterator import BaseResponsesAPIStreamingIterator
 # Initialize any necessary instances or variables here
 base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
-
-
-def get_requested_response_api_optional_param(
-    params: Dict[str, Any]
-) -> ResponsesAPIOptionalRequestParams:
-    """
-    Filter parameters to only include those defined in ResponsesAPIOptionalRequestParams.
-
-    Args:
-        params: Dictionary of parameters to filter
-
-    Returns:
-        ResponsesAPIOptionalRequestParams instance with only the valid parameters
-    """
-    valid_keys = get_type_hints(ResponsesAPIOptionalRequestParams).keys()
-    filtered_params = {k: v for k, v in params.items() if k in valid_keys}
-    return ResponsesAPIOptionalRequestParams(**filtered_params)
 
 
 @client
@@ -190,14 +173,16 @@ def responses(
     local_vars.update(kwargs)
     # Get ResponsesAPIOptionalRequestParams with only valid parameters
     response_api_optional_params: ResponsesAPIOptionalRequestParams = (
-        get_requested_response_api_optional_param(local_vars)
+        ResponsesAPIRequestUtils.get_requested_response_api_optional_param(local_vars)
     )
 
     # Get optional parameters for the responses API
-    responses_api_request_params: Dict = get_optional_params_responses_api(
-        model=model,
-        responses_api_provider_config=responses_api_provider_config,
-        response_api_optional_params=response_api_optional_params,
+    responses_api_request_params: Dict = (
+        ResponsesAPIRequestUtils.get_optional_params_responses_api(
+            model=model,
+            responses_api_provider_config=responses_api_provider_config,
+            response_api_optional_params=response_api_optional_params,
+        )
     )
 
     # Pre Call logging
