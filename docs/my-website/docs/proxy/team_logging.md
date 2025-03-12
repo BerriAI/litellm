@@ -30,10 +30,12 @@ litellm_settings:
   default_team_settings: 
     - team_id: "dbe2f686-a686-4896-864a-4c3924458709"
       success_callback: ["langfuse"]
+      langfuse_host: os.environ/LANGFUSE_HOST
       langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_1 # Project 1
       langfuse_secret: os.environ/LANGFUSE_PRIVATE_KEY_1 # Project 1
     - team_id: "06ed1e01-3fa7-4b9e-95bc-f2e59b74f3a8"
       success_callback: ["langfuse"]
+      langfuse_host: os.environ/LANGFUSE_HOST
       langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_2 # Project 2
       langfuse_secret: os.environ/LANGFUSE_PRIVATE_KEY_2 # Project 2
 ```
@@ -48,6 +50,28 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 ```
 
 All requests made with these keys will log data to their team-specific logging. -->
+
+### Setting Team Logging via UI
+
+You can also achieve this via the UI, by setting the Team metadata to the following:
+
+```json
+{
+  "callback_settings": {
+    "callback_vars": {
+      "langfuse_host": "<your host>",
+      "langfuse_public_key": "os.environ/LANGFUSE_PUB_KEY_1",
+      "langfuse_secret_key": "os.environ/LANGFUSE_PRIVATE_KEY_1"
+    },
+    "failure_callback": [],
+    "success_callback": [
+      "langfuse"
+    ]
+  }
+}
+```
+
+Environment Variables can be used.
 
 ## [BETA] Team Logging via API 
 
