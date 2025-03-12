@@ -1034,6 +1034,36 @@
         "supports_prompt_caching": true,
         "supports_tool_choice": true
     },
+    "azure/us/o3-mini-2025-01-31": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 0.00000121,
+        "input_cost_per_token_batches": 0.000000605,
+        "output_cost_per_token": 0.00000484,
+        "output_cost_per_token_batches": 0.00000242,
+        "cache_read_input_token_cost": 0.000000605,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supports_vision": false,
+        "supports_prompt_caching": true,
+        "supports_tool_choice": true
+    },
+    "azure/eu/o3-mini-2025-01-31": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 0.00000121,
+        "input_cost_per_token_batches": 0.000000605,
+        "output_cost_per_token": 0.00000484,
+        "output_cost_per_token_batches": 0.00000242,
+        "cache_read_input_token_cost": 0.000000605,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supports_vision": false,
+        "supports_prompt_caching": true,
+        "supports_tool_choice": true
+    },
     "azure/tts-1": {
         "mode": "audio_speech", 
         "input_cost_per_character": 0.000015,
