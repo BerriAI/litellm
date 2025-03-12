@@ -735,6 +735,8 @@ class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
 class OutputTokensDetails(BaseModel):
     reasoning_tokens: int
 
+    model_config = {"extra": "allow"}
+
 
 class ResponseAPIUsage(BaseModel):
     input_tokens: int
@@ -743,11 +745,13 @@ class ResponseAPIUsage(BaseModel):
     output_tokens: int
     """The number of output tokens."""
 
-    output_tokens_details: OutputTokensDetails
+    output_tokens_details: Optional[OutputTokensDetails]
     """A detailed breakdown of the output tokens."""
 
     total_tokens: int
     """The total number of tokens used."""
+
+    model_config = {"extra": "allow"}
 
 
 class ResponsesAPIResponse(BaseModel):
