@@ -1,12 +1,6 @@
 import asyncio
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
-import httpx
-import openai
-
-import litellm
-from litellm import get_secret, get_secret_str
-from litellm._logging import verbose_router_logger
 from litellm.utils import calculate_max_parallel_requests
 
 if TYPE_CHECKING:
