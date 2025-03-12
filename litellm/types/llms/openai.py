@@ -1,6 +1,8 @@
+from enum import Enum
 from os import PathLike
 from typing import IO, Any, Iterable, List, Literal, Mapping, Optional, Tuple, Union
 
+import httpx
 from openai._legacy_response import (
     HttpxBinaryResponseContent as _HttpxBinaryResponseContent,
 )
@@ -31,8 +33,24 @@ from openai.types.chat.chat_completion_prediction_content_param import (
 )
 from openai.types.embedding import Embedding as OpenAIEmbedding
 from openai.types.fine_tuning.fine_tuning_job import FineTuningJob
-from pydantic import BaseModel, Field
-from typing_extensions import Dict, Required, TypedDict, override
+from openai.types.responses.response import (
+    IncompleteDetails,
+    Response,
+    ResponseOutputItem,
+    ResponseTextConfig,
+    Tool,
+    ToolChoice,
+)
+from openai.types.responses.response_create_params import (
+    Reasoning,
+    ResponseIncludable,
+    ResponseInputParam,
+    ResponseTextConfigParam,
+    ToolChoice,
+    ToolParam,
+)
+from pydantic import BaseModel, Discriminator, Field, PrivateAttr
+from typing_extensions import Annotated, Dict, Required, TypedDict, override
 
 FileContent = Union[IO[bytes], bytes, PathLike]
 
@@ -684,3 +702,323 @@ OpenAIAudioTranscriptionOptionalParams = Literal[
 
 
 OpenAIImageVariationOptionalParams = Literal["n", "size", "response_format", "user"]
+
+
+class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
+    """TypedDict for Optional parameters supported by the responses API."""
+
+    include: Optional[List[ResponseIncludable]]
+    instructions: Optional[str]
+    max_output_tokens: Optional[int]
+    metadata: Optional[Dict[str, Any]]
+    parallel_tool_calls: Optional[bool]
+    previous_response_id: Optional[str]
+    reasoning: Optional[Reasoning]
+    store: Optional[bool]
+    stream: Optional[bool]
+    temperature: Optional[float]
+    text: Optional[ResponseTextConfigParam]
+    tool_choice: Optional[ToolChoice]
+    tools: Optional[Iterable[ToolParam]]
+    top_p: Optional[float]
+    truncation: Optional[Literal["auto", "disabled"]]
+    user: Optional[str]
+
+
+class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
+    """TypedDict for request parameters supported by the responses API."""
+
+    input: Union[str, ResponseInputParam]
+    model: str
+
+
+class BaseLiteLLMOpenAIResponseObject(BaseModel):
+    def __getitem__(self, key):
+        return self.__dict__[key]
+
+    def get(self, key, default=None):
+        return self.__dict__.get(key, default)
+
+    def __contains__(self, key):
+        return key in self.__dict__
+
+
+class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
+    reasoning_tokens: int
+
+    model_config = {"extra": "allow"}
+
+
+class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
+    input_tokens: int
+    """The number of input tokens."""
+
+    output_tokens: int
+    """The number of output tokens."""
+
+    output_tokens_details: Optional[OutputTokensDetails]
+    """A detailed breakdown of the output tokens."""
+
+    total_tokens: int
+    """The total number of tokens used."""
+
+    model_config = {"extra": "allow"}
+
+
+class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
+    id: str
+    created_at: float
+    error: Optional[dict]
+    incomplete_details: Optional[IncompleteDetails]
+    instructions: Optional[str]
+    metadata: Optional[Dict]
+    model: Optional[str]
+    object: Optional[str]
+    output: List[ResponseOutputItem]
+    parallel_tool_calls: bool
+    temperature: Optional[float]
+    tool_choice: ToolChoice
+    tools: List[Tool]
+    top_p: Optional[float]
+    max_output_tokens: Optional[int]
+    previous_response_id: Optional[str]
+    reasoning: Optional[Reasoning]
+    status: Optional[str]
+    text: Optional[ResponseTextConfig]
+    truncation: Optional[Literal["auto", "disabled"]]
+    usage: Optional[ResponseAPIUsage]
+    user: Optional[str]
+    # Define private attributes using PrivateAttr
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+
+class ResponsesAPIStreamEvents(str, Enum):
+    """
+    Enum representing all supported OpenAI stream event types for the Responses API.
+
+    Inherits from str to allow direct string comparison and usage as dictionary keys.
+    """
+
+    # Response lifecycle events
+    RESPONSE_CREATED = "response.created"
+    RESPONSE_IN_PROGRESS = "response.in_progress"
+    RESPONSE_COMPLETED = "response.completed"
+    RESPONSE_FAILED = "response.failed"
+    RESPONSE_INCOMPLETE = "response.incomplete"
+
+    # Output item events
+    OUTPUT_ITEM_ADDED = "response.output_item.added"
+    OUTPUT_ITEM_DONE = "response.output_item.done"
+
+    # Content part events
+    CONTENT_PART_ADDED = "response.content_part.added"
+    CONTENT_PART_DONE = "response.content_part.done"
+
+    # Output text events
+    OUTPUT_TEXT_DELTA = "response.output_text.delta"
+    OUTPUT_TEXT_ANNOTATION_ADDED = "response.output_text.annotation.added"
+    OUTPUT_TEXT_DONE = "response.output_text.done"
+
+    # Refusal events
+    REFUSAL_DELTA = "response.refusal.delta"
+    REFUSAL_DONE = "response.refusal.done"
+
+    # Function call events
+    FUNCTION_CALL_ARGUMENTS_DELTA = "response.function_call_arguments.delta"
+    FUNCTION_CALL_ARGUMENTS_DONE = "response.function_call_arguments.done"
+
+    # File search events
+    FILE_SEARCH_CALL_IN_PROGRESS = "response.file_search_call.in_progress"
+    FILE_SEARCH_CALL_SEARCHING = "response.file_search_call.searching"
+    FILE_SEARCH_CALL_COMPLETED = "response.file_search_call.completed"
+
+    # Web search events
+    WEB_SEARCH_CALL_IN_PROGRESS = "response.web_search_call.in_progress"
+    WEB_SEARCH_CALL_SEARCHING = "response.web_search_call.searching"
+    WEB_SEARCH_CALL_COMPLETED = "response.web_search_call.completed"
+
+    # Error event
+    ERROR = "error"
+
+
+class ResponseCreatedEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.RESPONSE_CREATED]
+    response: ResponsesAPIResponse
+
+
+class ResponseInProgressEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS]
+    response: ResponsesAPIResponse
+
+
+class ResponseCompletedEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.RESPONSE_COMPLETED]
+    response: ResponsesAPIResponse
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+
+class ResponseFailedEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.RESPONSE_FAILED]
+    response: ResponsesAPIResponse
+
+
+class ResponseIncompleteEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE]
+    response: ResponsesAPIResponse
+
+
+class OutputItemAddedEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
+    output_index: int
+    item: dict
+
+
+class OutputItemDoneEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
+    output_index: int
+    item: dict
+
+
+class ContentPartAddedEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.CONTENT_PART_ADDED]
+    item_id: str
+    output_index: int
+    content_index: int
+    part: dict
+
+
+class ContentPartDoneEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.CONTENT_PART_DONE]
+    item_id: str
+    output_index: int
+    content_index: int
+    part: dict
+
+
+class OutputTextDeltaEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA]
+    item_id: str
+    output_index: int
+    content_index: int
+    delta: str
+
+
+class OutputTextAnnotationAddedEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED]
+    item_id: str
+    output_index: int
+    content_index: int
+    annotation_index: int
+    annotation: dict
+
+
+class OutputTextDoneEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE]
+    item_id: str
+    output_index: int
+    content_index: int
+    text: str
+
+
+class RefusalDeltaEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.REFUSAL_DELTA]
+    item_id: str
+    output_index: int
+    content_index: int
+    delta: str
+
+
+class RefusalDoneEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.REFUSAL_DONE]
+    item_id: str
+    output_index: int
+    content_index: int
+    refusal: str
+
+
+class FunctionCallArgumentsDeltaEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA]
+    item_id: str
+    output_index: int
+    delta: str
+
+
+class FunctionCallArgumentsDoneEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE]
+    item_id: str
+    output_index: int
+    arguments: str
+
+
+class FileSearchCallInProgressEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.FILE_SEARCH_CALL_IN_PROGRESS]
+    output_index: int
+    item_id: str
+
+
+class FileSearchCallSearchingEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.FILE_SEARCH_CALL_SEARCHING]
+    output_index: int
+    item_id: str
+
+
+class FileSearchCallCompletedEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.FILE_SEARCH_CALL_COMPLETED]
+    output_index: int
+    item_id: str
+
+
+class WebSearchCallInProgressEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.WEB_SEARCH_CALL_IN_PROGRESS]
+    output_index: int
+    item_id: str
+
+
+class WebSearchCallSearchingEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.WEB_SEARCH_CALL_SEARCHING]
+    output_index: int
+    item_id: str
+
+
+class WebSearchCallCompletedEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.WEB_SEARCH_CALL_COMPLETED]
+    output_index: int
+    item_id: str
+
+
+class ErrorEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.ERROR]
+    code: Optional[str]
+    message: str
+    param: Optional[str]
+
+
+# Union type for all possible streaming responses
+ResponsesAPIStreamingResponse = Annotated[
+    Union[
+        ResponseCreatedEvent,
+        ResponseInProgressEvent,
+        ResponseCompletedEvent,
+        ResponseFailedEvent,
+        ResponseIncompleteEvent,
+        OutputItemAddedEvent,
+        OutputItemDoneEvent,
+        ContentPartAddedEvent,
+        ContentPartDoneEvent,
+        OutputTextDeltaEvent,
+        OutputTextAnnotationAddedEvent,
+        OutputTextDoneEvent,
+        RefusalDeltaEvent,
+        RefusalDoneEvent,
+        FunctionCallArgumentsDeltaEvent,
+        FunctionCallArgumentsDoneEvent,
+        FileSearchCallInProgressEvent,
+        FileSearchCallSearchingEvent,
+        FileSearchCallCompletedEvent,
+        WebSearchCallInProgressEvent,
+        WebSearchCallSearchingEvent,
+        WebSearchCallCompletedEvent,
+        ErrorEvent,
+    ],
+    Discriminator("type"),
+]

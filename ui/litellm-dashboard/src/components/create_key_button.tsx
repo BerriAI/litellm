@@ -39,6 +39,9 @@ import { InfoCircleOutlined } from '@ant-design/icons';
 import { Tooltip } from 'antd';
 import Createuser from "./create_user_button";
 import debounce from 'lodash/debounce';
+import { rolesWithWriteAccess } from '../utils/roles';
+
+
 
 const { Option } = Select;
 
@@ -335,9 +338,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({
 
   return (
     <div>
-      <Button className="mx-auto" onClick={() => setIsModalVisible(true)}>
-        + Create New Key
-      </Button>
+      {userRole && rolesWithWriteAccess.includes(userRole) && (
+        <Button className="mx-auto" onClick={() => setIsModalVisible(true)}>
+          + Create New Key
+        </Button>
+      )}
       <Modal
         // title="Create Key"
         visible={isModalVisible}

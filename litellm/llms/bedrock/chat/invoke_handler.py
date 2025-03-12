@@ -1231,7 +1231,9 @@ class AWSEventStreamDecoder:
         if len(self.content_blocks) == 0:
             return False
 
-        if "text" in self.content_blocks[0]:
+        if (
+            "toolUse" not in self.content_blocks[0]
+        ):  # be explicit - only do this if tool use block, as this is to prevent json decoding errors
             return False
 
         for block in self.content_blocks:
