@@ -1,4 +1,4 @@
-from typing import Coroutine, Iterable, Literal, Optional, Union
+from typing import Any, Coroutine, Dict, Iterable, Literal, Optional, Union
 
 import httpx
 from openai import AsyncAzureOpenAI, AzureOpenAI
@@ -618,7 +618,7 @@ class AzureAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: Optional[str],
         instructions: Optional[str],
-        metadata: Optional[object],
+        metadata: Optional[Dict],
         model: Optional[str],
         stream: Optional[bool],
         tools: Optional[Iterable[AssistantToolParam]],
@@ -659,12 +659,12 @@ class AzureAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: Optional[str],
         instructions: Optional[str],
-        metadata: Optional[object],
+        metadata: Optional[Dict],
         model: Optional[str],
         tools: Optional[Iterable[AssistantToolParam]],
         event_handler: Optional[AssistantEventHandler],
     ) -> AsyncAssistantStreamManager[AsyncAssistantEventHandler]:
-        data = {
+        data: Dict[str, Any] = {
             "thread_id": thread_id,
             "assistant_id": assistant_id,
             "additional_instructions": additional_instructions,
@@ -684,12 +684,12 @@ class AzureAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: Optional[str],
         instructions: Optional[str],
-        metadata: Optional[object],
+        metadata: Optional[Dict],
         model: Optional[str],
         tools: Optional[Iterable[AssistantToolParam]],
         event_handler: Optional[AssistantEventHandler],
     ) -> AssistantStreamManager[AssistantEventHandler]:
-        data = {
+        data: Dict[str, Any] = {
             "thread_id": thread_id,
             "assistant_id": assistant_id,
             "additional_instructions": additional_instructions,
@@ -711,7 +711,7 @@ class AzureAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: Optional[str],
         instructions: Optional[str],
-        metadata: Optional[object],
+        metadata: Optional[Dict],
         model: Optional[str],
         stream: Optional[bool],
         tools: Optional[Iterable[AssistantToolParam]],
@@ -733,7 +733,7 @@ class AzureAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: Optional[str],
         instructions: Optional[str],
-        metadata: Optional[object],
+        metadata: Optional[Dict],
         model: Optional[str],
         stream: Optional[bool],
         tools: Optional[Iterable[AssistantToolParam]],
@@ -756,7 +756,7 @@ class AzureAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: Optional[str],
         instructions: Optional[str],
-        metadata: Optional[object],
+        metadata: Optional[Dict],
         model: Optional[str],
         stream: Optional[bool],
         tools: Optional[Iterable[AssistantToolParam]],

@@ -1,17 +1,6 @@
 from enum import Enum
 from os import PathLike
-from typing import (
-    IO,
-    Annotated,
-    Any,
-    Iterable,
-    List,
-    Literal,
-    Mapping,
-    Optional,
-    Tuple,
-    Union,
-)
+from typing import IO, Any, Iterable, List, Literal, Mapping, Optional, Tuple, Union
 
 import httpx
 from openai._legacy_response import (
@@ -46,7 +35,6 @@ from openai.types.embedding import Embedding as OpenAIEmbedding
 from openai.types.fine_tuning.fine_tuning_job import FineTuningJob
 from openai.types.responses.response import (
     IncompleteDetails,
-    Reasoning,
     Response,
     ResponseOutputItem,
     ResponseTextConfig,
@@ -62,7 +50,7 @@ from openai.types.responses.response_create_params import (
     ToolParam,
 )
 from pydantic import BaseModel, Discriminator, Field, PrivateAttr
-from typing_extensions import Dict, Required, TypedDict, override
+from typing_extensions import Annotated, Dict, Required, TypedDict, override
 
 FileContent = Union[IO[bytes], bytes, PathLike]
 
