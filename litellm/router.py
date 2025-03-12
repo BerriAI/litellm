@@ -71,7 +71,7 @@ from litellm.router_utils.batch_utils import (
     _get_router_metadata_variable_name,
     replace_model_in_jsonl,
 )
-from litellm.router_utils.client_initalization_utils import InitalizeOpenAISDKClient
+from litellm.router_utils.client_initalization_utils import InitalizeCachedClient
 from litellm.router_utils.clientside_credential_handler import (
     get_dynamic_litellm_params,
     is_clientside_credential,
@@ -955,6 +955,7 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
+
             _timeout_debug_deployment_dict = deployment
             end_time = time.time()
             _duration = end_time - start_time
@@ -4373,10 +4374,10 @@ class Router:
         if custom_llm_provider not in litellm.provider_list:
             raise Exception(f"Unsupported provider - {custom_llm_provider}")
 
-        # init OpenAI, Azure clients
-        InitalizeOpenAISDKClient.set_client(
-            litellm_router_instance=self, model=deployment.to_json(exclude_none=True)
-        )
+        # # init OpenAI, Azure clients
+        # InitalizeOpenAISDKClient.set_client(
+        #     litellm_router_instance=self, model=deployment.to_json(exclude_none=True)
+        # )
 
         self._initialize_deployment_for_pass_through(
             deployment=deployment,
@@ -5345,6 +5346,13 @@ class Router:
             client = self.cache.get_cache(
                 key=cache_key, local_only=True, parent_otel_span=parent_otel_span
             )
+            if client is None:
+                InitalizeCachedClient.set_max_parallel_requests_client(
+                    litellm_router_instance=self, model=deployment
+                )
+                client = self.cache.get_cache(
+                    key=cache_key, local_only=True, parent_otel_span=parent_otel_span
+                )
             return client
         elif client_type == "async":
             if kwargs.get("stream") is True:
@@ -5352,36 +5360,12 @@ class Router:
                 client = self.cache.get_cache(
                     key=cache_key, local_only=True, parent_otel_span=parent_otel_span
                 )
-                if client is None:
-                    """
-                    Re-initialize the client
-                    """
-                    InitalizeOpenAISDKClient.set_client(
-                        litellm_router_instance=self, model=deployment
-                    )
-                    client = self.cache.get_cache(
-                        key=cache_key,
-                        local_only=True,
-                        parent_otel_span=parent_otel_span,
-                    )
                 return client
             else:
                 cache_key = f"{model_id}_async_client"
                 client = self.cache.get_cache(
                     key=cache_key, local_only=True, parent_otel_span=parent_otel_span
                 )
-                if client is None:
-                    """
-                    Re-initialize the client
-                    """
-                    InitalizeOpenAISDKClient.set_client(
-                        litellm_router_instance=self, model=deployment
-                    )
-                    client = self.cache.get_cache(
-                        key=cache_key,
-                        local_only=True,
-                        parent_otel_span=parent_otel_span,
-                    )
                 return client
         else:
             if kwargs.get("stream") is True:
@@ -5389,32 +5373,12 @@ class Router:
                 client = self.cache.get_cache(
                     key=cache_key, parent_otel_span=parent_otel_span
                 )
-                if client is None:
-                    """
-                    Re-initialize the client
-                    """
-                    InitalizeOpenAISDKClient.set_client(
-                        litellm_router_instance=self, model=deployment
-                    )
-                    client = self.cache.get_cache(
-                        key=cache_key, parent_otel_span=parent_otel_span
-                    )
                 return client
             else:
                 cache_key = f"{model_id}_client"
                 client = self.cache.get_cache(
                     key=cache_key, parent_otel_span=parent_otel_span
                 )
-                if client is None:
-                    """
-                    Re-initialize the client
-                    """
-                    InitalizeOpenAISDKClient.set_client(
-                        litellm_router_instance=self, model=deployment
-                    )
-                    client = self.cache.get_cache(
-                        key=cache_key, parent_otel_span=parent_otel_span
-                    )
                 return client
 
     def _pre_call_checks(  # noqa: PLR0915
