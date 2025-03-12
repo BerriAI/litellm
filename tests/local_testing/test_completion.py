@@ -3338,6 +3338,52 @@ def test_bedrock_deepseek_known_tokenizer_config(monkeypatch):
             == """<｜begin▁of▁sentence｜>You are a good assistant<｜User｜>What is the weather in Copenhagen?<｜Assistant｜><think>"""
         )
 
+@pytest.mark.parametrize("sync_mode", [False, True])
+@pytest.mark.asyncio
+async def test_completion_netmind_chat(sync_mode):
+    litellm.set_verbose = True
+    model_name = "netmind/meta-llama/Llama-3.3-70B-Instruct"
+    try:
+        if sync_mode:
+            response = completion(
+                model=model_name,
+                messages=messages,
+                max_tokens=10,
+            )
+        else:
+            response = await litellm.acompletion(
+                model=model_name,
+                messages=messages,
+                max_tokens=10,
+            )
+        assert isinstance(response, litellm.ModelResponse)
+        assert len(response.choices[0].message.content.strip()) > 0
+        response_format_tests(response=response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+@pytest.mark.parametrize("sync_mode", [False, True])
+@pytest.mark.asyncio
+async def test_completion_netmind_embedding(sync_mode):
+    litellm.set_verbose = True
+    model_name = "netmind/nvidia/NV-Embed-v2"
+    try:
+        if sync_mode:
+            response = embedding(
+                model=model_name,
+                input=[user_message],
+
+            )
+        else:
+            response = await litellm.aembedding(
+                model=model_name,
+                input=[user_message],
+            )
+        assert isinstance(response, litellm.EmbeddingResponse)
+        assert len(response.data[0]['embedding']) == 4096
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
 
 # test_replicate_custom_prompt_dict()
 
