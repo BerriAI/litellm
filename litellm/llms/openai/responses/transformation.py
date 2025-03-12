@@ -55,6 +55,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         model: str,
         drop_params: bool,
     ) -> Dict:
+        """No mapping applied since inputs are in OpenAI spec already"""
         return dict(response_api_optional_params)
 
     def transform_responses_api_request(
@@ -65,6 +66,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> ResponsesAPIRequestParams:
+        """No transform applied since inputs are in OpenAI spec already"""
         return ResponsesAPIRequestParams(
             model=model, input=input, **response_api_optional_request_params
         )
@@ -75,6 +77,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> ResponsesAPIResponse:
+        """No transform applied since outputs are in OpenAI spec already"""
         try:
             raw_response_json = raw_response.json()
         except Exception:
