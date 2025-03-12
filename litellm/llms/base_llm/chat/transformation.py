@@ -51,6 +51,7 @@ class BaseLLMException(Exception):
         headers: Optional[Union[dict, httpx.Headers]] = None,
         request: Optional[httpx.Request] = None,
         response: Optional[httpx.Response] = None,
+        body: Optional[dict] = None,
     ):
         self.status_code = status_code
         self.message: str = message
@@ -67,6 +68,7 @@ class BaseLLMException(Exception):
             self.response = httpx.Response(
                 status_code=status_code, request=self.request
             )
+        self.body = body
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
