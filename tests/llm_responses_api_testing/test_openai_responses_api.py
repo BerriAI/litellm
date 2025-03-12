@@ -27,5 +27,5 @@ async def test_basic_openai_responses_api_streaming():
         stream=True,
     )
 
-    for event in response:
+    async for event in response:
         print("litellm response=", json.dumps(event, indent=4, default=str))
