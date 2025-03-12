@@ -6,7 +6,6 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
 from litellm.utils import CustomStreamWrapper, ModelResponse, TextCompletionResponse
 
-from ...base import BaseLLM
 from ...openai.completion.transformation import OpenAITextCompletionConfig
 from ..common_utils import AzureOpenAIError, BaseAzureLLM
 
