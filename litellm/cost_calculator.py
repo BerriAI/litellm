@@ -45,7 +45,11 @@ from litellm.llms.vertex_ai.image_generation.cost_calculator import (
     cost_calculator as vertex_ai_image_cost_calculator,
 )
 from litellm.responses.utils import ResponseAPILoggingUtils
-from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
+from litellm.types.llms.openai import (
+    HttpxBinaryResponseContent,
+    ResponseAPIUsage,
+    ResponsesAPIResponse,
+)
 from litellm.types.rerank import RerankBilledUnits, RerankResponse
 from litellm.types.utils import (
     CallTypesLiteral,
@@ -465,6 +469,13 @@ def _get_usage_object(
     return usage_obj
 
 
+def _is_known_usage_objects(usage_obj):
+    """Returns True if the usage obj is a known Usage type"""
+    return isinstance(usage_obj, litellm.Usage) or isinstance(
+        usage_obj, ResponseAPIUsage
+    )
+
+
 def _infer_call_type(
     call_type: Optional[CallTypesLiteral], completion_response: Any
 ) -> Optional[CallTypesLiteral]:
@@ -588,8 +599,8 @@ def completion_cost(  # noqa: PLR0915
                 )
             else:
                 usage_obj = getattr(completion_response, "usage", {})
-            if isinstance(usage_obj, BaseModel) and not isinstance(
-                usage_obj, litellm.Usage
+            if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
+                usage_obj=usage_obj
             ):
                 setattr(
                     completion_response,

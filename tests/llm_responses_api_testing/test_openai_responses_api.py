@@ -13,6 +13,8 @@ from litellm.types.llms.openai import (
     ResponseCompletedEvent,
     ResponsesAPIResponse,
     ResponseTextConfig,
+    ResponseAPIUsage,
+    IncompleteDetails,
 )
 
 
@@ -50,7 +52,7 @@ def validate_responses_api_response(response):
     # Optional fields with their expected types
     optional_fields = {
         "error": (dict, type(None)),  # error can be dict or None
-        "incomplete_details": (dict, type(None)),
+        "incomplete_details": (IncompleteDetails, type(None)),
         "instructions": (str, type(None)),
         "metadata": dict,
         "model": str,
@@ -65,7 +67,7 @@ def validate_responses_api_response(response):
         "status": str,
         "text": ResponseTextConfig,
         "truncation": str,
-        # "usage": dict,
+        "usage": ResponseAPIUsage,
         "user": (str, type(None)),
     }
 
@@ -89,9 +91,13 @@ async def test_basic_openai_responses_api(sync_mode):
     litellm._turn_on_debug()
 
     if sync_mode:
-        response = litellm.responses(model="gpt-4o", input="Basic ping")
+        response = litellm.responses(
+            model="gpt-4o", input="Basic ping", max_output_tokens=20
+        )
     else:
-        response = await litellm.aresponses(model="gpt-4o", input="Basic ping")
+        response = await litellm.aresponses(
+            model="gpt-4o", input="Basic ping", max_output_tokens=20
+        )
 
     print("litellm response=", json.dumps(response, indent=4, default=str))
 
