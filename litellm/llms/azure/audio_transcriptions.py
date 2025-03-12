@@ -109,7 +109,6 @@ class AzureAudioTranscription(AzureChatCompletion):
             if client is None:
                 async_azure_client = AsyncAzureOpenAI(
                     **azure_client_params,
-                    http_client=litellm.aclient_session,
                 )
             else:
                 async_azure_client = client
