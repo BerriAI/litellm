@@ -14,14 +14,16 @@ from litellm.types.llms.openai import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelInfo
 
-from ..chat.transformation import BaseLLMException
-
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
+    from ..chat.transformation import BaseLLMException as _BaseLLMException
+
     LiteLLMLoggingObj = _LiteLLMLoggingObj
+    BaseLLMException = _BaseLLMException
 else:
     LiteLLMLoggingObj = Any
+    BaseLLMException = Any
 
 
 class BaseResponsesAPIConfig(ABC):
@@ -123,6 +125,8 @@ class BaseResponsesAPIConfig(ABC):
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
+        from ..chat.transformation import BaseLLMException
+
         raise BaseLLMException(
             status_code=status_code,
             message=error_message,
