@@ -76,8 +76,9 @@ async def test_basic_openai_responses_api_non_streaming_with_logging():
     litellm.set_verbose = True
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
+    request_model = "gpt-4o"
     response = await litellm.aresponses(
-        model="gpt-4o",
+        model=request_model,
         input="hi",
     )
 
@@ -111,9 +112,14 @@ async def test_basic_openai_responses_api_non_streaming_with_logging():
     assert test_custom_logger.standard_logging_object["response_cost"] > 0
 
     # validate response id matches OpenAI
+    assert test_custom_logger.standard_logging_object["id"] == response["id"]
 
     # validate model matches
+    assert test_custom_logger.standard_logging_object["model"] == request_model
 
     # validate messages matches
+    assert test_custom_logger.standard_logging_object["messages"] == [
+        {"content": "hi", "role": "user"}
+    ]
 
     # validate responses matches
