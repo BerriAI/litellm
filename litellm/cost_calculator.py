@@ -573,9 +573,7 @@ def completion_cost(  # noqa: PLR0915
             base_model=base_model,
         )
 
-        verbose_logger.debug(
-            f"completion_response _select_model_name_for_cost_calc: {model}"
-        )
+        verbose_logger.info(f"selected model name for cost calculation: {model}")
 
         if completion_response is not None and (
             isinstance(completion_response, BaseModel)
