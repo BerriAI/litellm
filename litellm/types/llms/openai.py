@@ -35,7 +35,6 @@ from openai.types.embedding import Embedding as OpenAIEmbedding
 from openai.types.fine_tuning.fine_tuning_job import FineTuningJob
 from openai.types.responses.response import (
     IncompleteDetails,
-    Reasoning,
     Response,
     ResponseOutputItem,
     ResponseTextConfig,
