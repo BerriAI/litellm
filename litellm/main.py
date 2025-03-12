@@ -1162,6 +1162,7 @@ def completion(  # type: ignore # noqa: PLR0915
             merge_reasoning_content_in_choices=kwargs.get(
                 "merge_reasoning_content_in_choices", None
             ),
+            api_version=api_version,
         )
         logging.update_environment_variables(
             model=model,
