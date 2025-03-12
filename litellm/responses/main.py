@@ -1,3 +1,6 @@
+import asyncio
+import contextvars
+from functools import partial
 from typing import Any, Dict, Iterable, List, Literal, Optional, Union, get_type_hints
 
 import httpx
@@ -23,7 +26,10 @@ from litellm.types.llms.openai import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
-from .streaming_iterator import ResponsesAPIStreamingIterator
+from .streaming_iterator import (
+    BaseResponsesAPIStreamingIterator,
+    ResponsesAPIStreamingIterator,
+)
 
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
@@ -75,9 +81,89 @@ async def aresponses(
     extra_body: Optional[Dict[str, Any]] = None,
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     **kwargs,
-) -> Union[ResponsesAPIResponse, ResponsesAPIStreamingIterator]:
+) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
+    """
+    Async: Handles responses API requests by reusing the synchronous function
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        kwargs["aresponses"] = True
+
+        func = partial(
+            responses,
+            input,
+            model,
+            include,
+            instructions,
+            max_output_tokens,
+            metadata,
+            parallel_tool_calls,
+            previous_response_id,
+            reasoning,
+            store,
+            stream,
+            temperature,
+            text,
+            tool_choice,
+            tools,
+            top_p,
+            truncation,
+            user,
+            extra_headers,
+            extra_query,
+            extra_body,
+            timeout,
+            **kwargs,
+        )
+
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+        return response
+    except Exception as e:
+        raise e
+
+
+@client
+def responses(
+    input: Union[str, ResponseInputParam],
+    model: str,
+    include: Optional[List[ResponseIncludable]] = None,
+    instructions: Optional[str] = None,
+    max_output_tokens: Optional[int] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    parallel_tool_calls: Optional[bool] = None,
+    previous_response_id: Optional[str] = None,
+    reasoning: Optional[Reasoning] = None,
+    store: Optional[bool] = None,
+    stream: Optional[bool] = None,
+    temperature: Optional[float] = None,
+    text: Optional[ResponseTextConfigParam] = None,
+    tool_choice: Optional[ToolChoice] = None,
+    tools: Optional[Iterable[ToolParam]] = None,
+    top_p: Optional[float] = None,
+    truncation: Optional[Literal["auto", "disabled"]] = None,
+    user: Optional[str] = None,
+    # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+    # The extra values given here take precedence over values defined on the client or passed to this method.
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    **kwargs,
+):
+    """
+    Synchronous version of the Responses API.
+    Uses the synchronous HTTP handler to make requests.
+    """
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+    _is_async = kwargs.pop("aresponses", False) is True
 
     # get llm provider logic
     litellm_params = GenericLiteLLMParams(**kwargs)
@@ -132,7 +218,11 @@ async def aresponses(
         custom_llm_provider=custom_llm_provider,
     )
 
-    response = await base_llm_http_handler.async_response_api_handler(
+    # Get an instance of BaseLLMHTTPHandler
+    base_llm_http_handler_instance = BaseLLMHTTPHandler()
+
+    # Call the handler with _is_async flag instead of directly calling the async handler
+    response = base_llm_http_handler_instance.response_api_handler(
         model=model,
         input=input,
         responses_api_provider_config=responses_api_provider_config,
@@ -143,34 +233,8 @@ async def aresponses(
         extra_headers=extra_headers,
         extra_body=extra_body,
         timeout=timeout,
+        _is_async=_is_async,
+        client=kwargs.get("client"),
     )
+
     return response
-
-
-def responses(
-    input: Union[str, ResponseInputParam],
-    model: str,
-    include: Optional[List[ResponseIncludable]] = None,
-    instructions: Optional[str] = None,
-    max_output_tokens: Optional[int] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-    parallel_tool_calls: Optional[bool] = None,
-    previous_response_id: Optional[str] = None,
-    reasoning: Optional[Reasoning] = None,
-    store: Optional[bool] = None,
-    stream: Optional[bool] = None,
-    temperature: Optional[float] = None,
-    text: Optional[ResponseTextConfigParam] = None,
-    tool_choice: Optional[ToolChoice] = None,
-    tools: Optional[Iterable[ToolParam]] = None,
-    top_p: Optional[float] = None,
-    truncation: Optional[Literal["auto", "disabled"]] = None,
-    user: Optional[str] = None,
-    # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
-    # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-):
-    pass
