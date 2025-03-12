@@ -109,21 +109,21 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     async def __anext__(self) -> ResponsesAPIStreamingResponse:
         try:
-            # Get the next chunk from the stream
-            try:
-                chunk = await self.stream_iterator.__anext__()
-            except StopAsyncIteration:
-                self.finished = True
-                raise StopAsyncIteration
+            while True:
+                # Get the next chunk from the stream
+                try:
+                    chunk = await self.stream_iterator.__anext__()
+                except StopAsyncIteration:
+                    self.finished = True
+                    raise StopAsyncIteration
 
-            result = self._process_chunk(chunk)
+                result = self._process_chunk(chunk)
 
-            if self.finished:
-                raise StopAsyncIteration
-            elif result is not None:
-                return result
-            else:
-                return await self.__anext__()
+                if self.finished:
+                    raise StopAsyncIteration
+                elif result is not None:
+                    return result
+                # If result is None, continue the loop to get the next chunk
 
         except httpx.HTTPError as e:
             # Handle HTTP errors
@@ -170,21 +170,21 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def __next__(self):
         try:
-            # Get the next chunk from the stream
-            try:
-                chunk = next(self.stream_iterator)
-            except StopIteration:
-                self.finished = True
-                raise StopIteration
+            while True:
+                # Get the next chunk from the stream
+                try:
+                    chunk = next(self.stream_iterator)
+                except StopIteration:
+                    self.finished = True
+                    raise StopIteration
 
-            result = self._process_chunk(chunk)
+                result = self._process_chunk(chunk)
 
-            if self.finished:
-                raise StopIteration
-            elif result is not None:
-                return result
-            else:
-                return self.__next__()
+                if self.finished:
+                    raise StopIteration
+                elif result is not None:
+                    return result
+                # If result is None, continue the loop to get the next chunk
 
         except httpx.HTTPError as e:
             # Handle HTTP errors
