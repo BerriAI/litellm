@@ -981,6 +981,7 @@ class BaseLLMHTTPHandler:
             )
         else:
             async_httpx_client = client
+            
         headers = responses_api_provider_config.validate_environment(
             api_key=litellm_params.api_key,
             headers=response_api_optional_request_params.get("extra_headers", {}) or {},
