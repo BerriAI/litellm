@@ -58,6 +58,7 @@ def get_litellm_params(
     async_call: Optional[bool] = None,
     ssl_verify: Optional[bool] = None,
     merge_reasoning_content_in_choices: Optional[bool] = None,
+    api_version: Optional[str] = None,
     **kwargs,
 ) -> dict:
     litellm_params = {
@@ -99,5 +100,6 @@ def get_litellm_params(
         "async_call": async_call,
         "ssl_verify": ssl_verify,
         "merge_reasoning_content_in_choices": merge_reasoning_content_in_choices,
+        "api_version": api_version,
     }
     return litellm_params

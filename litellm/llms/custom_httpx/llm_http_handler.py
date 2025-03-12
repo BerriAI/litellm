@@ -234,6 +234,7 @@ class BaseLLMHTTPHandler:
             model=model,
             optional_params=optional_params,
             stream=stream,
+            litellm_params=litellm_params,
         )
 
         data = provider_config.transform_request(
