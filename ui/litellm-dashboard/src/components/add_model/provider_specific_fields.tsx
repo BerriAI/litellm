@@ -23,7 +23,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
   console.log(`type of selectedProviderEnum: ${typeof selectedProviderEnum}`);
   return (
     <>
-      {selectedProviderEnum === Providers.OpenAI && (
+      {selectedProviderEnum === Providers.OpenAI || selectedProviderEnum === Providers.OpenAI_Text && (
         <>
           <Form.Item
             label="API Base"
@@ -99,7 +99,8 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
 
       {(selectedProviderEnum === Providers.Azure ||
         selectedProviderEnum === Providers.Azure_AI_Studio ||
-        selectedProviderEnum === Providers.OpenAI_Compatible
+        selectedProviderEnum === Providers.OpenAI_Compatible ||
+        selectedProviderEnum === Providers.OpenAI_Text_Compatible
       ) && (
         <Form.Item
           rules={[{ required: true, message: "Required" }]}

@@ -3,7 +3,7 @@ Translates from OpenAI's `/v1/chat/completions` endpoint to Triton's `/generate`
 """
 
 import json
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, AsyncIterator, Dict, Iterator, List, Literal, Optional, Union
 
 from httpx import Headers, Response
 
@@ -66,6 +66,20 @@ class TritonConfig(BaseConfig):
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params[param] = value
         return optional_params
+
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        model: str,
+        optional_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        if api_base is None:
+            raise ValueError("api_base is required")
+        llm_type = self._get_triton_llm_type(api_base)
+        if llm_type == "generate" and stream:
+            return api_base + "_stream"
+        return api_base
 
     def transform_response(
         self,
@@ -149,6 +163,18 @@ class TritonConfig(BaseConfig):
         else:
             raise ValueError(f"Invalid Triton API base: {api_base}")
 
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
+        return TritonResponseIterator(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
 
 class TritonGenerateConfig(TritonConfig):
     """
@@ -204,7 +230,7 @@ class TritonGenerateConfig(TritonConfig):
         return model_response
 
 
-class TritonInferConfig(TritonGenerateConfig):
+class TritonInferConfig(TritonConfig):
     """
     Transformations for triton /infer endpoint (his is an infer model with a custom model on triton)
     """
