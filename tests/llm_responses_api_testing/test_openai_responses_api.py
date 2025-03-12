@@ -18,7 +18,7 @@ from litellm.types.llms.openai import (
 )
 
 
-def validate_responses_api_response(response):
+def validate_responses_api_response(response, final_chunk: bool = False):
     """
     Validate that a response from litellm.responses() or litellm.aresponses()
     conforms to the expected ResponsesAPIResponse structure.
@@ -70,6 +70,8 @@ def validate_responses_api_response(response):
         "usage": ResponseAPIUsage,
         "user": (str, type(None)),
     }
+    if final_chunk is False:
+        optional_fields["usage"] = type(None)
 
     for field, expected_type in optional_fields.items():
         if field in response:
@@ -78,9 +80,10 @@ def validate_responses_api_response(response):
             ), f"Field '{field}' should be of type {expected_type}, but got {type(response[field])}"
 
     # Check if output has at least one item
-    assert (
-        len(response["output"]) > 0
-    ), "Response 'output' field should have at least one item"
+    if final_chunk is True:
+        assert (
+            len(response["output"]) > 0
+        ), "Response 'output' field should have at least one item"
 
     return True  # Return True if validation passes
 
@@ -102,7 +105,7 @@ async def test_basic_openai_responses_api(sync_mode):
     print("litellm response=", json.dumps(response, indent=4, default=str))
 
     # Use the helper function to validate the response
-    validate_responses_api_response(response)
+    validate_responses_api_response(response, final_chunk=True)
 
 
 @pytest.mark.parametrize("sync_mode", [True])
@@ -280,3 +283,223 @@ async def test_basic_openai_responses_api_non_streaming_with_logging():
     validate_standard_logging_payload(
         test_custom_logger.standard_logging_object, response, request_model
     )
+
+
+def validate_stream_event(event):
+    """
+    Validate that a streaming event from litellm.responses() or litellm.aresponses()
+    with stream=True conforms to the expected structure based on its event type.
+
+    Args:
+        event: The streaming event object to validate
+
+    Raises:
+        AssertionError: If the event doesn't match the expected structure for its type
+    """
+    # Common validation for all event types
+    assert hasattr(event, "type"), "Event should have a 'type' attribute"
+
+    # Type-specific validation
+    if event.type == "response.created" or event.type == "response.in_progress":
+        assert hasattr(
+            event, "response"
+        ), f"{event.type} event should have a 'response' attribute"
+        validate_responses_api_response(event.response, final_chunk=False)
+
+    elif event.type == "response.completed":
+        assert hasattr(
+            event, "response"
+        ), "response.completed event should have a 'response' attribute"
+        validate_responses_api_response(event.response, final_chunk=True)
+        # Usage is guaranteed only on the completed event
+        assert (
+            "usage" in event.response
+        ), "response.completed event should have usage information"
+        print("Usage in event.response=", event.response["usage"])
+        assert isinstance(event.response["usage"], ResponseAPIUsage)
+    elif event.type == "response.failed" or event.type == "response.incomplete":
+        assert hasattr(
+            event, "response"
+        ), f"{event.type} event should have a 'response' attribute"
+
+    elif (
+        event.type == "response.output_item.added"
+        or event.type == "response.output_item.done"
+    ):
+        assert hasattr(
+            event, "output_index"
+        ), f"{event.type} event should have an 'output_index' attribute"
+        assert hasattr(
+            event, "item"
+        ), f"{event.type} event should have an 'item' attribute"
+
+    elif (
+        event.type == "response.content_part.added"
+        or event.type == "response.content_part.done"
+    ):
+        assert hasattr(
+            event, "item_id"
+        ), f"{event.type} event should have an 'item_id' attribute"
+        assert hasattr(
+            event, "output_index"
+        ), f"{event.type} event should have an 'output_index' attribute"
+        assert hasattr(
+            event, "content_index"
+        ), f"{event.type} event should have a 'content_index' attribute"
+        assert hasattr(
+            event, "part"
+        ), f"{event.type} event should have a 'part' attribute"
+
+    elif event.type == "response.output_text.delta":
+        assert hasattr(
+            event, "item_id"
+        ), f"{event.type} event should have an 'item_id' attribute"
+        assert hasattr(
+            event, "output_index"
+        ), f"{event.type} event should have an 'output_index' attribute"
+        assert hasattr(
+            event, "content_index"
+        ), f"{event.type} event should have a 'content_index' attribute"
+        assert hasattr(
+            event, "delta"
+        ), f"{event.type} event should have a 'delta' attribute"
+
+    elif event.type == "response.output_text.annotation.added":
+        assert hasattr(
+            event, "item_id"
+        ), f"{event.type} event should have an 'item_id' attribute"
+        assert hasattr(
+            event, "output_index"
+        ), f"{event.type} event should have an 'output_index' attribute"
+        assert hasattr(
+            event, "content_index"
+        ), f"{event.type} event should have a 'content_index' attribute"
+        assert hasattr(
+            event, "annotation_index"
+        ), f"{event.type} event should have an 'annotation_index' attribute"
+        assert hasattr(
+            event, "annotation"
+        ), f"{event.type} event should have an 'annotation' attribute"
+
+    elif event.type == "response.output_text.done":
+        assert hasattr(
+            event, "item_id"
+        ), f"{event.type} event should have an 'item_id' attribute"
+        assert hasattr(
+            event, "output_index"
+        ), f"{event.type} event should have an 'output_index' attribute"
+        assert hasattr(
+            event, "content_index"
+        ), f"{event.type} event should have a 'content_index' attribute"
+        assert hasattr(
+            event, "text"
+        ), f"{event.type} event should have a 'text' attribute"
+
+    elif event.type == "response.refusal.delta":
+        assert hasattr(
+            event, "item_id"
+        ), f"{event.type} event should have an 'item_id' attribute"
+        assert hasattr(
+            event, "output_index"
+        ), f"{event.type} event should have an 'output_index' attribute"
+        assert hasattr(
+            event, "content_index"
+        ), f"{event.type} event should have a 'content_index' attribute"
+        assert hasattr(
+            event, "delta"
+        ), f"{event.type} event should have a 'delta' attribute"
+
+    elif event.type == "response.refusal.done":
+        assert hasattr(
+            event, "item_id"
+        ), f"{event.type} event should have an 'item_id' attribute"
+        assert hasattr(
+            event, "output_index"
+        ), f"{event.type} event should have an 'output_index' attribute"
+        assert hasattr(
+            event, "content_index"
+        ), f"{event.type} event should have a 'content_index' attribute"
+        assert hasattr(
+            event, "refusal"
+        ), f"{event.type} event should have a 'refusal' attribute"
+
+    elif event.type == "response.function_call_arguments.delta":
+        assert hasattr(
+            event, "item_id"
+        ), f"{event.type} event should have an 'item_id' attribute"
+        assert hasattr(
+            event, "output_index"
+        ), f"{event.type} event should have an 'output_index' attribute"
+        assert hasattr(
+            event, "delta"
+        ), f"{event.type} event should have a 'delta' attribute"
+
+    elif event.type == "response.function_call_arguments.done":
+        assert hasattr(
+            event, "item_id"
+        ), f"{event.type} event should have an 'item_id' attribute"
+        assert hasattr(
+            event, "output_index"
+        ), f"{event.type} event should have an 'output_index' attribute"
+        assert hasattr(
+            event, "arguments"
+        ), f"{event.type} event should have an 'arguments' attribute"
+
+    elif event.type in [
+        "response.file_search_call.in_progress",
+        "response.file_search_call.searching",
+        "response.file_search_call.completed",
+        "response.web_search_call.in_progress",
+        "response.web_search_call.searching",
+        "response.web_search_call.completed",
+    ]:
+        assert hasattr(
+            event, "output_index"
+        ), f"{event.type} event should have an 'output_index' attribute"
+        assert hasattr(
+            event, "item_id"
+        ), f"{event.type} event should have an 'item_id' attribute"
+
+    elif event.type == "error":
+        assert hasattr(
+            event, "message"
+        ), "Error event should have a 'message' attribute"
+    return True  # Return True if validation passes
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_openai_responses_api_streaming_validation(sync_mode):
+    """Test that validates each streaming event from the responses API"""
+    litellm._turn_on_debug()
+
+    event_types_seen = set()
+
+    if sync_mode:
+        response = litellm.responses(
+            model="gpt-4o",
+            input="Tell me about artificial intelligence in 3 sentences.",
+            stream=True,
+        )
+        for event in response:
+            print(f"Validating event type: {event.type}")
+            validate_stream_event(event)
+            event_types_seen.add(event.type)
+    else:
+        response = await litellm.aresponses(
+            model="gpt-4o",
+            input="Tell me about artificial intelligence in 3 sentences.",
+            stream=True,
+        )
+        async for event in response:
+            print(f"Validating event type: {event.type}")
+            validate_stream_event(event)
+            event_types_seen.add(event.type)
+
+    # At minimum, we should see these core event types
+    required_events = {"response.created", "response.completed"}
+
+    missing_events = required_events - event_types_seen
+    assert not missing_events, f"Missing required event types: {missing_events}"
+
+    print(f"Successfully validated all event types: {event_types_seen}")
