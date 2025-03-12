@@ -332,6 +332,7 @@ class BaseAzureLLM:
             "api_version": api_version,
             "azure_ad_token": azure_ad_token,
             "azure_ad_token_provider": azure_ad_token_provider,
+            "http_client": litellm.client_session,
         }
         if max_retries is not None:
             azure_client_params["max_retries"] = max_retries
