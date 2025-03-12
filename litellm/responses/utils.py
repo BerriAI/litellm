@@ -1,4 +1,4 @@
-from typing import Any, Dict, get_type_hints
+from typing import Any, Dict, cast, get_type_hints
 
 import litellm
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
@@ -73,7 +73,7 @@ class ResponsesAPIRequestUtils:
         """
         valid_keys = get_type_hints(ResponsesAPIOptionalRequestParams).keys()
         filtered_params = {k: v for k, v in params.items() if k in valid_keys}
-        return ResponsesAPIOptionalRequestParams(**filtered_params)
+        return cast(ResponsesAPIOptionalRequestParams, filtered_params)
 
 
 class ResponseAPILoggingUtils:
