@@ -1,6 +1,5 @@
 import asyncio
-import os
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import httpx
 import openai

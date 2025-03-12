@@ -6,7 +6,6 @@ from typing import Any, Coroutine, Optional, Union, cast
 
 import httpx
 
-import litellm
 from litellm.llms.azure.azure import AsyncAzureOpenAI, AzureOpenAI
 from litellm.types.llms.openai import (
     Batch,
