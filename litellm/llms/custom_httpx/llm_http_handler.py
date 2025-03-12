@@ -23,12 +23,7 @@ from litellm.responses.streaming_iterator import (
     ResponsesAPIStreamingIterator,
     SyncResponsesAPIStreamingIterator,
 )
-from litellm.types.llms.openai import (
-    ResponseInputParam,
-    ResponsesAPIOptionalRequestParams,
-    ResponsesAPIRequestParams,
-    ResponsesAPIResponse,
-)
+from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIResponse
 from litellm.types.rerank import OptionalRerankParams, RerankResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import EmbeddingResponse, FileTypes, TranscriptionResponse
