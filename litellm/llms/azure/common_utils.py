@@ -342,6 +342,9 @@ class BaseAzureLLM:
             azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
         # this decides if we should set azure_endpoint or base_url on Azure OpenAI Client
         # required to support GPT-4 vision enhancements, since base_url needs to be set on Azure OpenAI Client
-        azure_client_params = select_azure_base_url_or_endpoint(azure_client_params)
+
+        azure_client_params = select_azure_base_url_or_endpoint(
+            azure_client_params=azure_client_params
+        )
 
         return azure_client_params
