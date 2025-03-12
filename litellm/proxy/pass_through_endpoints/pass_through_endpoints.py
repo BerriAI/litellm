@@ -3,8 +3,8 @@ import asyncio
 import json
 from base64 import b64encode
 from datetime import datetime
-from typing import List, Optional, Union, Dict
-from urllib.parse import urlencode, parse_qs, urlparse
+from typing import Dict, List, Optional, Union
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -260,6 +260,7 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
             code=getattr(e, "status_code", 500),
         )
 
+
 class HttpPassThroughEndpointHelpers:
     @staticmethod
     def forward_headers_from_request(
@@ -315,11 +316,11 @@ class HttpPassThroughEndpointHelpers:
         existing_query_params = parse_qs(existing_query_string)
 
         # parse_qs returns a dict where each value is a list, so let's flatten it
-        existing_query_params = {
+        updated_existing_query_params = {
             k: v[0] if len(v) == 1 else v for k, v in existing_query_params.items()
         }
         # Merge the query params, giving priority to the existing ones
-        return {**request_query_params, **existing_query_params}
+        return {**request_query_params, **updated_existing_query_params}
 
     @staticmethod
     async def _make_non_streaming_http_request(
@@ -351,6 +352,7 @@ class HttpPassThroughEndpointHelpers:
                 json=custom_body,
             )
         return response
+
 
 async def pass_through_request(  # noqa: PLR0915
     request: Request,
