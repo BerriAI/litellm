@@ -1205,3 +1205,35 @@ def test_context_window_exceeded_error_from_litellm_proxy():
     }
     with pytest.raises(litellm.ContextWindowExceededError):
         extract_and_raise_litellm_exception(**args)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("stream_mode", [True, False])
+@pytest.mark.parametrize("model", ["azure/gpt-4o"])  # "gpt-4o-mini",
+@pytest.mark.asyncio
+async def test_exception_bubbling_up(sync_mode, stream_mode, model):
+    """
+    make sure code, param, and type are bubbled up
+    """
+    import litellm
+
+    litellm.set_verbose = True
+    with pytest.raises(Exception) as exc_info:
+        if sync_mode:
+            litellm.completion(
+                model=model,
+                messages=[{"role": "usera", "content": "hi"}],
+                stream=stream_mode,
+                sync_stream=sync_mode,
+            )
+        else:
+            await litellm.acompletion(
+                model=model,
+                messages=[{"role": "usera", "content": "hi"}],
+                stream=stream_mode,
+                sync_stream=sync_mode,
+            )
+
+    assert exc_info.value.code == "invalid_value"
+    assert exc_info.value.param is not None
+    assert exc_info.value.type == "invalid_request_error"
