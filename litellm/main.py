@@ -1168,6 +1168,8 @@ def completion(  # type: ignore # noqa: PLR0915
             client_secret=kwargs.get("client_secret"),
             azure_username=kwargs.get("azure_username"),
             azure_password=kwargs.get("azure_password"),
+            max_retries=max_retries,
+            timeout=timeout,
         )
         logging.update_environment_variables(
             model=model,
@@ -3356,6 +3358,7 @@ def embedding(  # noqa: PLR0915
                 }
             }
         )
+
     litellm_params_dict = get_litellm_params(**kwargs)
 
     logging: Logging = litellm_logging_obj  # type: ignore
