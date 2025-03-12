@@ -376,13 +376,6 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Adding Providers",
-      items: [
-        "adding_provider/directory_structure",
-        "adding_provider/new_rerank_provider"],
-    },
-    {
-      type: "category",
       label: "Logging & Observability",
       items: [
         "observability/lunary_integration",
@@ -440,12 +433,26 @@ const sidebars = {
         },
       ]
     },
-
+    {
+      type: "category",
+      label: "Contributing",
+      items: [
+        "extras/contributing_code",
+        {
+          type: "category",
+          label: "Adding Providers",
+          items: [
+            "adding_provider/directory_structure",
+            "adding_provider/new_rerank_provider"],
+        },
+        "extras/contributing",
+        "contributing",
+      ]
+    },
     {
       type: "category",
       label: "Extras",
       items: [
-        "extras/contributing",
         "data_security",
         "data_retention",
         "migration_policy",
@@ -481,7 +488,6 @@ const sidebars = {
             "projects/pgai",
           ],
         },
-        "contributing",
         "proxy/pii_masking",
         "extras/code_quality",
         "rules",
