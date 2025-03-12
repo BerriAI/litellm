@@ -1,15 +1,19 @@
+import json
 from typing import Any, Dict
 
 import litellm
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
-from litellm.types.llms.openai import ResponsesAPIRequestParams
+from litellm.types.llms.openai import (
+    ResponsesAPIOptionalRequestParams,
+    ResponsesAPIRequestParams,
+)
 
 
 def get_optional_params_responses_api(
     model: str,
     responses_api_provider_config: BaseResponsesAPIConfig,
-    optional_params: Dict[str, Any],
-) -> ResponsesAPIRequestParams:
+    response_api_optional_params: ResponsesAPIOptionalRequestParams,
+) -> Dict:
     """
     Get optional parameters for the responses API.
 
@@ -22,14 +26,13 @@ def get_optional_params_responses_api(
         A dictionary of supported parameters for the responses API
     """
     # Remove None values and internal parameters
-    filtered_params = {k: v for k, v in optional_params.items() if v is not None}
 
     # Get supported parameters for the model
     supported_params = responses_api_provider_config.get_supported_openai_params(model)
 
     # Check for unsupported parameters
     unsupported_params = [
-        param for param in filtered_params if param not in supported_params
+        param for param in response_api_optional_params if param not in supported_params
     ]
 
     if unsupported_params:
@@ -40,7 +43,9 @@ def get_optional_params_responses_api(
 
     # Map parameters to provider-specific format
     mapped_params = responses_api_provider_config.map_openai_params(
-        optional_params=filtered_params, model=model, drop_params=litellm.drop_params
+        response_api_optional_params=response_api_optional_params,
+        model=model,
+        drop_params=litellm.drop_params,
     )
 
     return mapped_params

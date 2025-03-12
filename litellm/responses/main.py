@@ -1,8 +1,9 @@
-from typing import Any, Dict, Iterable, List, Literal, Optional, Union
+from typing import Any, Dict, Iterable, List, Literal, Optional, Union, get_type_hints
 
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.responses.utils import (
@@ -13,12 +14,13 @@ from litellm.types.llms.openai import (
     Reasoning,
     ResponseIncludable,
     ResponseInputParam,
+    ResponsesAPIOptionalRequestParams,
     ResponseTextConfigParam,
     ToolChoice,
     ToolParam,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.utils import ProviderConfigManager
+from litellm.utils import ProviderConfigManager, client
 
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
@@ -26,6 +28,24 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
 
 
+def get_requested_response_api_optional_param(
+    params: Dict[str, Any]
+) -> ResponsesAPIOptionalRequestParams:
+    """
+    Filter parameters to only include those defined in ResponsesAPIOptionalRequestParams.
+
+    Args:
+        params: Dictionary of parameters to filter
+
+    Returns:
+        ResponsesAPIOptionalRequestParams instance with only the valid parameters
+    """
+    valid_keys = get_type_hints(ResponsesAPIOptionalRequestParams).keys()
+    filtered_params = {k: v for k, v in params.items() if k in valid_keys}
+    return ResponsesAPIOptionalRequestParams(**filtered_params)
+
+
+@client
 async def aresponses(
     input: Union[str, ResponseInputParam],
     model: str,
@@ -53,6 +73,8 @@ async def aresponses(
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     **kwargs,
 ):
+    litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
+    litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
 
     # get llm provider logic
     litellm_params = GenericLiteLLMParams(**kwargs)
@@ -81,22 +103,31 @@ async def aresponses(
         )
 
     # Get all parameters using locals() and combine with kwargs
-    all_params = {**locals(), **kwargs}
+    local_vars = locals()
+    local_vars.update(kwargs)
+    # Get ResponsesAPIOptionalRequestParams with only valid parameters
+    response_api_optional_params: ResponsesAPIOptionalRequestParams = (
+        get_requested_response_api_optional_param(local_vars)
+    )
 
     # Get optional parameters for the responses API
-    responses_api_request_params: ResponsesAPIRequestParams = (
-        get_optional_params_responses_api(
-            model=model,
-            responses_api_provider_config=responses_api_provider_config,
-            optional_params={**locals(), **kwargs},
-        )
+    responses_api_request_params: Dict = get_optional_params_responses_api(
+        model=model,
+        responses_api_provider_config=responses_api_provider_config,
+        response_api_optional_params=response_api_optional_params,
     )
 
     response = await base_llm_http_handler.async_response_api_handler(
         model=model,
         input=input,
         responses_api_provider_config=responses_api_provider_config,
-        responses_api_request_params=responses_api_request_params,
+        response_api_optional_request_params=responses_api_request_params,
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params,
+        logging_obj=litellm_logging_obj,
+        extra_headers=extra_headers,
+        extra_body=extra_body,
+        timeout=timeout,
     )
     return response
 
