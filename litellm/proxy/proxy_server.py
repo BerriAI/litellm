@@ -947,7 +947,9 @@ def _set_spend_logs_payload(
     spend_logs_url: Optional[str] = None,
 ):
     verbose_proxy_logger.info(
-        "Writing spend log to db - request_id: {}".format(payload.get("request_id"))
+        "Writing spend log to db - request_id: {}, spend: {}".format(
+            payload.get("request_id"), payload.get("spend")
+        )
     )
     if prisma_client is not None and spend_logs_url is not None:
         if isinstance(payload["startTime"], datetime):
@@ -3716,6 +3718,7 @@ async def chat_completion(  # noqa: PLR0915
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
+            openai_code=getattr(e, "code", None),
             code=getattr(e, "status_code", 500),
             headers=headers,
         )
@@ -3929,6 +3932,7 @@ async def completion(  # noqa: PLR0915
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
+            openai_code=getattr(e, "code", None),
             code=getattr(e, "status_code", 500),
         )
 
@@ -4138,6 +4142,7 @@ async def embeddings(  # noqa: PLR0915
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
+                openai_code=getattr(e, "code", None),
                 code=getattr(e, "status_code", 500),
             )
 
@@ -4257,6 +4262,7 @@ async def image_generation(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
+                openai_code=getattr(e, "code", None),
                 code=getattr(e, "status_code", 500),
             )
 
@@ -4518,6 +4524,7 @@ async def audio_transcriptions(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
+                openai_code=getattr(e, "code", None),
                 code=getattr(e, "status_code", 500),
             )
 
@@ -4667,6 +4674,7 @@ async def get_assistants(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
+                openai_code=getattr(e, "code", None),
                 code=getattr(e, "status_code", 500),
             )
 
@@ -4765,7 +4773,7 @@ async def create_assistant(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                code=getattr(e, "code", getattr(e, "status_code", 500)),
             )
 
 
@@ -4862,7 +4870,7 @@ async def delete_assistant(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                code=getattr(e, "code", getattr(e, "status_code", 500)),
             )
 
 
@@ -4959,7 +4967,7 @@ async def create_threads(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                code=getattr(e, "code", getattr(e, "status_code", 500)),
             )
 
 
@@ -5055,7 +5063,7 @@ async def get_thread(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                code=getattr(e, "code", getattr(e, "status_code", 500)),
             )
 
 
@@ -5154,7 +5162,7 @@ async def add_messages(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                code=getattr(e, "code", getattr(e, "status_code", 500)),
             )
 
 
@@ -5249,7 +5257,7 @@ async def get_messages(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                code=getattr(e, "code", getattr(e, "status_code", 500)),
             )
 
 
@@ -5358,7 +5366,7 @@ async def run_thread(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                code=getattr(e, "code", getattr(e, "status_code", 500)),
             )
 
 

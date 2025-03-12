@@ -156,7 +156,7 @@ ${formattedBody}
       }}>
         <div style={{ marginBottom: '24px' }}>
           <h2 style={{ fontSize: '24px', fontWeight: 'bold', margin: '0 0 4px 0' }}>Original Request</h2>
-          <p style={{ color: '#666', margin: 0 }}>The request you would send to LiteLLM's `/chat/completions` endpoint.</p>
+          <p style={{ color: '#666', margin: 0 }}>The request you would send to LiteLLM /chat/completions endpoint.</p>
         </div>
         
         <textarea 
