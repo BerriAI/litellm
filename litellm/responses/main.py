@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, Dict, Iterable, List, Literal, Optional, Union, get_type_hints
+from typing import Any, Dict, Iterable, List, Literal, Optional, Union
 
 import httpx
 
