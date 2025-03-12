@@ -45,18 +45,11 @@ class InitalizeOpenAISDKClient:
         return True
 
     @staticmethod
-    def set_client(  # noqa: PLR0915
+    def set_max_parallel_requests_client(
         litellm_router_instance: LitellmRouter, model: dict
     ):
-        """
-        - Initializes Azure/OpenAI clients. Stores them in cache, b/c of this - https://github.com/BerriAI/litellm/issues/1278
-        - Initializes Semaphore for client w/ rpm. Stores them in cache. b/c of this - https://github.com/BerriAI/litellm/issues/2994
-        """
-        client_ttl = litellm_router_instance.client_ttl
         litellm_params = model.get("litellm_params", {})
-        model_name = litellm_params.get("model")
         model_id = model["model_info"]["id"]
-        # ### IF RPM SET - initialize a semaphore ###
         rpm = litellm_params.get("rpm", None)
         tpm = litellm_params.get("tpm", None)
         max_parallel_requests = litellm_params.get("max_parallel_requests", None)
@@ -74,6 +67,19 @@ class InitalizeOpenAISDKClient:
                 value=semaphore,
                 local_only=True,
             )
+
+    @staticmethod
+    def set_client(  # noqa: PLR0915
+        litellm_router_instance: LitellmRouter, model: dict
+    ):
+        """
+        - Initializes Azure/OpenAI clients. Stores them in cache, b/c of this - https://github.com/BerriAI/litellm/issues/1278
+        - Initializes Semaphore for client w/ rpm. Stores them in cache. b/c of this - https://github.com/BerriAI/litellm/issues/2994
+        """
+        client_ttl = litellm_router_instance.client_ttl
+        litellm_params = model.get("litellm_params", {})
+        model_name = litellm_params.get("model")
+        model_id = model["model_info"]["id"]
 
         ####  for OpenAI / Azure we need to initalize the Client for High Traffic ########
         custom_llm_provider = litellm_params.get("custom_llm_provider")
@@ -185,7 +191,6 @@ class InitalizeOpenAISDKClient:
                 organization_env_name = organization.replace("os.environ/", "")
                 organization = get_secret_str(organization_env_name)
                 litellm_params["organization"] = organization
-
             else:
                 _api_key = api_key  # type: ignore
                 if _api_key is not None and isinstance(_api_key, str):
