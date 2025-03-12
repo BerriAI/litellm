@@ -120,6 +120,18 @@ async def aresponses(
         response_api_optional_params=response_api_optional_params,
     )
 
+    # Pre Call logging
+    litellm_logging_obj.update_environment_variables(
+        model=model,
+        user=user,
+        optional_params=dict(responses_api_request_params),
+        litellm_params={
+            "litellm_call_id": litellm_call_id,
+            **responses_api_request_params,
+        },
+        custom_llm_provider=custom_llm_provider,
+    )
+
     response = await base_llm_http_handler.async_response_api_handler(
         model=model,
         input=input,
