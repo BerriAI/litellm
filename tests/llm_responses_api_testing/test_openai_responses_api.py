@@ -9,7 +9,78 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 import json
 from litellm.types.utils import StandardLoggingPayload
-from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIResponse
+from litellm.types.llms.openai import (
+    ResponseCompletedEvent,
+    ResponsesAPIResponse,
+    ResponseTextConfig,
+)
+
+
+def validate_responses_api_response(response):
+    """
+    Validate that a response from litellm.responses() or litellm.aresponses()
+    conforms to the expected ResponsesAPIResponse structure.
+
+    Args:
+        response: The response object to validate
+
+    Raises:
+        AssertionError: If the response doesn't match the expected structure
+    """
+    # Validate response structure
+    print("response=", json.dumps(response, indent=4, default=str))
+    assert isinstance(
+        response, ResponsesAPIResponse
+    ), "Response should be an instance of ResponsesAPIResponse"
+
+    # Required fields
+    assert "id" in response and isinstance(
+        response["id"], str
+    ), "Response should have a string 'id' field"
+    assert "created_at" in response and isinstance(
+        response["created_at"], (int, float)
+    ), "Response should have a numeric 'created_at' field"
+    assert "output" in response and isinstance(
+        response["output"], list
+    ), "Response should have a list 'output' field"
+    assert "parallel_tool_calls" in response and isinstance(
+        response["parallel_tool_calls"], bool
+    ), "Response should have a boolean 'parallel_tool_calls' field"
+
+    # Optional fields with their expected types
+    optional_fields = {
+        "error": (dict, type(None)),  # error can be dict or None
+        "incomplete_details": (dict, type(None)),
+        "instructions": (str, type(None)),
+        "metadata": dict,
+        "model": str,
+        "object": str,
+        "temperature": (int, float),
+        "tool_choice": (dict, str),
+        "tools": list,
+        "top_p": (int, float),
+        "max_output_tokens": (int, type(None)),
+        "previous_response_id": (str, type(None)),
+        "reasoning": dict,
+        "status": str,
+        "text": ResponseTextConfig,
+        "truncation": str,
+        # "usage": dict,
+        "user": (str, type(None)),
+    }
+
+    for field, expected_type in optional_fields.items():
+        if field in response:
+            assert isinstance(
+                response[field], expected_type
+            ), f"Field '{field}' should be of type {expected_type}, but got {type(response[field])}"
+
+    # Check if output has at least one item
+    assert (
+        len(response["output"]) > 0
+    ), "Response 'output' field should have at least one item"
+
+    return True  # Return True if validation passes
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -23,6 +94,9 @@ async def test_basic_openai_responses_api(sync_mode):
         response = await litellm.aresponses(model="gpt-4o", input="Basic ping")
 
     print("litellm response=", json.dumps(response, indent=4, default=str))
+
+    # Use the helper function to validate the response
+    validate_responses_api_response(response)
 
 
 @pytest.mark.parametrize("sync_mode", [True])
