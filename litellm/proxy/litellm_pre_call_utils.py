@@ -472,8 +472,13 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
                 model_config = m
                 break
     
+    # Add api_version from model config if available
+    if model_config and model_config.litellm_params and "api_version" in model_config.litellm_params:
+        if "litellm_params" not in data:
+            data["litellm_params"] = {}
+        data["litellm_params"]["api_version"] = model_config.litellm_params["api_version"]
     # Only add api_version from query params if not set in proxy config
-    if not (model_config and model_config.litellm_params and "api_version" in model_config.litellm_params):
+    else:
         safe_add_api_version_from_query_params(data, request)
 
     _headers = clean_headers(
