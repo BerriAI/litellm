@@ -718,8 +718,8 @@ jobs:
       - persist_to_workspace:
           root: .
           paths:
-            - llm_responses_api_testing.xml
-            - llm_responses_api_testing
+            - llm_responses_api_coverage.xml
+            - llm_responses_api_coverage
   litellm_mapped_tests:
     docker:
       - image: cimg/python:3.11
