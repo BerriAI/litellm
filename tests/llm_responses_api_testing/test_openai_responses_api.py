@@ -9,6 +9,7 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 import json
 from litellm.types.utils import StandardLoggingPayload
+from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIResponse
 
 
 @pytest.mark.asyncio
@@ -43,8 +44,48 @@ class TestCustomLogger(CustomLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         print("in async_log_success_event")
+        print("kwargs=", json.dumps(kwargs, indent=4, default=str))
         self.standard_logging_object = kwargs["standard_logging_object"]
         pass
+
+
+def validate_standard_logging_payload(
+    slp: StandardLoggingPayload, response: ResponsesAPIResponse, request_model: str
+):
+    """
+    Validate that a StandardLoggingPayload object matches the expected response
+
+    Args:
+        slp (StandardLoggingPayload): The standard logging payload object to validate
+        response (dict): The litellm response to compare against
+        request_model (str): The model name that was requested
+    """
+    # Validate payload exists
+    assert slp is not None, "Standard logging payload should not be None"
+
+    # Validate token counts
+    print("response=", json.dumps(response, indent=4, default=str))
+    assert (
+        slp["prompt_tokens"] == response["usage"]["input_tokens"]
+    ), "Prompt tokens mismatch"
+    assert (
+        slp["completion_tokens"] == response["usage"]["output_tokens"]
+    ), "Completion tokens mismatch"
+    assert (
+        slp["total_tokens"]
+        == response["usage"]["input_tokens"] + response["usage"]["output_tokens"]
+    ), "Total tokens mismatch"
+
+    # Validate spend and response metadata
+    assert slp["response_cost"] > 0, "Response cost should be greater than 0"
+    assert slp["id"] == response["id"], "Response ID mismatch"
+    assert slp["model"] == request_model, "Model name mismatch"
+
+    # Validate messages
+    assert slp["messages"] == [{"content": "hi", "role": "user"}], "Messages mismatch"
+
+    # Validate complete response structure
+    validate_responses_match(slp["response"], response)
 
 
 @pytest.mark.asyncio
@@ -53,13 +94,16 @@ async def test_basic_openai_responses_api_streaming_with_logging():
     litellm.set_verbose = True
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
+    request_model = "gpt-4o"
     response = await litellm.aresponses(
-        model="gpt-4o",
+        model=request_model,
         input="hi",
         stream=True,
     )
-
+    final_response: Optional[ResponseCompletedEvent] = None
     async for event in response:
+        if event.type == "response.completed":
+            final_response = event
         print("litellm response=", json.dumps(event, indent=4, default=str))
 
     print("sleeping for 2 seconds...")
@@ -67,6 +111,15 @@ async def test_basic_openai_responses_api_streaming_with_logging():
     print(
         "standard logging payload=",
         json.dumps(test_custom_logger.standard_logging_object, indent=4, default=str),
+    )
+
+    assert final_response is not None
+    assert test_custom_logger.standard_logging_object is not None
+
+    validate_standard_logging_payload(
+        slp=test_custom_logger.standard_logging_object,
+        response=final_response.response,
+        request_model=request_model,
     )
 
 
@@ -129,37 +182,9 @@ async def test_basic_openai_responses_api_non_streaming_with_logging():
         json.dumps(test_custom_logger.standard_logging_object, indent=4, default=str),
     )
 
+    assert response is not None
     assert test_custom_logger.standard_logging_object is not None
 
-    # validate token counts match OpenAI response
-    assert (
-        test_custom_logger.standard_logging_object["prompt_tokens"]
-        == response["usage"]["input_tokens"]
-    )
-    assert (
-        test_custom_logger.standard_logging_object["completion_tokens"]
-        == response["usage"]["output_tokens"]
-    )
-    assert (
-        test_custom_logger.standard_logging_object["total_tokens"]
-        == response["usage"]["input_tokens"] + response["usage"]["output_tokens"]
-    )
-
-    # validate spend > 0
-    assert test_custom_logger.standard_logging_object["response_cost"] > 0
-
-    # validate response id matches OpenAI
-    assert test_custom_logger.standard_logging_object["id"] == response["id"]
-
-    # validate model matches
-    assert test_custom_logger.standard_logging_object["model"] == request_model
-
-    # validate messages matches
-    assert test_custom_logger.standard_logging_object["messages"] == [
-        {"content": "hi", "role": "user"}
-    ]
-
-    # Add validation after existing assertions
-    validate_responses_match(
-        test_custom_logger.standard_logging_object["response"], response
+    validate_standard_logging_payload(
+        test_custom_logger.standard_logging_object, response, request_model
     )
