@@ -1,5 +1,17 @@
+from enum import Enum
 from os import PathLike
-from typing import IO, Any, Iterable, List, Literal, Mapping, Optional, Tuple, Union
+from typing import (
+    IO,
+    Annotated,
+    Any,
+    Iterable,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Tuple,
+    Union,
+)
 
 import httpx
 from openai._legacy_response import (
@@ -49,7 +61,7 @@ from openai.types.responses.response_create_params import (
     ToolChoice,
     ToolParam,
 )
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, Discriminator, Field, PrivateAttr
 from typing_extensions import Dict, Required, TypedDict, override
 
 FileContent = Union[IO[bytes], bytes, PathLike]
@@ -790,6 +802,233 @@ class ResponsesAPIResponse(BaseModel):
         return key in self.__dict__
 
 
-class ResponsesAPIStreamingResponse(BaseModel):
-    type: str
+class ResponsesAPIStreamEvents(str, Enum):
+    """
+    Enum representing all supported OpenAI stream event types for the Responses API.
+
+    Inherits from str to allow direct string comparison and usage as dictionary keys.
+    """
+
+    # Response lifecycle events
+    RESPONSE_CREATED = "response.created"
+    RESPONSE_IN_PROGRESS = "response.in_progress"
+    RESPONSE_COMPLETED = "response.completed"
+    RESPONSE_FAILED = "response.failed"
+    RESPONSE_INCOMPLETE = "response.incomplete"
+
+    # Output item events
+    OUTPUT_ITEM_ADDED = "response.output_item.added"
+    OUTPUT_ITEM_DONE = "response.output_item.done"
+
+    # Content part events
+    CONTENT_PART_ADDED = "response.content_part.added"
+    CONTENT_PART_DONE = "response.content_part.done"
+
+    # Output text events
+    OUTPUT_TEXT_DELTA = "response.output_text.delta"
+    OUTPUT_TEXT_ANNOTATION_ADDED = "response.output_text.annotation.added"
+    OUTPUT_TEXT_DONE = "response.output_text.done"
+
+    # Refusal events
+    REFUSAL_DELTA = "response.refusal.delta"
+    REFUSAL_DONE = "response.refusal.done"
+
+    # Function call events
+    FUNCTION_CALL_ARGUMENTS_DELTA = "response.function_call_arguments.delta"
+    FUNCTION_CALL_ARGUMENTS_DONE = "response.function_call_arguments.done"
+
+    # File search events
+    FILE_SEARCH_CALL_IN_PROGRESS = "response.file_search_call.in_progress"
+    FILE_SEARCH_CALL_SEARCHING = "response.file_search_call.searching"
+    FILE_SEARCH_CALL_COMPLETED = "response.file_search_call.completed"
+
+    # Web search events
+    WEB_SEARCH_CALL_IN_PROGRESS = "response.web_search_call.in_progress"
+    WEB_SEARCH_CALL_SEARCHING = "response.web_search_call.searching"
+    WEB_SEARCH_CALL_COMPLETED = "response.web_search_call.completed"
+
+    # Error event
+    ERROR = "error"
+
+
+# Base streaming response types
+class ResponseCreatedEvent(BaseModel):
+    type: Literal[ResponsesAPIStreamEvents.RESPONSE_CREATED]
     response: ResponsesAPIResponse
+
+
+class ResponseInProgressEvent(BaseModel):
+    type: Literal[ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS]
+    response: ResponsesAPIResponse
+
+
+class ResponseCompletedEvent(BaseModel):
+    type: Literal[ResponsesAPIStreamEvents.RESPONSE_COMPLETED]
+    response: ResponsesAPIResponse
+
+
+class ResponseFailedEvent(BaseModel):
+    type: Literal[ResponsesAPIStreamEvents.RESPONSE_FAILED]
+    response: ResponsesAPIResponse
+
+
+class ResponseIncompleteEvent(BaseModel):
+    type: Literal[ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE]
+    response: ResponsesAPIResponse
+
+
+class OutputItemAddedEvent(BaseModel):
+    type: Literal[ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
+    output_index: int
+    item: dict
+
+
+class OutputItemDoneEvent(BaseModel):
+    type: Literal[ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
+    output_index: int
+    item: dict
+
+
+class ContentPartAddedEvent(BaseModel):
+    type: Literal[ResponsesAPIStreamEvents.CONTENT_PART_ADDED]
+    item_id: str
+    output_index: int
+    content_index: int
+    part: dict
+
+
+class ContentPartDoneEvent(BaseModel):
+    type: Literal[ResponsesAPIStreamEvents.CONTENT_PART_DONE]
+    item_id: str
+    output_index: int
+    content_index: int
+    part: dict
+
+
+class OutputTextDeltaEvent(BaseModel):
+    type: Literal[ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA]
+    item_id: str
+    output_index: int
+    content_index: int
+    delta: str
+
+
+class OutputTextAnnotationAddedEvent(BaseModel):
+    type: Literal[ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED]
+    item_id: str
+    output_index: int
+    content_index: int
+    annotation_index: int
+    annotation: dict
+
+
+class OutputTextDoneEvent(BaseModel):
+    type: Literal[ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE]
+    item_id: str
+    output_index: int
+    content_index: int
+    text: str
+
+
+class RefusalDeltaEvent(BaseModel):
+    type: Literal[ResponsesAPIStreamEvents.REFUSAL_DELTA]
+    item_id: str
+    output_index: int
+    content_index: int
+    delta: str
+
+
+class RefusalDoneEvent(BaseModel):
+    type: Literal[ResponsesAPIStreamEvents.REFUSAL_DONE]
+    item_id: str
+    output_index: int
+    content_index: int
+    refusal: str
+
+
+class FunctionCallArgumentsDeltaEvent(BaseModel):
+    type: Literal[ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA]
+    item_id: str
+    output_index: int
+    delta: str
+
+
+class FunctionCallArgumentsDoneEvent(BaseModel):
+    type: Literal[ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE]
+    item_id: str
+    output_index: int
+    arguments: str
+
+
+class FileSearchCallInProgressEvent(BaseModel):
+    type: Literal[ResponsesAPIStreamEvents.FILE_SEARCH_CALL_IN_PROGRESS]
+    output_index: int
+    item_id: str
+
+
+class FileSearchCallSearchingEvent(BaseModel):
+    type: Literal[ResponsesAPIStreamEvents.FILE_SEARCH_CALL_SEARCHING]
+    output_index: int
+    item_id: str
+
+
+class FileSearchCallCompletedEvent(BaseModel):
+    type: Literal[ResponsesAPIStreamEvents.FILE_SEARCH_CALL_COMPLETED]
+    output_index: int
+    item_id: str
+
+
+class WebSearchCallInProgressEvent(BaseModel):
+    type: Literal[ResponsesAPIStreamEvents.WEB_SEARCH_CALL_IN_PROGRESS]
+    output_index: int
+    item_id: str
+
+
+class WebSearchCallSearchingEvent(BaseModel):
+    type: Literal[ResponsesAPIStreamEvents.WEB_SEARCH_CALL_SEARCHING]
+    output_index: int
+    item_id: str
+
+
+class WebSearchCallCompletedEvent(BaseModel):
+    type: Literal[ResponsesAPIStreamEvents.WEB_SEARCH_CALL_COMPLETED]
+    output_index: int
+    item_id: str
+
+
+class ErrorEvent(BaseModel):
+    type: Literal[ResponsesAPIStreamEvents.ERROR]
+    code: Optional[str]
+    message: str
+    param: Optional[str]
+
+
+# Union type for all possible streaming responses
+ResponsesAPIStreamingResponse = Annotated[
+    Union[
+        ResponseCreatedEvent,
+        ResponseInProgressEvent,
+        ResponseCompletedEvent,
+        ResponseFailedEvent,
+        ResponseIncompleteEvent,
+        OutputItemAddedEvent,
+        OutputItemDoneEvent,
+        ContentPartAddedEvent,
+        ContentPartDoneEvent,
+        OutputTextDeltaEvent,
+        OutputTextAnnotationAddedEvent,
+        OutputTextDoneEvent,
+        RefusalDeltaEvent,
+        RefusalDoneEvent,
+        FunctionCallArgumentsDeltaEvent,
+        FunctionCallArgumentsDoneEvent,
+        FileSearchCallInProgressEvent,
+        FileSearchCallSearchingEvent,
+        FileSearchCallCompletedEvent,
+        WebSearchCallInProgressEvent,
+        WebSearchCallSearchingEvent,
+        WebSearchCallCompletedEvent,
+        ErrorEvent,
+    ],
+    Discriminator("type"),
+]
