@@ -222,9 +222,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       <TabGroup defaultIndex={editTeam ? 2 : 0}>
         <TabList className="mb-4">
-          <Tab>Overview</Tab>
-          <Tab>Members</Tab>
-          <Tab>Settings</Tab>
+          {[
+            <Tab key="overview">Overview</Tab>,
+            ...(canEditTeam ? [
+              <Tab key="members">Members</Tab>,
+              <Tab key="settings">Settings</Tab>
+            ] : [])
+          ]}
         </TabList>
 
         <TabPanels>
