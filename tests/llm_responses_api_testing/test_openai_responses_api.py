@@ -70,6 +70,43 @@ async def test_basic_openai_responses_api_streaming_with_logging():
     )
 
 
+def validate_responses_match(slp_response, litellm_response):
+    """Validate that the standard logging payload OpenAI response matches the litellm response"""
+    # Validate core fields
+    assert slp_response["id"] == litellm_response["id"], "ID mismatch"
+    assert slp_response["model"] == litellm_response["model"], "Model mismatch"
+    assert (
+        slp_response["created_at"] == litellm_response["created_at"]
+    ), "Created at mismatch"
+
+    # Validate usage
+    assert (
+        slp_response["usage"]["input_tokens"]
+        == litellm_response["usage"]["input_tokens"]
+    ), "Input tokens mismatch"
+    assert (
+        slp_response["usage"]["output_tokens"]
+        == litellm_response["usage"]["output_tokens"]
+    ), "Output tokens mismatch"
+    assert (
+        slp_response["usage"]["total_tokens"]
+        == litellm_response["usage"]["total_tokens"]
+    ), "Total tokens mismatch"
+
+    # Validate output/messages
+    assert len(slp_response["output"]) == len(
+        litellm_response["output"]
+    ), "Output length mismatch"
+    for slp_msg, litellm_msg in zip(slp_response["output"], litellm_response["output"]):
+        assert slp_msg["role"] == litellm_msg.role, "Message role mismatch"
+        # Access the content's text field for the litellm response
+        litellm_content = litellm_msg.content[0].text if litellm_msg.content else ""
+        assert (
+            slp_msg["content"][0]["text"] == litellm_content
+        ), f"Message content mismatch. Expected {litellm_content}, Got {slp_msg['content']}"
+        assert slp_msg["status"] == litellm_msg.status, "Message status mismatch"
+
+
 @pytest.mark.asyncio
 async def test_basic_openai_responses_api_non_streaming_with_logging():
     litellm._turn_on_debug()
@@ -122,4 +159,7 @@ async def test_basic_openai_responses_api_non_streaming_with_logging():
         {"content": "hi", "role": "user"}
     ]
 
-    # validate responses matches
+    # Add validation after existing assertions
+    validate_responses_match(
+        test_custom_logger.standard_logging_object["response"], response
+    )
