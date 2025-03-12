@@ -5,16 +5,14 @@ from typing import Any, AsyncIterator, Dict, Optional, Union
 
 import httpx
 
+from litellm.constants import STREAM_SSE_DONE_STRING
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.types.llms.openai import (
-    ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
 )
 from litellm.utils import CustomStreamWrapper
-
-COMPLETED_OPENAI_CHUNK_TYPE = "response.completed"
 
 
 class BaseResponsesAPIStreamingIterator:
@@ -50,7 +48,7 @@ class BaseResponsesAPIStreamingIterator:
             return None
 
         # Handle "[DONE]" marker
-        if chunk == "[DONE]":
+        if chunk == STREAM_SSE_DONE_STRING:
             self.finished = True
             return None
 
