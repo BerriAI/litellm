@@ -7,9 +7,7 @@ Written separately to handle faking streaming for o1 and o3 models.
 from typing import Any, Callable, Optional, Union
 
 import httpx
-from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 
-from litellm.types.llms.openai import Any
 from litellm.types.utils import ModelResponse
 
 from ...openai.openai import OpenAIChatCompletion
