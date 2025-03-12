@@ -1030,6 +1030,7 @@ class BaseLLMHTTPHandler:
                     response=response,
                     model=model,
                     logging_obj=logging_obj,
+                    responses_api_provider_config=responses_api_provider_config,
                 )
             else:
                 # For non-streaming, proceed as before
