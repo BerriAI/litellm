@@ -14,9 +14,12 @@ class LLMClientCache(InMemoryCache):
         Add the event loop to the cache key, to prevent event loop closed errors.
         If none, use the key as is.
         """
-        event_loop = asyncio.get_event_loop()
-        stringified_event_loop = str(id(event_loop))
-        return f"{key}-{stringified_event_loop}"
+        try:
+            event_loop = asyncio.get_event_loop()
+            stringified_event_loop = str(id(event_loop))
+            return f"{key}-{stringified_event_loop}"
+        except Exception:  # handle no current event loop
+            return key
 
     def set_cache(self, key, value, **kwargs):
         key = self.update_cache_key_with_event_loop(key)
