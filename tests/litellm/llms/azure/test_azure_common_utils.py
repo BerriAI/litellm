@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import traceback
 from typing import Callable, Optional
 from unittest.mock import MagicMock, patch
 
@@ -346,7 +347,7 @@ async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
                 azure_ad_token="oidc/test-token",
             )
         except Exception as e:
-            print(e)
+            traceback.print_exc()
 
         # Verify initialize_azure_sdk_client was called
         mock_init_azure.assert_called_once()

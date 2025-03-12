@@ -71,6 +71,7 @@ from litellm.router_utils.batch_utils import (
     _get_router_metadata_variable_name,
     replace_model_in_jsonl,
 )
+from litellm.router_utils.client_initalization_utils import InitalizeCachedClient
 from litellm.router_utils.clientside_credential_handler import (
     get_dynamic_litellm_params,
     is_clientside_credential,
@@ -5346,7 +5347,7 @@ class Router:
                 key=cache_key, local_only=True, parent_otel_span=parent_otel_span
             )
             if client is None:
-                InitalizeOpenAISDKClient.set_max_parallel_requests_client(
+                InitalizeCachedClient.set_max_parallel_requests_client(
                     litellm_router_instance=self, model=deployment
                 )
                 client = self.cache.get_cache(
