@@ -1127,7 +1127,12 @@ class Router:
         )  # add new deployment to router
         return deployment_pydantic_obj
 
-    def _update_kwargs_with_deployment(self, deployment: dict, kwargs: dict) -> None:
+    def _update_kwargs_with_deployment(
+        self,
+        deployment: dict,
+        kwargs: dict,
+        function_name: Optional[str] = None,
+    ) -> None:
         """
         2 jobs:
         - Adds selected deployment, model_info and api_base to kwargs["metadata"] (used for logging)
@@ -1144,7 +1149,10 @@ class Router:
             deployment_model_name = deployment_pydantic_obj.litellm_params.model
             deployment_api_base = deployment_pydantic_obj.litellm_params.api_base
 
-        kwargs.setdefault("metadata", {}).update(
+        metadata_variable_name = _get_router_metadata_variable_name(
+            function_name=function_name,
+        )
+        kwargs.setdefault(metadata_variable_name, {}).update(
             {
                 "deployment": deployment_model_name,
                 "model_info": model_info,
@@ -2402,7 +2410,9 @@ class Router:
                 messages=kwargs.get("messages", None),
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
-            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+            self._update_kwargs_with_deployment(
+                deployment=deployment, kwargs=kwargs, function_name="generic_api_call"
+            )
 
             data = deployment["litellm_params"].copy()
             model_name = data["model"]
@@ -2481,7 +2491,9 @@ class Router:
                 messages=kwargs.get("messages", None),
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
-            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+            self._update_kwargs_with_deployment(
+                deployment=deployment, kwargs=kwargs, function_name="generic_api_call"
+            )
 
             data = deployment["litellm_params"].copy()
             model_name = data["model"]
