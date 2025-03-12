@@ -522,7 +522,7 @@ async def test_async_azure_max_retries_0(
 @pytest.mark.parametrize("max_retries", [0, 4])
 @pytest.mark.parametrize("stream", [True, False])
 @pytest.mark.parametrize("sync_mode", [True, False])
-@patch("litellm.llms.azure.completion.handler.select_azure_base_url_or_endpoint")
+@patch("litellm.llms.azure.common_utils.select_azure_base_url_or_endpoint")
 @pytest.mark.asyncio
 async def test_azure_instruct(
     mock_select_azure_base_url_or_endpoint, max_retries, stream, sync_mode
