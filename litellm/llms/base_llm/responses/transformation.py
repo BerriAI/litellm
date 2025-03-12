@@ -9,6 +9,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIRequestParams,
     ResponsesAPIResponse,
+    ResponsesAPIStreamingResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelInfo
@@ -105,6 +106,18 @@ class BaseResponsesAPIConfig(ABC):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> ResponsesAPIResponse:
+        pass
+
+    @abstractmethod
+    def transform_streaming_response(
+        self,
+        model: str,
+        parsed_chunk: dict,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIStreamingResponse:
+        """
+        Transform a parsed streaming response chunk into a ResponsesAPIStreamingResponse
+        """
         pass
 
     def get_error_class(

@@ -10,6 +10,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIRequestParams,
     ResponsesAPIResponse,
+    ResponsesAPIStreamingResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
 
@@ -126,3 +127,15 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_base = api_base.rstrip("/")
 
         return f"{api_base}/responses"
+
+    def transform_streaming_response(
+        self,
+        model: str,
+        parsed_chunk: dict,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIStreamingResponse:
+        """
+        Transform a parsed streaming response chunk into a ResponsesAPIStreamingResponse
+        """
+        # Convert the dictionary to a properly typed ResponsesAPIStreamingResponse
+        return ResponsesAPIStreamingResponse(**parsed_chunk)
