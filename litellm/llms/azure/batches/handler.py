@@ -31,35 +31,6 @@ class AzureBatchesAPI(BaseAzureLLM):
     def __init__(self) -> None:
         super().__init__()
 
-    def get_azure_openai_client(
-        self,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        litellm_params: dict,
-        max_retries: Optional[int],
-        api_version: Optional[str] = None,
-        client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None,
-        _is_async: bool = False,
-    ) -> Optional[Union[AzureOpenAI, AsyncAzureOpenAI]]:
-        openai_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None
-        if client is None:
-            azure_client_params = self.initialize_azure_sdk_client(
-                litellm_params=litellm_params,
-                api_key=api_key,
-                model_name="",
-                api_version=api_version,
-                api_base=api_base,
-            )
-            if _is_async is True:
-                openai_client = AsyncAzureOpenAI(**azure_client_params)
-            else:
-                openai_client = AzureOpenAI(**azure_client_params)  # type: ignore
-        else:
-            openai_client = client
-
-        return openai_client
-
     async def acreate_batch(
         self,
         create_batch_data: CreateBatchRequest,
@@ -84,9 +55,7 @@ class AzureBatchesAPI(BaseAzureLLM):
             self.get_azure_openai_client(
                 api_key=api_key,
                 api_base=api_base,
-                timeout=timeout,
                 api_version=api_version,
-                max_retries=max_retries,
                 client=client,
                 _is_async=_is_async,
                 litellm_params=litellm_params or {},
@@ -133,8 +102,6 @@ class AzureBatchesAPI(BaseAzureLLM):
                 api_key=api_key,
                 api_base=api_base,
                 api_version=api_version,
-                timeout=timeout,
-                max_retries=max_retries,
                 client=client,
                 _is_async=_is_async,
                 litellm_params=litellm_params or {},
@@ -183,8 +150,6 @@ class AzureBatchesAPI(BaseAzureLLM):
                 api_key=api_key,
                 api_base=api_base,
                 api_version=api_version,
-                timeout=timeout,
-                max_retries=max_retries,
                 client=client,
                 _is_async=_is_async,
                 litellm_params=litellm_params or {},
@@ -223,8 +188,6 @@ class AzureBatchesAPI(BaseAzureLLM):
             self.get_azure_openai_client(
                 api_key=api_key,
                 api_base=api_base,
-                timeout=timeout,
-                max_retries=max_retries,
                 api_version=api_version,
                 client=client,
                 _is_async=_is_async,
