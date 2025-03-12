@@ -1,16 +1,12 @@
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union, cast
 
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import (
-    ResponseInputParam,
-    ResponsesAPIOptionalRequestParams,
-    ResponsesAPIRequestParams,
-    ResponsesAPIResponse,
-)
+from litellm.types.llms.openai import *
 from litellm.types.router import GenericLiteLLMParams
 
 from ..common_utils import OpenAIError
@@ -126,3 +122,66 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_base = api_base.rstrip("/")
 
         return f"{api_base}/responses"
+
+    def transform_streaming_response(
+        self,
+        model: str,
+        parsed_chunk: dict,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIStreamingResponse:
+        """
+        Transform a parsed streaming response chunk into a ResponsesAPIStreamingResponse
+        """
+        # Convert the dictionary to a properly typed ResponsesAPIStreamingResponse
+        verbose_logger.debug("Raw OpenAI Chunk=%s", parsed_chunk)
+        event_type = str(parsed_chunk.get("type"))
+        event_pydantic_model = OpenAIResponsesAPIConfig.get_event_model_class(
+            event_type=event_type
+        )
+        return event_pydantic_model(**parsed_chunk)
+
+    @staticmethod
+    def get_event_model_class(event_type: str) -> Any:
+        """
+        Returns the appropriate event model class based on the event type.
+
+        Args:
+            event_type (str): The type of event from the response chunk
+
+        Returns:
+            Any: The corresponding event model class
+
+        Raises:
+            ValueError: If the event type is unknown
+        """
+        event_models = {
+            ResponsesAPIStreamEvents.RESPONSE_CREATED: ResponseCreatedEvent,
+            ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS: ResponseInProgressEvent,
+            ResponsesAPIStreamEvents.RESPONSE_COMPLETED: ResponseCompletedEvent,
+            ResponsesAPIStreamEvents.RESPONSE_FAILED: ResponseFailedEvent,
+            ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE: ResponseIncompleteEvent,
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED: OutputItemAddedEvent,
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE: OutputItemDoneEvent,
+            ResponsesAPIStreamEvents.CONTENT_PART_ADDED: ContentPartAddedEvent,
+            ResponsesAPIStreamEvents.CONTENT_PART_DONE: ContentPartDoneEvent,
+            ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA: OutputTextDeltaEvent,
+            ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED: OutputTextAnnotationAddedEvent,
+            ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE: OutputTextDoneEvent,
+            ResponsesAPIStreamEvents.REFUSAL_DELTA: RefusalDeltaEvent,
+            ResponsesAPIStreamEvents.REFUSAL_DONE: RefusalDoneEvent,
+            ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA: FunctionCallArgumentsDeltaEvent,
+            ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE: FunctionCallArgumentsDoneEvent,
+            ResponsesAPIStreamEvents.FILE_SEARCH_CALL_IN_PROGRESS: FileSearchCallInProgressEvent,
+            ResponsesAPIStreamEvents.FILE_SEARCH_CALL_SEARCHING: FileSearchCallSearchingEvent,
+            ResponsesAPIStreamEvents.FILE_SEARCH_CALL_COMPLETED: FileSearchCallCompletedEvent,
+            ResponsesAPIStreamEvents.WEB_SEARCH_CALL_IN_PROGRESS: WebSearchCallInProgressEvent,
+            ResponsesAPIStreamEvents.WEB_SEARCH_CALL_SEARCHING: WebSearchCallSearchingEvent,
+            ResponsesAPIStreamEvents.WEB_SEARCH_CALL_COMPLETED: WebSearchCallCompletedEvent,
+            ResponsesAPIStreamEvents.ERROR: ErrorEvent,
+        }
+
+        model_class = event_models.get(cast(ResponsesAPIStreamEvents, event_type))
+        if not model_class:
+            raise ValueError(f"Unknown event type: {event_type}")
+
+        return model_class
