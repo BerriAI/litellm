@@ -12,28 +12,40 @@ from litellm.types.utils import StandardLoggingPayload
 from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIResponse
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_basic_openai_responses_api():
+async def test_basic_openai_responses_api(sync_mode):
     litellm._turn_on_debug()
-    response = await litellm.aresponses(
-        model="gpt-4o", input="Tell me a three sentence bedtime story about a unicorn."
-    )
+
+    if sync_mode:
+        response = litellm.responses(model="gpt-4o", input="Basic ping")
+    else:
+        response = await litellm.aresponses(model="gpt-4o", input="Basic ping")
+
     print("litellm response=", json.dumps(response, indent=4, default=str))
 
-    # validate_responses_api_response()
 
-
+@pytest.mark.parametrize("sync_mode", [True])
 @pytest.mark.asyncio
-async def test_basic_openai_responses_api_streaming():
+async def test_basic_openai_responses_api_streaming(sync_mode):
     litellm._turn_on_debug()
-    response = await litellm.aresponses(
-        model="gpt-4o",
-        input="Tell me a three sentence bedtime story about a unicorn.",
-        stream=True,
-    )
 
-    async for event in response:
-        print("litellm response=", json.dumps(event, indent=4, default=str))
+    if sync_mode:
+        response = litellm.responses(
+            model="gpt-4o",
+            input="Basic ping",
+            stream=True,
+        )
+        for event in response:
+            print("litellm response=", json.dumps(event, indent=4, default=str))
+    else:
+        response = await litellm.aresponses(
+            model="gpt-4o",
+            input="Basic ping",
+            stream=True,
+        )
+        async for event in response:
+            print("litellm response=", json.dumps(event, indent=4, default=str))
 
 
 class TestCustomLogger(CustomLogger):
