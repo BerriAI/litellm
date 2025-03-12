@@ -1276,7 +1276,7 @@ jobs:
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
-            pip install "openai==1.54.0"
+            pip install "openai==1.66.1"
       - run:
           name: Install Grype
           command: |
