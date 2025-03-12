@@ -103,10 +103,9 @@ class BaseResponsesAPIConfig(ABC):
         self,
         model: str,
         raw_response: httpx.Response,
-        model_response: ResponsesAPIResponse,
         logging_obj: LiteLLMLoggingObj,
     ) -> ResponsesAPIResponse:
-        return model_response
+        pass
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]

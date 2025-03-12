@@ -1,4 +1,6 @@
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
+
+import httpx
 
 import litellm
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
@@ -7,8 +9,18 @@ from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIRequestParams,
+    ResponsesAPIResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
+
+from ..common_utils import OpenAIError
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
 
 
 class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
@@ -82,6 +94,20 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return ResponsesAPIRequestParams(
             model=model, input=input, **response_api_optional_request_params
         )
+
+    def transform_response_api_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIResponse:
+        try:
+            raw_response_json = raw_response.json()
+        except Exception:
+            raise OpenAIError(
+                message=raw_response.text, status_code=raw_response.status_code
+            )
+        return ResponsesAPIResponse(**raw_response_json)
 
     def validate_environment(
         self,
