@@ -36,7 +36,7 @@ class BaseResponsesAPIStreamingIterator:
         self.logging_obj = logging_obj
         self.finished = False
         self.responses_api_provider_config = responses_api_provider_config
-        self.completed_response = None
+        self.completed_response: Optional[ResponsesAPIStreamingResponse] = None
         self.start_time = datetime.now()
 
     def _process_chunk(self, chunk):
@@ -102,7 +102,6 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     ):
         super().__init__(response, model, responses_api_provider_config, logging_obj)
         self.stream_iterator = response.aiter_lines()
-        self.completed_response: Optional[ResponsesAPIStreamingResponse] = None
 
     def __aiter__(self):
         return self
