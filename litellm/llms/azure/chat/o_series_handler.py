@@ -45,6 +45,7 @@ class AzureOpenAIO1ChatCompletion(BaseAzureLLM, OpenAIChatCompletion):
             api_base=api_base,
             api_version=api_version,
             client=client,
+            _is_async=acompletion,
         )
         return super().completion(
             model_response=model_response,
