@@ -15,12 +15,15 @@ from litellm.types.llms.openai import (
     ResponseIncludable,
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
+    ResponsesAPIResponse,
     ResponseTextConfigParam,
     ToolChoice,
     ToolParam,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
+
+from .streaming_iterator import ResponsesAPIStreamingIterator
 
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
@@ -72,7 +75,7 @@ async def aresponses(
     extra_body: Optional[Dict[str, Any]] = None,
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     **kwargs,
-):
+) -> Union[ResponsesAPIResponse, ResponsesAPIStreamingIterator]:
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
 
@@ -130,8 +133,6 @@ async def aresponses(
         timeout=timeout,
     )
     return response
-
-    pass
 
 
 def responses(
