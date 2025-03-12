@@ -3,8 +3,8 @@ import asyncio
 import json
 from base64 import b64encode
 from datetime import datetime
-from typing import List, Optional
-from urllib.parse import urlparse
+from typing import List, Optional, Union, Dict
+from urllib.parse import urlencode, parse_qs, urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -260,7 +260,6 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
             code=getattr(e, "status_code", 500),
         )
 
-
 class HttpPassThroughEndpointHelpers:
     @staticmethod
     def forward_headers_from_request(
@@ -308,6 +307,21 @@ class HttpPassThroughEndpointHelpers:
         return EndpointType.GENERIC
 
     @staticmethod
+    def get_merged_query_parameters(
+        existing_url: httpx.URL, request_query_params: Dict[str, Union[str, list]]
+    ) -> Dict[str, Union[str, List[str]]]:
+        # Get the existing query params from the target URL
+        existing_query_string = existing_url.query.decode("utf-8")
+        existing_query_params = parse_qs(existing_query_string)
+
+        # parse_qs returns a dict where each value is a list, so let's flatten it
+        existing_query_params = {
+            k: v[0] if len(v) == 1 else v for k, v in existing_query_params.items()
+        }
+        # Merge the query params, giving priority to the existing ones
+        return {**request_query_params, **existing_query_params}
+
+    @staticmethod
     async def _make_non_streaming_http_request(
         request: Request,
         async_client: httpx.AsyncClient,
@@ -338,7 +352,6 @@ class HttpPassThroughEndpointHelpers:
             )
         return response
 
-
 async def pass_through_request(  # noqa: PLR0915
     request: Request,
     target: str,
@@ -346,6 +359,7 @@ async def pass_through_request(  # noqa: PLR0915
     user_api_key_dict: UserAPIKeyAuth,
     custom_body: Optional[dict] = None,
     forward_headers: Optional[bool] = False,
+    merge_query_params: Optional[bool] = False,
     query_params: Optional[dict] = None,
     stream: Optional[bool] = None,
 ):
@@ -360,6 +374,18 @@ async def pass_through_request(  # noqa: PLR0915
         headers = HttpPassThroughEndpointHelpers.forward_headers_from_request(
             request=request, headers=headers, forward_headers=forward_headers
         )
+
+        if merge_query_params:
+
+            # Create a new URL with the merged query params
+            url = url.copy_with(
+                query=urlencode(
+                    HttpPassThroughEndpointHelpers.get_merged_query_parameters(
+                        existing_url=url,
+                        request_query_params=dict(request.query_params),
+                    )
+                ).encode("ascii")
+            )
 
         endpoint_type: EndpointType = HttpPassThroughEndpointHelpers.get_endpoint_type(
             str(url)
@@ -657,6 +683,7 @@ def create_pass_through_route(
     target: str,
     custom_headers: Optional[dict] = None,
     _forward_headers: Optional[bool] = False,
+    _merge_query_params: Optional[bool] = False,
     dependencies: Optional[List] = None,
 ):
     # check if target is an adapter.py or a url
@@ -703,6 +730,7 @@ def create_pass_through_route(
                 custom_headers=custom_headers or {},
                 user_api_key_dict=user_api_key_dict,
                 forward_headers=_forward_headers,
+                merge_query_params=_merge_query_params,
                 query_params=query_params,
                 stream=stream,
                 custom_body=custom_body,
@@ -732,6 +760,7 @@ async def initialize_pass_through_endpoints(pass_through_endpoints: list):
             custom_headers=_custom_headers
         )
         _forward_headers = endpoint.get("forward_headers", None)
+        _merge_query_params = endpoint.get("merge_query_params", None)
         _auth = endpoint.get("auth", None)
         _dependencies = None
         if _auth is not None and str(_auth).lower() == "true":
@@ -753,7 +782,12 @@ async def initialize_pass_through_endpoints(pass_through_endpoints: list):
         app.add_api_route(  # type: ignore
             path=_path,
             endpoint=create_pass_through_route(  # type: ignore
-                _path, _target, _custom_headers, _forward_headers, _dependencies
+                _path,
+                _target,
+                _custom_headers,
+                _forward_headers,
+                _merge_query_params,
+                _dependencies,
             ),
             methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
             dependencies=_dependencies,
