@@ -5,6 +5,7 @@ https://docs.voyageai.com/embeddings/
 
 | Model Settings | Value |
 | -------------- | ----- |
+| Provider | OpenAI-Compatible Endpoint |
 | API Base | https://api.voyageai.com/v1 |
 | Model Name | e.g. voyage-3-large |
 | LiteLLM Model Name | e.g. openai/voyage-3-large |
