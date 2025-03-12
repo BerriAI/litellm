@@ -45,6 +45,7 @@ from litellm.types.llms.openai import (
     Batch,
     FineTuningJob,
     HttpxBinaryResponseContent,
+    ResponseCompletedEvent,
     ResponsesAPIResponse,
 )
 from litellm.types.rerank import RerankResponse
@@ -854,6 +855,7 @@ class Logging(LiteLLMLoggingBaseClass):
             Batch,
             FineTuningJob,
             ResponsesAPIResponse,
+            ResponseCompletedEvent,
         ],
         cache_hit: Optional[bool] = None,
     ) -> Optional[float]:
@@ -1000,9 +1002,7 @@ class Logging(LiteLLMLoggingBaseClass):
             ## if model in model cost map - log the response cost
             ## else set cost to None
             if (
-                standard_logging_object is None
-                and result is not None
-                and self.stream is not True
+                standard_logging_object is None and result is not None
             ):  # handle streaming separately
                 if (
                     isinstance(result, ModelResponse)
@@ -1016,6 +1016,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     or isinstance(result, FineTuningJob)
                     or isinstance(result, LiteLLMBatch)
                     or isinstance(result, ResponsesAPIResponse)
+                    or isinstance(result, ResponseCompletedEvent)
                 ):
                     ## HIDDEN PARAMS ##
                     hidden_params = getattr(result, "_hidden_params", {})
