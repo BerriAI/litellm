@@ -6,6 +6,7 @@ from typing import Any, Dict, Iterable, List, Literal, Optional, Union, get_type
 import httpx
 
 import litellm
+from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -208,7 +209,7 @@ def responses(
         logging_obj=litellm_logging_obj,
         extra_headers=extra_headers,
         extra_body=extra_body,
-        timeout=timeout,
+        timeout=timeout or request_timeout,
         _is_async=_is_async,
         client=kwargs.get("client"),
     )
