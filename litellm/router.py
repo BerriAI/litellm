@@ -5346,6 +5346,13 @@ class Router:
             client = self.cache.get_cache(
                 key=cache_key, local_only=True, parent_otel_span=parent_otel_span
             )
+            if client is None:
+                InitalizeOpenAISDKClient.set_max_parallel_requests_client(
+                    litellm_router_instance=self, model=deployment
+                )
+                client = self.cache.get_cache(
+                    key=cache_key, local_only=True, parent_otel_span=parent_otel_span
+                )
             return client
         elif client_type == "async":
             if kwargs.get("stream") is True:
