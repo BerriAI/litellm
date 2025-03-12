@@ -598,6 +598,12 @@ Use this if you cannot mount a config file on your deployment service (example -
 
 LiteLLM Proxy will read your config.yaml from an s3 Bucket or GCS Bucket 
 
+:::info
+
+The config.yaml will be fetched from the S3 Bucket or GCS Bucket every 10 seconds. Keep this in mind as pricing may vary based on the number of requests or data transfer out of bucket.
+
+:::
+
 <Tabs>
 <TabItem value="gcs" label="GCS Bucket">
 
@@ -640,5 +646,20 @@ docker run --name litellm-proxy \
    -p 4000:4000 \
    ghcr.io/berriai/litellm-database:main-latest
 ```
+
+If you need to set the AWS credentials, the following env vars can be used:
+
+```shell
+AWS_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY
+AWS_SESSION_TOKEN
+AWS_REGION_NAME
+AWS_SESSION_NAME
+AWS_PROFILE_NAME
+AWS_ROLE_NAME
+AWS_WEB_IDENTITY_TOKEN
+AWS_STS_ENDPOINT
+```
+
 </TabItem>
 </Tabs>

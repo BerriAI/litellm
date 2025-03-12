@@ -35,7 +35,7 @@ litellm_settings:
     - team_id: "06ed1e01-3fa7-4b9e-95bc-f2e59b74f3a8"
       success_callback: ["langfuse"]
       langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_2 # Project 2
-      langfuse_secret: os.environ/LANGFUSE_SECRET_2 # Project 2
+      langfuse_secret: os.environ/LANGFUSE_PRIVATE_KEY_2 # Project 2
 ```
 
 Now, when you [generate keys](./virtual_keys.md) for this team-id 
