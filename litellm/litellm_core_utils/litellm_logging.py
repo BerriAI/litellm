@@ -1117,7 +1117,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response: Optional[
-                Union[ModelResponse, TextCompletionResponse]
+                Union[ModelResponse, TextCompletionResponse, ResponseCompletedEvent]
             ] = None
             if "complete_streaming_response" in self.model_call_details:
                 return  # break out of this.
@@ -1639,7 +1639,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if "async_complete_streaming_response" in self.model_call_details:
             return  # break out of this.
         complete_streaming_response: Optional[
-            Union[ModelResponse, TextCompletionResponse]
+            Union[ModelResponse, TextCompletionResponse, ResponseCompletedEvent]
         ] = self._get_assembled_streaming_response(
             result=result,
             start_time=start_time,
@@ -2349,15 +2349,23 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _get_assembled_streaming_response(
         self,
-        result: Union[ModelResponse, TextCompletionResponse, ModelResponseStream, Any],
+        result: Union[
+            ModelResponse,
+            TextCompletionResponse,
+            ModelResponseStream,
+            ResponseCompletedEvent,
+            Any,
+        ],
         start_time: datetime.datetime,
         end_time: datetime.datetime,
         is_async: bool,
         streaming_chunks: List[Any],
-    ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
+    ) -> Optional[Union[ModelResponse, TextCompletionResponse, ResponseCompletedEvent]]:
         if isinstance(result, ModelResponse):
             return result
         elif isinstance(result, TextCompletionResponse):
+            return result
+        elif isinstance(result, ResponseCompletedEvent):
             return result
         elif isinstance(result, ModelResponseStream):
             complete_streaming_response: Optional[
