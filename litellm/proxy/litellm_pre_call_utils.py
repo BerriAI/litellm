@@ -464,7 +464,17 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     from litellm.proxy.proxy_server import llm_router, premium_user
 
-    safe_add_api_version_from_query_params(data, request)
+    # Check if api_version is set in proxy config
+    model_config = None
+    if proxy_config and proxy_config.model_list:
+        for m in proxy_config.model_list:
+            if m.model_name == data.get("model"):
+                model_config = m
+                break
+    
+    # Only add api_version from query params if not set in proxy config
+    if not (model_config and model_config.litellm_params and "api_version" in model_config.litellm_params):
+        safe_add_api_version_from_query_params(data, request)
 
     _headers = clean_headers(
         request.headers,
@@ -499,11 +509,11 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     except KeyError:
         query_dict = {}
 
-    ## check for api version in query params
-    dynamic_api_version: Optional[str] = query_dict.get("api-version")
-
-    if dynamic_api_version is not None:  # only pass, if set
-        data["api_version"] = dynamic_api_version
+    ## check for api version in query params - only if not set in proxy config
+    if not (model_config and model_config.litellm_params and "api_version" in model_config.litellm_params):
+        dynamic_api_version: Optional[str] = query_dict.get("api-version")
+        if dynamic_api_version is not None:  # only pass, if set
+            data["api_version"] = dynamic_api_version
 
     ## Forward any LLM API Provider specific headers in extra_headers
     add_provider_specific_headers_to_request(data=data, headers=_headers)
@@ -537,9 +547,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name].update(user_api_key_logged_metadata)
     data[_metadata_variable_name][
         "user_api_key"
-    ] = (
-        user_api_key_dict.api_key
-    )  # this is just the hashed token. [TODO]: replace variable name in repo.
+    ] = user_api_key_dict.api_key
 
     data[_metadata_variable_name]["user_api_end_user_max_budget"] = getattr(
         user_api_key_dict, "end_user_max_budget", None
