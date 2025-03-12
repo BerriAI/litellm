@@ -16,7 +16,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 import litellm
-from litellm.proxy.enterprise.enterprise_hooks.llm_guard import _ENTERPRISE_LLMGuard
+from litellm.proxy.guardrails.guardrail_hooks.llm_guard import LLMGuard
 from litellm import Router, mock_completion
 from litellm.proxy.utils import ProxyLogging, hash_token
 from litellm.proxy._types import UserAPIKeyAuth
@@ -35,7 +35,7 @@ async def test_llm_guard_valid_response():
         "is_valid": True,
         "scanners": {"Regex": 0.0},
     }
-    llm_guard = _ENTERPRISE_LLMGuard(
+    llm_guard = LLMGuard(
         mock_testing=True, mock_redacted_text=input_a_anonymizer_results
     )
 
@@ -72,7 +72,7 @@ async def test_llm_guard_error_raising():
         "is_valid": False,
         "scanners": {"Regex": 0.0},
     }
-    llm_guard = _ENTERPRISE_LLMGuard(
+    llm_guard = LLMGuard(
         mock_testing=True, mock_redacted_text=input_b_anonymizer_results
     )
 
@@ -105,7 +105,7 @@ def test_llm_guard_key_specific_mode():
     """
     litellm.llm_guard_mode = "key-specific"
 
-    llm_guard = _ENTERPRISE_LLMGuard(mock_testing=True)
+    llm_guard = LLMGuard(mock_testing=True)
 
     _api_key = "sk-12345"
     # NOT ENABLED
@@ -140,7 +140,7 @@ def test_llm_guard_request_specific_mode():
     """
     litellm.llm_guard_mode = "request-specific"
 
-    llm_guard = _ENTERPRISE_LLMGuard(mock_testing=True)
+    llm_guard = LLMGuard(mock_testing=True)
 
     _api_key = "sk-12345"
     # NOT ENABLED

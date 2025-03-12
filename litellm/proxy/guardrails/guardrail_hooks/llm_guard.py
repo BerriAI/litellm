@@ -7,20 +7,22 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 ## This provides an LLM Guard Integration for content moderation on the proxy
 
-from typing import Optional, Literal
-import litellm
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.integrations.custom_logger import CustomLogger
-from fastapi import HTTPException
-from litellm._logging import verbose_proxy_logger
+from typing import Literal, Optional
+
 import aiohttp
-from litellm.utils import get_formatted_prompt
+from fastapi import HTTPException
+
+import litellm
+from litellm._logging import verbose_proxy_logger
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.secret_managers.main import get_secret_str
+from litellm.utils import get_formatted_prompt
 
 litellm.set_verbose = True
 
 
-class _ENTERPRISE_LLMGuard(CustomLogger):
+class LLMGuard(CustomLogger):
     # Class variables or attributes
     def __init__(
         self,
@@ -29,7 +31,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
     ):
         self.mock_redacted_text = mock_redacted_text
         self.llm_guard_mode = litellm.llm_guard_mode
-        if mock_testing == True:  # for testing purposes only
+        if mock_testing:  # for testing purposes only
             return
         self.llm_guard_api_base = get_secret_str("LLM_GUARD_API_BASE", None)
         if self.llm_guard_api_base is None:
@@ -69,7 +71,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
                 if redacted_text is not None:
                     if (
                         redacted_text.get("is_valid", None) is not None
-                        and redacted_text["is_valid"] != True
+                        and redacted_text["is_valid"] is not True
                     ):
                         raise HTTPException(
                             status_code=400,
@@ -100,7 +102,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
             )
             if (
                 user_api_key_dict.permissions.get("enable_llm_guard_check", False)
-                == True
+                is True
             ):
                 return True
         elif self.llm_guard_mode == "all":
@@ -111,7 +113,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
             permissions = metadata.get("permissions", {})
             if (
                 "enable_llm_guard_check" in permissions
-                and permissions["enable_llm_guard_check"] == True
+                and permissions["enable_llm_guard_check"] is True
             ):
                 return True
         return False
@@ -139,7 +141,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
         )
 
         _proceed = self.should_proceed(user_api_key_dict=user_api_key_dict, data=data)
-        if _proceed == False:
+        if _proceed is False:
             return
 
         self.print_verbose("Makes LLM Guard Check")
@@ -168,12 +170,3 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
             await self.moderation_check(text=response)
 
         return response
-
-
-# llm_guard = _ENTERPRISE_LLMGuard()
-
-# asyncio.run(
-#     llm_guard.async_moderation_hook(
-#         data={"messages": [{"role": "user", "content": "Hey how's it going?"}]}
-#     )
-# )

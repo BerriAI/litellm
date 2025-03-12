@@ -125,7 +125,7 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                 google_text_moderation_obj = _ENTERPRISE_GoogleTextModeration()
                 imported_list.append(google_text_moderation_obj)
             elif isinstance(callback, str) and callback == "llmguard_moderations":
-                from enterprise.enterprise_hooks.llm_guard import _ENTERPRISE_LLMGuard
+                from litellm.proxy.guardrails.guardrail_hooks.llm_guard import LLMGuard
 
                 if premium_user is not True:
                     raise Exception(
@@ -133,7 +133,7 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                         + CommonProxyErrors.not_premium_user.value
                     )
 
-                llm_guard_moderation_obj = _ENTERPRISE_LLMGuard()
+                llm_guard_moderation_obj = LLMGuard()
                 imported_list.append(llm_guard_moderation_obj)
             elif isinstance(callback, str) and callback == "blocked_user_check":
                 from enterprise.enterprise_hooks.blocked_user_list import (
