@@ -184,7 +184,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         max_budget: values.max_budget,
         budget_duration: values.budget_duration,
         metadata: {
-          ...teamData?.team_info?.metadata,
+          ...values.metadata,
           guardrails: values.guardrails || []
         }
       };
