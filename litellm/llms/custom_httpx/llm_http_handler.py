@@ -1,6 +1,6 @@
 import io
 import json
-from typing import TYPE_CHECKING, Any, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import httpx  # type: ignore
 
@@ -966,10 +966,13 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         input: Union[str, ResponseInputParam],
         responses_api_provider_config: BaseResponsesAPIConfig,
-        response_api_optional_request_params: ResponsesAPIOptionalRequestParams,
+        response_api_optional_request_params: Dict,
         logging_obj: LiteLLMLoggingObj,
         litellm_params: GenericLiteLLMParams,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
     ) -> ResponsesAPIResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
@@ -1020,11 +1023,9 @@ class BaseLLMHTTPHandler:
                 provider_config=responses_api_provider_config,
             )
 
-        base_response_api_response = ResponsesAPIResponse()
         return responses_api_provider_config.transform_response_api_response(
             model=model,
             raw_response=response,
-            model_response=base_response_api_response,
             logging_obj=logging_obj,
         )
 

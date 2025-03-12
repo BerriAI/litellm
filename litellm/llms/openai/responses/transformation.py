@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 import httpx
 
@@ -55,39 +55,17 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
     def map_openai_params(
         self,
-        optional_params: dict,
+        response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> ResponsesAPIOptionalRequestParams:
-
-        return ResponsesAPIOptionalRequestParams(
-            include=optional_params.get("include"),
-            instructions=optional_params.get("instructions"),
-            max_output_tokens=optional_params.get("max_output_tokens"),
-            metadata=optional_params.get("metadata"),
-            parallel_tool_calls=optional_params.get("parallel_tool_calls"),
-            previous_response_id=optional_params.get("previous_response_id"),
-            reasoning=optional_params.get("reasoning"),
-            store=optional_params.get("store"),
-            stream=optional_params.get("stream"),
-            temperature=optional_params.get("temperature"),
-            text=optional_params.get("text"),
-            tool_choice=optional_params.get("tool_choice"),
-            tools=optional_params.get("tools"),
-            top_p=optional_params.get("top_p"),
-            truncation=optional_params.get("truncation"),
-            user=optional_params.get("user"),
-            extra_headers=optional_params.get("extra_headers"),
-            extra_query=optional_params.get("extra_query"),
-            extra_body=optional_params.get("extra_body"),
-            timeout=optional_params.get("timeout"),
-        )
+    ) -> Dict:
+        return dict(response_api_optional_params)
 
     def transform_responses_api_request(
         self,
         model: str,
         input: Union[str, ResponseInputParam],
-        response_api_optional_request_params: ResponsesAPIOptionalRequestParams,
+        response_api_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> ResponsesAPIRequestParams:

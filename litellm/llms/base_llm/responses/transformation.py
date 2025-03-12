@@ -1,6 +1,6 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 import httpx
 
@@ -53,10 +53,10 @@ class BaseResponsesAPIConfig(ABC):
     @abstractmethod
     def map_openai_params(
         self,
-        optional_params: dict,
+        response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> ResponsesAPIOptionalRequestParams:
+    ) -> Dict:
 
         pass
 
@@ -92,7 +92,7 @@ class BaseResponsesAPIConfig(ABC):
         self,
         model: str,
         input: Union[str, ResponseInputParam],
-        response_api_optional_request_params: ResponsesAPIOptionalRequestParams,
+        response_api_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> ResponsesAPIRequestParams:
