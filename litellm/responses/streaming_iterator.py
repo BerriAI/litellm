@@ -1,4 +1,6 @@
+import asyncio
 import json
+from datetime import datetime
 from typing import Any, AsyncIterator, Dict, Optional, Union
 
 import httpx
@@ -10,6 +12,8 @@ from litellm.types.llms.openai import (
     ResponsesAPIStreamingResponse,
 )
 from litellm.utils import CustomStreamWrapper
+
+COMPLETED_OPENAI_CHUNK_TYPE = "response.completed"
 
 
 class ResponsesAPIStreamingIterator:
@@ -33,14 +37,13 @@ class ResponsesAPIStreamingIterator:
         self.stream_iterator = response.aiter_lines()
         self.finished = False
         self.responses_api_provider_config = responses_api_provider_config
+        self.completed_response: Optional[ResponsesAPIStreamingResponse] = None
+        self.start_time = datetime.now()
 
     def __aiter__(self):
         return self
 
     async def __anext__(self) -> ResponsesAPIStreamingResponse:
-        if self.finished:
-            raise StopAsyncIteration
-
         try:
             # Get the next chunk from the stream
             try:
@@ -75,6 +78,19 @@ class ResponsesAPIStreamingIterator:
                             logging_obj=self.logging_obj,
                         )
                     )
+                    # Store the completed response
+                    if (
+                        openai_responses_api_chunk
+                        and openai_responses_api_chunk.type
+                        == COMPLETED_OPENAI_CHUNK_TYPE
+                    ):
+                        self.completed_response = openai_responses_api_chunk
+                        await self.logging_obj.async_success_handler(
+                            result=self.completed_response,
+                            start_time=self.start_time,
+                            end_time=datetime.now(),
+                            cache_hit=None,
+                        )
                     return openai_responses_api_chunk
 
                 return ResponsesAPIStreamingResponse(

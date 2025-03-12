@@ -1015,6 +1015,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     or isinstance(result, RerankResponse)
                     or isinstance(result, FineTuningJob)
                     or isinstance(result, LiteLLMBatch)
+                    or isinstance(result, ResponsesAPIResponse)
                 ):
                     ## HIDDEN PARAMS ##
                     hidden_params = getattr(result, "_hidden_params", {})
