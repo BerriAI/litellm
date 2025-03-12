@@ -724,10 +724,6 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     top_p: Optional[float]
     truncation: Optional[Literal["auto", "disabled"]]
     user: Optional[str]
-    extra_headers: Optional[Dict[str, Any]]
-    extra_query: Optional[Dict[str, Any]]
-    extra_body: Optional[Dict[str, Any]]
-    timeout: Optional[Union[float, httpx.Timeout]]
 
 
 class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
