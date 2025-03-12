@@ -947,7 +947,9 @@ def _set_spend_logs_payload(
     spend_logs_url: Optional[str] = None,
 ):
     verbose_proxy_logger.info(
-        "Writing spend log to db - request_id: {}".format(payload.get("request_id"))
+        "Writing spend log to db - request_id: {}, spend: {}".format(
+            payload.get("request_id"), payload.get("spend")
+        )
     )
     if prisma_client is not None and spend_logs_url is not None:
         if isinstance(payload["startTime"], datetime):
