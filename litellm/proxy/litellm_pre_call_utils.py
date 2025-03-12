@@ -71,8 +71,21 @@ def _get_metadata_variable_name(request: Request) -> str:
         return "metadata"
 
 
-def safe_add_api_version_from_query_params(data: dict, request: Request):
+def safe_add_api_version_from_query_params(data: dict, request: Request, proxy_config: Optional["ProxyConfig"] = None, model: Optional[str] = None):
+    """
+    Adds api_version to the data dict, prioritizing proxy config over query params
+    """
     try:
+        # First check if api_version is set in proxy config for this model
+        if proxy_config and proxy_config.model_list and model:
+            for m in proxy_config.model_list:
+                if m.model_name == model and m.litellm_params and "api_version" in m.litellm_params:
+                    if "litellm_params" not in data:
+                        data["litellm_params"] = {}
+                    data["litellm_params"]["api_version"] = m.litellm_params["api_version"]
+                    return  # Return early if we found api_version in proxy config
+
+        # Only add from query params if not set in proxy config
         if hasattr(request, "query_params"):
             query_params = dict(request.query_params)
             if "api-version" in query_params:
@@ -454,14 +467,13 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         data (dict): The data dictionary to be modified.
         request (Request): The incoming request.
         user_api_key_dict (UserAPIKeyAuth): The user API key dictionary.
+        proxy_config (ProxyConfig): The proxy configuration.
         general_settings (Optional[Dict[str, Any]], optional): General settings. Defaults to None.
         version (Optional[str], optional): Version. Defaults to None.
 
     Returns:
         dict: The modified data dictionary.
-
     """
-
     from litellm.proxy.proxy_server import llm_router, premium_user
 
     # Check if api_version is set in proxy config
@@ -544,177 +556,89 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             data["metadata"]
         )
 
-    user_api_key_logged_metadata = (
-        LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
-            user_api_key_dict=user_api_key_dict
-        )
-    )
-    data[_metadata_variable_name].update(user_api_key_logged_metadata)
-    data[_metadata_variable_name][
-        "user_api_key"
-    ] = user_api_key_dict.api_key
-
-    data[_metadata_variable_name]["user_api_end_user_max_budget"] = getattr(
-        user_api_key_dict, "end_user_max_budget", None
-    )
-
-    data[_metadata_variable_name]["litellm_api_version"] = version
-
-    if general_settings is not None:
-        data[_metadata_variable_name]["global_max_parallel_requests"] = (
-            general_settings.get("global_max_parallel_requests", None)
-        )
-
-    ### KEY-LEVEL Controls
-    key_metadata = user_api_key_dict.metadata
-    data = LiteLLMProxyRequestSetup.add_key_level_controls(
-        key_metadata=key_metadata,
-        data=data,
-        _metadata_variable_name=_metadata_variable_name,
-    )
-    ## TEAM-LEVEL SPEND LOGS/TAGS
-    team_metadata = user_api_key_dict.team_metadata or {}
-    if "tags" in team_metadata and team_metadata["tags"] is not None:
-        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
-            request_tags=data[_metadata_variable_name].get("tags"),
-            tags_to_add=team_metadata["tags"],
-        )
-    if "spend_logs_metadata" in team_metadata and isinstance(
-        team_metadata["spend_logs_metadata"], dict
-    ):
-        if "spend_logs_metadata" in data[_metadata_variable_name] and isinstance(
-            data[_metadata_variable_name]["spend_logs_metadata"], dict
-        ):
-            for key, value in team_metadata["spend_logs_metadata"].items():
-                if (
-                    key not in data[_metadata_variable_name]["spend_logs_metadata"]
-                ):  # don't override k-v pair sent by request (user request)
-                    data[_metadata_variable_name]["spend_logs_metadata"][key] = value
-        else:
-            data[_metadata_variable_name]["spend_logs_metadata"] = team_metadata[
-                "spend_logs_metadata"
-            ]
-
-    # Team spend, budget - used by prometheus.py
-    data[_metadata_variable_name][
-        "user_api_key_team_max_budget"
-    ] = user_api_key_dict.team_max_budget
-    data[_metadata_variable_name][
-        "user_api_key_team_spend"
-    ] = user_api_key_dict.team_spend
-
-    # API Key spend, budget - used by prometheus.py
-    data[_metadata_variable_name]["user_api_key_spend"] = user_api_key_dict.spend
-    data[_metadata_variable_name][
-        "user_api_key_max_budget"
-    ] = user_api_key_dict.max_budget
-    data[_metadata_variable_name][
-        "user_api_key_model_max_budget"
-    ] = user_api_key_dict.model_max_budget
-
-    data[_metadata_variable_name]["user_api_key_metadata"] = user_api_key_dict.metadata
-    _headers = dict(request.headers)
-    _headers.pop(
-        "authorization", None
-    )  # do not store the original `sk-..` api key in the db
-    data[_metadata_variable_name]["headers"] = _headers
-    data[_metadata_variable_name]["endpoint"] = str(request.url)
-
-    # OTEL Controls / Tracing
-    # Add the OTEL Parent Trace before sending it LiteLLM
-    data[_metadata_variable_name][
-        "litellm_parent_otel_span"
-    ] = user_api_key_dict.parent_otel_span
-    _add_otel_traceparent_to_data(data, request=request)
-
-    ### END-USER SPECIFIC PARAMS ###
-    if user_api_key_dict.allowed_model_region is not None:
-        data["allowed_model_region"] = user_api_key_dict.allowed_model_region
-    start_time = time.time()
-    ## [Enterprise Only]
-    # Add User-IP Address
-    requester_ip_address = ""
-    if premium_user is True:
-        # Only set the IP Address for Enterprise Users
-
-        # logic for tracking IP Address
-        if (
-            general_settings is not None
-            and general_settings.get("use_x_forwarded_for") is True
-            and request is not None
-            and hasattr(request, "headers")
-            and "x-forwarded-for" in request.headers
-        ):
-            requester_ip_address = request.headers["x-forwarded-for"]
-        elif (
-            request is not None
-            and hasattr(request, "client")
-            and hasattr(request.client, "host")
-            and request.client is not None
-        ):
-            requester_ip_address = request.client.host
-    data[_metadata_variable_name]["requester_ip_address"] = requester_ip_address
-
-    # Check if using tag based routing
-    tags = LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
-        llm_router=llm_router,
-        headers=dict(request.headers),
-        data=data,
-    )
-
-    if tags is not None:
-        data[_metadata_variable_name]["tags"] = tags
-
-    # Team Callbacks controls
+    # Add team-based callbacks from config
     callback_settings_obj = _get_dynamic_logging_metadata(
         user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
     if callback_settings_obj is not None:
-        data["success_callback"] = callback_settings_obj.success_callback
-        data["failure_callback"] = callback_settings_obj.failure_callback
+        data[_metadata_variable_name]["callback_settings"] = callback_settings_obj
 
-        if callback_settings_obj.callback_vars is not None:
-            # unpack callback_vars in data
-            for k, v in callback_settings_obj.callback_vars.items():
-                data[k] = v
+    # Add key-level controls
+    if user_api_key_dict.metadata is not None:
+        LiteLLMProxyRequestSetup.add_key_level_controls(
+            key_metadata=user_api_key_dict.metadata,
+            data=data,
+            _metadata_variable_name=_metadata_variable_name,
+        )
 
-    # Guardrails
+    # Add team-level controls
+    if user_api_key_dict.team_metadata is not None:
+        LiteLLMProxyRequestSetup.add_key_level_controls(
+            key_metadata=user_api_key_dict.team_metadata,
+            data=data,
+            _metadata_variable_name=_metadata_variable_name,
+        )
+
+    # Add guardrails from key or team metadata
     move_guardrails_to_metadata(
         data=data,
         _metadata_variable_name=_metadata_variable_name,
         user_api_key_dict=user_api_key_dict,
     )
 
-    # Team Model Aliases
+    # Add request tags
+    request_tags = LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
+        llm_router=llm_router,
+        headers=_headers,
+        data=data,
+    )
+
+    # Add key-level tags
+    key_tags = None
+    if user_api_key_dict.metadata is not None and "tags" in user_api_key_dict.metadata:
+        key_tags = user_api_key_dict.metadata["tags"]
+
+    # Add team-level tags
+    team_tags = None
+    if (
+        user_api_key_dict.team_metadata is not None
+        and "tags" in user_api_key_dict.team_metadata
+    ):
+        team_tags = user_api_key_dict.team_metadata["tags"]
+
+    # Merge all tags
+    final_tags = LiteLLMProxyRequestSetup._merge_tags(
+        request_tags=request_tags, tags_to_add=key_tags
+    )
+    final_tags = LiteLLMProxyRequestSetup._merge_tags(
+        request_tags=final_tags, tags_to_add=team_tags
+    )
+
+    if final_tags:
+        data[_metadata_variable_name]["tags"] = final_tags
+
+    # Add user-specific information
+    data[_metadata_variable_name][
+        "user_api_key_metadata"
+    ] = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+        user_api_key_dict=user_api_key_dict
+    )
+
+    # Add OpenTelemetry traceparent
+    _add_otel_traceparent_to_data(data=data, request=request)
+
+    # Update model if team alias exists
     _update_model_if_team_alias_exists(
         data=data,
         user_api_key_dict=user_api_key_dict,
     )
 
-    verbose_proxy_logger.debug(
-        "[PROXY] returned data from litellm_pre_call_utils: %s", data
-    )
-
-    ## ENFORCED PARAMS CHECK
-    # loop through each enforced param
-    # example enforced_params ['user', 'metadata', 'metadata.generation_name']
+    # Check for enforced params
     _enforced_params_check(
         request_body=data,
         general_settings=general_settings,
         user_api_key_dict=user_api_key_dict,
         premium_user=premium_user,
-    )
-
-    end_time = time.time()
-    asyncio.create_task(
-        service_logger_obj.async_service_success_hook(
-            service=ServiceTypes.PROXY_PRE_CALL,
-            duration=end_time - start_time,
-            call_type="add_litellm_data_to_request",
-            start_time=start_time,
-            end_time=end_time,
-            parent_otel_span=user_api_key_dict.parent_otel_span,
-        )
     )
 
     return data
