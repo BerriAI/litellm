@@ -18,6 +18,7 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
+from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
@@ -973,7 +974,7 @@ class BaseLLMHTTPHandler:
         extra_headers: Optional[Dict[str, Any]] = None,
         extra_body: Optional[Dict[str, Any]] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
-    ) -> ResponsesAPIResponse:
+    ) -> Union[ResponsesAPIResponse, ResponsesAPIStreamingIterator]:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider)
@@ -1010,13 +1011,34 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        # Check if streaming is requested
+        stream = response_api_optional_request_params.get("stream", False)
+
         try:
-            response = await async_httpx_client.post(
-                url=api_base,
-                headers=headers,
-                data=json.dumps(data),
-                timeout=response_api_optional_request_params.get("timeout"),
-            )
+            if stream:
+                # For streaming, we need to use stream=True in the request
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=json.dumps(data),
+                    timeout=response_api_optional_request_params.get("timeout"),
+                    stream=True,
+                )
+
+                # Return the streaming iterator
+                return ResponsesAPIStreamingIterator(
+                    response=response,
+                    model=model,
+                    logging_obj=logging_obj,
+                )
+            else:
+                # For non-streaming, proceed as before
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=json.dumps(data),
+                    timeout=response_api_optional_request_params.get("timeout"),
+                )
         except Exception as e:
             raise self._handle_error(
                 e=e,
