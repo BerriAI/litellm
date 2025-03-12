@@ -48,7 +48,7 @@ The `tests/litellm/` directory follows the same directory structure as `litellm/
 - `litellm/proxy/test_caching_routes.py` maps to `litellm/proxy/caching_routes.py`
 - `test_{filename}.py` maps to `litellm/{filename}.py`
 
-### 3. Running Unit Tests
+## 3. Running Unit Tests
 
 run the following command on the root of the litellm directory
 
@@ -56,7 +56,7 @@ run the following command on the root of the litellm directory
 make test-unit
 ```
 
-### 4. Submit a PR with your changes!
+## 4. Submit a PR with your changes!
 
 - push your fork to your GitHub repo
 - submit a PR from there

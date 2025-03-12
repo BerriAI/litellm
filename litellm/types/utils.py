@@ -227,6 +227,8 @@ class CallTypes(Enum):
     list_fine_tuning_jobs = "list_fine_tuning_jobs"
     aretrieve_fine_tuning_job = "aretrieve_fine_tuning_job"
     retrieve_fine_tuning_job = "retrieve_fine_tuning_job"
+    responses = "responses"
+    aresponses = "aresponses"
 
 
 CallTypesLiteral = Literal[

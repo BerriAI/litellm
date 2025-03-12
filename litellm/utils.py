@@ -211,6 +211,7 @@ from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
 )
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
+from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 
 from ._logging import _is_debugging_on, verbose_logger
 from .caching.caching import (
@@ -729,6 +730,11 @@ def function_setup(  # noqa: PLR0915
             call_type == CallTypes.aspeech.value or call_type == CallTypes.speech.value
         ):
             messages = kwargs.get("input", "speech")
+        elif (
+            call_type == CallTypes.aresponses.value
+            or call_type == CallTypes.responses.value
+        ):
+            messages = args[0] if len(args) > 0 else kwargs["input"]
         else:
             messages = "default-message-value"
         stream = True if "stream" in kwargs and kwargs["stream"] is True else False
@@ -2445,6 +2451,7 @@ def get_optional_params_image_gen(
         config_class = (
             litellm.AmazonStability3Config
             if litellm.AmazonStability3Config._is_stability_3_model(model=model)
+            else litellm.AmazonNovaCanvasConfig if litellm.AmazonNovaCanvasConfig._is_nova_model(model=model)
             else litellm.AmazonStabilityConfig
         )
         supported_params = config_class.get_supported_openai_params(model=model)
@@ -5121,7 +5128,7 @@ def prompt_token_calculator(model, messages):
         from anthropic import AI_PROMPT, HUMAN_PROMPT, Anthropic
 
         anthropic_obj = Anthropic()
-        num_tokens = anthropic_obj.count_tokens(text)
+        num_tokens = anthropic_obj.count_tokens(text)  # type: ignore
     else:
         num_tokens = len(encoding.encode(text))
     return num_tokens
@@ -6291,6 +6298,15 @@ class ProviderConfigManager:
             return litellm.FireworksAIAudioTranscriptionConfig()
         elif litellm.LlmProviders.DEEPGRAM == provider:
             return litellm.DeepgramAudioTranscriptionConfig()
+        return None
+
+    @staticmethod
+    def get_provider_responses_api_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseResponsesAPIConfig]:
+        if litellm.LlmProviders.OPENAI == provider:
+            return litellm.OpenAIResponsesAPIConfig()
         return None
 
     @staticmethod
