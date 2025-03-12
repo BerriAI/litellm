@@ -21,6 +21,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_litellm_data_to_request,
 )
 from litellm.types.utils import SupportedCacheControls
+from litellm.proxy.proxy_server import ProxyConfig, ModelParams
 
 
 @pytest.fixture
@@ -1819,3 +1820,47 @@ async def test_get_admin_team_ids(
         )
     else:
         mock_prisma_client.db.litellm_teamtable.find_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_api_version_precedence():
+    """
+    Test that API versions set in proxy config take precedence over client-provided versions
+    """
+    # Create a mock request with api-version in query params
+    mock_request = Mock(spec=Request)
+    mock_request.url = Mock()
+    mock_request.url.path = "/chat/completions"
+    mock_request.query_params = {"api-version": "2024-02-01"}
+    mock_request.headers = {}
+
+    # Create a proxy config with a model that has api_version set
+    proxy_config = ProxyConfig()
+    model_config = ModelParams(
+        model_name="gpt-4",
+        litellm_params={"api_version": "2023-12-01"},  # this should take precedence
+        model_info={"id": "gpt-4"}
+    )
+    proxy_config.model_list = [model_config]
+
+    # Create test data with the model that matches our config
+    data = {"model": "gpt-4"}
+    
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="test_user_id",
+        org_id="test_org_id"
+    )
+
+    # Process the request
+    await add_litellm_data_to_request(
+        data=data,
+        request=mock_request,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=proxy_config
+    )
+
+    # The api_version from the proxy config should be used, not the one from query params
+    assert "litellm_params" in data
+    assert "api_version" in data["litellm_params"]
+    assert data["litellm_params"]["api_version"] == "2023-12-01"
