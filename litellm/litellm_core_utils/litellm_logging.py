@@ -1002,8 +1002,10 @@ class Logging(LiteLLMLoggingBaseClass):
             ## if model in model cost map - log the response cost
             ## else set cost to None
             if (
-                standard_logging_object is None and result is not None
-            ):  # handle streaming separately
+                standard_logging_object is None
+                and result is not None
+                and self.stream is not True
+            ):
                 if (
                     isinstance(result, ModelResponse)
                     or isinstance(result, ModelResponseStream)
@@ -1016,7 +1018,6 @@ class Logging(LiteLLMLoggingBaseClass):
                     or isinstance(result, FineTuningJob)
                     or isinstance(result, LiteLLMBatch)
                     or isinstance(result, ResponsesAPIResponse)
-                    or isinstance(result, ResponseCompletedEvent)
                 ):
                     ## HIDDEN PARAMS ##
                     hidden_params = getattr(result, "_hidden_params", {})
