@@ -744,13 +744,24 @@ class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
     model: str
 
 
-class OutputTokensDetails(BaseModel):
+class BaseLiteLLMOpenAIResponseObject(BaseModel):
+    def __getitem__(self, key):
+        return self.__dict__[key]
+
+    def get(self, key, default=None):
+        return self.__dict__.get(key, default)
+
+    def __contains__(self, key):
+        return key in self.__dict__
+
+
+class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     reasoning_tokens: int
 
     model_config = {"extra": "allow"}
 
 
-class ResponseAPIUsage(BaseModel):
+class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
     input_tokens: int
     """The number of input tokens."""
 
@@ -766,7 +777,7 @@ class ResponseAPIUsage(BaseModel):
     model_config = {"extra": "allow"}
 
 
-class ResponsesAPIResponse(BaseModel):
+class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     id: str
     created_at: float
     error: Optional[dict]
@@ -791,15 +802,6 @@ class ResponsesAPIResponse(BaseModel):
     user: Optional[str]
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
-
-    def __getitem__(self, key):
-        return self.__dict__[key]
-
-    def get(self, key, default=None):
-        return self.__dict__.get(key, default)
-
-    def __contains__(self, key):
-        return key in self.__dict__
 
 
 class ResponsesAPIStreamEvents(str, Enum):
@@ -851,57 +853,45 @@ class ResponsesAPIStreamEvents(str, Enum):
     ERROR = "error"
 
 
-# Base streaming response types
-class BaseResponseAPIStreamEvent(BaseModel):
-    def __getitem__(self, key):
-        return self.__dict__[key]
-
-    def get(self, key, default=None):
-        return self.__dict__.get(key, default)
-
-    def __contains__(self, key):
-        return key in self.__dict__
-
-
-class ResponseCreatedEvent(BaseResponseAPIStreamEvent):
+class ResponseCreatedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.RESPONSE_CREATED]
     response: ResponsesAPIResponse
 
 
-class ResponseInProgressEvent(BaseResponseAPIStreamEvent):
+class ResponseInProgressEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS]
     response: ResponsesAPIResponse
 
 
-class ResponseCompletedEvent(BaseResponseAPIStreamEvent):
+class ResponseCompletedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.RESPONSE_COMPLETED]
     response: ResponsesAPIResponse
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
 
-class ResponseFailedEvent(BaseResponseAPIStreamEvent):
+class ResponseFailedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.RESPONSE_FAILED]
     response: ResponsesAPIResponse
 
 
-class ResponseIncompleteEvent(BaseResponseAPIStreamEvent):
+class ResponseIncompleteEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE]
     response: ResponsesAPIResponse
 
 
-class OutputItemAddedEvent(BaseResponseAPIStreamEvent):
+class OutputItemAddedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
     output_index: int
     item: dict
 
 
-class OutputItemDoneEvent(BaseResponseAPIStreamEvent):
+class OutputItemDoneEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
     output_index: int
     item: dict
 
 
-class ContentPartAddedEvent(BaseResponseAPIStreamEvent):
+class ContentPartAddedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.CONTENT_PART_ADDED]
     item_id: str
     output_index: int
@@ -909,7 +899,7 @@ class ContentPartAddedEvent(BaseResponseAPIStreamEvent):
     part: dict
 
 
-class ContentPartDoneEvent(BaseResponseAPIStreamEvent):
+class ContentPartDoneEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.CONTENT_PART_DONE]
     item_id: str
     output_index: int
@@ -917,7 +907,7 @@ class ContentPartDoneEvent(BaseResponseAPIStreamEvent):
     part: dict
 
 
-class OutputTextDeltaEvent(BaseResponseAPIStreamEvent):
+class OutputTextDeltaEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA]
     item_id: str
     output_index: int
@@ -925,7 +915,7 @@ class OutputTextDeltaEvent(BaseResponseAPIStreamEvent):
     delta: str
 
 
-class OutputTextAnnotationAddedEvent(BaseResponseAPIStreamEvent):
+class OutputTextAnnotationAddedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED]
     item_id: str
     output_index: int
@@ -934,7 +924,7 @@ class OutputTextAnnotationAddedEvent(BaseResponseAPIStreamEvent):
     annotation: dict
 
 
-class OutputTextDoneEvent(BaseResponseAPIStreamEvent):
+class OutputTextDoneEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE]
     item_id: str
     output_index: int
@@ -942,7 +932,7 @@ class OutputTextDoneEvent(BaseResponseAPIStreamEvent):
     text: str
 
 
-class RefusalDeltaEvent(BaseResponseAPIStreamEvent):
+class RefusalDeltaEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.REFUSAL_DELTA]
     item_id: str
     output_index: int
@@ -950,7 +940,7 @@ class RefusalDeltaEvent(BaseResponseAPIStreamEvent):
     delta: str
 
 
-class RefusalDoneEvent(BaseResponseAPIStreamEvent):
+class RefusalDoneEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.REFUSAL_DONE]
     item_id: str
     output_index: int
@@ -958,57 +948,57 @@ class RefusalDoneEvent(BaseResponseAPIStreamEvent):
     refusal: str
 
 
-class FunctionCallArgumentsDeltaEvent(BaseResponseAPIStreamEvent):
+class FunctionCallArgumentsDeltaEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA]
     item_id: str
     output_index: int
     delta: str
 
 
-class FunctionCallArgumentsDoneEvent(BaseResponseAPIStreamEvent):
+class FunctionCallArgumentsDoneEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE]
     item_id: str
     output_index: int
     arguments: str
 
 
-class FileSearchCallInProgressEvent(BaseResponseAPIStreamEvent):
+class FileSearchCallInProgressEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.FILE_SEARCH_CALL_IN_PROGRESS]
     output_index: int
     item_id: str
 
 
-class FileSearchCallSearchingEvent(BaseResponseAPIStreamEvent):
+class FileSearchCallSearchingEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.FILE_SEARCH_CALL_SEARCHING]
     output_index: int
     item_id: str
 
 
-class FileSearchCallCompletedEvent(BaseResponseAPIStreamEvent):
+class FileSearchCallCompletedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.FILE_SEARCH_CALL_COMPLETED]
     output_index: int
     item_id: str
 
 
-class WebSearchCallInProgressEvent(BaseResponseAPIStreamEvent):
+class WebSearchCallInProgressEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.WEB_SEARCH_CALL_IN_PROGRESS]
     output_index: int
     item_id: str
 
 
-class WebSearchCallSearchingEvent(BaseResponseAPIStreamEvent):
+class WebSearchCallSearchingEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.WEB_SEARCH_CALL_SEARCHING]
     output_index: int
     item_id: str
 
 
-class WebSearchCallCompletedEvent(BaseResponseAPIStreamEvent):
+class WebSearchCallCompletedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.WEB_SEARCH_CALL_COMPLETED]
     output_index: int
     item_id: str
 
 
-class ErrorEvent(BaseResponseAPIStreamEvent):
+class ErrorEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.ERROR]
     code: Optional[str]
     message: str
