@@ -9,11 +9,7 @@ from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_name
 from litellm.types.utils import FileTypes
 from litellm.utils import TranscriptionResponse, convert_to_model_response_object
 
-from .azure import (
-    AzureChatCompletion,
-    get_azure_ad_token_from_oidc,
-    select_azure_base_url_or_endpoint,
-)
+from .azure import AzureChatCompletion
 
 
 class AzureAudioTranscription(AzureChatCompletion):
@@ -32,29 +28,18 @@ class AzureAudioTranscription(AzureChatCompletion):
         client=None,
         azure_ad_token: Optional[str] = None,
         atranscription: bool = False,
+        litellm_params: Optional[dict] = None,
     ) -> TranscriptionResponse:
         data = {"model": model, "file": audio_file, **optional_params}
 
         # init AzureOpenAI Client
-        azure_client_params = {
-            "api_version": api_version,
-            "azure_endpoint": api_base,
-            "azure_deployment": model,
-            "timeout": timeout,
-        }
-
-        azure_client_params = select_azure_base_url_or_endpoint(
-            azure_client_params=azure_client_params
+        azure_client_params = self.initialize_azure_sdk_client(
+            litellm_params=litellm_params or {},
+            api_key=api_key,
+            model_name=model,
+            api_version=api_version,
+            api_base=api_base,
         )
-        if api_key is not None:
-            azure_client_params["api_key"] = api_key
-        elif azure_ad_token is not None:
-            if azure_ad_token.startswith("oidc/"):
-                azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
-            azure_client_params["azure_ad_token"] = azure_ad_token
-
-        if max_retries is not None:
-            azure_client_params["max_retries"] = max_retries
 
         if atranscription is True:
             return self.async_audio_transcriptions(  # type: ignore
