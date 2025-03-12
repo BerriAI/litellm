@@ -9,11 +9,7 @@ from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_name
 from litellm.types.utils import FileTypes
 from litellm.utils import TranscriptionResponse, convert_to_model_response_object
 
-from .azure import (
-    AzureChatCompletion,
-    get_azure_ad_token_from_oidc,
-    select_azure_base_url_or_endpoint,
-)
+from .azure import AzureChatCompletion
 
 
 class AzureAudioTranscription(AzureChatCompletion):
