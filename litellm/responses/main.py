@@ -9,10 +9,7 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.responses.utils import (
-    ResponsesAPIRequestParams,
-    get_optional_params_responses_api,
-)
+from litellm.responses.utils import get_optional_params_responses_api
 from litellm.types.llms.openai import (
     Reasoning,
     ResponseIncludable,
@@ -26,10 +23,7 @@ from litellm.types.llms.openai import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
-from .streaming_iterator import (
-    BaseResponsesAPIStreamingIterator,
-    ResponsesAPIStreamingIterator,
-)
+from .streaming_iterator import BaseResponsesAPIStreamingIterator
 
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
@@ -218,11 +212,8 @@ def responses(
         custom_llm_provider=custom_llm_provider,
     )
 
-    # Get an instance of BaseLLMHTTPHandler
-    base_llm_http_handler_instance = BaseLLMHTTPHandler()
-
     # Call the handler with _is_async flag instead of directly calling the async handler
-    response = base_llm_http_handler_instance.response_api_handler(
+    response = base_llm_http_handler.response_api_handler(
         model=model,
         input=input,
         responses_api_provider_config=responses_api_provider_config,
