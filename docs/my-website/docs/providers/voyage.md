@@ -1,6 +1,22 @@
 # Voyage AI
 https://docs.voyageai.com/embeddings/
 
+## Proxy settings
+
+| Model Settings | Value |
+| -------------- | ----- |
+| API Base | https://api.voyageai.com/v1 |
+| Model Name | e.g. voyage-3-large |
+| LiteLLM Model Name | e.g. openai/voyage-3-large |
+
+
+:: info
+
+  It's important that the API Base includes the `/v1` postfix and that the LiteLLM Model Name includes the `openai/` prefix.
+
+::
+
+
 ## API Key
 ```python
 # env variable
