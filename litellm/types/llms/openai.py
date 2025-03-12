@@ -756,3 +756,8 @@ class ResponsesAPIResponse(TypedDict, total=False):
     truncation: Optional[Literal["auto", "disabled"]]
     usage: Optional[ResponseUsage]
     user: Optional[str]
+
+
+class ResponsesAPIStreamingResponse(TypedDict, total=False):
+    type: str
+    response: ResponsesAPIResponse
