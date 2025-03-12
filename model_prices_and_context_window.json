@@ -9698,18 +9698,6 @@
         "supports_tool_choice": true,
         "source": "https://cloud.sambanova.ai/plans/pricing"
     },
-    "sambanova/QwQ-32B-Preview": {
-        "max_tokens": 16000,
-        "max_input_tokens": 16000,
-        "max_output_tokens": 16000, 
-        "input_cost_per_token": 0.0000015,
-        "output_cost_per_token": 0.000003,
-        "litellm_provider": "sambanova",
-        "supports_function_calling": true,
-        "mode": "chat",
-        "supports_tool_choice": true,
-        "source": "https://cloud.sambanova.ai/plans/pricing"
-    },
     "sambanova/QwQ-32B": {
         "max_tokens": 16000,
         "max_input_tokens": 16000,
