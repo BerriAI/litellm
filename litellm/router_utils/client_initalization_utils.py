@@ -54,18 +54,11 @@ class InitalizeOpenAISDKClient:
         return True
 
     @staticmethod
-    def set_client(  # noqa: PLR0915
+    def set_max_parallel_requests_client(
         litellm_router_instance: LitellmRouter, model: dict
     ):
-        """
-        - Initializes Azure/OpenAI clients. Stores them in cache, b/c of this - https://github.com/BerriAI/litellm/issues/1278
-        - Initializes Semaphore for client w/ rpm. Stores them in cache. b/c of this - https://github.com/BerriAI/litellm/issues/2994
-        """
-        client_ttl = litellm_router_instance.client_ttl
         litellm_params = model.get("litellm_params", {})
-        model_name = litellm_params.get("model")
         model_id = model["model_info"]["id"]
-        # ### IF RPM SET - initialize a semaphore ###
         rpm = litellm_params.get("rpm", None)
         tpm = litellm_params.get("tpm", None)
         max_parallel_requests = litellm_params.get("max_parallel_requests", None)
@@ -83,6 +76,19 @@ class InitalizeOpenAISDKClient:
                 value=semaphore,
                 local_only=True,
             )
+
+    @staticmethod
+    def set_client(  # noqa: PLR0915
+        litellm_router_instance: LitellmRouter, model: dict
+    ):
+        """
+        - Initializes Azure/OpenAI clients. Stores them in cache, b/c of this - https://github.com/BerriAI/litellm/issues/1278
+        - Initializes Semaphore for client w/ rpm. Stores them in cache. b/c of this - https://github.com/BerriAI/litellm/issues/2994
+        """
+        client_ttl = litellm_router_instance.client_ttl
+        litellm_params = model.get("litellm_params", {})
+        model_name = litellm_params.get("model")
+        model_id = model["model_info"]["id"]
 
         ####  for OpenAI / Azure we need to initalize the Client for High Traffic ########
         custom_llm_provider = litellm_params.get("custom_llm_provider")
@@ -233,7 +239,8 @@ class InitalizeOpenAISDKClient:
                     if azure_ad_token.startswith("oidc/"):
                         azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
                 elif (
-                     not api_key and azure_ad_token_provider is None
+                    not api_key
+                    and azure_ad_token_provider is None
                     and litellm.enable_azure_ad_token_refresh is True
                 ):
                     try:
