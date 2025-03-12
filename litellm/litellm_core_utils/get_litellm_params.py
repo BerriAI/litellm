@@ -58,9 +58,9 @@ def get_litellm_params(
     async_call: Optional[bool] = None,
     ssl_verify: Optional[bool] = None,
     merge_reasoning_content_in_choices: Optional[bool] = None,
+    max_retries: Optional[int] = None,
     **kwargs,
 ) -> dict:
-
     litellm_params = {
         "acompletion": acompletion,
         "api_key": api_key,
@@ -106,5 +106,7 @@ def get_litellm_params(
         "client_secret": kwargs.get("client_secret"),
         "azure_username": kwargs.get("azure_username"),
         "azure_password": kwargs.get("azure_password"),
+        "max_retries": max_retries,
+        "timeout": kwargs.get("timeout"),
     }
     return litellm_params

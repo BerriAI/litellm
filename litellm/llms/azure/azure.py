@@ -718,6 +718,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     ):
         response = None
         try:
+
             if client is None:
                 openai_aclient = AsyncAzureOpenAI(**azure_client_params)
             else:
