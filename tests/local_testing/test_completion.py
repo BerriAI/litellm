@@ -3364,7 +3364,7 @@ async def test_completion_netmind_chat(sync_mode):
 
 @pytest.mark.parametrize("sync_mode", [False, True])
 @pytest.mark.asyncio
-async def test_completion_netmind_embedding(sync_mode):
+async def test_embedding_netmind(sync_mode):
     litellm.set_verbose = True
     model_name = "netmind/nvidia/NV-Embed-v2"
     try:
