@@ -44,7 +44,9 @@ def setup_mocks():
         mock_oidc_token.return_value = "mock-oidc-token"
         mock_token_provider.return_value = lambda: "mock-default-token"
 
-        mock_select_url.side_effect = lambda params: params
+        mock_select_url.side_effect = (
+            lambda azure_client_params, **kwargs: azure_client_params
+        )
 
         yield {
             "entrata_token": mock_entrata_token,
