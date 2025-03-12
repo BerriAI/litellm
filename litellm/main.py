@@ -5172,7 +5172,7 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
 
 
 @client
-def speech(
+def speech(  # noqa: PLR0915
     model: str,
     input: str,
     voice: Optional[Union[str, dict]] = None,
