@@ -38,7 +38,6 @@ from openai.types.responses.response import (
     Response,
     ResponseOutputItem,
     ResponseTextConfig,
-    ResponseUsage,
     Tool,
     ToolChoice,
 )
@@ -50,7 +49,7 @@ from openai.types.responses.response_create_params import (
     ToolChoice,
     ToolParam,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 from typing_extensions import Dict, Required, TypedDict, override
 
 FileContent = Union[IO[bytes], bytes, PathLike]
@@ -733,7 +732,25 @@ class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
     model: str
 
 
-class ResponsesAPIResponse(TypedDict, total=False):
+class OutputTokensDetails(BaseModel):
+    reasoning_tokens: int
+
+
+class ResponseAPIUsage(BaseModel):
+    input_tokens: int
+    """The number of input tokens."""
+
+    output_tokens: int
+    """The number of output tokens."""
+
+    output_tokens_details: OutputTokensDetails
+    """A detailed breakdown of the output tokens."""
+
+    total_tokens: int
+    """The total number of tokens used."""
+
+
+class ResponsesAPIResponse(BaseModel):
     id: str
     created_at: float
     error: Optional[dict]
@@ -754,10 +771,21 @@ class ResponsesAPIResponse(TypedDict, total=False):
     status: Optional[str]
     text: Optional[ResponseTextConfig]
     truncation: Optional[Literal["auto", "disabled"]]
-    usage: Optional[ResponseUsage]
+    usage: Optional[ResponseAPIUsage]
     user: Optional[str]
+    # Define private attributes using PrivateAttr
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+    def __getitem__(self, key):
+        return self.__dict__[key]
+
+    def get(self, key, default=None):
+        return self.__dict__.get(key, default)
+
+    def __contains__(self, key):
+        return key in self.__dict__
 
 
-class ResponsesAPIStreamingResponse(TypedDict, total=False):
+class ResponsesAPIStreamingResponse(BaseModel):
     type: str
     response: ResponsesAPIResponse

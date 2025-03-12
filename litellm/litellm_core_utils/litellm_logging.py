@@ -39,11 +39,13 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
 )
+from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import (
     AllMessageValues,
     Batch,
     FineTuningJob,
     HttpxBinaryResponseContent,
+    ResponsesAPIResponse,
 )
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
@@ -851,6 +853,7 @@ class Logging(LiteLLMLoggingBaseClass):
             RerankResponse,
             Batch,
             FineTuningJob,
+            ResponsesAPIResponse,
         ],
         cache_hit: Optional[bool] = None,
     ) -> Optional[float]:
@@ -3111,6 +3114,12 @@ class StandardLoggingPayloadSetup:
         elif isinstance(usage, Usage):
             return usage
         elif isinstance(usage, dict):
+            if ResponseAPILoggingUtils._is_response_api_usage(usage):
+                return (
+                    ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                        usage
+                    )
+                )
             return Usage(**usage)
 
         raise ValueError(f"usage is required, got={usage} of type {type(usage)}")
