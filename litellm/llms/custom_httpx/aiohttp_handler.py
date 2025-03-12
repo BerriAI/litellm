@@ -234,6 +234,7 @@ class BaseLLMAIOHTTPHandler:
             api_base=api_base,
             model=model,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             stream=stream,
         )
 
@@ -483,6 +484,7 @@ class BaseLLMAIOHTTPHandler:
             api_base=api_base,
             model=model,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             stream=False,
         )
 
