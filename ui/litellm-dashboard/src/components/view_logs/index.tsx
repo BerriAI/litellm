@@ -67,6 +67,7 @@ export default function SpendLogsTable({
   const [filterByCurrentUser, setFilterByCurrentUser] = useState(
     userRole && internalUserRoles.includes(userRole)
   );
+  const [expandedRequestId, setExpandedRequestId] = useState<string | null>(null);
 
   const queryClient = useQueryClient();
 
@@ -176,6 +177,18 @@ export default function SpendLogsTable({
     refetchIntervalInBackground: true,
   });
 
+  // Add this effect to preserve expanded state when data refreshes
+  useEffect(() => {
+    if (logs.data?.data && expandedRequestId) {
+      // Check if the expanded request ID still exists in the new data
+      const stillExists = logs.data.data.some(log => log.request_id === expandedRequestId);
+      if (!stillExists) {
+        // If the request ID no longer exists in the data, clear the expanded state
+        setExpandedRequestId(null);
+      }
+    }
+  }, [logs.data?.data, expandedRequestId]);
+
   if (!accessToken || !token || !userRole || !userID) {
     console.log(
       "got None values for one of accessToken, token, userRole, userID",
@@ -218,6 +231,10 @@ export default function SpendLogsTable({
     if (diffHours <= 24) return 'Last 24 Hours';
     if (diffHours <= 168) return 'Last 7 Days';
     return `${start.format('MMM D')} - ${now.format('MMM D')}`;
+  };
+
+  const handleRowExpand = (requestId: string | null) => {
+    setExpandedRequestId(requestId);
   };
 
   return (
@@ -573,6 +590,8 @@ export default function SpendLogsTable({
           data={filteredData}
           renderSubComponent={RequestViewer}
           getRowCanExpand={() => true}
+          onRowExpand={handleRowExpand}
+          expandedRequestId={expandedRequestId}
         />
       </div>
     </div>
@@ -618,7 +637,7 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
   const hasMessages = row.original.messages && 
     (Array.isArray(row.original.messages) ? row.original.messages.length > 0 : Object.keys(row.original.messages).length > 0);
   const hasResponse = row.original.response && Object.keys(formatData(row.original.response)).length > 0;
-  const missingData = !hasMessages || !hasResponse;
+  const missingData = !hasMessages && !hasResponse;
   
   // Format the response with error details if present
   const formattedResponse = () => {

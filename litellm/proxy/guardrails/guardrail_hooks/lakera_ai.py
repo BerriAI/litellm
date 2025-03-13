@@ -134,6 +134,7 @@ class lakeraAI_Moderation(CustomGuardrail):
             "audio_transcription",
             "pass_through_endpoint",
             "rerank",
+            "responses",
         ],
     ):
         if (
@@ -335,7 +336,7 @@ class lakeraAI_Moderation(CustomGuardrail):
         )
 
     @log_guardrail_information
-    async def async_moderation_hook(  ### 👈 KEY CHANGE ###
+    async def async_moderation_hook(
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
@@ -345,6 +346,7 @@ class lakeraAI_Moderation(CustomGuardrail):
             "image_generation",
             "moderation",
             "audio_transcription",
+            "responses",
         ],
     ):
         if self.event_hook is None:

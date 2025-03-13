@@ -187,53 +187,125 @@ def ollama_pt(
             final_prompt_value="### Response:",
             messages=messages,
         )
-    elif "llava" in model:
-        prompt = ""
-        images = []
-        for message in messages:
-            if isinstance(message["content"], str):
-                prompt += message["content"]
-            elif isinstance(message["content"], list):
-                # see https://docs.litellm.ai/docs/providers/openai#openai-vision-models
-                for element in message["content"]:
-                    if isinstance(element, dict):
-                        if element["type"] == "text":
-                            prompt += element["text"]
-                        elif element["type"] == "image_url":
-                            base64_image = convert_to_ollama_image(
-                                element["image_url"]["url"]
-                            )
-                            images.append(base64_image)
-        return {"prompt": prompt, "images": images}
     else:
+        user_message_types = {"user", "tool", "function"}
+        msg_i = 0
+        images = []
         prompt = ""
-        for message in messages:
-            role = message["role"]
-            content = message.get("content", "")
+        while msg_i < len(messages):
+            init_msg_i = msg_i
+            user_content_str = ""
+            ## MERGE CONSECUTIVE USER CONTENT ##
+            while (
+                msg_i < len(messages) and messages[msg_i]["role"] in user_message_types
+            ):
+                msg_content = messages[msg_i].get("content")
+                if msg_content:
+                    if isinstance(msg_content, list):
+                        for m in msg_content:
+                            if m.get("type", "") == "image_url":
+                                if isinstance(m["image_url"], str):
+                                    images.append(m["image_url"])
+                                elif isinstance(m["image_url"], dict):
+                                    images.append(m["image_url"]["url"])
+                            elif m.get("type", "") == "text":
+                                user_content_str += m["text"]
+                    else:
+                        # Tool message content will always be a string
+                        user_content_str += msg_content
 
-            if "tool_calls" in message:
-                tool_calls = []
+                msg_i += 1
 
-                for call in message["tool_calls"]:
-                    call_id: str = call["id"]
-                    function_name: str = call["function"]["name"]
-                    arguments = json.loads(call["function"]["arguments"])
+            if user_content_str:
+                prompt += f"### User:\n{user_content_str}\n\n"
 
-                    tool_calls.append(
-                        {
-                            "id": call_id,
-                            "type": "function",
-                            "function": {"name": function_name, "arguments": arguments},
-                        }
+            assistant_content_str = ""
+            ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
+            while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
+                msg_content = messages[msg_i].get("content")
+                if msg_content:
+                    if isinstance(msg_content, list):
+                        for m in msg_content:
+                            if m.get("type", "") == "text":
+                                assistant_content_str += m["text"]
+                    elif isinstance(msg_content, str):
+                        # Tool message content will always be a string
+                        assistant_content_str += msg_content
+
+                tool_calls = messages[msg_i].get("tool_calls")
+                ollama_tool_calls = []
+                if tool_calls:
+                    for call in tool_calls:
+                        call_id: str = call["id"]
+                        function_name: str = call["function"]["name"]
+                        arguments = json.loads(call["function"]["arguments"])
+
+                        ollama_tool_calls.append(
+                            {
+                                "id": call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": function_name,
+                                    "arguments": arguments,
+                                },
+                            }
+                        )
+
+                if ollama_tool_calls:
+                    assistant_content_str += (
+                        f"Tool Calls: {json.dumps(ollama_tool_calls, indent=2)}"
                     )
 
-                prompt += f"### Assistant:\nTool Calls: {json.dumps(tool_calls, indent=2)}\n\n"
+                msg_i += 1
 
-            elif "tool_call_id" in message:
-                prompt += f"### User:\n{message['content']}\n\n"
+            if assistant_content_str:
+                prompt += f"### Assistant:\n{assistant_content_str}\n\n"
 
-            elif content:
-                prompt += f"### {role.capitalize()}:\n{content}\n\n"
+            if msg_i == init_msg_i:  # prevent infinite loops
+                raise litellm.BadRequestError(
+                    message=BAD_MESSAGE_ERROR_STR + f"passed in {messages[msg_i]}",
+                    model=model,
+                    llm_provider="ollama",
+                )
+        # prompt = ""
+        # images = []
+        # for message in messages:
+        #     if isinstance(message["content"], str):
+        #         prompt += message["content"]
+        #     elif isinstance(message["content"], list):
+        #         # see https://docs.litellm.ai/docs/providers/openai#openai-vision-models
+        #         for element in message["content"]:
+        #             if isinstance(element, dict):
+        #                 if element["type"] == "text":
+        #                     prompt += element["text"]
+        #                 elif element["type"] == "image_url":
+        #                     base64_image = convert_to_ollama_image(
+        #                         element["image_url"]["url"]
+        #                     )
+        #                     images.append(base64_image)
+
+        #     if "tool_calls" in message:
+        #         tool_calls = []
+
+        #         for call in message["tool_calls"]:
+        #             call_id: str = call["id"]
+        #             function_name: str = call["function"]["name"]
+        #             arguments = json.loads(call["function"]["arguments"])
+
+        #             tool_calls.append(
+        #                 {
+        #                     "id": call_id,
+        #                     "type": "function",
+        #                     "function": {"name": function_name, "arguments": arguments},
+        #                 }
+        #             )
+
+        #         prompt += f"### Assistant:\nTool Calls: {json.dumps(tool_calls, indent=2)}\n\n"
+
+        #     elif "tool_call_id" in message:
+        #         prompt += f"### User:\n{message['content']}\n\n"
+
+        return {"prompt": prompt, "images": images}
 
     return prompt
 
@@ -680,12 +752,13 @@ def convert_generic_image_chunk_to_openai_image_obj(
     Return:
     "data:image/jpeg;base64,{base64_image}"
     """
-    return "data:{};{},{}".format(
-        image_chunk["media_type"], image_chunk["type"], image_chunk["data"]
-    )
+    media_type = image_chunk["media_type"]
+    return "data:{};{},{}".format(media_type, image_chunk["type"], image_chunk["data"])
 
 
-def convert_to_anthropic_image_obj(openai_image_url: str) -> GenericImageParsingChunk:
+def convert_to_anthropic_image_obj(
+    openai_image_url: str, format: Optional[str]
+) -> GenericImageParsingChunk:
     """
     Input:
     "image_url": "data:image/jpeg;base64,{base64_image}",
@@ -702,7 +775,11 @@ def convert_to_anthropic_image_obj(openai_image_url: str) -> GenericImageParsing
             openai_image_url = convert_url_to_base64(url=openai_image_url)
         # Extract the media type and base64 data
         media_type, base64_data = openai_image_url.split("data:")[1].split(";base64,")
-        media_type = media_type.replace("\\/", "/")
+
+        if format:
+            media_type = format
+        else:
+            media_type = media_type.replace("\\/", "/")
 
         return GenericImageParsingChunk(
             type="base64",
@@ -820,11 +897,12 @@ def anthropic_messages_pt_xml(messages: list):
             if isinstance(messages[msg_i]["content"], list):
                 for m in messages[msg_i]["content"]:
                     if m.get("type", "") == "image_url":
+                        format = m["image_url"].get("format")
                         user_content.append(
                             {
                                 "type": "image",
                                 "source": convert_to_anthropic_image_obj(
-                                    m["image_url"]["url"]
+                                    m["image_url"]["url"], format=format
                                 ),
                             }
                         )
@@ -1156,10 +1234,13 @@ def convert_to_anthropic_tool_result(
                 )
             elif content["type"] == "image_url":
                 if isinstance(content["image_url"], str):
-                    image_chunk = convert_to_anthropic_image_obj(content["image_url"])
-                else:
                     image_chunk = convert_to_anthropic_image_obj(
-                        content["image_url"]["url"]
+                        content["image_url"], format=None
+                    )
+                else:
+                    format = content["image_url"].get("format")
+                    image_chunk = convert_to_anthropic_image_obj(
+                        content["image_url"]["url"], format=format
                     )
                 anthropic_content_list.append(
                     AnthropicMessagesImageParam(
@@ -1282,6 +1363,7 @@ def add_cache_control_to_content(
         AnthropicMessagesImageParam,
         AnthropicMessagesTextParam,
         AnthropicMessagesDocumentParam,
+        ChatCompletionThinkingBlock,
     ],
     orignal_content_element: Union[dict, AllMessageValues],
 ):
@@ -1317,6 +1399,7 @@ def _anthropic_content_element_factory(
                 data=image_chunk["data"],
             ),
         )
+
     return _anthropic_content_element
 
 
@@ -1368,13 +1451,16 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     for m in user_message_types_block["content"]:
                         if m.get("type", "") == "image_url":
                             m = cast(ChatCompletionImageObject, m)
+                            format: Optional[str] = None
                             if isinstance(m["image_url"], str):
                                 image_chunk = convert_to_anthropic_image_obj(
-                                    openai_image_url=m["image_url"]
+                                    openai_image_url=m["image_url"], format=None
                                 )
                             else:
+                                format = m["image_url"].get("format")
                                 image_chunk = convert_to_anthropic_image_obj(
-                                    openai_image_url=m["image_url"]["url"]
+                                    openai_image_url=m["image_url"]["url"],
+                                    format=format,
                                 )
 
                             _anthropic_content_element = (
@@ -1454,12 +1540,23 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 assistant_content_block["content"], list
             ):
                 for m in assistant_content_block["content"]:
-                    # handle text
+                    # handle thinking blocks
+                    thinking_block = cast(str, m.get("thinking", ""))
+                    text_block = cast(str, m.get("text", ""))
                     if (
-                        m.get("type", "") == "text" and len(m.get("text", "")) > 0
+                        m.get("type", "") == "thinking" and len(thinking_block) > 0
+                    ):  # don't pass empty text blocks. anthropic api raises errors.
+                        anthropic_message: Union[
+                            ChatCompletionThinkingBlock,
+                            AnthropicMessagesTextParam,
+                        ] = cast(ChatCompletionThinkingBlock, m)
+                        assistant_content.append(anthropic_message)
+                    # handle text
+                    elif (
+                        m.get("type", "") == "text" and len(text_block) > 0
                     ):  # don't pass empty text blocks. anthropic api raises errors.
                         anthropic_message = AnthropicMessagesTextParam(
-                            type="text", text=m.get("text")
+                            type="text", text=text_block
                         )
                         _cached_message = add_cache_control_to_content(
                             anthropic_content_element=anthropic_message,
@@ -1512,6 +1609,7 @@ def anthropic_messages_pt(  # noqa: PLR0915
             msg_i += 1
 
         if assistant_content:
+
             new_messages.append({"role": "assistant", "content": assistant_content})
 
         if msg_i == init_msg_i:  # prevent infinite loops
@@ -1519,17 +1617,6 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 message=BAD_MESSAGE_ERROR_STR + f"passed in {messages[msg_i]}",
                 model=model,
                 llm_provider=llm_provider,
-            )
-    if not new_messages or new_messages[0]["role"] != "user":
-        if litellm.modify_params:
-            new_messages.insert(
-                0, {"role": "user", "content": [{"type": "text", "text": "."}]}
-            )
-        else:
-            raise Exception(
-                "Invalid first message={}. Should always start with 'role'='user' for Anthropic. System prompt is sent separately for Anthropic. set 'litellm.modify_params = True' or 'litellm_settings:modify_params = True' on proxy, to insert a placeholder user message - '.' as the first message, ".format(
-                    new_messages
-                )
             )
 
     if new_messages[-1]["role"] == "assistant":
@@ -2301,8 +2388,11 @@ class BedrockImageProcessor:
             )
 
     @classmethod
-    def process_image_sync(cls, image_url: str) -> BedrockContentBlock:
+    def process_image_sync(
+        cls, image_url: str, format: Optional[str] = None
+    ) -> BedrockContentBlock:
         """Synchronous image processing."""
+
         if "base64" in image_url:
             img_bytes, mime_type, image_format = cls._parse_base64_image(image_url)
         elif "http://" in image_url or "https://" in image_url:
@@ -2313,11 +2403,17 @@ class BedrockImageProcessor:
                 "Unsupported image type. Expected either image url or base64 encoded string"
             )
 
+        if format:
+            mime_type = format
+            image_format = mime_type.split("/")[1]
+
         image_format = cls._validate_format(mime_type, image_format)
         return cls._create_bedrock_block(img_bytes, mime_type, image_format)
 
     @classmethod
-    async def process_image_async(cls, image_url: str) -> BedrockContentBlock:
+    async def process_image_async(
+        cls, image_url: str, format: Optional[str]
+    ) -> BedrockContentBlock:
         """Asynchronous image processing."""
 
         if "base64" in image_url:
@@ -2331,6 +2427,10 @@ class BedrockImageProcessor:
             raise ValueError(
                 "Unsupported image type. Expected either image url or base64 encoded string"
             )
+
+        if format:  # override with user-defined params
+            mime_type = format
+            image_format = mime_type.split("/")[1]
 
         image_format = cls._validate_format(mime_type, image_format)
         return cls._create_bedrock_block(img_bytes, mime_type, image_format)
@@ -2819,12 +2919,14 @@ class BedrockConverseMessagesProcessor:
                                 _part = BedrockContentBlock(text=element["text"])
                                 _parts.append(_part)
                             elif element["type"] == "image_url":
+                                format: Optional[str] = None
                                 if isinstance(element["image_url"], dict):
                                     image_url = element["image_url"]["url"]
+                                    format = element["image_url"].get("format")
                                 else:
                                     image_url = element["image_url"]
                                 _part = await BedrockImageProcessor.process_image_async(  # type: ignore
-                                    image_url=image_url
+                                    image_url=image_url, format=format
                                 )
                                 _parts.append(_part)  # type: ignore
                             _cache_point_block = (
@@ -2924,7 +3026,14 @@ class BedrockConverseMessagesProcessor:
                     assistants_parts: List[BedrockContentBlock] = []
                     for element in _assistant_content:
                         if isinstance(element, dict):
-                            if element["type"] == "text":
+                            if element["type"] == "thinking":
+                                thinking_block = BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
+                                    thinking_blocks=[
+                                        cast(ChatCompletionThinkingBlock, element)
+                                    ]
+                                )
+                                assistants_parts.extend(thinking_block)
+                            elif element["type"] == "text":
                                 assistants_part = BedrockContentBlock(
                                     text=element["text"]
                                 )
@@ -2974,7 +3083,7 @@ class BedrockConverseMessagesProcessor:
         reasoning_content_blocks: List[BedrockContentBlock] = []
         for thinking_block in thinking_blocks:
             reasoning_text = thinking_block.get("thinking")
-            reasoning_signature = thinking_block.get("signature_delta")
+            reasoning_signature = thinking_block.get("signature")
             text_block = BedrockConverseReasoningTextBlock(
                 text=reasoning_text or "",
             )
@@ -3050,12 +3159,15 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             _part = BedrockContentBlock(text=element["text"])
                             _parts.append(_part)
                         elif element["type"] == "image_url":
+                            format: Optional[str] = None
                             if isinstance(element["image_url"], dict):
                                 image_url = element["image_url"]["url"]
+                                format = element["image_url"].get("format")
                             else:
                                 image_url = element["image_url"]
                             _part = BedrockImageProcessor.process_image_sync(  # type: ignore
-                                image_url=image_url
+                                image_url=image_url,
+                                format=format,
                             )
                             _parts.append(_part)  # type: ignore
                         _cache_point_block = (
@@ -3157,7 +3269,14 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                 assistants_parts: List[BedrockContentBlock] = []
                 for element in _assistant_content:
                     if isinstance(element, dict):
-                        if element["type"] == "text":
+                        if element["type"] == "thinking":
+                            thinking_block = BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
+                                thinking_blocks=[
+                                    cast(ChatCompletionThinkingBlock, element)
+                                ]
+                            )
+                            assistants_parts.extend(thinking_block)
+                        elif element["type"] == "text":
                             assistants_part = BedrockContentBlock(text=element["text"])
                             assistants_parts.append(assistants_part)
                         elif element["type"] == "image_url":
