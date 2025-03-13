@@ -70,6 +70,25 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return ResponsesAPIRequestParams(
             model=model, input=input, **response_api_optional_request_params
         )
+    
+    def transform_responses_api_retrieve_request(
+        self, 
+        response_api_optional_request_params: Dict, 
+        litellm_params: GenericLiteLLMParams, 
+        headers: Dict
+    ) -> ResponsesAPIRetrieveParams:
+        return ResponsesAPIRetrieveParams(
+             **response_api_optional_request_params
+        )
+    
+    def transform_responses_api_delete_request(
+        self, 
+        response_api_optional_request_params: Dict, 
+        litellm_params: GenericLiteLLMParams, 
+        headers: Dict
+    ) -> ResponsesAPIRetrieveParams:
+        '''Delete should have no parameters becuase the param is a path parameter'''
+        pass
 
     def transform_response_api_response(
         self,
@@ -85,6 +104,34 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 message=raw_response.text, status_code=raw_response.status_code
             )
         return ResponsesAPIResponse(**raw_response_json)
+
+    def transform_retrieve_api_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIResponse:
+        try:
+            raw_response_json = raw_response.json()
+        except Exception:
+            raise OpenAIError(
+                message=raw_response.text, status_code=raw_response.status_code
+            )
+        return ResponsesAPIResponse(**raw_response_json)
+    
+    def transform_delete_api_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIDeleteResponse:
+        try:
+            raw_response_json = raw_response.json()
+        except Exception:
+            raise OpenAIError(
+                message=raw_response.text, status_code=raw_response.status_code
+            )
+        return ResponsesAPIDeleteResponse(**raw_response_json)
+    
 
     def validate_environment(
         self,
@@ -108,8 +155,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: Optional[str],
-        model: str,
+        model: Optional[str] = None,
         stream: Optional[bool] = None,
+        path_parameter: Optional[str] = None,
     ) -> str:
         """
         Get the endpoint for OpenAI responses API
@@ -124,7 +172,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         # Remove trailing slashes
         api_base = api_base.rstrip("/")
 
-        return f"{api_base}/responses"
+        if path_parameter:
+            return f"{api_base}/responses/{path_parameter}"
+        else:
+            return f"{api_base}/responses"
 
     def transform_streaming_response(
         self,

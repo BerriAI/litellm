@@ -8,7 +8,10 @@ from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIRequestParams,
+    ResponsesAPIRetrieveParams,
+    ResponsesAPIDeleteParams,
     ResponsesAPIResponse,
+    ResponsesAPIDeleteResponse,
     ResponsesAPIStreamingResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
@@ -101,12 +104,49 @@ class BaseResponsesAPIConfig(ABC):
         pass
 
     @abstractmethod
+    def transform_responses_api_retrieve_request(
+        self,
+        id: str,
+        response_api_optional_request_params: Dict,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    )-> ResponsesAPIRetrieveParams:
+        pass
+
+    @abstractmethod
+    def transform_responses_api_delete_request(
+        self,
+        id: str,
+        response_api_optional_request_params: Dict,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    )-> ResponsesAPIDeleteParams:
+        pass
+
+    @abstractmethod
     def transform_response_api_response(
         self,
         model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> ResponsesAPIResponse:
+        pass
+    
+    @abstractmethod
+    def transform_retrieve_api_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIResponse:
+        pass
+    
+    @abstractmethod
+    def transform_delete_api_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIDeleteResponse:
         pass
 
     @abstractmethod
