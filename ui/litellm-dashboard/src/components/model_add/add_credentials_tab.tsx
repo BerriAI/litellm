@@ -89,7 +89,6 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
           tooltip="Helper to auto-populate provider specific fields"
         >
           <AntdSelect
-            showSearch={true}
             value={existingCredential?.credential_info.custom_llm_provider || selectedProvider}
             onChange={(value) => {
               setSelectedProvider(value as Providers);
