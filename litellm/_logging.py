@@ -35,7 +35,10 @@ class JsonFormatter(Formatter):
         }
 
         if record.exc_info:
-            json_record["stacktrace"] = self.formatException(record.exc_info)
+            try:
+                json_record["stacktrace"] = self.formatException(record.exc_info)
+            except Exception as e:
+                json_record["stacktrace"] = f"Error serializing stacktrace: {str(e)}"
 
         return json.dumps(json_record)
 
