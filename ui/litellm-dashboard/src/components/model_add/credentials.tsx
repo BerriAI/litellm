@@ -11,11 +11,14 @@ import {
   Badge,
   Button
 } from "@tremor/react";
+import { UploadProps } from "antd/es/upload";
 import { PlusIcon } from "@heroicons/react/solid";
 import { getCredentialsList } from "@/components/networking"; // Assume this is your networking function
-
+import AddCredentialsTab from "./add_credentials_tab";
+import { Form } from "antd";
 interface CredentialsPanelProps {
   accessToken: string | null;
+  uploadProps: UploadProps;
 }
 
 interface CredentialsResponse {
@@ -37,9 +40,32 @@ interface CredentialItem {
   };
 }
 
-const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken }) => {
+const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, uploadProps }) => {
   const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([]);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [form] = Form.useForm();
+
+  const handleAddCredential = (values: any) => {
+    // Transform form values into credential structure
+    const newCredential = {
+      credential_name: values.credential_name,
+      provider: values.custom_llm_provider,
+      credential_values: {
+        api_key: values.api_key,
+        api_base: values.api_base
+      },
+      credential_info: {
+        type: values.custom_llm_provider,
+        required: true, // You might want to make this configurable
+        default: values.credential_name
+      }
+    };
+
+    // Add to list and close modal
+    setCredentialsList([...credentialsList, newCredential]);
+    setIsAddModalOpen(false);
+    form.resetFields();
+  };
 
   useEffect(() => {
     if (!accessToken) {
@@ -76,12 +102,6 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken }) => {
 
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
-      <Button 
-        onClick={() => setIsAddModalOpen(true)}
-        className="mb-4"
-      >
-        Add Credential
-      </Button>
       <div className="flex justify-between items-center mb-4">
         <Text>
           Configured credentials for different AI providers. Add and manage your API credentials.{" "}
@@ -136,19 +156,23 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken }) => {
           </TableBody>
         </Table>
       </Card>
+      <Button 
+        onClick={() => setIsAddModalOpen(true)}
+        className="mt-4"
+      >
+        Add Credential
+      </Button>
 
       
 
-      {/* TODO: Implement Add Credential Modal */}
       {isAddModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
-          {/* Modal content for adding credentials */}
-          <Button 
-            onClick={() => setIsAddModalOpen(false)}
-          >
-            Close
-          </Button>
-        </div>
+        <AddCredentialsTab 
+          form={form}
+          handleOk={handleAddCredential}
+          isVisible={isAddModalOpen}
+          onCancel={() => setIsAddModalOpen(false)}
+          uploadProps={uploadProps}
+        />
       )}
     </div>
   );
