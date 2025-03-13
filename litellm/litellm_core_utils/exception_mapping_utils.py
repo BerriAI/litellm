@@ -128,7 +128,6 @@ def exception_type(  # type: ignore  # noqa: PLR0915
     extra_kwargs: Optional[dict] = {},
 ):
     """Maps an LLM Provider Exception to OpenAI Exception Format"""
-
     if any(
         isinstance(original_exception, exc_type)
         for exc_type in litellm.LITELLM_EXCEPTION_TYPES
