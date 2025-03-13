@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
@@ -51,8 +52,10 @@ async def create_credential(
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
 
-        credential = CredentialHelperUtils.encrypt_credential_values(credential)
-        credentials_dict = credential.model_dump()
+        encrypted_credential = CredentialHelperUtils.encrypt_credential_values(
+            credential
+        )
+        credentials_dict = encrypted_credential.model_dump()
         credentials_dict_jsonified = jsonify_object(credentials_dict)
         await prisma_client.db.litellm_credentialstable.create(
             data={
@@ -61,6 +64,9 @@ async def create_credential(
                 "updated_by": user_api_key_dict.user_id,
             }
         )
+
+        ## ADD TO LITELLM ##
+        CredentialAccessor.upsert_credentials([credential])
 
         return {"success": True, "message": "Credential created successfully"}
     except Exception as e:
@@ -85,7 +91,7 @@ async def get_credentials(
         masked_credentials = [
             {
                 "credential_name": credential.credential_name,
-                "credential_values": credential.credential_values,
+                "credential_info": credential.credential_info,
             }
             for credential in litellm.credential_list
         ]
@@ -146,6 +152,13 @@ async def delete_credential(
         await prisma_client.db.litellm_credentialstable.delete(
             where={"credential_name": credential_name}
         )
+
+        ## DELETE FROM LITELLM ##
+        litellm.credential_list = [
+            cred
+            for cred in litellm.credential_list
+            if cred.credential_name != credential_name
+        ]
         return {"success": True, "message": "Credential deleted successfully"}
     except Exception as e:
         return handle_exception_on_proxy(e)

@@ -21,8 +21,10 @@ class CredentialAccessor:
     def upsert_credentials(credentials: List[CredentialItem]):
         """Add a credential to the list of credentials."""
 
+        credential_names = [cred.credential_name for cred in litellm.credential_list]
+
         for credential in credentials:
-            if credential.credential_name in litellm.credential_list:
+            if credential.credential_name in credential_names:
                 # Find and replace the existing credential in the list
                 for i, existing_cred in enumerate(litellm.credential_list):
                     if existing_cred.credential_name == credential.credential_name:
