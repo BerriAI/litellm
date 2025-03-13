@@ -3,6 +3,12 @@ import TabItem from '@theme/TabItem';
 
 # 'Thinking' / 'Reasoning Content'
 
+:::info
+
+Requires LiteLLM v1.63.0+
+
+:::
+
 Supported Providers:
 - Deepseek (`deepseek/`)
 - Anthropic API (`anthropic/`)
