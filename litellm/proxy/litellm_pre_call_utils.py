@@ -62,8 +62,10 @@ def _get_metadata_variable_name(request: Request) -> str:
     """
     if RouteChecks._is_assistants_api_request(request):
         return "litellm_metadata"
+
     LITELLM_METADATA_ROUTES = [
-        "batches" "/v1/messages",
+        "batches",
+        "/v1/messages",
         "responses",
     ]
     if any(
