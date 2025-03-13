@@ -470,7 +470,7 @@ class Router:
         self.default_litellm_params = default_litellm_params
         self.default_litellm_params.setdefault("timeout", timeout)
         self.default_litellm_params.setdefault("max_retries", 0)
-        self.default_litellm_params.setdefault("metadata", {}).update(
+        self.default_litellm_params.setdefault("litellm_metadata", {}).update(
             {"caching_groups": caching_groups}
         )
 
