@@ -1214,7 +1214,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     <TabGroup>
                       <TabList variant="line" defaultValue="1">
                         <Tab value="1">Avg. Latency per Token</Tab>
-                        <Tab value="2">✨ Time to first token</Tab>
+                        <Tab value="2">Time to first token</Tab>
                       </TabList>
                       <TabPanels>
                         <TabPanel>
