@@ -2948,3 +2948,12 @@ async def test_bedrock_stream_thinking_content_openwebui():
     assert (
         len(response_content) > 0
     ), "There should be non-empty content after thinking tags"
+
+
+def test_bedrock_usage_block():
+    litellm._turn_on_debug()
+    response = completion(
+        model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        messages=[{"role": "user", "content": "Hello who is this?"}],
+    )
+    assert response.usage.total_tokens > 0
