@@ -104,7 +104,7 @@ class BaseResponsesAPIConfig(ABC):
         pass
 
     @abstractmethod
-    def transform_responses_api_retrieve_request(
+    def response_api_retrieve_optional_request_params(
         self,
         id: str,
         response_api_optional_request_params: Dict,
@@ -114,7 +114,7 @@ class BaseResponsesAPIConfig(ABC):
         pass
 
     @abstractmethod
-    def transform_responses_api_delete_request(
+    def response_api_delete_optional_request_params(
         self,
         id: str,
         response_api_optional_request_params: Dict,

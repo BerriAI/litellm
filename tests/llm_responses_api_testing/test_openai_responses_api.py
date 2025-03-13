@@ -518,11 +518,11 @@ def test_sync_retrieve_delete(model):
     id = response['id']
 
     # Test retrieve functionality
-    retrieved_response = litellm.responses_retrieve(id, llm_provider="openai")
+    retrieved_response = litellm.responses_retrieve(id, custom_llm_provider="openai")
     assert retrieved_response["text"] == response["text"]
 
     # Test delete functionality
-    deleted_response = litellm.responses_delete(id, llm_provider="openai")
+    deleted_response = litellm.responses_delete(id, custom_llm_provider="openai")
     assert deleted_response is not None
 
 
@@ -541,9 +541,9 @@ async def test_async_retrieve_delete(model):
     id = response['id']
 
     # Test async retrieve functionality
-    retrieved_response = await litellm.aresponses_retrieve(id, llm_provider="openai")
+    retrieved_response = await litellm.aresponses_retrieve(id, custom_llm_provider="openai")
     assert retrieved_response["text"] == response["text"]
 
     # Test async delete functionality
-    deleted_response = await litellm.aresponses_delete(id, llm_provider="openai")
+    deleted_response = await litellm.aresponses_delete(id, custom_llm_provider="openai")
     assert deleted_response is not None

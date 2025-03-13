@@ -1187,7 +1187,7 @@ class BaseLLMHTTPHandler:
     
     def response_api_retrieve_handler(
         self,
-        id: str,
+        response_id: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         response_api_optional_request_params: Dict,
         custom_llm_provider: str,
@@ -1212,7 +1212,7 @@ class BaseLLMHTTPHandler:
         if _is_async:
             # Return the async coroutine if called with _is_async=True
             return self.async_response_api_retrieve_handler(
-                id = id,
+                response_id = response_id,
                 responses_api_provider_config=responses_api_provider_config,
                 response_api_optional_request_params=response_api_optional_request_params,
                 custom_llm_provider=custom_llm_provider,
@@ -1242,10 +1242,10 @@ class BaseLLMHTTPHandler:
 
         api_base = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
-            path_parameter = id
+            response_id = response_id
         )
 
-        data = responses_api_provider_config.transform_responses_api_retrieve_request(
+        data = responses_api_provider_config.response_api_retrieve_optional_request_params(
             response_api_optional_request_params=response_api_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
@@ -1280,7 +1280,7 @@ class BaseLLMHTTPHandler:
     
     async def async_response_api_retrieve_handler(
         self,
-        id: str,
+        response_id: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         response_api_optional_request_params: Dict,
         custom_llm_provider: str,
@@ -1307,7 +1307,7 @@ class BaseLLMHTTPHandler:
         headers = responses_api_provider_config.validate_environment(
             api_key=litellm_params.api_key,
             headers=response_api_optional_request_params.get("extra_headers", {}) or {},
-            model= " ",
+            model= None,
         )
 
         if extra_headers:
@@ -1315,11 +1315,11 @@ class BaseLLMHTTPHandler:
 
         api_base = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
-            path_parameter = id
+            response_id = response_id
         )
 
         # Is this necessary? Perhaps for get,
-        data = responses_api_provider_config.transform_responses_api_retrieve_request(
+        data = responses_api_provider_config.response_api_retrieve_optional_request_params(
             response_api_optional_request_params=response_api_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
@@ -1356,7 +1356,7 @@ class BaseLLMHTTPHandler:
 
     def response_api_delete_handler(
         self,
-        id: str,
+        response_id: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         response_api_optional_request_params: Dict,
         custom_llm_provider: str,
@@ -1381,7 +1381,7 @@ class BaseLLMHTTPHandler:
         if _is_async:
             # Return the async coroutine if called with _is_async=True
             return self.async_response_api_delete_handler(
-                id = id,
+                response_id = response_id,
                 responses_api_provider_config=responses_api_provider_config,
                 response_api_optional_request_params=response_api_optional_request_params,
                 custom_llm_provider=custom_llm_provider,
@@ -1403,7 +1403,7 @@ class BaseLLMHTTPHandler:
         headers = responses_api_provider_config.validate_environment(
             api_key=litellm_params.api_key,
             headers=response_api_optional_request_params.get("extra_headers", {}) or {},
-            model= " ",
+            model= None,
         )
 
         if extra_headers:
@@ -1411,7 +1411,13 @@ class BaseLLMHTTPHandler:
 
         api_base = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
-            path_parameter = id
+            response_id= response_id
+        )
+
+        data = responses_api_provider_config.response_api_delete_optional_request_params(
+            response_api_optional_request_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
         )
 
         ## LOGGING
@@ -1419,6 +1425,7 @@ class BaseLLMHTTPHandler:
             input=input,
             api_key="",
             additional_args={
+                "complete_input_dict": data,
                 "api_base": api_base,
                 "headers": headers,
             },
@@ -1442,7 +1449,7 @@ class BaseLLMHTTPHandler:
 
     async def async_response_api_delete_handler(
         self,
-        id: str,
+        response_id: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         response_api_optional_request_params: Dict,
         custom_llm_provider: str,
@@ -1469,7 +1476,7 @@ class BaseLLMHTTPHandler:
         headers = responses_api_provider_config.validate_environment(
             api_key=litellm_params.api_key,
             headers=response_api_optional_request_params.get("extra_headers", {}) or {},
-            model= " ",
+            model= None,
         )
 
         if extra_headers:
@@ -1477,7 +1484,13 @@ class BaseLLMHTTPHandler:
 
         api_base = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
-            path_parameter = id
+            response_id = response_id
+        )
+
+        data = responses_api_provider_config.response_api_delete_optional_request_params(
+            response_api_optional_request_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
         )
 
         ## LOGGING
@@ -1485,11 +1498,11 @@ class BaseLLMHTTPHandler:
             input=input,
             api_key="",
             additional_args={
+                "complete_input_dict": data,
                 "api_base": api_base,
                 "headers": headers,
             },
         )
-
 
         try:
             response = await async_httpx_client.delete(

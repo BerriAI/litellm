@@ -71,7 +71,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             model=model, input=input, **response_api_optional_request_params
         )
     
-    def transform_responses_api_retrieve_request(
+    def response_api_retrieve_optional_request_params(
         self, 
         response_api_optional_request_params: Dict, 
         litellm_params: GenericLiteLLMParams, 
@@ -81,7 +81,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
              **response_api_optional_request_params
         )
     
-    def transform_responses_api_delete_request(
+    def response_api_delete_optional_request_params(
         self, 
         response_api_optional_request_params: Dict, 
         litellm_params: GenericLiteLLMParams, 
@@ -156,10 +156,11 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_base: Optional[str],
         model: Optional[str] = None,
         stream: Optional[bool] = None,
-        path_parameter: Optional[str] = None,
+        response_id: Optional[str] = None,
     ) -> str:
         """
-        Get the endpoint for OpenAI responses API
+        Get the endpoint for OpenAI responses API.
+        When using delete or retrieve, the response_id parameter is provided as a path parameter, so it has tp be part of the URL.
         """
         api_base = (
             api_base
@@ -171,8 +172,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         # Remove trailing slashes
         api_base = api_base.rstrip("/")
 
-        if path_parameter:
-            return f"{api_base}/responses/{path_parameter}"
+        if response_id:
+            return f"{api_base}/responses/{response_id}"
         else:
             return f"{api_base}/responses"
 

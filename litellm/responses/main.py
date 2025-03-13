@@ -218,8 +218,8 @@ def responses(
 
 @client
 async def aresponses_retrieve(
-    id: str,
-    llm_provider:str,
+    response_id: str,
+    custom_llm_provider:str,
     include: Optional[List[ResponseIncludable]] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
@@ -238,8 +238,8 @@ async def aresponses_retrieve(
 
         func = partial(
             responses_retrieve,
-            id,
-            llm_provider,
+            response_id,
+            custom_llm_provider,
             include=include,
             extra_headers=extra_headers,
             extra_query=extra_query,
@@ -262,8 +262,8 @@ async def aresponses_retrieve(
 
 @client
 def responses_retrieve(
-    id:str,
-    llm_provider:str,
+    response_id:str,
+    custom_llm_provider:str,
     include: Optional[List[ResponseIncludable]] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
@@ -288,52 +288,34 @@ def responses_retrieve(
     # get provider config
     responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
         ProviderConfigManager.get_provider_responses_api_config(
-            model=" ",
-            provider=litellm.LlmProviders(llm_provider),
+            model= None,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
     )
 
     if responses_api_provider_config is None:
         raise litellm.BadRequestError(
-            llm_provider=llm_provider,
-            message=f"Responses API not available for custom_llm_provider={llm_provider}",
+            custom_llm_provider=custom_llm_provider,
+            message=f"Responses API not available for custom_llm_provider={custom_llm_provider}",
         )
-    
-    # Get all parameters using locals() and combine with kwargs
-    local_vars = locals()
-    local_vars.update(kwargs)
-    # Get ResponsesAPIOptionalRequestParams with only valid parameters
-    response_api_optional_params: ResponsesAPIOptionalRequestParams = (
-        ResponsesAPIRequestUtils.get_requested_response_api_optional_param(local_vars)
-    )
-
-    # Get optional parameters for the responses API
-    responses_api_request_params: Dict = (
-        ResponsesAPIRequestUtils.get_optional_params_responses_api(
-            model=" ",
-            responses_api_provider_config=responses_api_provider_config,
-            response_api_optional_params=response_api_optional_params,
-        )
-    )
 
     # Pre Call logging
     if litellm_logging_obj:
         litellm_logging_obj.update_environment_variables(
-            model=" ",
-            optional_params=dict(responses_api_request_params),
+            model= None,
+            optional_params= {},
             litellm_params={
                 "litellm_call_id": litellm_call_id,
-                **responses_api_request_params,
             },
-            custom_llm_provider=llm_provider,
+            custom_llm_provider=custom_llm_provider,
         )
 
     # Call the handler with _is_async flag instead of directly calling the async handler
     response = base_llm_http_handler.response_api_retrieve_handler(
-        id=id,
+        response_id=response_id,
         responses_api_provider_config=responses_api_provider_config,
-        response_api_optional_request_params=responses_api_request_params,
-        custom_llm_provider=llm_provider,
+        response_api_optional_request_params={},
+        custom_llm_provider=custom_llm_provider,
         litellm_params=litellm_params,
         logging_obj=litellm_logging_obj,
         extra_headers=extra_headers,
@@ -347,8 +329,8 @@ def responses_retrieve(
 
 @client
 def responses_delete(
-    id:str,
-    llm_provider:str,
+    response_id:str,
+    custom_llm_provider:str,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -372,52 +354,35 @@ def responses_delete(
     # get provider config
     responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
         ProviderConfigManager.get_provider_responses_api_config(
-            model=" ",
-            provider=litellm.LlmProviders(llm_provider),
+            model= None,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
     )
 
     if responses_api_provider_config is None:
         raise litellm.BadRequestError(
-            llm_provider=llm_provider,
-            message=f"Responses API not available for custom_llm_provider={llm_provider}",
+            custom_llm_provider=custom_llm_provider,
+            message=f"Responses API not available for custom_llm_provider={custom_llm_provider}",
         )
 
-    # Get all parameters using locals() and combine with kwargs
-    local_vars = locals()
-    local_vars.update(kwargs)
-    # Get ResponsesAPIOptionalRequestParams with only valid parameters
-    response_api_optional_params: ResponsesAPIOptionalRequestParams = (
-        ResponsesAPIRequestUtils.get_requested_response_api_optional_param(local_vars)
-    )
-
-    # Get optional parameters for the responses API
-    responses_api_request_params: Dict = (
-        ResponsesAPIRequestUtils.get_optional_params_responses_api(
-            model=" ",
-            responses_api_provider_config=responses_api_provider_config,
-            response_api_optional_params=response_api_optional_params,
-        )
-    )
 
     # Pre Call logging
     if litellm_logging_obj:
         litellm_logging_obj.update_environment_variables(
-            model=" ",
-            optional_params=dict(responses_api_request_params),
+            model= None,
+            optional_params= {},
             litellm_params={
                 "litellm_call_id": litellm_call_id,
-                **responses_api_request_params,
             },
-            custom_llm_provider=llm_provider,
+            custom_llm_provider=custom_llm_provider,
         )
 
     # Call the handler with _is_async flag instead of directly calling the async handler
     response = base_llm_http_handler.response_api_delete_handler(
-        id=id,
+        response_id=response_id,
         responses_api_provider_config=responses_api_provider_config,
-        response_api_optional_request_params=responses_api_request_params,
-        custom_llm_provider=llm_provider,
+        response_api_optional_request_params={},
+        custom_llm_provider=custom_llm_provider,
         litellm_params=litellm_params,
         logging_obj=litellm_logging_obj,
         extra_headers=extra_headers,
@@ -431,8 +396,8 @@ def responses_delete(
 
 @client
 async def aresponses_delete(
-    id: str,
-    llm_provider:str,
+    response_id: str,
+    custom_llm_provider:str,
     include: Optional[List[ResponseIncludable]] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
@@ -451,8 +416,8 @@ async def aresponses_delete(
 
         func = partial(
             responses_delete,
-            id,
-            llm_provider,
+            response_id,
+            custom_llm_provider,
             extra_headers=extra_headers,
             extra_query=extra_query,
             extra_body=extra_body,
