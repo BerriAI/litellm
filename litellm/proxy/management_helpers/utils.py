@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 from functools import wraps
-from typing import Optional, Tuple
+from typing import Literal, Optional, Tuple, Any
 
 from fastapi import HTTPException, Request
 
@@ -372,3 +372,44 @@ def management_endpoint_wrapper(func):
             raise e
 
     return wrapper
+
+
+async def validate_entity_exists(
+    prisma_client: Any, 
+    table_name: Literal["budget", "team", "user"],
+    entity_id: Optional[str], 
+) -> None:
+    """
+    Validates if an entity exists in the database.
+    
+    Args:
+        prisma_client: Database client
+        entity_id: ID of the entity to check
+        entity_type: Human-readable name of the entity type (e.g., "User", "Team")
+        table_name: Database table name to check
+        id_field: Field name for the ID in the table (defaults to entity_type_id format)
+    
+    Raises:
+        Exception: If the entity doesn't exist
+    """
+    if entity_id is None:
+        return
+    
+    if prisma_client is None:
+        raise Exception("Database client is not available")
+    
+    if table_name == "budget":  
+        existing_entity = await prisma_client.db.litellm_budgettable.find_unique(
+            where={"budget_id": entity_id},  # type: ignore
+        )
+    elif table_name == "team":
+        existing_entity = await prisma_client.db.litellm_teamtable.find_unique(
+            where={"team_id": entity_id},  # type: ignore
+        )
+    elif table_name == "user":
+        existing_entity = await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": entity_id},  # type: ignore
+        )
+    
+    if existing_entity is None:
+        raise Exception(f"'{table_name}' with the id '{entity_id}' does not exist")
