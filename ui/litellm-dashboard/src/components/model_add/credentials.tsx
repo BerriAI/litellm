@@ -13,7 +13,7 @@ import {
 } from "@tremor/react";
 import { UploadProps } from "antd/es/upload";
 import { PlusIcon } from "@heroicons/react/solid";
-import { getCredentialsList, credentialCreateCall } from "@/components/networking"; // Assume this is your networking function
+import { credentialListCall, credentialCreateCall } from "@/components/networking"; // Assume this is your networking function
 import AddCredentialsTab from "./add_credentials_tab";
 import { Form, message } from "antd";
 interface CredentialsPanelProps {
@@ -27,16 +27,11 @@ interface CredentialsResponse {
 
 interface CredentialItem {
   credential_name: string | null;
-  provider: string;
-  credential_values: {
-    api_key?: string;
-    api_base?: string;
-  };
+  credential_values: object;
   credential_info: {
+    custom_llm_provider?: string;
     description?: string;
-    type: string;
-    required: boolean;
-    default?: string;
+    required?: boolean;
   };
 }
 
@@ -78,7 +73,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
     
     const fetchCredentials = async () => {
       try {
-        const response: CredentialsResponse = await getCredentialsList(accessToken);
+        const response: CredentialsResponse = await credentialListCall(accessToken);
         console.log(`credentials: ${JSON.stringify(response)}`);
         setCredentialsList(response.credentials);
       } catch (error) {
@@ -127,7 +122,6 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
               <TableHeaderCell>Credential Name</TableHeaderCell>
               <TableHeaderCell>Provider</TableHeaderCell>
               <TableHeaderCell>Description</TableHeaderCell>
-              <TableHeaderCell>Required</TableHeaderCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -142,18 +136,9 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
                 <TableRow key={index}>
                   <TableCell>{credential.credential_name}</TableCell>
                   <TableCell>
-                    {renderProviderBadge(credential.provider)}
+                    {renderProviderBadge(credential.credential_info?.custom_llm_provider as string || '-')}
                   </TableCell>
-                  <TableCell>{credential.credential_info.description || '-'}</TableCell>
-                  <TableCell>
-                    <div className={`inline-flex rounded-full px-2 py-1 text-xs font-medium
-                      ${credential.credential_info.required 
-                        ? 'bg-green-100 text-green-800'  // Required styling
-                        : 'bg-gray-100 text-gray-800'    // Optional styling
-                      }`}>
-                      {credential.credential_info.required ? 'Required' : 'Optional'}
-                    </div>
-                  </TableCell>
+                  <TableCell>{credential.credential_info?.description || '-'}</TableCell>
                 </TableRow>
               ))
             )}

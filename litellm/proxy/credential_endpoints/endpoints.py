@@ -85,7 +85,7 @@ async def get_credentials(
         masked_credentials = [
             {
                 "credential_name": credential.credential_name,
-                "credential_values": credential.credential_values,
+                "credential_info": credential.credential_info,
             }
             for credential in litellm.credential_list
         ]
