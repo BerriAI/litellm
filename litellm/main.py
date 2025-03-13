@@ -201,6 +201,7 @@ from litellm.utils import (
     TranscriptionResponse,
 )
 
+from .parameter_mapping import ParameterMapping
 ####### ENVIRONMENT VARIABLES ###################
 openai_chat_completions = OpenAIChatCompletion()
 openai_text_completions = OpenAITextCompletion()
@@ -1113,6 +1114,11 @@ def completion(  # type: ignore # noqa: PLR0915
             thinking=thinking,
             **non_default_params,
         )
+
+        if reasoning_effort and thinking is None:
+            thinking_config = ParameterMapping.map_reasoning_to_thinking(reasoning_effort)
+            if thinking_config:
+                optional_params["thinking"] = thinking_config
 
         if litellm.add_function_to_prompt and optional_params.get(
             "functions_unsupported_model", None
