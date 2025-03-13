@@ -203,18 +203,18 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
       
 
       {isAddModalOpen && (
-        <AddCredentialsTab 
-          form={form}
+        <AddCredentialsTab
           onAddCredential={handleAddCredential}
           isVisible={isAddModalOpen}
           onCancel={() => setIsAddModalOpen(false)}
           uploadProps={uploadProps}
           addOrEdit="add"
+          onUpdateCredential={handleUpdateCredential}
+          existingCredential={null}
         />
       )}
       {isUpdateModalOpen && (
         <AddCredentialsTab 
-          form={form}
           onAddCredential={handleAddCredential}
           isVisible={isUpdateModalOpen}
           existingCredential={selectedCredential}
