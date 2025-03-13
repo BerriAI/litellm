@@ -119,7 +119,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
 
                   <Form.Item
                     label="Existing Credentials"
-                    name="credential_name"
+                    name="litellm_credential_name"
                   >
                     <AntdSelect
                       showSearch
@@ -128,10 +128,13 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                       filterOption={(input, option) =>
                         (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
                       }
-                      options={credentials.map((credential) => ({
-                        value: credential.credential_name,
-                        label: credential.credential_name
-                      }))}
+                      options={[
+                        { value: null, label: 'None' },
+                        ...credentials.map((credential) => ({
+                          value: credential.credential_name,
+                          label: credential.credential_name
+                        }))
+                      ]}
                       allowClear
                     />
                   </Form.Item>
@@ -142,10 +145,31 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                     <div className="flex-grow border-t border-gray-200"></div>
                   </div>
 
-                  <ProviderSpecificFields
-                    selectedProvider={selectedProvider}
-                    uploadProps={uploadProps}
-                  />
+                  <Form.Item
+                    noStyle
+                    shouldUpdate={(prevValues, currentValues) => 
+                      prevValues.credential_name !== currentValues.credential_name ||
+                      prevValues.provider !== currentValues.provider
+                    }
+                  >
+                    {({ getFieldValue }) => {
+                      const credentialName = getFieldValue('litellm_credential_name');
+                      // Only show provider specific fields if no credentials selected
+                      if (!credentialName) {
+                        return (
+                          <ProviderSpecificFields
+                            selectedProvider={selectedProvider}
+                            uploadProps={uploadProps}
+                          />
+                        );
+                      }
+                      return (
+                        <div className="text-gray-500 text-sm text-center">
+                          Using existing credentials - no additional provider fields needed
+                        </div>
+                      );
+                    }}
+                  </Form.Item>
                   <AdvancedSettings 
                     showAdvancedSettings={showAdvancedSettings}
                     setShowAdvancedSettings={setShowAdvancedSettings}
