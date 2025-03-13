@@ -8,7 +8,7 @@ import ProviderSpecificFields from "./provider_specific_fields";
 import AdvancedSettings from "./advanced_settings";
 import { Providers, providerLogoMap, getPlaceholder } from "../provider_info_helpers";
 import type { Team } from "../key_team_helpers/key_list";
-
+import { CredentialItem } from "../networking";
 interface AddModelTabProps {
   form: FormInstance;
   handleOk: () => void;
@@ -21,6 +21,7 @@ interface AddModelTabProps {
   showAdvancedSettings: boolean;
   setShowAdvancedSettings: (show: boolean) => void;
   teams: Team[] | null;
+  credentials: CredentialItem[];
 }
 
 const { Title, Link } = Typography;
@@ -37,6 +38,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
   showAdvancedSettings,
   setShowAdvancedSettings,
   teams,
+  credentials,
 }) => {
   return (
     <>
@@ -107,6 +109,38 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                   
                   {/* Conditionally Render "Public Model Name" */}
                   <ConditionalPublicModelName  />
+
+                  {/* Credentials */}
+                  <div className="mb-4">
+                    <Typography.Text className="text-sm text-gray-500 mb-2">
+                      Either select existing credentials OR enter new provider credentials below
+                    </Typography.Text>
+                  </div>
+
+                  <Form.Item
+                    label="Existing Credentials"
+                    name="credential_name"
+                  >
+                    <AntdSelect
+                      showSearch
+                      placeholder="Select or search for existing credentials"
+                      optionFilterProp="children"
+                      filterOption={(input, option) =>
+                        (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                      }
+                      options={credentials.map((credential) => ({
+                        value: credential.credential_name,
+                        label: credential.credential_name
+                      }))}
+                      allowClear
+                    />
+                  </Form.Item>
+
+                  <div className="flex items-center my-4">
+                    <div className="flex-grow border-t border-gray-200"></div>
+                    <span className="px-4 text-gray-500 text-sm">OR</span>
+                    <div className="flex-grow border-t border-gray-200"></div>
+                  </div>
 
                   <ProviderSpecificFields
                     selectedProvider={selectedProvider}
