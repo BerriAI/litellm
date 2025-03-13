@@ -1484,7 +1484,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               </Button>
             </TabPanel>
             <TabPanel>
-              <CredentialsPanel accessToken={accessToken} />
+              <CredentialsPanel accessToken={accessToken} uploadProps={uploadProps}/>
             </TabPanel>
           </TabPanels>
         </TabGroup>
