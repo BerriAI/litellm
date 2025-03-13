@@ -14,7 +14,7 @@ import type { UploadProps } from "antd/es/upload";
 import { Providers, providerLogoMap } from "../provider_info_helpers";
 import type { FormInstance } from "antd";
 import ProviderSpecificFields from "../add_model/provider_specific_fields";
-
+import { TextInput } from "@tremor/react";
 const { Title, Link } = Typography;
 
 interface AddCredentialsModalProps {
@@ -107,7 +107,7 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
           name="credential_name"
           rules={[{ required: true, message: "Credential name is required" }]}
         >
-          <Input placeholder="Enter a friendly name for these credentials" />
+          <TextInput placeholder="Enter a friendly name for these credentials" />
         </Form.Item>
 
         <ProviderSpecificFields
