@@ -1162,6 +1162,7 @@ def completion(  # type: ignore # noqa: PLR0915
             merge_reasoning_content_in_choices=kwargs.get(
                 "merge_reasoning_content_in_choices", None
             ),
+            api_version=api_version,
             azure_ad_token=kwargs.get("azure_ad_token"),
             tenant_id=kwargs.get("tenant_id"),
             client_id=kwargs.get("client_id"),
