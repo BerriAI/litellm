@@ -6107,6 +6107,8 @@ class ProviderConfigManager:
             return litellm.CohereChatConfig()
         elif litellm.LlmProviders.COHERE == provider:
             return litellm.CohereConfig()
+        elif litellm.LlmProviders.SNOWFLAKE == provider:
+            return litellm.SnowflakeConfig()
         elif litellm.LlmProviders.CLARIFAI == provider:
             return litellm.ClarifaiConfig()
         elif litellm.LlmProviders.ANTHROPIC == provider:
