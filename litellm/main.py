@@ -1162,6 +1162,15 @@ def completion(  # type: ignore # noqa: PLR0915
             merge_reasoning_content_in_choices=kwargs.get(
                 "merge_reasoning_content_in_choices", None
             ),
+            api_version=api_version,
+            azure_ad_token=kwargs.get("azure_ad_token"),
+            tenant_id=kwargs.get("tenant_id"),
+            client_id=kwargs.get("client_id"),
+            client_secret=kwargs.get("client_secret"),
+            azure_username=kwargs.get("azure_username"),
+            azure_password=kwargs.get("azure_password"),
+            max_retries=max_retries,
+            timeout=timeout,
         )
         logging.update_environment_variables(
             model=model,
@@ -3350,6 +3359,7 @@ def embedding(  # noqa: PLR0915
                 }
             }
         )
+
     litellm_params_dict = get_litellm_params(**kwargs)
 
     logging: Logging = litellm_logging_obj  # type: ignore
@@ -3411,6 +3421,7 @@ def embedding(  # noqa: PLR0915
                 aembedding=aembedding,
                 max_retries=max_retries,
                 headers=headers or extra_headers,
+                litellm_params=litellm_params_dict,
             )
         elif (
             model in litellm.open_ai_embedding_models
@@ -4514,6 +4525,8 @@ def image_generation(  # noqa: PLR0915
             **non_default_params,
         )
 
+        litellm_params_dict = get_litellm_params(**kwargs)
+
         logging: Logging = litellm_logging_obj
         logging.update_environment_variables(
             model=model,
@@ -4584,6 +4597,7 @@ def image_generation(  # noqa: PLR0915
                 aimg_generation=aimg_generation,
                 client=client,
                 headers=headers,
+                litellm_params=litellm_params_dict,
             )
         elif (
             custom_llm_provider == "openai"
@@ -4979,6 +4993,7 @@ def transcription(
         custom_llm_provider=custom_llm_provider,
         drop_params=drop_params,
     )
+    litellm_params_dict = get_litellm_params(**kwargs)
 
     litellm_logging_obj.update_environment_variables(
         model=model,
@@ -5032,6 +5047,7 @@ def transcription(
             api_version=api_version,
             azure_ad_token=azure_ad_token,
             max_retries=max_retries,
+            litellm_params=litellm_params_dict,
         )
     elif (
         custom_llm_provider == "openai"
@@ -5134,7 +5150,7 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
 
 
 @client
-def speech(
+def speech(  # noqa: PLR0915
     model: str,
     input: str,
     voice: Optional[Union[str, dict]] = None,
@@ -5175,7 +5191,7 @@ def speech(
 
     if max_retries is None:
         max_retries = litellm.num_retries or openai.DEFAULT_MAX_RETRIES
-
+    litellm_params_dict = get_litellm_params(**kwargs)
     logging_obj = kwargs.get("litellm_logging_obj", None)
     logging_obj.update_environment_variables(
         model=model,
@@ -5292,6 +5308,7 @@ def speech(
             timeout=timeout,
             client=client,  # pass AsyncOpenAI, OpenAI client
             aspeech=aspeech,
+            litellm_params=litellm_params_dict,
         )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
 
