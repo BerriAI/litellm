@@ -13,9 +13,9 @@ import {
 } from "@tremor/react";
 import { UploadProps } from "antd/es/upload";
 import { PlusIcon } from "@heroicons/react/solid";
-import { getCredentialsList } from "@/components/networking"; // Assume this is your networking function
+import { getCredentialsList, credentialCreateCall } from "@/components/networking"; // Assume this is your networking function
 import AddCredentialsTab from "./add_credentials_tab";
-import { Form } from "antd";
+import { Form, message } from "antd";
 interface CredentialsPanelProps {
   accessToken: string | null;
   uploadProps: UploadProps;
@@ -45,24 +45,28 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [form] = Form.useForm();
 
-  const handleAddCredential = (values: any) => {
+  const handleAddCredential = async (values: any) => {
+    if (!accessToken) {
+      console.error('No access token found');
+      return;
+    }
+
+    const filter_credential_values = Object.entries(values)
+      .filter(([key]) => !['credential_name', 'custom_llm_provider'].includes(key))
+      .reduce((acc, [key, value]) => ({ ...acc, [key]: value }), {});
     // Transform form values into credential structure
     const newCredential = {
       credential_name: values.credential_name,
-      provider: values.custom_llm_provider,
-      credential_values: {
-        api_key: values.api_key,
-        api_base: values.api_base
-      },
+      credential_values: filter_credential_values,
       credential_info: {
-        type: values.custom_llm_provider,
-        required: true, // You might want to make this configurable
-        default: values.credential_name
+        custom_llm_provider: values.custom_llm_provider,
       }
     };
 
     // Add to list and close modal
-    setCredentialsList([...credentialsList, newCredential]);
+    const response = await credentialCreateCall(accessToken, newCredential);
+    message.success('Credential added successfully');
+    console.log(`response: ${JSON.stringify(response)}`);
     setIsAddModalOpen(false);
     form.resetFields();
   };
@@ -168,7 +172,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
       {isAddModalOpen && (
         <AddCredentialsTab 
           form={form}
-          handleOk={handleAddCredential}
+          onAddCredential={handleAddCredential}
           isVisible={isAddModalOpen}
           onCancel={() => setIsAddModalOpen(false)}
           uploadProps={uploadProps}

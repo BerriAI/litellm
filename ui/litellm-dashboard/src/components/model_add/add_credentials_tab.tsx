@@ -67,10 +67,6 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
             value={selectedProvider}
             onChange={(value) => {
               setSelectedProvider(value);
-              form.setFieldsValue({ 
-                model: [],
-                model_name: undefined 
-              });
             }}
           >
             {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => (
@@ -134,7 +130,6 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
               Cancel
             </Button>
             <Button 
-              type="primary" 
               htmlType="submit"
             >
               Add Credential
