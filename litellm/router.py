@@ -1087,7 +1087,7 @@ class Router:
         kwargs.setdefault("metadata", {}).update({"model_group": model})
 
     def _update_kwargs_with_default_litellm_params(
-        self, kwargs: dict, metadata_variable_name: str
+        self, kwargs: dict, metadata_variable_name: Optional[str] = "metadata"
     ) -> None:
         """
         Adds default litellm params to kwargs, if set.
