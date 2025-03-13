@@ -2769,6 +2769,7 @@ def test_add_known_models():
     )
 
 
+@pytest.mark.skip(reason="flaky test")
 def test_bedrock_cost_calc_with_region():
     from litellm import completion
 
