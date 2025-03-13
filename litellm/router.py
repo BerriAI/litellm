@@ -1093,7 +1093,7 @@ class Router:
         Adds default litellm params to kwargs, if set.
         """
         self.default_litellm_params[metadata_variable_name] = (
-            self.default_litellm_params.pop("metadata")
+            self.default_litellm_params.pop("metadata", {})
         )
         for k, v in self.default_litellm_params.items():
             if (
