@@ -135,10 +135,12 @@ class VertexBase(BaseLLM):
         if not self.project_id:
             self.project_id = project_id or cred_project_id
 
-        if self._credentials.expired or not self._credentials.token:
+        if self._credentials and (
+            self._credentials.expired or not self._credentials.token
+        ):
             self.refresh_auth(self._credentials)
 
-        if not self.project_id:
+        if not self.project_id and self._credentials:
             self.project_id = self._credentials.quota_project_id
 
         if not self.project_id:
