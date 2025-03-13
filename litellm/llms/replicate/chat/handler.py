@@ -169,7 +169,10 @@ def completion(
     )  # for pricing this must remain right before calling api
 
     prediction_url = replicate_config.get_complete_url(
-        api_base=api_base, model=model, optional_params=optional_params
+        api_base=api_base,
+        model=model,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
     )
 
     ## COMPLETION CALL
@@ -243,7 +246,10 @@ async def async_completion(
 ) -> Union[ModelResponse, CustomStreamWrapper]:
 
     prediction_url = replicate_config.get_complete_url(
-        api_base=api_base, model=model, optional_params=optional_params
+        api_base=api_base,
+        model=model,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
     )
     async_handler = get_async_httpx_client(
         llm_provider=litellm.LlmProviders.REPLICATE,
