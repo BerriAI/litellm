@@ -365,6 +365,8 @@ async def user_info(
             and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         ):
             return await _get_user_info_for_proxy_admin()
+        elif user_id is None:
+            user_id = user_api_key_dict.user_id
         ## GET USER ROW ##
         if user_id is not None:
             user_info = await prisma_client.get_data(user_id=user_id)
@@ -373,10 +375,6 @@ async def user_info(
         ## GET ALL TEAMS ##
         team_list = []
         team_id_list = []
-        # get all teams user belongs to
-        # teams_1 = await prisma_client.get_data(
-        #     user_id=user_id, table_name="team", query_type="find_all"
-        # )
         from litellm.proxy.management_endpoints.team_endpoints import list_team
 
         teams_1 = await list_team(
