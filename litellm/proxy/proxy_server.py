@@ -233,6 +233,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     router as pass_through_router,
 )
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
+from litellm.proxy.response_api_endpoints.endpoints import router as response_router
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
@@ -8390,6 +8391,7 @@ async def get_routes():
 
 
 app.include_router(router)
+app.include_router(response_router)
 app.include_router(batches_router)
 app.include_router(rerank_router)
 app.include_router(fine_tuning_router)

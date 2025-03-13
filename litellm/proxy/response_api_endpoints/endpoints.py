@@ -5,7 +5,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.proxy.proxy_server import _read_request_body, select_data_generator
 
 router = APIRouter()
 
@@ -44,10 +43,12 @@ async def responses_api(
     ```
     """
     from litellm.proxy.proxy_server import (
+        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        select_data_generator,
         user_api_base,
         user_max_tokens,
         user_model,
