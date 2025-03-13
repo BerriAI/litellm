@@ -19,11 +19,6 @@ router = APIRouter()
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
 )
-@backoff.on_exception(
-    backoff.expo,
-    Exception,  # base exception to catch for the backoff
-    logger=verbose_proxy_logger,
-)
 async def responses_api(
     request: Request,
     fastapi_response: Response,
