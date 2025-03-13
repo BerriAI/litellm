@@ -3509,55 +3509,11 @@ async def chat_completion(  # noqa: PLR0915
         _chat_response.usage = _usage  # type: ignore
         return _chat_response
     except Exception as e:
-        verbose_proxy_logger.exception(
-            f"litellm.proxy.proxy_server.chat_completion(): Exception occured - {str(e)}"
-        )
-        await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
-        )
-        litellm_debug_info = getattr(e, "litellm_debug_info", "")
-        verbose_proxy_logger.debug(
-            "\033[1;31mAn error occurred: %s %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
-            e,
-            litellm_debug_info,
-        )
-
-        timeout = getattr(
-            e, "timeout", None
-        )  # returns the timeout set by the wrapper. Used for testing if model-specific timeout are set correctly
-        _litellm_logging_obj: Optional[LiteLLMLoggingObj] = data.get(
-            "litellm_logging_obj", None
-        )
-        custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+        raise await ProxyBaseLLMRequestProcessing._handle_llm_api_exception(
+            e=e,
+            data=data,
             user_api_key_dict=user_api_key_dict,
-            call_id=(
-                _litellm_logging_obj.litellm_call_id if _litellm_logging_obj else None
-            ),
-            version=version,
-            response_cost=0,
-            model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
-            request_data=data,
-            timeout=timeout,
-        )
-        headers = getattr(e, "headers", {}) or {}
-        headers.update(custom_headers)
-
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", str(e)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-                headers=headers,
-            )
-        error_msg = f"{str(e)}"
-        raise ProxyException(
-            message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            openai_code=getattr(e, "code", None),
-            code=getattr(e, "status_code", 500),
-            headers=headers,
+            proxy_logging_obj=proxy_logging_obj,
         )
 
 
