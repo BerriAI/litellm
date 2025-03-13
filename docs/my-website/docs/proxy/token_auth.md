@@ -53,7 +53,7 @@ Create a client scope called `litellm_proxy_admin` in your OpenID provider (e.g.
 Grant your user, `litellm_proxy_admin` scope when generating a JWT. 
 
 ```bash
-curl --location ' 'https://demo.duendesoftware.com/connect/token'' \
+curl --location 'https://demo.duendesoftware.com/connect/token' \
 --header 'Content-Type: application/x-www-form-urlencoded' \
 --data-urlencode 'client_id={CLIENT_ID}' \
 --data-urlencode 'client_secret={CLIENT_SECRET}' \
@@ -68,7 +68,7 @@ curl --location ' 'https://demo.duendesoftware.com/connect/token'' \
 Create a JWT for your project on your OpenID provider (e.g. Keycloak).
 
 ```bash
-curl --location ' 'https://demo.duendesoftware.com/connect/token'' \
+curl --location 'https://demo.duendesoftware.com/connect/token' \
 --header 'Content-Type: application/x-www-form-urlencoded' \
 --data-urlencode 'client_id={CLIENT_ID}' \ # 👈 project id
 --data-urlencode 'client_secret={CLIENT_SECRET}' \
@@ -209,16 +209,22 @@ OIDC Auth for API: [**See Walkthrough**](https://www.loom.com/share/00fe2deab59a
 
 ## Advanced - Custom Validate
 
-Validate a JWT Token using custom logic, if you need an extra way to verify if tokens are valid for LiteLLM Proxy.
+This section allows you to add custom logic to intercept and perform validation of the JWT token. 
+
+This can occur when there is additional logic that is needed to execute against each token not currently supported by LiteLLM. For example, additional restrictions are needed on tokens when IDPs are self-service and multi-tenancy or when the JWT has other fields to check against.
+
+> _Note_: You can expect the JWT will have ran the typical decrypting of the public key, token decoding, and expiration time checks before executing the custom validation function.
 
 ### 1. Setup custom validate function
 
 ```python
-from typing import Literal
+from typing import Any, Literal
 
-def my_custom_validate(token: str) -> Literal[True]:
+def my_custom_validate(token: dict[str, Any]) -> Literal[True]:
   """
-  Only allow tokens with tenant-id == "my-unique-tenant", and claims == ["proxy-admin"]
+  token is the decoded JWT key-value pairs.
+
+  Ex: Only allow tokens that have a "tenant_id" included in the "allowed_tenants" and claims in the "allows_claims".
   """
   allowed_tenants = ["my-unique-tenant"]
   allowed_claims = ["proxy-admin"]
@@ -247,7 +253,7 @@ general_settings:
 
 **Expected JWT**
 
-```
+```json
 {
   "sub": "my-unique-user",
   "tenant_id": "INVALID_TENANT",
@@ -257,13 +263,13 @@ general_settings:
 
 **Expected Response**
 
-```
+`401` with a body
+
+```json
 {
   "error": "Invalid JWT token"
 }
 ```
-
-
 
 ## Advanced - Allowed Routes 
 
