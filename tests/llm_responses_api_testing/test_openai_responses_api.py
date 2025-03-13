@@ -3,6 +3,7 @@ import sys
 import pytest
 import asyncio
 from typing import Optional
+from unittest.mock import patch, AsyncMock
 
 sys.path.insert(0, os.path.abspath("../.."))
 import litellm
@@ -16,6 +17,7 @@ from litellm.types.llms.openai import (
     ResponseAPIUsage,
     IncompleteDetails,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
 def validate_responses_api_response(response, final_chunk: bool = False):
@@ -599,3 +601,98 @@ async def test_openai_responses_litellm_router_streaming(sync_mode):
     assert not missing_events, f"Missing required event types: {missing_events}"
 
     print(f"Successfully validated all event types: {event_types_seen}")
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_litellm_router_no_metadata():
+    """
+    Test that metadata is not passed through when using the Router for responses API
+    """
+    mock_response = {
+        "id": "resp_123",
+        "object": "response",
+        "created_at": 1741476542,
+        "status": "completed",
+        "model": "gpt-4o",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_123",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": "Hello world!", "annotations": []}
+                ],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "total_tokens": 30,
+            "output_tokens_details": {"reasoning_tokens": 0},
+        },
+        "text": {"format": {"type": "text"}},
+        # Adding all required fields
+        "error": None,
+        "incomplete_details": None,
+        "instructions": None,
+        "metadata": {},
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 1.0,
+        "max_output_tokens": None,
+        "previous_response_id": None,
+        "reasoning": {"effort": None, "summary": None},
+        "truncation": "disabled",
+        "user": None,
+    }
+
+    class MockResponse:
+        def __init__(self, json_data, status_code):
+            self._json_data = json_data
+            self.status_code = status_code
+            self.text = str(json_data)
+
+        def json(self):  # Changed from async to sync
+            return self._json_data
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        # Configure the mock to return our response
+        mock_post.return_value = MockResponse(mock_response, 200)
+
+        litellm._turn_on_debug()
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt4o-special-alias",
+                    "litellm_params": {
+                        "model": "gpt-4o",
+                        "api_key": "fake-key",
+                    },
+                }
+            ]
+        )
+
+        # Call the handler with metadata
+        await router.aresponses(
+            model="gpt4o-special-alias",
+            input="Hello, can you tell me a short joke?",
+        )
+
+        # Check the request body
+        request_body = mock_post.call_args.kwargs["data"]
+        print("Request body:", json.dumps(request_body, indent=4))
+
+        loaded_request_body = json.loads(request_body)
+        print("Loaded request body:", json.dumps(loaded_request_body, indent=4))
+
+        # Assert metadata is not in the request
+        assert (
+            loaded_request_body["metadata"] == None
+        ), "metadata should not be in the request body"
+        mock_post.assert_called_once()
