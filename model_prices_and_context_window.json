@@ -1966,6 +1966,7 @@
         "output_cost_per_token": 0.0,
         "litellm_provider": "azure_ai",
         "mode": "embedding",
+        "supports_embedding_image_input": true,
         "source":"https://azuremarketplace.microsoft.com/en-us/marketplace/apps/cohere.cohere-embed-v3-english-offer?tab=PlansAndPrice"
     },
     "azure_ai/Cohere-embed-v3-multilingual": {
@@ -1976,6 +1977,7 @@
         "output_cost_per_token": 0.0,
         "litellm_provider": "azure_ai",
         "mode": "embedding",
+        "supports_embedding_image_input": true,
         "source":"https://azuremarketplace.microsoft.com/en-us/marketplace/apps/cohere.cohere-embed-v3-english-offer?tab=PlansAndPrice"
     },
     "babbage-002": {
@@ -5472,6 +5474,7 @@
         "input_cost_per_token": 0.00000010,
         "output_cost_per_token": 0.00000,
         "litellm_provider": "cohere",
+        "supports_embedding_image_input": true,
         "mode": "embedding"
     },
     "embed-english-v2.0": {
@@ -7653,8 +7656,9 @@
         "max_input_tokens": 512, 
         "input_cost_per_token": 0.0000001,
         "output_cost_per_token": 0.000000,
-        "litellm_provider": "bedrock",
-        "mode": "embedding"
+        "litellm_provider": "bedrock",                
+        "mode": "embedding",
+        "supports_embedding_image_input": true
     },
     "cohere.embed-multilingual-v3": {
         "max_tokens": 512, 
@@ -7662,7 +7666,8 @@
         "input_cost_per_token": 0.0000001,
         "output_cost_per_token": 0.000000,
         "litellm_provider": "bedrock",
-        "mode": "embedding"
+        "mode": "embedding",
+        "supports_embedding_image_input": true
     },
     "us.deepseek.r1-v1:0": {
         "max_tokens": 4096, 
