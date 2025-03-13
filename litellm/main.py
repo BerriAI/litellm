@@ -2986,6 +2986,38 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
                 return response
             response = model_response
+        elif custom_llm_provider == "snowflake" or model in litellm.snowflake_models: 
+            try:
+                client = HTTPHandler(timeout=timeout) if stream is False else None # Keep this here, otherwise, the httpx.client closes and streaming is impossible
+                response = base_llm_http_handler.completion(
+                    model=model,
+                    messages=messages,
+                    headers=headers,
+                    model_response=model_response,
+                    api_key=api_key,
+                    api_base=api_base,
+                    acompletion=acompletion,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    timeout=timeout,  # type: ignore
+                    client= client,
+                    custom_llm_provider=custom_llm_provider,
+                    encoding=encoding,
+                    stream=stream,
+                )   
+
+
+            except Exception as e:
+                ## LOGGING - log the original exception returned
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=str(e),
+                    additional_args={"headers": headers},
+                )
+                raise e
+            
         elif custom_llm_provider == "custom":
             url = litellm.api_base or api_base or ""
             if url is None or url == "":
@@ -3044,6 +3076,7 @@ def completion(  # type: ignore # noqa: PLR0915
             model_response.created = int(time.time())
             model_response.model = model
             response = model_response
+
         elif (
             custom_llm_provider in litellm._custom_providers
         ):  # Assume custom LLM provider
