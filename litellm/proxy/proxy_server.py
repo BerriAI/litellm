@@ -1725,6 +1725,16 @@ class ProxyConfig:
             )
             return {}
 
+    def load_credential_list(self, config: dict) -> List[CredentialItem]:
+        """
+        Load the credential list from the database
+        """
+        credential_list_dict = config.get("credential_list")
+        credential_list = []
+        if credential_list_dict:
+            credential_list = [CredentialItem(**cred) for cred in credential_list_dict]
+        return credential_list
+
     async def load_config(  # noqa: PLR0915
         self, router: Optional[litellm.Router], config_file_path: str
     ):
@@ -2190,11 +2200,8 @@ class ProxyConfig:
             )
 
         ## CREDENTIALS
-        credential_list_dict = config.get("credential_list")
-        if credential_list_dict:
-            litellm.credential_list = [
-                CredentialItem(**cred) for cred in credential_list_dict
-            ]
+        credential_list_dict = self.load_credential_list(config=config)
+        litellm.credential_list = credential_list_dict
         return router, router.get_model_list(), general_settings
 
     def _load_alerting_settings(self, general_settings: dict):
@@ -2854,11 +2861,39 @@ class ProxyConfig:
         credential_object.credential_values = decrypted_credential_values
         return credential_object
 
+    async def delete_credentials(self, db_credentials: List[CredentialItem]):
+        """
+        Create all-up list of db credentials + local credentials
+        Compare to the litellm.credential_list
+        Delete any from litellm.credential_list that are not in the all-up list
+        """
+        ## CONFIG credentials ##
+        config = await self.get_config(config_file_path=user_config_file_path)
+        credential_list = self.load_credential_list(config=config)
+
+        ## COMBINED LIST ##
+        combined_list = db_credentials + credential_list
+
+        ## DELETE ##
+        idx_to_delete = []
+        for idx, credential in enumerate(litellm.credential_list):
+            if credential.credential_name not in [
+                cred.credential_name for cred in combined_list
+            ]:
+                idx_to_delete.append(idx)
+        for idx in sorted(idx_to_delete, reverse=True):
+            litellm.credential_list.pop(idx)
+
     async def get_credentials(self, prisma_client: PrismaClient):
         try:
             credentials = await prisma_client.db.litellm_credentialstable.find_many()
             credentials = [self.decrypt_credentials(cred) for cred in credentials]
-            CredentialAccessor.upsert_credentials(credentials)
+            await self.delete_credentials(
+                credentials
+            )  # delete credentials that are not in the all-up list
+            CredentialAccessor.upsert_credentials(
+                credentials
+            )  # upsert credentials that are in the all-up list
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy_server.py::get_credentials() - Error getting credentials from DB - {}".format(

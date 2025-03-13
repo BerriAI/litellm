@@ -11,32 +11,29 @@ import {
   Badge,
   Button
 } from "@tremor/react";
+import {
+  InformationCircleIcon,
+  PencilAltIcon,
+  PencilIcon,
+  RefreshIcon,
+  StatusOnlineIcon,
+  TrashIcon,
+} from "@heroicons/react/outline";
 import { UploadProps } from "antd/es/upload";
 import { PlusIcon } from "@heroicons/react/solid";
-import { credentialListCall, credentialCreateCall } from "@/components/networking"; // Assume this is your networking function
+import { credentialListCall, credentialCreateCall, credentialDeleteCall, CredentialItem, CredentialsResponse } from "@/components/networking"; // Assume this is your networking function
 import AddCredentialsTab from "./add_credentials_tab";
 import { Form, message } from "antd";
 interface CredentialsPanelProps {
   accessToken: string | null;
   uploadProps: UploadProps;
+  credentialList: CredentialItem[];
+  fetchCredentials: (accessToken: string) => Promise<void>;
 }
 
-interface CredentialsResponse {
-  credentials: CredentialItem[];
-}
 
-interface CredentialItem {
-  credential_name: string | null;
-  credential_values: object;
-  credential_info: {
-    custom_llm_provider?: string;
-    description?: string;
-    required?: boolean;
-  };
-}
 
-const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, uploadProps }) => {
-  const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([]);
+const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, uploadProps, credentialList, fetchCredentials }) => {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [form] = Form.useForm();
 
@@ -63,24 +60,16 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
     message.success('Credential added successfully');
     console.log(`response: ${JSON.stringify(response)}`);
     setIsAddModalOpen(false);
-    form.resetFields();
+    fetchCredentials(accessToken);
   };
+
+  
 
   useEffect(() => {
     if (!accessToken) {
       return;
     }
-    
-    const fetchCredentials = async () => {
-      try {
-        const response: CredentialsResponse = await credentialListCall(accessToken);
-        console.log(`credentials: ${JSON.stringify(response)}`);
-        setCredentialsList(response.credentials);
-      } catch (error) {
-        console.error('Error fetching credentials:', error);
-      }
-    };
-    fetchCredentials();
+    fetchCredentials(accessToken);
   }, [accessToken]);
 
   const renderProviderBadge = (provider: string) => {
@@ -97,6 +86,18 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
         {provider}
       </Badge>
     );
+  };
+
+
+  const handleDeleteCredential = async (credentialName: string) => {
+    if (!accessToken) {
+      console.error('No access token found');
+      return;
+    }
+    const response = await credentialDeleteCall(accessToken, credentialName);
+    console.log(`response: ${JSON.stringify(response)}`);
+    message.success('Credential deleted successfully');
+    fetchCredentials(accessToken);
   };
 
   return (
@@ -125,20 +126,33 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
             </TableRow>
           </TableHead>
           <TableBody>
-            {(!credentialsList || credentialsList.length === 0) ? (
+            {(!credentialList || credentialList.length === 0) ? (
               <TableRow>
                 <TableCell colSpan={4} className="text-center py-4 text-gray-500">
                   No credentials configured
                 </TableCell>
               </TableRow>
             ) : (
-              credentialsList.map((credential: CredentialItem, index: number) => (
+              credentialList.map((credential: CredentialItem, index: number) => (
                 <TableRow key={index}>
                   <TableCell>{credential.credential_name}</TableCell>
                   <TableCell>
                     {renderProviderBadge(credential.credential_info?.custom_llm_provider as string || '-')}
                   </TableCell>
                   <TableCell>{credential.credential_info?.description || '-'}</TableCell>
+                  <TableCell>
+                    <Button
+                      icon={PencilAltIcon}
+                      variant="light"
+                      size="sm"
+                    />
+                    <Button
+                      icon={TrashIcon}
+                      variant="light"
+                      size="sm"
+                      onClick={() => handleDeleteCredential(credential.credential_name)}
+                    />
+                  </TableCell>
                 </TableRow>
               ))
             )}
