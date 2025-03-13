@@ -151,6 +151,8 @@ async def _realtime_health_check(
         url = openai_realtime._construct_url(
             api_base=api_base or "https://api.openai.com/", model=model
         )
+    else:
+        raise ValueError(f"Unsupported model: {model}")
     async with websockets.connect(  # type: ignore
         url,
         extra_headers={
