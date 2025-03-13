@@ -545,6 +545,9 @@ def test_initialize_router_endpoints():
         ]
     )
 
+    # Explicitly call initialize_router_endpoints
+    router.initialize_router_endpoints()
+
     # Verify all expected endpoints are initialized
     assert hasattr(router, "amoderation")
     assert hasattr(router, "aanthropic_messages")
