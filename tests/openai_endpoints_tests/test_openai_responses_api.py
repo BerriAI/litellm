@@ -29,8 +29,21 @@ def validate_response(response):
     Validate basic response structure from OpenAI responses API
     """
     assert response is not None
-    assert isinstance(response.choices[0].message.content, str)
+    assert hasattr(response, "choices")
     assert len(response.choices) > 0
+    assert hasattr(response.choices[0], "message")
+    assert hasattr(response.choices[0].message, "content")
+    assert isinstance(response.choices[0].message.content, str)
+    assert hasattr(response, "id")
+    assert isinstance(response.id, str)
+    assert hasattr(response, "model")
+    assert isinstance(response.model, str)
+    assert hasattr(response, "created")
+    assert isinstance(response.created, int)
+    assert hasattr(response, "usage")
+    assert hasattr(response.usage, "prompt_tokens")
+    assert hasattr(response.usage, "completion_tokens")
+    assert hasattr(response.usage, "total_tokens")
 
 
 def validate_stream_chunk(chunk):
@@ -38,7 +51,23 @@ def validate_stream_chunk(chunk):
     Validate streaming chunk structure from OpenAI responses API
     """
     assert chunk is not None
-    assert isinstance(chunk.choices[0].delta.content, str)
+    assert hasattr(chunk, "choices")
+    assert len(chunk.choices) > 0
+    assert hasattr(chunk.choices[0], "delta")
+
+    # Some chunks might not have content in the delta
+    if (
+        hasattr(chunk.choices[0].delta, "content")
+        and chunk.choices[0].delta.content is not None
+    ):
+        assert isinstance(chunk.choices[0].delta.content, str)
+
+    assert hasattr(chunk, "id")
+    assert isinstance(chunk.id, str)
+    assert hasattr(chunk, "model")
+    assert isinstance(chunk.model, str)
+    assert hasattr(chunk, "created")
+    assert isinstance(chunk.created, int)
 
 
 def test_basic_response():
