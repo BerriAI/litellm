@@ -1047,12 +1047,13 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             <div className="flex">
               <Tab>All Models</Tab>
               <Tab>Add Model</Tab>
+              <Tab>LLM Credentials</Tab>
               <Tab>
                 <pre>/health Models</pre>
               </Tab>
               <Tab>Model Analytics</Tab>
               <Tab>Model Retry Settings</Tab>
-              <Tab>LLM Credentials</Tab>
+              
             </div>
 
             <div className="flex items-center space-x-2">
@@ -1140,6 +1141,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 teams={teams}
                 credentials={credentialsList}
               />
+            </TabPanel>
+            <TabPanel>
+              <CredentialsPanel accessToken={accessToken} uploadProps={uploadProps} credentialList={credentialsList} fetchCredentials={fetchCredentials} />
             </TabPanel>
             <TabPanel>
               <Card>
@@ -1496,9 +1500,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 Save
               </Button>
             </TabPanel>
-            <TabPanel>
-              <CredentialsPanel accessToken={accessToken} uploadProps={uploadProps} credentialList={credentialsList} fetchCredentials={fetchCredentials} />
-            </TabPanel>
+            
           </TabPanels>
         </TabGroup>
       )}
