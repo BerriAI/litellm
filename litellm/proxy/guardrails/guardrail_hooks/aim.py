@@ -36,12 +36,8 @@ class AimGuardrailMissingSecrets(Exception):
 
 
 class AimGuardrail(CustomGuardrail):
-    def __init__(
-        self, api_key: Optional[str] = None, api_base: Optional[str] = None, **kwargs
-    ):
-        self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
-        )
+    def __init__(self, api_key: Optional[str] = None, api_base: Optional[str] = None, **kwargs):
+        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.api_key = api_key or os.environ.get("AIM_API_KEY")
         if not self.api_key:
             msg = (
