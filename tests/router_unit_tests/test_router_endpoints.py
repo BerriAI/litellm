@@ -526,3 +526,33 @@ async def test__aadapter_completion():
 
         # Verify async_routing_strategy_pre_call_checks was called
         router.async_routing_strategy_pre_call_checks.assert_called_once()
+
+
+def test_initialize_router_endpoints():
+    """
+    Test that initialize_router_endpoints correctly sets up all router endpoints
+    """
+    # Create a router with a basic model
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "anthropic/test-model",
+                    "api_key": "fake-api-key",
+                },
+            }
+        ]
+    )
+
+    # Verify all expected endpoints are initialized
+    assert hasattr(router, "amoderation")
+    assert hasattr(router, "aanthropic_messages")
+    assert hasattr(router, "aresponses")
+    assert hasattr(router, "responses")
+
+    # Verify the endpoints are callable
+    assert callable(router.amoderation)
+    assert callable(router.aanthropic_messages)
+    assert callable(router.aresponses)
+    assert callable(router.responses)
