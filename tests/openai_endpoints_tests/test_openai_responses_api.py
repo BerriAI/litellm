@@ -97,3 +97,12 @@ def test_bad_request_error():
     with pytest.raises(BadRequestError):
         # Trigger error with invalid model name
         client.responses.create(model="non-existent-model", input="This should fail")
+
+
+def test_bad_request_bad_param_error():
+    client = get_test_client()
+    with pytest.raises(BadRequestError):
+        # Trigger error with invalid model name
+        client.responses.create(
+            model="gpt-4o", input="This should fail", temperature=2000
+        )
