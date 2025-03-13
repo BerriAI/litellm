@@ -28,6 +28,7 @@ import CacheDashboard from "@/components/cache_dashboard";
 import { setGlobalLitellmHeaderName } from "@/components/networking";
 import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
+import CredentialsPanel from "@/components/credentials";
 import TransformRequestPanel from "@/components/transform_request";
 import { fetchUserModels } from "@/components/create_key_button";
 import { fetchTeams } from "@/components/common_components/fetch_teams";
@@ -312,6 +313,8 @@ export default function CreateKeyPage() {
                 <GuardrailsPanel accessToken={accessToken} />
               ) : page == "transform-request" ? (
                 <TransformRequestPanel accessToken={accessToken} />
+              ) : page == "credentials" ? (
+                <CredentialsPanel accessToken={accessToken} />
               ) : page == "general-settings" ? (
                 <GeneralSettings
                   userID={userID}
