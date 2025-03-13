@@ -15,33 +15,46 @@ import { Providers, providerLogoMap } from "../provider_info_helpers";
 import type { FormInstance } from "antd";
 import ProviderSpecificFields from "../add_model/provider_specific_fields";
 import { TextInput } from "@tremor/react";
+import { CredentialItem } from "../networking";
 const { Title, Link } = Typography;
 
 interface AddCredentialsModalProps {
   isVisible: boolean;
   onCancel: () => void;
   onAddCredential: (values: any) => void;
+  onUpdateCredential: (values: any) => void;
   uploadProps: UploadProps;
+  addOrEdit: "add" | "edit";
+  existingCredential: CredentialItem | null;
 }
 
 const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
   isVisible,
   onCancel,
   onAddCredential,
-  uploadProps
+  onUpdateCredential,
+  uploadProps,
+  addOrEdit,
+  existingCredential
 }) => {
   const [form] = Form.useForm();
   const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
 
+  console.log(`existingCredential in add credentials tab: ${JSON.stringify(existingCredential)}`);
+
   const handleSubmit = (values: any) => {
-    onAddCredential(values);
+    if (addOrEdit === "add") {
+      onAddCredential(values);
+    } else {
+      onUpdateCredential(values);
+    }
     form.resetFields();
   };
 
   return (
     <Modal
-      title="Add New Credential"
+      title={addOrEdit === "add" ? "Add New Credential" : "Edit Credential"}
       visible={isVisible}
       onCancel={() => {
         onCancel();
@@ -55,18 +68,31 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
         onFinish={handleSubmit}
         layout="vertical"
       >
+        {/* Credential Name */}
+        <Form.Item
+          label="Credential Name:"
+          name="credential_name"
+          rules={[{ required: true, message: "Credential name is required" }]}
+          initialValue={existingCredential?.credential_name}
+        >
+          <TextInput 
+            placeholder="Enter a friendly name for these credentials"
+            disabled={existingCredential?.credential_name ? true : false}
+          />
+        </Form.Item>
+
         {/* Provider Selection */}
         <Form.Item
           rules={[{ required: true, message: "Required" }]}
           label="Provider:"
           name="custom_llm_provider"
-          tooltip="Select the credential provider"
+          tooltip="Helper to auto-populate provider specific fields"
         >
           <AntdSelect
             showSearch={true}
-            value={selectedProvider}
+            value={existingCredential?.credential_info.custom_llm_provider || selectedProvider}
             onChange={(value) => {
-              setSelectedProvider(value);
+              setSelectedProvider(value as Providers);
             }}
           >
             {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => (
@@ -97,14 +123,7 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
           </AntdSelect>
         </Form.Item>
 
-        {/* Credential Name */}
-        <Form.Item
-          label="Credential Name:"
-          name="credential_name"
-          rules={[{ required: true, message: "Credential name is required" }]}
-        >
-          <TextInput placeholder="Enter a friendly name for these credentials" />
-        </Form.Item>
+        
 
         <ProviderSpecificFields
           selectedProvider={selectedProvider}
@@ -132,7 +151,7 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
             <Button 
               htmlType="submit"
             >
-              Add Credential
+              {addOrEdit === "add" ? "Add Credential" : "Update Credential"}
             </Button>
           </div>
         </div>
