@@ -21,7 +21,7 @@ import {
 } from "@heroicons/react/outline";
 import { UploadProps } from "antd/es/upload";
 import { PlusIcon } from "@heroicons/react/solid";
-import { credentialListCall, credentialCreateCall, credentialDeleteCall, CredentialItem, CredentialsResponse } from "@/components/networking"; // Assume this is your networking function
+import { credentialListCall, credentialCreateCall, credentialDeleteCall, credentialUpdateCall, CredentialItem, CredentialsResponse } from "@/components/networking"; // Assume this is your networking function
 import AddCredentialsTab from "./add_credentials_tab";
 import { Form, message } from "antd";
 interface CredentialsPanelProps {
@@ -35,7 +35,36 @@ interface CredentialsPanelProps {
 
 const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, uploadProps, credentialList, fetchCredentials }) => {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
+  const [selectedCredential, setSelectedCredential] = useState<CredentialItem | null>(null);
   const [form] = Form.useForm();
+  console.log(`selectedCredential in credentials panel: ${JSON.stringify(selectedCredential)}`);
+
+  const restrictedFields = ['credential_name', 'custom_llm_provider'];
+  const handleUpdateCredential = async (values: any) => {
+    if (!accessToken) {
+      console.error('No access token found');
+      return;
+    }
+
+    const filter_credential_values = Object.entries(values)
+      .filter(([key]) => !restrictedFields.includes(key))
+      .reduce((acc, [key, value]) => ({ ...acc, [key]: value }), {});
+    // Transform form values into credential structure
+    const newCredential = {
+      credential_name: values.credential_name,
+      credential_values: filter_credential_values,
+      credential_info: {
+        custom_llm_provider: values.custom_llm_provider,
+      }
+    };
+
+    const response = await credentialUpdateCall(accessToken, values.credential_name, newCredential);
+    message.success('Credential updated successfully');
+    console.log(`response: ${JSON.stringify(response)}`);
+    setIsUpdateModalOpen(false);
+    fetchCredentials(accessToken);
+  }
 
   const handleAddCredential = async (values: any) => {
     if (!accessToken) {
@@ -44,7 +73,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
     }
 
     const filter_credential_values = Object.entries(values)
-      .filter(([key]) => !['credential_name', 'custom_llm_provider'].includes(key))
+      .filter(([key]) => !restrictedFields.includes(key))
       .reduce((acc, [key, value]) => ({ ...acc, [key]: value }), {});
     // Transform form values into credential structure
     const newCredential = {
@@ -143,8 +172,13 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
                   <TableCell>
                     <Button
                       icon={PencilAltIcon}
-                      variant="light"
+                      variant="light" 
                       size="sm"
+                      onClick={() => {
+                        console.log(`credential being set: ${JSON.stringify(credential)}`);
+                        setSelectedCredential(credential);
+                        setIsUpdateModalOpen(true);
+                      }}
                     />
                     <Button
                       icon={TrashIcon}
@@ -175,6 +209,19 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
           isVisible={isAddModalOpen}
           onCancel={() => setIsAddModalOpen(false)}
           uploadProps={uploadProps}
+          addOrEdit="add"
+        />
+      )}
+      {isUpdateModalOpen && (
+        <AddCredentialsTab 
+          form={form}
+          onAddCredential={handleAddCredential}
+          isVisible={isUpdateModalOpen}
+          existingCredential={selectedCredential}
+          onUpdateCredential={handleUpdateCredential}
+          uploadProps={uploadProps}
+          onCancel={() => setIsUpdateModalOpen(false)}
+          addOrEdit="edit"
         />
       )}
     </div>

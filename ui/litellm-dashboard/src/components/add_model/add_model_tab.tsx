@@ -148,12 +148,13 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                   <Form.Item
                     noStyle
                     shouldUpdate={(prevValues, currentValues) => 
-                      prevValues.credential_name !== currentValues.credential_name ||
+                      prevValues.litellm_credential_name !== currentValues.litellm_credential_name ||
                       prevValues.provider !== currentValues.provider
                     }
                   >
                     {({ getFieldValue }) => {
                       const credentialName = getFieldValue('litellm_credential_name');
+                      console.log("🔑 Credential Name Changed:", credentialName);
                       // Only show provider specific fields if no credentials selected
                       if (!credentialName) {
                         return (
