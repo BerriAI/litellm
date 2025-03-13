@@ -315,14 +315,20 @@ async def test_router_with_empty_choices(model_list):
     assert response is not None
 
 
-@pytest.mark.asyncio
-async def test_ageneric_api_call_with_fallbacks_basic():
+@pytest.mark.parametrize("sync_mode", [True, False])
+def test_generic_api_call_with_fallbacks_basic(sync_mode):
     """
-    Test the _ageneric_api_call_with_fallbacks method with a basic successful call
+    Test both the sync and async versions of generic_api_call_with_fallbacks with a basic successful call
     """
-    # Create a mock function that will be passed to _ageneric_api_call_with_fallbacks
-    mock_function = AsyncMock()
-    mock_function.__name__ = "test_function"
+    # Create a mock function that will be passed to generic_api_call_with_fallbacks
+    if sync_mode:
+        from unittest.mock import Mock
+
+        mock_function = Mock()
+        mock_function.__name__ = "test_function"
+    else:
+        mock_function = AsyncMock()
+        mock_function.__name__ = "test_function"
 
     # Create a mock response
     mock_response = {
@@ -347,13 +353,23 @@ async def test_ageneric_api_call_with_fallbacks_basic():
         ]
     )
 
-    # Call the _ageneric_api_call_with_fallbacks method
-    response = await router._ageneric_api_call_with_fallbacks(
-        model="test-model-alias",
-        original_function=mock_function,
-        messages=[{"role": "user", "content": "Hello"}],
-        max_tokens=100,
-    )
+    # Call the appropriate generic_api_call_with_fallbacks method
+    if sync_mode:
+        response = router._generic_api_call_with_fallbacks(
+            model="test-model-alias",
+            original_function=mock_function,
+            messages=[{"role": "user", "content": "Hello"}],
+            max_tokens=100,
+        )
+    else:
+        response = asyncio.run(
+            router._ageneric_api_call_with_fallbacks(
+                model="test-model-alias",
+                original_function=mock_function,
+                messages=[{"role": "user", "content": "Hello"}],
+                max_tokens=100,
+            )
+        )
 
     # Verify the mock function was called
     mock_function.assert_called_once()
