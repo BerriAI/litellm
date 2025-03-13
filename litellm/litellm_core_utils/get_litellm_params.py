@@ -59,6 +59,7 @@ def get_litellm_params(
     ssl_verify: Optional[bool] = None,
     merge_reasoning_content_in_choices: Optional[bool] = None,
     api_version: Optional[str] = None,
+    max_retries: Optional[int] = None,
     **kwargs,
 ) -> dict:
     litellm_params = {
@@ -101,5 +102,13 @@ def get_litellm_params(
         "ssl_verify": ssl_verify,
         "merge_reasoning_content_in_choices": merge_reasoning_content_in_choices,
         "api_version": api_version,
+        "azure_ad_token": kwargs.get("azure_ad_token"),
+        "tenant_id": kwargs.get("tenant_id"),
+        "client_id": kwargs.get("client_id"),
+        "client_secret": kwargs.get("client_secret"),
+        "azure_username": kwargs.get("azure_username"),
+        "azure_password": kwargs.get("azure_password"),
+        "max_retries": max_retries,
+        "timeout": kwargs.get("timeout"),
     }
     return litellm_params
