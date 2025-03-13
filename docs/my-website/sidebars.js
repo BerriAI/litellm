@@ -286,6 +286,7 @@ const sidebars = {
             "completion/usage",
           ],
         },
+        "response_api",
         "text_completion",
         "embedding/supported_embedding",
         "anthropic_unified",
