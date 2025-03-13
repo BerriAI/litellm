@@ -3,4 +3,5 @@ model_list:
     litellm_params:
       model: gpt-4o
 
-
+litellm_settings:
+  callbacks: ["langfuse"]

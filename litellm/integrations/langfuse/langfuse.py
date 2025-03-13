@@ -25,6 +25,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
 )
+from litellm.utils import Usage
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
@@ -197,6 +198,10 @@ class LangFuseLogger:
             )  # if litellm_params['metadata'] == None
             metadata = self.add_metadata_from_header(litellm_params, metadata)
             optional_params = copy.deepcopy(kwargs.get("optional_params", {}))
+            standard_logging_object: Optional[StandardLoggingPayload] = cast(
+                Optional[StandardLoggingPayload],
+                kwargs.get("standard_logging_object", None),
+            )
 
             prompt = {"messages": kwargs.get("messages")}
 
@@ -217,9 +222,7 @@ class LangFuseLogger:
                         pass
 
             input, output = self._get_langfuse_input_output_content(
-                kwargs=kwargs,
-                response_obj=response_obj,
-                prompt=prompt,
+                standard_logging_object=standard_logging_object,
                 level=level,
                 status_message=status_message,
             )
@@ -239,6 +242,7 @@ class LangFuseLogger:
                     kwargs=kwargs,
                     optional_params=optional_params,
                     input=input,
+                    standard_logging_object=standard_logging_object,
                     response_obj=response_obj,
                     level=level,
                     litellm_call_id=litellm_call_id,
@@ -269,29 +273,15 @@ class LangFuseLogger:
 
     def _get_langfuse_input_output_content(
         self,
-        kwargs: dict,
-        response_obj: Union[
-            None,
-            dict,
-            EmbeddingResponse,
-            ModelResponse,
-            TextCompletionResponse,
-            ImageResponse,
-            TranscriptionResponse,
-            RerankResponse,
-            HttpxBinaryResponseContent,
-        ],
-        prompt: dict,
+        standard_logging_object: Optional[StandardLoggingPayload],
         level: str,
         status_message: Optional[str],
-    ) -> Tuple[Optional[dict], Optional[Union[str, dict, list]]]:
+    ) -> Tuple[Optional[Union[str, list, dict]], Optional[Union[str, dict, list]]]:
         """
         Get the input and output content for Langfuse logging
 
         Args:
-            kwargs: The keyword arguments passed to the function
-            response_obj: The response object returned by the function
-            prompt: The prompt used to generate the response
+            standard_logging_object: The standard logging object
             level: The level of the log message
             status_message: The status message of the log message
 
@@ -299,67 +289,23 @@ class LangFuseLogger:
             input: The input content for Langfuse logging
             output: The output content for Langfuse logging
         """
-        input = None
-        output: Optional[Union[str, dict, List[Any]]] = None
+        input: Optional[Union[str, list, dict]] = None
+        output: Optional[Union[str, Dict, List[Any]]] = None
         if (
             level == "ERROR"
             and status_message is not None
             and isinstance(status_message, str)
         ):
-            input = prompt
+            input = None
+            if standard_logging_object is not None:
+                input = standard_logging_object.get("messages")
             output = status_message
-        elif response_obj is not None and (
-            kwargs.get("call_type", None) == "embedding"
-            or isinstance(response_obj, litellm.EmbeddingResponse)
-        ):
-            input = prompt
-            output = None
-        elif response_obj is not None and isinstance(
-            response_obj, litellm.ModelResponse
-        ):
-            input = prompt
-            output = self._get_chat_content_for_langfuse(response_obj)
-        elif response_obj is not None and isinstance(
-            response_obj, litellm.HttpxBinaryResponseContent
-        ):
-            input = prompt
-            output = "speech-output"
-        elif response_obj is not None and isinstance(
-            response_obj, litellm.TextCompletionResponse
-        ):
-            input = prompt
-            output = self._get_text_completion_content_for_langfuse(response_obj)
-        elif response_obj is not None and isinstance(
-            response_obj, litellm.ImageResponse
-        ):
-            input = prompt
-            output = response_obj.get("data", None)
-        elif response_obj is not None and isinstance(
-            response_obj, litellm.TranscriptionResponse
-        ):
-            input = prompt
-            output = response_obj.get("text", None)
-        elif response_obj is not None and isinstance(
-            response_obj, litellm.RerankResponse
-        ):
-            input = prompt
-            output = response_obj.results
-        elif (
-            kwargs.get("call_type") is not None
-            and kwargs.get("call_type") == "_arealtime"
-            and response_obj is not None
-            and isinstance(response_obj, list)
-        ):
-            input = kwargs.get("input")
-            output = response_obj
-        elif (
-            kwargs.get("call_type") is not None
-            and kwargs.get("call_type") == "pass_through_endpoint"
-            and response_obj is not None
-            and isinstance(response_obj, dict)
-        ):
-            input = prompt
-            output = response_obj.get("response", "")
+        else:
+            if standard_logging_object:
+                input = standard_logging_object.get("messages", None)
+                output = standard_logging_object.get("response", None)
+                if standard_logging_object.get("call_type") == "embedding":
+                    output = None
         return input, output
 
     async def _async_log_event(
@@ -430,19 +376,16 @@ class LangFuseLogger:
         end_time: Optional[datetime],
         kwargs: dict,
         optional_params: dict,
-        input: Optional[dict],
+        input: Optional[Union[str, list, dict]],
         response_obj,
         level: str,
         litellm_call_id: Optional[str],
+        standard_logging_object: Optional[StandardLoggingPayload] = None,
     ) -> tuple:
         verbose_logger.debug("Langfuse Layer Logging - logging to langfuse v2")
 
         try:
             metadata = metadata or {}
-            standard_logging_object: Optional[StandardLoggingPayload] = cast(
-                Optional[StandardLoggingPayload],
-                kwargs.get("standard_logging_object", None),
-            )
             tags = (
                 self._get_langfuse_tags(standard_logging_object=standard_logging_object)
                 if self._supports_tags()
@@ -626,18 +569,12 @@ class LangFuseLogger:
                         if key.lower() not in ["authorization", "cookie", "referer"]:
                             clean_headers[key] = value
 
-                # clean_metadata["request"] = {
-                #     "method": method,
-                #     "url": url,
-                #     "headers": clean_headers,
-                # }
             trace = self.Langfuse.trace(**trace_params)
 
             # Log provider specific information as a span
             log_provider_specific_information_as_span(trace, clean_metadata)
 
             generation_id = None
-            usage = None
             if response_obj is not None:
                 if (
                     hasattr(response_obj, "id")
@@ -646,14 +583,6 @@ class LangFuseLogger:
                     generation_id = litellm.utils.get_logging_id(
                         start_time, response_obj
                     )
-                _usage_obj = getattr(response_obj, "usage", None)
-
-                if _usage_obj:
-                    usage = {
-                        "prompt_tokens": _usage_obj.prompt_tokens,
-                        "completion_tokens": _usage_obj.completion_tokens,
-                        "total_cost": cost if self._supports_costs() else None,
-                    }
             generation_name = clean_metadata.pop("generation_name", None)
             if generation_name is None:
                 # if `generation_name` is None, use sensible default values
@@ -685,7 +614,10 @@ class LangFuseLogger:
                 "model_parameters": optional_params,
                 "input": input if not mask_input else "redacted-by-litellm",
                 "output": output if not mask_output else "redacted-by-litellm",
-                "usage": usage,
+                "usage": self._get_langfuse_usage(
+                    standard_logging_object=standard_logging_object,
+                    cost=cost,
+                ),
                 "metadata": log_requester_metadata(clean_metadata),
                 "level": level,
                 "version": clean_metadata.pop("version", None),
@@ -776,6 +708,27 @@ class LangFuseLogger:
                     _cache_key = _preset_cache_key
                 tags.append(f"cache_key:{_cache_key}")
         return tags
+
+    def _get_langfuse_usage(
+        self,
+        standard_logging_object: Optional[StandardLoggingPayload],
+        cost: Optional[float],
+    ) -> Usage:
+        if standard_logging_object is None:
+            return Usage()
+        return Usage(
+            prompt_tokens=standard_logging_object.get("prompt_tokens", 0),
+            completion_tokens=standard_logging_object.get("completion_tokens", 0),
+            total_tokens=standard_logging_object.get("total_tokens", 0),
+            reasoning_tokens=standard_logging_object.get("reasoning_tokens", 0),
+            prompt_tokens_details=standard_logging_object.get(
+                "prompt_tokens_details", {}
+            ),
+            completion_tokens_details=standard_logging_object.get(
+                "completion_tokens_details", {}
+            ),
+            total_cost=cost if self._supports_costs() else None,
+        )
 
     def _supports_tags(self):
         """Check if current langfuse version supports tags"""
