@@ -23,6 +23,7 @@ import LiteLLMModelNameField from "./add_model/litellm_model_name";
 import AdvancedSettings from "./add_model/advanced_settings";
 import ProviderSpecificFields from "./add_model/provider_specific_fields";
 import { handleAddModelSubmit } from "./add_model/handle_add_model_submit";
+import CredentialsPanel from "@/components/model_add/credentials";
 import { getDisplayModelName } from "./view_model/model_name_display";
 import EditModelModal, { handleEditModelSubmit } from "./edit_model/edit_model_modal";
 import {
@@ -1039,6 +1040,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               </Tab>
               <Tab>Model Analytics</Tab>
               <Tab>Model Retry Settings</Tab>
+              <Tab>LLM Credentials</Tab>
             </div>
 
             <div className="flex items-center space-x-2">
@@ -1480,6 +1482,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               <Button className="mt-6 mr-8" onClick={handleSaveRetrySettings}>
                 Save
               </Button>
+            </TabPanel>
+            <TabPanel>
+              <CredentialsPanel accessToken={accessToken} />
             </TabPanel>
           </TabPanels>
         </TabGroup>
