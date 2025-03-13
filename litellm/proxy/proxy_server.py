@@ -3454,11 +3454,10 @@ async def chat_completion(  # noqa: PLR0915
     """
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
-    data = {}
+    data = await _read_request_body(request=request)
+    base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        data = await _read_request_body(request=request)
-        return await ProxyBaseLLMRequestProcessing.base_process_llm_request(
-            data=data,
+        return await base_llm_response_processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -3510,9 +3509,8 @@ async def chat_completion(  # noqa: PLR0915
         _chat_response.usage = _usage  # type: ignore
         return _chat_response
     except Exception as e:
-        raise await ProxyBaseLLMRequestProcessing._handle_llm_api_exception(
+        raise await base_llm_response_processor._handle_llm_api_exception(
             e=e,
-            data=data,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
         )

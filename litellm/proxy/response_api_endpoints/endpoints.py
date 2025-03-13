@@ -50,11 +50,10 @@ async def responses_api(
         version,
     )
 
-    data = {}
+    data = await _read_request_body(request=request)
+    processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        data = await _read_request_body(request=request)
-        return await ProxyBaseLLMRequestProcessing.base_process_llm_request(
-            data=data,
+        return await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -73,9 +72,8 @@ async def responses_api(
             version=version,
         )
     except Exception as e:
-        raise await ProxyBaseLLMRequestProcessing._handle_llm_api_exception(
+        raise await processor._handle_llm_api_exception(
             e=e,
-            data=data,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
             version=version,
