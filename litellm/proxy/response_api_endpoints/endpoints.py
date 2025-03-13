@@ -78,3 +78,93 @@ async def responses_api(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+
+
+@router.get(
+    "/v1/responses/{response_id}",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+)
+@router.get(
+    "/responses/{response_id}",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+)
+async def get_response(
+    response_id: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get a response by ID.
+    
+    Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/get
+    
+    ```bash
+    curl -X GET http://localhost:4000/v1/responses/resp_abc123 \
+    -H "Authorization: Bearer sk-1234"
+    ```
+    """
+    # TODO: Implement response retrieval logic
+    pass
+
+
+@router.delete(
+    "/v1/responses/{response_id}",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+)
+@router.delete(
+    "/responses/{response_id}",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+)
+async def delete_response(
+    response_id: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Delete a response by ID.
+    
+    Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/delete
+    
+    ```bash
+    curl -X DELETE http://localhost:4000/v1/responses/resp_abc123 \
+    -H "Authorization: Bearer sk-1234"
+    ```
+    """
+    # TODO: Implement response deletion logic
+    pass
+
+
+@router.get(
+    "/v1/responses/{response_id}/input_items",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+)
+@router.get(
+    "/responses/{response_id}/input_items",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+)
+async def get_response_input_items(
+    response_id: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get input items for a response.
+    
+    Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/input-items
+    
+    ```bash
+    curl -X GET http://localhost:4000/v1/responses/resp_abc123/input_items \
+    -H "Authorization: Bearer sk-1234"
+    ```
+    """
+    # TODO: Implement input items retrieval logic
+    pass
