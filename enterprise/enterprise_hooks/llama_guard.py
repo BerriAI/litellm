@@ -107,6 +107,7 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
             "image_generation",
             "moderation",
             "audio_transcription",
+            "responses",
         ],
     ):
         """
