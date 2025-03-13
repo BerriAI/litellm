@@ -16,7 +16,7 @@ import {
   AccordionHeader,
   AccordionBody,
 } from "@tremor/react";
-
+import { CredentialItem, credentialListCall, CredentialsResponse } from "./networking";
 
 import ConditionalPublicModelName from "./add_model/conditional_public_model_name";
 import LiteLLMModelNameField from "./add_model/litellm_model_name";
@@ -235,6 +235,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
   const [allEndUsers, setAllEndUsers] = useState<any[]>([]);
 
+  const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([]);
+
   // Add state for advanced settings visibility
   const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
 
@@ -371,6 +373,16 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       
     } catch (error) {
       console.error("Failed to fetch model metrics", error);
+    }
+  };
+
+  const fetchCredentials = async (accessToken: string) => {
+    try {
+      const response: CredentialsResponse = await credentialListCall(accessToken);
+      console.log(`credentials: ${JSON.stringify(response)}`);
+      setCredentialsList(response.credentials);
+    } catch (error) {
+      console.error('Error fetching credentials:', error);
     }
   };
 
@@ -1126,6 +1138,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 showAdvancedSettings={showAdvancedSettings}
                 setShowAdvancedSettings={setShowAdvancedSettings}
                 teams={teams}
+                credentials={credentialsList}
               />
             </TabPanel>
             <TabPanel>
@@ -1484,7 +1497,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               </Button>
             </TabPanel>
             <TabPanel>
-              <CredentialsPanel accessToken={accessToken} uploadProps={uploadProps}/>
+              <CredentialsPanel accessToken={accessToken} uploadProps={uploadProps} credentialList={credentialsList} fetchCredentials={fetchCredentials} />
             </TabPanel>
           </TabPanels>
         </TabGroup>
