@@ -826,7 +826,7 @@ async def test_jwt_user_api_key_auth_builder_enforce_rbac(enforce_rbac, monkeypa
     ]
 
     local_cache.set_cache(
-        key="litellm_jwt_auth_keys",
+        key="litellm_jwt_auth_keys_my-fake-url",
         value=keys,
     )
 

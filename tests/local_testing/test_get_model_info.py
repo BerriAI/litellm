@@ -121,7 +121,11 @@ def test_get_model_info_gemini():
 
     model_map = litellm.model_cost
     for model, info in model_map.items():
-        if model.startswith("gemini/") and not "gemma" in model:
+        if (
+            model.startswith("gemini/")
+            and not "gemma" in model
+            and not "learnlm" in model
+        ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
 

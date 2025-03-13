@@ -308,7 +308,7 @@ async def test_chat_completion():
                 model="gpt-4",
                 messages=[{"role": "user", "content": "Hello!"}],
             )
-        assert "API Key not allowed to access model." in str(e)
+        assert "key not allowed to access model." in str(e)
 
 
 @pytest.mark.asyncio
