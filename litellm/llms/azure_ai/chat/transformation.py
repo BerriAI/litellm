@@ -16,10 +16,23 @@ from litellm.llms.openai.openai import OpenAIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, ProviderField
-from litellm.utils import _add_path_to_api_base
+from litellm.utils import _add_path_to_api_base, supports_tool_choice
 
 
 class AzureAIStudioConfig(OpenAIConfig):
+    def get_supported_openai_params(self, model: str) -> List:
+        model_supports_tool_choice = True  # azure ai supports this by default
+        if not supports_tool_choice(model=f"azure_ai/{model}"):
+            model_supports_tool_choice = False
+        supported_params = super().get_supported_openai_params(model)
+        if not model_supports_tool_choice:
+            filtered_supported_params = []
+            for param in supported_params:
+                if param != "tool_choice":
+                    filtered_supported_params.append(param)
+            return filtered_supported_params
+        return supported_params
+
     def validate_environment(
         self,
         headers: dict,
@@ -54,6 +67,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         api_base: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         """
@@ -79,12 +93,14 @@ class AzureAIStudioConfig(OpenAIConfig):
         original_url = httpx.URL(api_base)
 
         # Extract api_version or use default
-        api_version = cast(Optional[str], optional_params.get("api_version"))
+        api_version = cast(Optional[str], litellm_params.get("api_version"))
 
-        # Check if 'api-version' is already present
-        if "api-version" not in original_url.params and api_version:
-            # Add api_version to optional_params
-            original_url.params["api-version"] = api_version
+        # Create a new dictionary with existing params
+        query_params = dict(original_url.params)
+
+        # Add api_version if needed
+        if "api-version" not in query_params and api_version:
+            query_params["api-version"] = api_version
 
         # Add the path to the base URL
         if "services.ai.azure.com" in api_base:
@@ -96,8 +112,7 @@ class AzureAIStudioConfig(OpenAIConfig):
                 api_base=api_base, ending_path="/chat/completions"
             )
 
-        # Convert optional_params to query parameters
-        query_params = original_url.params
+        # Use the new query_params dictionary
         final_url = httpx.URL(new_url).copy_with(params=query_params)
 
         return str(final_url)

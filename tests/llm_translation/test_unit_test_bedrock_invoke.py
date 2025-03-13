@@ -28,6 +28,7 @@ def test_get_complete_url_basic(bedrock_transformer):
         model="anthropic.claude-v2",
         optional_params={},
         stream=False,
+        litellm_params={},
     )
 
     assert (
@@ -43,6 +44,7 @@ def test_get_complete_url_streaming(bedrock_transformer):
         model="anthropic.claude-v2",
         optional_params={},
         stream=True,
+        litellm_params={},
     )
 
     assert (

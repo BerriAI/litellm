@@ -94,6 +94,7 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
             "image_generation",
             "moderation",
             "audio_transcription",
+            "responses",
         ],
     ):
         """
