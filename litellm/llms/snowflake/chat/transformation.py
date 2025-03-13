@@ -59,34 +59,6 @@ class SnowflakeConfig(OpenAIGPTConfig):
             if param in supported_openai_params:
                 optional_params[param] = value
         return optional_params
-    
-    def _convert_tool_response_to_message(
-        message: ChatCompletionAssistantMessage, json_mode: bool
-    ) -> ChatCompletionAssistantMessage:
-        """
-        if json_mode is true, convert the returned tool call response to a content with json str
-
-        e.g. input:
-
-        {"role": "assistant", "tool_calls": [{"id": "call_5ms4", "type": "function", "function": {"name": "json_tool_call", "arguments": "{\"key\": \"question\", \"value\": \"What is the capital of France?\"}"}}]}
-
-        output:
-
-        {"role": "assistant", "content": "{\"key\": \"question\", \"value\": \"What is the capital of France?\"}"}
-        """
-        if not json_mode:
-            return message
-
-        _tool_calls = message.get("tool_calls")
-
-        if _tool_calls is None or len(_tool_calls) != 1:
-            return message
-
-        message["content"] = _tool_calls[0]["function"].get("arguments") or ""
-        message["tool_calls"] = None
-
-        return message
-
 
     @staticmethod
     def transform_response(
@@ -110,12 +82,6 @@ class SnowflakeConfig(OpenAIGPTConfig):
             additional_args={"complete_input_dict": request_data},
         )
 
-        if json_mode:
-            for choice in response_json["choices"]:
-                message = SnowflakeConfig._convert_tool_response_to_message(
-                    choice.get("message"), json_mode
-                )
-                choice["message"] = message
 
         returned_response = ModelResponse(**response_json)
 
@@ -208,10 +174,3 @@ class SnowflakeConfig(OpenAIGPTConfig):
             **optional_params,
             **extra_body,
         }
-    
-    def get_model_response_iterator(
-        self,
-        streaming_response: ModelResponse,
-        sync_stream: bool,
-    ):
-        return ModelResponseIterator(streaming_response=streaming_response, sync_stream=sync_stream)
