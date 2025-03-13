@@ -29,10 +29,51 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
     prepare_metadata_fields,
 )
+from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy
 
 router = APIRouter()
+
+
+async def create_internal_user_audit_log(
+    user_id: str,
+    action: AUDIT_ACTIONS,
+    litellm_changed_by: Optional[str],
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_proxy_admin_name: Optional[str],
+    before_value: Optional[str] = None,
+    after_value: Optional[str] = None,
+):
+    """
+    Create an audit log for an internal user.
+
+    Parameters:
+    - user_id: str - The id of the user to create the audit log for.
+    - action: AUDIT_ACTIONS - The action to create the audit log for.
+    - user_row: LiteLLM_UserTable - The user row to create the audit log for.
+    - litellm_changed_by: Optional[str] - The user id of the user who is changing the user.
+    - user_api_key_dict: UserAPIKeyAuth - The user api key dictionary.
+    - litellm_proxy_admin_name: Optional[str] - The name of the proxy admin.
+    """
+    if not litellm.store_audit_logs:
+        return
+
+    await create_audit_log_for_update(
+        request_data=LiteLLM_AuditLogs(
+            id=str(uuid.uuid4()),
+            updated_at=datetime.now(timezone.utc),
+            changed_by=litellm_changed_by
+            or user_api_key_dict.user_id
+            or litellm_proxy_admin_name,
+            changed_by_api_key=user_api_key_dict.api_key,
+            table_name=LitellmTableNames.USER_TABLE_NAME,
+            object_id=user_id,
+            action=action,
+            updated_values=after_value,
+            before_value=before_value,
+        )
+    )
 
 
 def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> dict:
@@ -169,6 +210,7 @@ async def new_user(
     try:
         from litellm.proxy.proxy_server import (
             general_settings,
+            litellm_proxy_admin_name,
             prisma_client,
             proxy_logging_obj,
         )
@@ -252,6 +294,34 @@ async def new_user(
                 proxy_logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email(
                     webhook_event=event,
                 )
+            )
+
+        try:
+            if prisma_client is None:
+                raise Exception(CommonProxyErrors.db_not_connected_error.value)
+            user_row: BaseModel = await prisma_client.db.litellm_usertable.find_first(
+                where={"user_id": response["user_id"]}
+            )
+
+            user_row_litellm_typed = LiteLLM_UserTable(
+                **user_row.model_dump(exclude_none=True)
+            )
+            asyncio.create_task(
+                create_internal_user_audit_log(
+                    user_id=user_row_litellm_typed.user_id,
+                    action="created",
+                    litellm_changed_by=user_api_key_dict.user_id,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    before_value=None,
+                    after_value=user_row_litellm_typed.model_dump_json(
+                        exclude_none=True
+                    ),
+                )
+            )
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Unable to create audit log for user on `/user/new` - {}".format(str(e))
             )
 
         return NewUserResponse(
