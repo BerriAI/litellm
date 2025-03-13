@@ -1584,7 +1584,7 @@ class NewOrganizationResponse(LiteLLM_OrganizationTable):
 
 class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     user_id: str
-    max_budget: Optional[float]
+    max_budget: Optional[float] = None
     spend: float = 0.0
     model_max_budget: Optional[Dict] = {}
     model_spend: Optional[Dict] = {}
@@ -1677,12 +1677,15 @@ class LiteLLM_ErrorLogs(LiteLLMPydanticObjectBase):
     endTime: Union[str, datetime, None]
 
 
+AUDIT_ACTIONS = Literal["created", "updated", "deleted", "blocked"]
+
+
 class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
     id: str
     updated_at: datetime
     changed_by: Optional[Any] = None
     changed_by_api_key: Optional[str] = None
-    action: Literal["created", "updated", "deleted", "blocked"]
+    action: AUDIT_ACTIONS
     table_name: Literal[
         LitellmTableNames.TEAM_TABLE_NAME,
         LitellmTableNames.USER_TABLE_NAME,
