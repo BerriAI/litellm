@@ -21,7 +21,6 @@ Documentation = "https://docs.litellm.ai"
 [tool.poetry.dependencies]
 python = ">=3.8.1,<4.0, !=3.9.7"
 httpx = ">=0.23.0"
-websockets = "^13.1.0"
 openai = ">=1.66.1"
 python-dotenv = ">=0.2.0"
 tiktoken = ">=0.7.0"
@@ -52,6 +51,7 @@ azure-keyvault-secrets = {version = "^4.8.0", optional = true}
 google-cloud-kms = {version = "^2.21.3", optional = true}
 resend = {version = "^0.8.0", optional = true}
 pynacl = {version = "^1.5.0", optional = true}
+websockets = {version = "^13.1.0", optional = true}
 
 [tool.poetry.extras]
 proxy = [
@@ -68,7 +68,8 @@ proxy = [
     "PyJWT",
     "python-multipart",
     "cryptography",
-    "pynacl"
+    "pynacl",
+    "websockets"
 ]
 
 extra_proxy = [
