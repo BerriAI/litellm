@@ -67,6 +67,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         api_base: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         """
@@ -92,12 +93,14 @@ class AzureAIStudioConfig(OpenAIConfig):
         original_url = httpx.URL(api_base)
 
         # Extract api_version or use default
-        api_version = cast(Optional[str], optional_params.get("api_version"))
+        api_version = cast(Optional[str], litellm_params.get("api_version"))
 
-        # Check if 'api-version' is already present
-        if "api-version" not in original_url.params and api_version:
-            # Add api_version to optional_params
-            original_url.params["api-version"] = api_version
+        # Create a new dictionary with existing params
+        query_params = dict(original_url.params)
+
+        # Add api_version if needed
+        if "api-version" not in query_params and api_version:
+            query_params["api-version"] = api_version
 
         # Add the path to the base URL
         if "services.ai.azure.com" in api_base:
@@ -109,8 +112,7 @@ class AzureAIStudioConfig(OpenAIConfig):
                 api_base=api_base, ending_path="/chat/completions"
             )
 
-        # Convert optional_params to query parameters
-        query_params = original_url.params
+        # Use the new query_params dictionary
         final_url = httpx.URL(new_url).copy_with(params=query_params)
 
         return str(final_url)
