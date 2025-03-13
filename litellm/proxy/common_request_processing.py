@@ -5,18 +5,18 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Dict, Literal, Optional, Tuple, Union
 
 import httpx
-from fastapi import Request
+from fastapi import HTTPException, Request, status
 from fastapi.responses import Response, StreamingResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
 )
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
@@ -280,6 +280,66 @@ class ProxyBaseLLMRequestProcessing:
         await check_response_size_is_safe(response=response)
 
         return response
+
+    @staticmethod
+    async def _handle_llm_api_exception(
+        e: Exception,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        proxy_logging_obj: ProxyLogging,
+        version: Optional[str] = None,
+    ):
+        """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
+        verbose_proxy_logger.exception(
+            f"litellm.proxy.proxy_server.chat_completion(): Exception occured - {str(e)}"
+        )
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+        )
+        litellm_debug_info = getattr(e, "litellm_debug_info", "")
+        verbose_proxy_logger.debug(
+            "\033[1;31mAn error occurred: %s %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
+            e,
+            litellm_debug_info,
+        )
+
+        timeout = getattr(
+            e, "timeout", None
+        )  # returns the timeout set by the wrapper. Used for testing if model-specific timeout are set correctly
+        _litellm_logging_obj: Optional[LiteLLMLoggingObj] = data.get(
+            "litellm_logging_obj", None
+        )
+        custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=user_api_key_dict,
+            call_id=(
+                _litellm_logging_obj.litellm_call_id if _litellm_logging_obj else None
+            ),
+            version=version,
+            response_cost=0,
+            model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+            request_data=data,
+            timeout=timeout,
+        )
+        headers = getattr(e, "headers", {}) or {}
+        headers.update(custom_headers)
+
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", str(e)),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                headers=headers,
+            )
+        error_msg = f"{str(e)}"
+        raise ProxyException(
+            message=getattr(e, "message", error_msg),
+            type=getattr(e, "type", "None"),
+            param=getattr(e, "param", "None"),
+            openai_code=getattr(e, "code", None),
+            code=getattr(e, "status_code", 500),
+            headers=headers,
+        )
 
     @staticmethod
     def _get_pre_call_type(
