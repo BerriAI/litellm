@@ -1474,7 +1474,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -s -vv tests/openai_misc_endpoints_tests --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -s -vv tests/openai_endpoints_tests --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
 
       # Store test results
