@@ -273,7 +273,7 @@ const sidebars = {
       items: [
         {
           type: "category",
-          label: "Chat",
+          label: "/chat/completions",
           link: {
             type: "generated-index",
             title: "Chat Completions",
@@ -286,12 +286,13 @@ const sidebars = {
             "completion/usage",
           ],
         },
+        "response_api",
         "text_completion",
         "embedding/supported_embedding",
         "anthropic_unified",
         {
           type: "category",
-          label: "Image",
+          label: "/images",
           items: [
             "image_generation",
             "image_variations",
@@ -299,7 +300,7 @@ const sidebars = {
         },
         {
           type: "category",
-          label: "Audio",
+          label: "/audio",
           "items": [
             "audio_transcription",
             "text_to_speech",
