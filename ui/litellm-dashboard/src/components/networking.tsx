@@ -2527,6 +2527,51 @@ export const teamCreateCall = async (
   }
 };
 
+export const credentialCreateCall = async (
+  accessToken: string,
+  formValues: Record<string, any> // Assuming formValues is an object
+) => {
+  try {
+    console.log("Form Values in credentialCreateCall:", formValues); // Log the form values before making the API call
+    if (formValues.metadata) {
+      console.log("formValues.metadata:", formValues.metadata);
+      // if there's an exception JSON.parse, show it in the message
+      try {
+        formValues.metadata = JSON.parse(formValues.metadata);
+      } catch (error) {
+        throw new Error("Failed to parse metadata: " + error);
+      }
+    }
+
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/credentials` : `/credentials`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...formValues, // Include formValues in the request body
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      console.error("Error response from the server:", errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("API Response:", data);
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
 export const keyUpdateCall = async (
   accessToken: string,
   formValues: Record<string, any> // Assuming formValues is an object
