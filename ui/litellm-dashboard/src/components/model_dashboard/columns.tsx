@@ -189,6 +189,29 @@ export const columns = (
     },
   },
   {
+    header: "Credentials",
+    accessorKey: "litellm_credential_name",
+    cell: ({ row }) => {
+      const model = row.original;
+      return model.litellm_params.litellm_credential_name ? (
+        <div className="overflow-hidden">
+          <Tooltip title={model.litellm_params.litellm_credential_name}>
+            <Button
+              size="xs"
+              variant="light"
+              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+              onClick={() => setSelectedTeamId(model.model_info.team_id)}
+            >
+              {model.litellm_params.litellm_credential_name.slice(0, 7)}...
+            </Button>
+          </Tooltip>
+        </div>
+      ) : (
+        "-"
+      );
+    },
+  },
+  {
     header: "Status",
     accessorKey: "model_info.db_model",
     cell: ({ row }) => {
