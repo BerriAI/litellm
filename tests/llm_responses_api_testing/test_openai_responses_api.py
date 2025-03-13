@@ -696,3 +696,102 @@ async def test_openai_responses_litellm_router_no_metadata():
             loaded_request_body["metadata"] == None
         ), "metadata should not be in the request body"
         mock_post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_litellm_router_with_metadata():
+    """
+    Test that metadata is correctly passed through when explicitly provided to the Router for responses API
+    """
+    test_metadata = {
+        "user_id": "123",
+        "conversation_id": "abc",
+        "custom_field": "test_value",
+    }
+
+    mock_response = {
+        "id": "resp_123",
+        "object": "response",
+        "created_at": 1741476542,
+        "status": "completed",
+        "model": "gpt-4o",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_123",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": "Hello world!", "annotations": []}
+                ],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "total_tokens": 30,
+            "output_tokens_details": {"reasoning_tokens": 0},
+        },
+        "text": {"format": {"type": "text"}},
+        "error": None,
+        "incomplete_details": None,
+        "instructions": None,
+        "metadata": test_metadata,  # Include the test metadata in response
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 1.0,
+        "max_output_tokens": None,
+        "previous_response_id": None,
+        "reasoning": {"effort": None, "summary": None},
+        "truncation": "disabled",
+        "user": None,
+    }
+
+    class MockResponse:
+        def __init__(self, json_data, status_code):
+            self._json_data = json_data
+            self.status_code = status_code
+            self.text = str(json_data)
+
+        def json(self):
+            return self._json_data
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        # Configure the mock to return our response
+        mock_post.return_value = MockResponse(mock_response, 200)
+
+        litellm._turn_on_debug()
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt4o-special-alias",
+                    "litellm_params": {
+                        "model": "gpt-4o",
+                        "api_key": "fake-key",
+                    },
+                }
+            ]
+        )
+
+        # Call the handler with metadata
+        await router.aresponses(
+            model="gpt4o-special-alias",
+            input="Hello, can you tell me a short joke?",
+            metadata=test_metadata,
+        )
+
+        # Check the request body
+        request_body = mock_post.call_args.kwargs["data"]
+        loaded_request_body = json.loads(request_body)
+        print("Request body:", json.dumps(loaded_request_body, indent=4))
+
+        # Assert metadata matches exactly what was passed
+        assert (
+            loaded_request_body["metadata"] == test_metadata
+        ), "metadata in request body should match what was passed"
+        mock_post.assert_called_once()
