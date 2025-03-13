@@ -25,8 +25,12 @@ class AimGuardrailMissingSecrets(Exception):
 
 
 class AimGuardrail(CustomGuardrail):
-    def __init__(self, api_key: Optional[str] = None, api_base: Optional[str] = None, **kwargs):
-        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+    def __init__(
+        self, api_key: Optional[str] = None, api_base: Optional[str] = None, **kwargs
+    ):
+        self.async_handler = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
         self.api_key = api_key or os.environ.get("AIM_API_KEY")
         if not self.api_key:
             msg = (
@@ -34,7 +38,9 @@ class AimGuardrail(CustomGuardrail):
                 "pass it as a parameter to the guardrail in the config file"
             )
             raise AimGuardrailMissingSecrets(msg)
-        self.api_base = api_base or os.environ.get("AIM_API_BASE") or "https://api.aim.security"
+        self.api_base = (
+            api_base or os.environ.get("AIM_API_BASE") or "https://api.aim.security"
+        )
         super().__init__(**kwargs)
 
     async def async_pre_call_hook(
@@ -68,6 +74,7 @@ class AimGuardrail(CustomGuardrail):
             "image_generation",
             "moderation",
             "audio_transcription",
+            "responses",
         ],
     ) -> Union[Exception, str, dict, None]:
         verbose_proxy_logger.debug("Inside AIM Moderation Hook")
@@ -77,9 +84,10 @@ class AimGuardrail(CustomGuardrail):
 
     async def call_aim_guardrail(self, data: dict, hook: str) -> None:
         user_email = data.get("metadata", {}).get("headers", {}).get("x-aim-user-email")
-        headers = {"Authorization": f"Bearer {self.api_key}", "x-aim-litellm-hook": hook} | (
-            {"x-aim-user-email": user_email} if user_email else {}
-        )
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "x-aim-litellm-hook": hook,
+        } | ({"x-aim-user-email": user_email} if user_email else {})
         response = await self.async_handler.post(
             f"{self.api_base}/detect/openai",
             headers=headers,

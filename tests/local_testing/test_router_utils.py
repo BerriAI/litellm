@@ -418,3 +418,21 @@ def test_router_handle_clientside_credential():
 
     assert new_deployment.litellm_params.api_key == "123"
     assert len(router.get_model_list()) == 2
+
+
+def test_router_get_async_openai_model_client():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gemini/*",
+                "litellm_params": {
+                    "model": "gemini/*",
+                    "api_base": "https://api.gemini.com",
+                },
+            }
+        ]
+    )
+    model_client = router._get_async_openai_model_client(
+        deployment=MagicMock(), kwargs={}
+    )
+    assert model_client is None

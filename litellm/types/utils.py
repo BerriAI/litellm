@@ -191,6 +191,44 @@ class CallTypes(Enum):
     retrieve_batch = "retrieve_batch"
     pass_through = "pass_through_endpoint"
     anthropic_messages = "anthropic_messages"
+    get_assistants = "get_assistants"
+    aget_assistants = "aget_assistants"
+    create_assistants = "create_assistants"
+    acreate_assistants = "acreate_assistants"
+    delete_assistant = "delete_assistant"
+    adelete_assistant = "adelete_assistant"
+    acreate_thread = "acreate_thread"
+    create_thread = "create_thread"
+    aget_thread = "aget_thread"
+    get_thread = "get_thread"
+    a_add_message = "a_add_message"
+    add_message = "add_message"
+    aget_messages = "aget_messages"
+    get_messages = "get_messages"
+    arun_thread = "arun_thread"
+    run_thread = "run_thread"
+    arun_thread_stream = "arun_thread_stream"
+    run_thread_stream = "run_thread_stream"
+    afile_retrieve = "afile_retrieve"
+    file_retrieve = "file_retrieve"
+    afile_delete = "afile_delete"
+    file_delete = "file_delete"
+    afile_list = "afile_list"
+    file_list = "file_list"
+    acreate_file = "acreate_file"
+    create_file = "create_file"
+    afile_content = "afile_content"
+    file_content = "file_content"
+    create_fine_tuning_job = "create_fine_tuning_job"
+    acreate_fine_tuning_job = "acreate_fine_tuning_job"
+    acancel_fine_tuning_job = "acancel_fine_tuning_job"
+    cancel_fine_tuning_job = "cancel_fine_tuning_job"
+    alist_fine_tuning_jobs = "alist_fine_tuning_jobs"
+    list_fine_tuning_jobs = "list_fine_tuning_jobs"
+    aretrieve_fine_tuning_job = "aretrieve_fine_tuning_job"
+    retrieve_fine_tuning_job = "retrieve_fine_tuning_job"
+    responses = "responses"
+    aresponses = "aresponses"
 
 
 CallTypesLiteral = Literal[
@@ -1815,6 +1853,7 @@ all_litellm_params = [
     "budget_duration",
     "use_in_pass_through",
     "merge_reasoning_content_in_choices",
+    "litellm_credential_name",
 ] + list(StandardCallbackDynamicParams.__annotations__.keys())
 
 
@@ -2011,3 +2050,9 @@ class RawRequestTypedDict(TypedDict, total=False):
     raw_request_body: Optional[dict]
     raw_request_headers: Optional[dict]
     error: Optional[str]
+
+
+class CredentialItem(BaseModel):
+    credential_name: str
+    credential_values: dict
+    credential_info: dict

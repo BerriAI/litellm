@@ -111,6 +111,7 @@ def create_batch(
         proxy_server_request = kwargs.get("proxy_server_request", None)
         model_info = kwargs.get("model_info", None)
         _is_async = kwargs.pop("acreate_batch", False) is True
+        litellm_params = get_litellm_params(**kwargs)
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj", None)
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
@@ -217,6 +218,7 @@ def create_batch(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 create_batch_data=_create_batch_request,
+                litellm_params=litellm_params,
             )
         elif custom_llm_provider == "vertex_ai":
             api_base = optional_params.api_base or ""
@@ -320,15 +322,12 @@ def retrieve_batch(
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
-
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj", None)
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         litellm_params = get_litellm_params(
             custom_llm_provider=custom_llm_provider,
-            litellm_call_id=kwargs.get("litellm_call_id", None),
-            litellm_trace_id=kwargs.get("litellm_trace_id"),
-            litellm_metadata=kwargs.get("litellm_metadata"),
+            **kwargs,
         )
         litellm_logging_obj.update_environment_variables(
             model=None,
@@ -424,6 +423,7 @@ def retrieve_batch(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 retrieve_batch_data=_retrieve_batch_request,
+                litellm_params=litellm_params,
             )
         elif custom_llm_provider == "vertex_ai":
             api_base = optional_params.api_base or ""
@@ -526,6 +526,10 @@ def list_batches(
     try:
         # set API KEY
         optional_params = GenericLiteLLMParams(**kwargs)
+        litellm_params = get_litellm_params(
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        )
         api_key = (
             optional_params.api_key
             or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
@@ -603,6 +607,7 @@ def list_batches(
                 api_version=api_version,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
+                litellm_params=litellm_params,
             )
         else:
             raise litellm.exceptions.BadRequestError(
@@ -678,6 +683,10 @@ def cancel_batch(
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
+        litellm_params = get_litellm_params(
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        )
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         # set timeout for 10 minutes by default
@@ -765,6 +774,7 @@ def cancel_batch(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 cancel_batch_data=_cancel_batch_request,
+                litellm_params=litellm_params,
             )
         else:
             raise litellm.exceptions.BadRequestError(
