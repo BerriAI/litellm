@@ -15,6 +15,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import handle_exception_on_proxy
 
 router = APIRouter()
@@ -97,7 +98,6 @@ async def create_fine_tuning_job(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
-        get_custom_headers,
         premium_user,
         proxy_config,
         proxy_logging_obj,
@@ -151,7 +151,7 @@ async def create_fine_tuning_job(
         api_base = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
-            get_custom_headers(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
@@ -205,7 +205,6 @@ async def retrieve_fine_tuning_job(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
-        get_custom_headers,
         premium_user,
         proxy_config,
         proxy_logging_obj,
@@ -248,7 +247,7 @@ async def retrieve_fine_tuning_job(
         api_base = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
-            get_custom_headers(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
@@ -305,7 +304,6 @@ async def list_fine_tuning_jobs(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
-        get_custom_headers,
         premium_user,
         proxy_config,
         proxy_logging_obj,
@@ -349,7 +347,7 @@ async def list_fine_tuning_jobs(
         api_base = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
-            get_custom_headers(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
@@ -404,7 +402,6 @@ async def cancel_fine_tuning_job(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
-        get_custom_headers,
         premium_user,
         proxy_config,
         proxy_logging_obj,
@@ -451,7 +448,7 @@ async def cancel_fine_tuning_job(
         api_base = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
-            get_custom_headers(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,

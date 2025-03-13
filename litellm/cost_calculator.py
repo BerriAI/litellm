@@ -44,7 +44,12 @@ from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_ro
 from litellm.llms.vertex_ai.image_generation.cost_calculator import (
     cost_calculator as vertex_ai_image_cost_calculator,
 )
-from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.responses.utils import ResponseAPILoggingUtils
+from litellm.types.llms.openai import (
+    HttpxBinaryResponseContent,
+    ResponseAPIUsage,
+    ResponsesAPIResponse,
+)
 from litellm.types.rerank import RerankBilledUnits, RerankResponse
 from litellm.types.utils import (
     CallTypesLiteral,
@@ -239,6 +244,15 @@ def cost_per_token(  # noqa: PLR0915
             custom_llm_provider=custom_llm_provider,
             billed_units=rerank_billed_units,
         )
+    elif (
+        call_type == "aretrieve_batch"
+        or call_type == "retrieve_batch"
+        or call_type == CallTypes.aretrieve_batch
+        or call_type == CallTypes.retrieve_batch
+    ):
+        return batch_cost_calculator(
+            usage=usage_block, model=model, custom_llm_provider=custom_llm_provider
+        )
     elif call_type == "atranscription" or call_type == "transcription":
         return openai_cost_per_second(
             model=model,
@@ -399,9 +413,12 @@ def _select_model_name_for_cost_calc(
     if base_model is not None:
         return_model = base_model
 
-    completion_response_model: Optional[str] = getattr(
-        completion_response, "model", None
-    )
+    completion_response_model: Optional[str] = None
+    if completion_response is not None:
+        if isinstance(completion_response, BaseModel):
+            completion_response_model = getattr(completion_response, "model", None)
+        elif isinstance(completion_response, dict):
+            completion_response_model = completion_response.get("model", None)
     hidden_params: Optional[dict] = getattr(completion_response, "_hidden_params", None)
     if completion_response_model is None and hidden_params is not None:
         if (
@@ -450,6 +467,13 @@ def _get_usage_object(
         usage_obj = completion_response.get("usage")
 
     return usage_obj
+
+
+def _is_known_usage_objects(usage_obj):
+    """Returns True if the usage obj is a known Usage type"""
+    return isinstance(usage_obj, litellm.Usage) or isinstance(
+        usage_obj, ResponseAPIUsage
+    )
 
 
 def _infer_call_type(
@@ -561,9 +585,7 @@ def completion_cost(  # noqa: PLR0915
             base_model=base_model,
         )
 
-        verbose_logger.debug(
-            f"completion_response _select_model_name_for_cost_calc: {model}"
-        )
+        verbose_logger.info(f"selected model name for cost calculation: {model}")
 
         if completion_response is not None and (
             isinstance(completion_response, BaseModel)
@@ -575,8 +597,8 @@ def completion_cost(  # noqa: PLR0915
                 )
             else:
                 usage_obj = getattr(completion_response, "usage", {})
-            if isinstance(usage_obj, BaseModel) and not isinstance(
-                usage_obj, litellm.Usage
+            if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
+                usage_obj=usage_obj
             ):
                 setattr(
                     completion_response,
@@ -589,6 +611,14 @@ def completion_cost(  # noqa: PLR0915
                 _usage = usage_obj.model_dump()
             else:
                 _usage = usage_obj
+
+            if ResponseAPILoggingUtils._is_response_api_usage(_usage):
+                _usage = (
+                    ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                        _usage
+                    ).model_dump()
+                )
+
             # get input/output tokens from completion_response
             prompt_tokens = _usage.get("prompt_tokens", 0)
             completion_tokens = _usage.get("completion_tokens", 0)
@@ -787,6 +817,7 @@ def response_cost_calculator(
         TextCompletionResponse,
         HttpxBinaryResponseContent,
         RerankResponse,
+        ResponsesAPIResponse,
     ],
     model: str,
     custom_llm_provider: Optional[str],
@@ -957,3 +988,54 @@ def default_image_cost_calculator(
             )
 
     return cost_info["input_cost_per_pixel"] * height * width * n
+
+
+def batch_cost_calculator(
+    usage: Usage,
+    model: str,
+    custom_llm_provider: Optional[str] = None,
+) -> Tuple[float, float]:
+    """
+    Calculate the cost of a batch job
+    """
+
+    _, custom_llm_provider, _, _ = litellm.get_llm_provider(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
+
+    verbose_logger.info(
+        "Calculating batch cost per token. model=%s, custom_llm_provider=%s",
+        model,
+        custom_llm_provider,
+    )
+
+    try:
+        model_info: Optional[ModelInfo] = litellm.get_model_info(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+    except Exception:
+        model_info = None
+
+    if not model_info:
+        return 0.0, 0.0
+
+    input_cost_per_token_batches = model_info.get("input_cost_per_token_batches")
+    input_cost_per_token = model_info.get("input_cost_per_token")
+    output_cost_per_token_batches = model_info.get("output_cost_per_token_batches")
+    output_cost_per_token = model_info.get("output_cost_per_token")
+    total_prompt_cost = 0.0
+    total_completion_cost = 0.0
+    if input_cost_per_token_batches:
+        total_prompt_cost = usage.prompt_tokens * input_cost_per_token_batches
+    elif input_cost_per_token:
+        total_prompt_cost = (
+            usage.prompt_tokens * (input_cost_per_token) / 2
+        )  # batch cost is usually half of the regular token cost
+    if output_cost_per_token_batches:
+        total_completion_cost = usage.completion_tokens * output_cost_per_token_batches
+    elif output_cost_per_token:
+        total_completion_cost = (
+            usage.completion_tokens * (output_cost_per_token) / 2
+        )  # batch cost is usually half of the regular token cost
+
+    return total_prompt_cost, total_completion_cost

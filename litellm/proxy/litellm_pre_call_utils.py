@@ -62,10 +62,18 @@ def _get_metadata_variable_name(request: Request) -> str:
     """
     if RouteChecks._is_assistants_api_request(request):
         return "litellm_metadata"
-    if "batches" in request.url.path:
-        return "litellm_metadata"
-    if "/v1/messages" in request.url.path:
-        # anthropic API has a field called metadata
+
+    LITELLM_METADATA_ROUTES = [
+        "batches",
+        "/v1/messages",
+        "responses",
+    ]
+    if any(
+        [
+            litellm_metadata_route in request.url.path
+            for litellm_metadata_route in LITELLM_METADATA_ROUTES
+        ]
+    ):
         return "litellm_metadata"
     else:
         return "metadata"
