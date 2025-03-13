@@ -120,7 +120,6 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     
     def transform_delete_api_response(
         self,
-        model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> ResponsesAPIDeleteResponse:
