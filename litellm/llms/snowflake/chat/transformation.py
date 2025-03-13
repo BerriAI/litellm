@@ -1,14 +1,14 @@
-'''
+"""
 Support for Snowflake REST API 
-'''
-import httpx
-from typing import List, Optional, Tuple, Any, TYPE_CHECKING
+"""
 
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+
+import httpx
+
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.utils import get_secret
 from litellm.types.utils import ModelResponse
-from litellm.types.llms.openai import ChatCompletionAssistantMessage
-from litellm.llms.databricks.streaming_utils import ModelResponseIterator
 
 from ...openai_like.chat.transformation import OpenAIGPTConfig
 
@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+
 class SnowflakeConfig(OpenAIGPTConfig):
     """
     source: https://docs.snowflake.com/en/sql-reference/functions/complete-snowflake-cortex
@@ -27,15 +28,10 @@ class SnowflakeConfig(OpenAIGPTConfig):
     @classmethod
     def get_config(cls):
         return super().get_config()
-    
+
     def get_supported_openai_params(self, model: str) -> List:
-        return [
-            "temperature",
-            "max_tokens",
-            "top_p",
-            "response_format"
-        ]
-            
+        return ["temperature", "max_tokens", "top_p", "response_format"]
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -60,8 +56,8 @@ class SnowflakeConfig(OpenAIGPTConfig):
                 optional_params[param] = value
         return optional_params
 
-    @staticmethod
     def transform_response(
+        self,
         model: str,
         raw_response: httpx.Response,
         model_response: ModelResponse,
@@ -82,26 +78,22 @@ class SnowflakeConfig(OpenAIGPTConfig):
             additional_args={"complete_input_dict": request_data},
         )
 
-
         returned_response = ModelResponse(**response_json)
 
-        returned_response.model = (
-            "snowflake/" + (returned_response.model or "")
-        )
+        returned_response.model = "snowflake/" + (returned_response.model or "")
 
         if model is not None:
             returned_response._hidden_params["model"] = model
         return returned_response
 
-
     def validate_environment(
         self,
         headers: dict,
         model: str,
-        api_base: str = None,
+        messages: List[AllMessageValues],
+        optional_params: dict,
         api_key: Optional[str] = None,
-        messages: dict = None,
-        optional_params: dict = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         """
         Return headers to use for Snowflake completion request
@@ -113,57 +105,56 @@ class SnowflakeConfig(OpenAIGPTConfig):
             "Accept": "application/json",
             "Authorization": "Bearer " + <JWT>,
             "X-Snowflake-Authorization-Token-Type": "KEYPAIR_JWT"
-        } 
+        }
         """
 
         if api_key is None:
-                raise ValueError(
-                    "Missing Snowflake JWT key"
-                )
+            raise ValueError("Missing Snowflake JWT key")
 
         headers.update(
             {
                 "Content-Type": "application/json",
                 "Accept": "application/json",
                 "Authorization": "Bearer " + api_key,
-                "X-Snowflake-Authorization-Token-Type": "KEYPAIR_JWT"
+                "X-Snowflake-Authorization-Token-Type": "KEYPAIR_JWT",
             }
         )
         return headers
-    
+
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
         api_base = (
             api_base
-            or f"""https://{get_secret("SNOWFLAKE_ACCOUNT_ID")}.snowflakecomputing.com/api/v2/cortex/inference:complete"""
-            or get_secret("SNOWFLAKE_API_BASE")
-        )  # type: ignore
-        dynamic_api_key = api_key or get_secret("SNOWFLAKE_JWT")
+            or f"""https://{get_secret_str("SNOWFLAKE_ACCOUNT_ID")}.snowflakecomputing.com/api/v2/cortex/inference:complete"""
+            or get_secret_str("SNOWFLAKE_API_BASE")
+        )
+        dynamic_api_key = api_key or get_secret_str("SNOWFLAKE_JWT")
         return api_base, dynamic_api_key
-    
+
     def get_complete_url(
         self,
         api_base: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         """
         If api_base is not provided, use the default DeepSeek /chat/completions endpoint.
         """
         if not api_base:
-            api_base = f"""https://{get_secret("SNOWFLAKE_ACCOUNT_ID")}.snowflakecomputing.com/api/v2/cortex/inference:complete"""
+            api_base = f"""https://{get_secret_str("SNOWFLAKE_ACCOUNT_ID")}.snowflakecomputing.com/api/v2/cortex/inference:complete"""
 
         return api_base
-    
+
     def transform_request(
-        self, 
-        model: str, 
-        messages: dict , 
-        optional_params: dict, 
-        litellm_params: dict, 
-        headers: dict
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
     ) -> dict:
         stream: bool = optional_params.pop("stream", None) or False
         extra_body = optional_params.pop("extra_body", {})
