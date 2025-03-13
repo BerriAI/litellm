@@ -2914,7 +2914,6 @@ def get_optional_params(  # noqa: PLR0915
             and custom_llm_provider != "bedrock"
             and custom_llm_provider != "ollama_chat"
             and custom_llm_provider != "openrouter"
-            and custom_llm_provider != "netmind"
             and custom_llm_provider not in litellm.openai_compatible_providers
         ):
             if custom_llm_provider == "ollama":
@@ -3147,17 +3146,6 @@ def get_optional_params(  # noqa: PLR0915
     elif custom_llm_provider == "together_ai":
 
         optional_params = litellm.TogetherAIConfig().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=(
-                drop_params
-                if drop_params is not None and isinstance(drop_params, bool)
-                else False
-            ),
-        )
-    elif custom_llm_provider == "netmind":
-        optional_params = litellm.NetmindChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
