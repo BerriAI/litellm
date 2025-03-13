@@ -8,10 +8,11 @@ import {
   TableRow,
   Card,
   Text,
-  Badge
+  Badge,
+  Button
 } from "@tremor/react";
 import { PlusIcon } from "@heroicons/react/solid";
-import { getCredentialsList } from "./networking"; // Assume this is your networking function
+import { getCredentialsList } from "@/components/networking"; // Assume this is your networking function
 
 interface CredentialsPanelProps {
   accessToken: string | null;
@@ -75,6 +76,12 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken }) => {
 
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
+      <Button 
+        onClick={() => setIsAddModalOpen(true)}
+        className="mb-4"
+      >
+        Add Credential
+      </Button>
       <div className="flex justify-between items-center mb-4">
         <Text>
           Configured credentials for different AI providers. Add and manage your API credentials.{" "}
@@ -87,13 +94,6 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken }) => {
             Docs
           </a>
         </Text>
-        <button 
-          onClick={() => setIsAddModalOpen(true)}
-          className="flex items-center bg-blue-500 text-white px-3 py-2 rounded-md hover:bg-blue-600 transition-colors"
-        >
-          <PlusIcon className="h-5 w-5 mr-2" />
-          Add Credential
-        </button>
       </div>
 
       <Card>
@@ -137,10 +137,17 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken }) => {
         </Table>
       </Card>
 
+      
+
       {/* TODO: Implement Add Credential Modal */}
       {isAddModalOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
           {/* Modal content for adding credentials */}
+          <Button 
+            onClick={() => setIsAddModalOpen(false)}
+          >
+            Close
+          </Button>
         </div>
       )}
     </div>
