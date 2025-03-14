@@ -826,7 +826,7 @@ async def user_update(
         return response  # type: ignore
         # update based on remaining passed in values
     except Exception as e:
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.user_update(): Exception occured - {}".format(
                 str(e)
             )

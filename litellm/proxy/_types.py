@@ -133,7 +133,7 @@ class LitellmTableNames(str, enum.Enum):
     TEAM_TABLE_NAME = "LiteLLM_TeamTable"
     USER_TABLE_NAME = "LiteLLM_UserTable"
     KEY_TABLE_NAME = "LiteLLM_VerificationToken"
-    PROXY_MODEL_TABLE_NAME = "LiteLLM_ModelTable"
+    PROXY_MODEL_TABLE_NAME = "LiteLLM_ProxyModelTable"
 
 
 def hash_token(token: str):
@@ -1588,7 +1588,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     spend: float = 0.0
     model_max_budget: Optional[Dict] = {}
     model_spend: Optional[Dict] = {}
-    user_email: Optional[str]
+    user_email: Optional[str] = None
     models: list = []
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
@@ -1687,12 +1687,7 @@ class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
     changed_by: Optional[Any] = None
     changed_by_api_key: Optional[str] = None
     action: AUDIT_ACTIONS
-    table_name: Literal[
-        LitellmTableNames.TEAM_TABLE_NAME,
-        LitellmTableNames.USER_TABLE_NAME,
-        LitellmTableNames.KEY_TABLE_NAME,
-        LitellmTableNames.PROXY_MODEL_TABLE_NAME,
-    ]
+    table_name: LitellmTableNames
     object_id: str
     before_value: Optional[Json] = None
     updated_values: Optional[Json] = None

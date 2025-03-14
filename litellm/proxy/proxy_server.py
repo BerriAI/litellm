@@ -3182,7 +3182,7 @@ class ProxyStartupEvent:
 
         # add proxy budget to db in the user table
         asyncio.create_task(
-            generate_key_helper_fn(
+            generate_key_helper_fn(  # type: ignore
                 request_type="user",
                 user_id=litellm_proxy_budget_name,
                 duration=None,
@@ -6590,84 +6590,6 @@ async def model_group_info(
     )
 
     return {"data": model_groups}
-
-
-#### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
-@router.post(
-    "/model/delete",
-    description="Allows deleting models in the model list in the config.yaml",
-    tags=["model management"],
-    dependencies=[Depends(user_api_key_auth)],
-)
-async def delete_model(model_info: ModelInfoDelete):
-    global llm_router, llm_model_list, general_settings, user_config_file_path, proxy_config
-    try:
-        """
-        [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
-
-        - Check if id in db
-        - Delete
-        """
-
-        global prisma_client
-
-        if prisma_client is None:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": "No DB Connected. Here's how to do it - https://docs.litellm.ai/docs/proxy/virtual_keys"
-                },
-            )
-
-        # update DB
-        if store_model_in_db is True:
-            """
-            - store model_list in db
-            - store keys separately
-            """
-            # encrypt litellm params #
-            result = await prisma_client.db.litellm_proxymodeltable.delete(
-                where={"model_id": model_info.id}
-            )
-
-            if result is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail={"error": f"Model with id={model_info.id} not found in db"},
-                )
-
-            ## DELETE FROM ROUTER ##
-            if llm_router is not None:
-                llm_router.delete_deployment(id=model_info.id)
-
-            return {"message": f"Model: {result.model_id} deleted successfully"}
-        else:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
-                },
-            )
-
-    except Exception as e:
-        verbose_proxy_logger.exception(
-            f"Failed to delete model. Due to error - {str(e)}"
-        )
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
 
 
 @router.get(
