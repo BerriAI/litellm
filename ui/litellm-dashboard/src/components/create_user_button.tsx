@@ -314,11 +314,8 @@ const Createuser: React.FC<CreateuserProps> = ({
           <Form.Item label="Metadata" name="metadata">
             <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
           </Form.Item>
-          <Accordion>
-          <AccordionHeader>
+
             <Title>Personal Key Creation</Title>
-          </AccordionHeader>
-          <AccordionBody>
             <Form.Item className="gap-2" label={
                 <span>
                   Models{' '}
@@ -345,8 +342,6 @@ const Createuser: React.FC<CreateuserProps> = ({
                 ))}
               </Select2>
             </Form.Item>
-          </AccordionBody>
-        </Accordion>
           <div style={{ textAlign: "right", marginTop: "10px" }}>
             <Button htmlType="submit">Create User</Button>
           </div>
