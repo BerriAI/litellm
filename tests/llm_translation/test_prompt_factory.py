@@ -743,3 +743,13 @@ def test_hf_chat_template():
         chat_template.rstrip()
         == """<｜begin▁of▁sentence｜>You are a helpful assistant.<｜User｜>What is the weather in Copenhagen?<｜Assistant｜><think>"""
     )
+
+
+def test_ollama_pt():
+    from litellm.litellm_core_utils.prompt_templates.factory import ollama_pt
+
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hello!"},
+    ]
+    ollama_pt(model="ollama/llama3.1:8b", messages=messages)

@@ -219,6 +219,31 @@ def ollama_pt(
             if user_content_str:
                 prompt += f"### User:\n{user_content_str}\n\n"
 
+            system_content_str = ""
+            ## MERGE CONSECUTIVE SYSTEM CONTENT ##
+            while (
+                msg_i < len(messages) and messages[msg_i]["role"] == "system"
+            ):
+                msg_content = messages[msg_i].get("content")
+                if msg_content:
+                    if isinstance(msg_content, list):
+                        for m in msg_content:
+                            if m.get("type", "") == "image_url":
+                                if isinstance(m["image_url"], str):
+                                    images.append(m["image_url"])
+                                elif isinstance(m["image_url"], dict):
+                                    images.append(m["image_url"]["url"])
+                            elif m.get("type", "") == "text":
+                                system_content_str += m["text"]
+                    else:
+                        # Tool message content will always be a string
+                        system_content_str += msg_content
+
+                msg_i += 1
+
+            if system_content_str:
+                prompt += f"### System:\n{system_content_str}\n\n"
+
             assistant_content_str = ""
             ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
             while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
