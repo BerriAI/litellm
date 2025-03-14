@@ -286,13 +286,16 @@ def test_azure_openai_gpt_4o_naming(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "api_version",
-    [
-        "2024-10-21",
-        # "2024-02-15-preview",
-    ],
+   "api_version, should_have_response_format",
+     [
+       ("2024-02-15-preview", False),
+       ("2024-10-21", True),
+       ("2025-01-01-preview", True),
+     ],
 )
-def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
+def test_azure_gpt_4o_with_tool_call_and_response_format(
+    api_version, should_have_response_format
+):
     from litellm import completion
     from typing import Optional
     from pydantic import BaseModel
@@ -361,10 +364,12 @@ def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
 
         mock_post.assert_called_once()
 
-        if api_version == "2024-10-21":
-            assert "response_format" in mock_post.call_args.kwargs
-        else:
-            assert "response_format" not in mock_post.call_args.kwargs
+        assert (
+           "response_format"
+           in mock_post.call_args.kwargs
+           is should_have_response_format
+       )
+
 
 
 def test_map_openai_params():
