@@ -244,38 +244,6 @@ def responses(
             extra_kwargs=kwargs,
         )
 
-    )
-
-    # Pre Call logging
-    litellm_logging_obj.update_environment_variables(
-        model=model,
-        user=user,
-        optional_params=dict(responses_api_request_params),
-        litellm_params={
-            "litellm_call_id": litellm_call_id,
-            **responses_api_request_params,
-        },
-        custom_llm_provider=custom_llm_provider,
-    )
-
-    # Call the handler with _is_async flag instead of directly calling the async handler
-    response = base_llm_http_handler.response_api_handler(
-        model=model,
-        input=input,
-        responses_api_provider_config=responses_api_provider_config,
-        response_api_optional_request_params=responses_api_request_params,
-        custom_llm_provider=custom_llm_provider,
-        litellm_params=litellm_params,
-        logging_obj=litellm_logging_obj,
-        extra_headers=extra_headers,
-        extra_body=extra_body,
-        timeout=timeout or request_timeout,
-        _is_async=_is_async,
-        client=kwargs.get("client"),
-    )
-
-    return response
-
 @client
 async def aresponses_retrieve(
     response_id: str,
