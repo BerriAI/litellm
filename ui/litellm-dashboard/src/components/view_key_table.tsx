@@ -182,6 +182,11 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     accessToken,
   });
 
+  // Make refresh function available globally so CreateKey can access it
+  if (typeof window !== 'undefined') {
+    window.refreshKeysList = refresh;
+  }
+
   const handlePageChange = (newPage: number) => {
     refresh({ page: newPage });
   };
@@ -421,6 +426,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         userRole={userRole}
         organizations={organizations}
         setCurrentOrg={setCurrentOrg}
+        refresh={refresh}
       />
 
       {isDeleteModalOpen && (
@@ -618,5 +624,12 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     </div>
   );
 };
+
+// Add this type declaration at the top of the file to avoid TypeScript errors
+declare global {
+  interface Window {
+    refreshKeysList?: () => void;
+  }
+}
 
 export default ViewKeyTable;
