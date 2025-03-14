@@ -7,7 +7,7 @@ import TabItem from '@theme/TabItem';
 |-------|-------|
 | Description | The Snowflake Cortex LLM REST API lets you access the COMPLETE function via HTTP POST requests|
 | Provider Route on LiteLLM | `snowflake/` |
-| Link to Provider Doc | [Vertex AI ↗](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-llm-rest-api) |
+| Link to Provider Doc | [Snowflake ↗](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-llm-rest-api) |
 | Base URL | [https://{account-id}.snowflakecomputing.com/api/v2/cortex/inference:complete/](https://{account-id}.snowflakecomputing.com/api/v2/cortex/inference:complete) |
 | Supported Operations | `/completions`|
 
