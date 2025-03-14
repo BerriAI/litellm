@@ -9,7 +9,6 @@ import AdvancedSettings from "./advanced_settings";
 import { Providers, providerLogoMap, getPlaceholder } from "../provider_info_helpers";
 import type { Team } from "../key_team_helpers/key_list";
 import { CredentialItem } from "../networking";
-import { testModelConnection } from "./test_connection_handler";
 import ConnectionErrorDisplay from "./ConnectionErrorDisplay";
 
 interface AddModelTabProps {
@@ -60,26 +59,6 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
   const [testMode, setTestMode] = useState<string>("chat");
   const [isTestModalVisible, setIsTestModalVisible] = useState<boolean>(false);
   const [connectionError, setConnectionError] = useState<Error | string | null>(null);
-
-  // Add a function to handle test connection
-  const handleTestConnection = async () => {
-    // Clear any previous errors
-    setConnectionError(null);
-    
-    try {
-      const formValues = form.getFieldsValue();
-      
-      // Call the existing testModelConnection function
-      const result = await testModelConnection(formValues, accessToken, testMode, setConnectionError);
-      
-      // Only close the modal on success
-      if (result && result.status === "success") {
-        setIsTestModalVisible(false);
-      }
-    } catch (error) {
-      console.error("Test connection failed:", error);
-    }
-  };
 
   // Show test modal with mode selection
   const showTestModal = () => {
@@ -252,7 +231,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
           <Button 
             key="test" 
             type="primary" 
-            onClick={handleTestConnection}
+            onClick={() => setConnectionError("Test connection logic is now in ConnectionErrorDisplay")}
             loading={false} // You might want to add a loading state
           >
             Test Connection
@@ -281,8 +260,11 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
             <Typography.Title level={5} type="danger">Connection Test Failed</Typography.Title>
             <div className="border border-red-300 rounded-md overflow-hidden">
               <ConnectionErrorDisplay 
-                error={connectionError} 
-                modelName={form.getFieldValue('model_name') || form.getFieldValue('model')} 
+                formValues={form.getFieldsValue()}
+                accessToken={accessToken}
+                testMode={testMode}
+                modelName={form.getFieldValue('model_name') || form.getFieldValue('model')}
+                onClose={() => setIsTestModalVisible(false)}
               />
             </div>
           </div>
