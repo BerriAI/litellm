@@ -9,6 +9,8 @@ import AdvancedSettings from "./advanced_settings";
 import { Providers, providerLogoMap, getPlaceholder } from "../provider_info_helpers";
 import type { Team } from "../key_team_helpers/key_list";
 import { CredentialItem } from "../networking";
+import { testModelConnection } from "./handle_add_model_submit";
+
 interface AddModelTabProps {
   form: FormInstance;
   handleOk: () => void;
@@ -22,6 +24,7 @@ interface AddModelTabProps {
   setShowAdvancedSettings: (show: boolean) => void;
   teams: Team[] | null;
   credentials: CredentialItem[];
+  accessToken: string;
 }
 
 const { Title, Link } = Typography;
@@ -39,7 +42,14 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
   setShowAdvancedSettings,
   teams,
   credentials,
+  accessToken,
 }) => {
+  // Add a function to handle test connection
+  const handleTestConnection = async () => {
+    const formValues = form.getFieldsValue();
+    await testModelConnection(formValues, accessToken);
+  };
+
   return (
     <>
       <Title level={2}>Add new model</Title>
@@ -184,7 +194,10 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                         Need Help?
                       </Typography.Link>
                     </Tooltip>
-                    <Button htmlType="submit">Add Model</Button>
+                    <div className="space-x-2">
+                      <Button onClick={handleTestConnection}>Test Connect</Button>
+                      <Button htmlType="submit">Add Model</Button>
+                    </div>
                   </div>
                 </>
               </Form>
