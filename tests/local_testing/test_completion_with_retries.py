@@ -155,22 +155,18 @@ async def test_acompletion_with_retries_retries():
 
     from unittest.mock import patch
 
-    retry_count = 0
     with patch.object(litellm, "acompletion") as mock_completion:
         async def timeout_fnc(*args, **kwargs):
-            nonlocal retry_count
-            retry_count += 1
-            
             await mock_completion(*args, **kwargs)
-            if retry_count < 3:
-                raise litellm.Timeout(message='test', model='gpt-3.5-turbo', llm_provider='mock')
+            raise litellm.Timeout(message='test', model='gpt-3.5-turbo', llm_provider='mock')
         
-        await acompletion_with_retries(
-            model="gpt-3.5-turbo",
-            messages=[{"gm": "vibe", "role": "user"}],
-            num_retries=3,
-            original_function=timeout_fnc,
-        )
+        with pytest.raises(litellm.Timeout):
+            await acompletion_with_retries(
+                model="gpt-3.5-turbo",
+                messages=[{"gm": "vibe", "role": "user"}],
+                num_retries=3,
+                original_function=timeout_fnc,
+            )
     
     assert mock_completion.call_count == 3
     
