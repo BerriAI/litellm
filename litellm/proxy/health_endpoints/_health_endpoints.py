@@ -19,7 +19,11 @@ from litellm.proxy._types import (
     WebhookEvent,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.health_check import perform_health_check
+from litellm.proxy.health_check import (
+    _clean_endpoint_data,
+    perform_health_check,
+    run_with_timeout,
+)
 
 #### Health ENDPOINTS ####
 
@@ -600,3 +604,86 @@ async def health_liveliness_options():
         "Access-Control-Allow-Headers": "*",
     }
     return Response(headers=response_headers, status_code=200)
+
+
+@router.post(
+    "/health/test_connection",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def test_model_connection(
+    request: Request,
+    model: str = fastapi.Body(..., description="The model to test connection with"),
+    mode: Optional[
+        Literal[
+            "chat",
+            "completion",
+            "embedding",
+            "audio_speech",
+            "audio_transcription",
+            "image_generation",
+            "batch",
+            "rerank",
+            "realtime",
+        ]
+    ] = fastapi.Body("chat", description="The mode to test the model with"),
+    prompt: Optional[str] = fastapi.Body(None, description="Test prompt for the model"),
+    timeout: Optional[int] = fastapi.Body(
+        30, description="Timeout in seconds for the health check"
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Test a direct connection to a specific model.
+    
+    This endpoint allows you to verify if your proxy can successfully connect to a specific model.
+    It's useful for troubleshooting model connectivity issues without going through the full proxy routing.
+    
+    Example:
+    ```bash
+    curl -X POST 'http://localhost:4000/health/test_connection' \\
+      -H 'Authorization: Bearer sk-1234' \\
+      -H 'Content-Type: application/json' \\
+      -d '{
+        "model": "openai/gpt-3.5-turbo",
+        "mode": "chat",
+        "prompt": "Hello, world!",
+        "timeout": 30
+      }'
+    ```
+    
+    Returns:
+        dict: A dictionary containing the health check result with either success information or error details.
+    """
+    try:
+        # Create basic params for the model
+        model_params = {"model": model}
+
+        # Run the health check with timeout
+        result = await run_with_timeout(
+            litellm.ahealth_check(
+                model_params,
+                mode=mode,
+                prompt=prompt,
+                input=[prompt] if prompt else ["test from litellm"],
+            ),
+            timeout,
+        )
+
+        # Clean the result for display
+        cleaned_result = _clean_endpoint_data({**model_params, **result}, details=True)
+
+        return {
+            "status": "error" if "error" in result else "success",
+            "result": cleaned_result,
+        }
+
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"litellm.proxy.health_endpoints.test_model_connection(): Exception occurred - {str(e)}"
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": f"Failed to test connection: {str(e)}"},
+        )
