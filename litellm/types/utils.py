@@ -18,7 +18,7 @@ from openai.types.moderation import (
     CategoryScores,
 )
 from openai.types.moderation_create_response import Moderation, ModerationCreateResponse
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 import litellm
@@ -2053,7 +2053,22 @@ class RawRequestTypedDict(TypedDict, total=False):
     error: Optional[str]
 
 
-class CredentialItem(BaseModel):
+class CredentialBase(BaseModel):
     credential_name: str
-    credential_values: dict
     credential_info: dict
+
+
+class CredentialItem(CredentialBase):
+    credential_values: dict
+
+
+class CreateCredentialItem(CredentialBase):
+    credential_values: Optional[dict] = None
+    model_id: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def check_credential_params(cls, values):
+        if not values.get("credential_values") and not values.get("model_id"):
+            raise ValueError("Either credential_values or model_id must be set")
+        return values
