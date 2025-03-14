@@ -392,6 +392,9 @@ class BedrockModelInfo(BaseLLMModelInfo):
             return "converse_like"
         elif "converse/" in model:
             return "converse"
-        elif base_model in litellm.bedrock_converse_models:
+        elif (
+            base_model in litellm.bedrock_converse_models
+            or model in litellm.bedrock_converse_models
+        ):
             return "converse"
         return "invoke"
