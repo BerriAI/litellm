@@ -626,8 +626,7 @@ def prepare_metadata_fields(
 
 
 def prepare_key_update_data(
-    data: Union[UpdateKeyRequest, RegenerateKeyRequest], 
-    existing_key_row
+    data: Union[UpdateKeyRequest, RegenerateKeyRequest], existing_key_row
 ):
     data_json: dict = data.model_dump(exclude_unset=True)
     data_json.pop("key", None)
@@ -770,8 +769,7 @@ async def update_key_fn(
             )
 
         non_default_values = prepare_key_update_data(
-            data=data, 
-            existing_key_row=existing_key_row,
+            data=data, existing_key_row=existing_key_row
         )
 
         await _enforce_unique_key_alias(
