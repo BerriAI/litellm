@@ -176,15 +176,19 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   // Build a memoized filters object for the backend call.
 
   // Pass filters into the hook so the API call includes these query parameters.
-  const { keys, isLoading, error, pagination, refresh } = useKeyList({
+  const { keys, isLoading, error, pagination, refresh, setKeys } = useKeyList({
     selectedTeam,
     currentOrg,
     accessToken,
   });
 
-  // Make refresh function available globally so CreateKey can access it
+  // Make both refresh and addKey functions available globally
   if (typeof window !== 'undefined') {
     window.refreshKeysList = refresh;
+    window.addNewKeyToList = (newKey) => {
+      // Add the new key to the keys list without making an API call
+      setKeys((prevKeys) => [newKey, ...prevKeys]);
+    };
   }
 
   const handlePageChange = (newPage: number) => {
@@ -625,10 +629,11 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   );
 };
 
-// Add this type declaration at the top of the file to avoid TypeScript errors
+// Update the type declaration to include the new function
 declare global {
   interface Window {
     refreshKeysList?: () => void;
+    addNewKeyToList?: (newKey: any) => void;
   }
 }
 
