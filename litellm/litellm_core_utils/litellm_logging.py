@@ -2401,8 +2401,8 @@ def _get_masked_values(
     sensitive_object: dict,
     ignore_sensitive_values: bool = False,
     mask_all_values: bool = False,
-    unmasked_length: int = 44,
-    number_of_asterisks: Optional[int] = None,
+    unmasked_length: int = 4,
+    number_of_asterisks: Optional[int] = 4,
 ) -> dict:
     """
     Internal debugging helper function
