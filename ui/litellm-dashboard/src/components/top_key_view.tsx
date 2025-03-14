@@ -119,7 +119,6 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
 
       {viewMode === 'chart' ? (
         <div className="relative">
-          <div className="mb-2 text-sm text-gray-500 italic">Click on any key to view detailed information</div>
           <BarChart
             className="mt-4 h-40 cursor-pointer hover:opacity-90"
             data={topKeys}

@@ -657,7 +657,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                 </Card>
               </Col>
               <Col numColSpan={1}>
-                <Card>
+                <Card className="h-full">
                   <Title>Top API Keys</Title>
                   <TopKeyView
                     topKeys={topKeys}
@@ -668,7 +668,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                 </Card>
               </Col>
               <Col numColSpan={1}>
-              <Card>
+                <Card className="h-full">
                   <Title>Top Models</Title>
                   <BarChart
                     className="mt-4 h-40"
@@ -683,7 +683,6 @@ const UsagePage: React.FC<UsagePageProps> = ({
                     valueFormatter={(value) => `$${value.toFixed(2)}`}
                   />
                 </Card>
-               
               </Col>
               <Col numColSpan={1}>
                 
