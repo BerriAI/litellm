@@ -24,8 +24,11 @@ const ConnectionErrorDisplay: React.FC<ConnectionErrorDisplayProps> = ({
   const [error, setError] = React.useState<Error | string | null>(null);
   const [rawRequest, setRawRequest] = React.useState<any>(null);
   const [rawResponse, setRawResponse] = React.useState<any>(null);
+  const [isLoading, setIsLoading] = React.useState<boolean>(true);
+  const [isSuccess, setIsSuccess] = React.useState<boolean>(false);
 
   const testModelConnection = async () => {
+    setIsLoading(true);
     try {
       const result = await prepareModelAddRequest(formValues, accessToken, null);
       if (!result) throw new Error("Failed to prepare model data");
@@ -37,15 +40,20 @@ const ConnectionErrorDisplay: React.FC<ConnectionErrorDisplayProps> = ({
       if (response.status === "success") {
         message.success("Connection test successful!");
         setError(null);
+        setIsSuccess(true);
       } else {
         const errorMessage = response.result?.error || response.message || "Unknown error";
         setError(errorMessage);
         setRawRequest(requestBody);
         setRawResponse(response.result?.raw_request_typed_dict);
+        setIsSuccess(false);
       }
     } catch (error) {
       console.error("Test connection error:", error);
       setError(error instanceof Error ? error.message : String(error));
+      setIsSuccess(false);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -81,28 +89,42 @@ ${formattedBody}
 
   return (
     <div style={{ padding: '16px 24px' }}>
-      <Divider style={{ margin: '16px 0' }} />
-      {error && (
-        <div>
-          <Text type="danger">{errorMessage}</Text>
-          <Divider style={{ margin: '16px 0' }} />
-          <div>
-            <h3>Raw Request</h3>
-            <pre style={{ backgroundColor: '#f5f5f5', padding: '16px', borderRadius: '6px' }}>
-              {curlCommand || "No request data"}
-            </pre>
-            <Button 
-              type="text" 
-              icon={<CopyOutlined />} 
-              onClick={() => {
-                navigator.clipboard.writeText(curlCommand || '');
-                message.success('Copied to clipboard');
-              }}
-            >
-              Copy to Clipboard
-            </Button>
-          </div>
+      {isLoading ? (
+        <div style={{ textAlign: 'center', padding: '20px' }}>
+          <div>Testing connection to {modelName}...</div>
+          {/* You could add a spinner here */}
         </div>
+      ) : isSuccess ? (
+        <div style={{ textAlign: 'center', padding: '20px' }}>
+          <Text type="success" style={{ fontSize: '16px' }}>
+            Connection to {modelName} successful!
+          </Text>
+        </div>
+      ) : (
+        <>
+          <div>
+            <Text type="danger" style={{ fontSize: '16px' }}>Connection to {modelName} failed</Text>
+            <Divider style={{ margin: '16px 0' }} />
+            <Text type="danger">{errorMessage}</Text>
+            <Divider style={{ margin: '16px 0' }} />
+            <div>
+              <h3>Raw Request</h3>
+              <pre style={{ backgroundColor: '#f5f5f5', padding: '16px', borderRadius: '6px' }}>
+                {curlCommand || "No request data"}
+              </pre>
+              <Button 
+                type="text" 
+                icon={<CopyOutlined />} 
+                onClick={() => {
+                  navigator.clipboard.writeText(curlCommand || '');
+                  message.success('Copied to clipboard');
+                }}
+              >
+                Copy to Clipboard
+              </Button>
+            </div>
+          </div>
+        </>
       )}
       <Divider style={{ margin: '16px 0' }} />
       <div style={{ display: 'flex', justifyContent: 'flex-start' }}>

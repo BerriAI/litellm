@@ -57,13 +57,14 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
 }) => {
   // Add state for test mode and connection error
   const [testMode, setTestMode] = useState<string>("chat");
-  const [isTestModalVisible, setIsTestModalVisible] = useState<boolean>(false);
-  const [connectionError, setConnectionError] = useState<Error | string | null>(null);
+  const [isResultModalVisible, setIsResultModalVisible] = useState<boolean>(false);
+  const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);
 
-  // Show test modal with mode selection
-  const showTestModal = () => {
-    setConnectionError(null);
-    setIsTestModalVisible(true);
+  // Test connection directly when button is clicked
+  const handleTestConnection = async () => {
+    setIsTestingConnection(true);
+    setIsResultModalVisible(true);
+    // The actual testing is handled in ConnectionErrorDisplay component
   };
 
   return (
@@ -135,6 +136,20 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
             
             {/* Conditionally Render "Public Model Name" */}
             <ConditionalPublicModelName  />
+                        
+            {/* Select Mode */}
+            <Form.Item
+              label="Test Mode"
+              name="test_mode"
+              tooltip="Select the mode to test this model with"
+            >
+              <AntdSelect
+                style={{ width: '100%' }}
+                value={testMode}
+                onChange={(value) => setTestMode(value)}
+                options={TEST_MODES}
+              />
+            </Form.Item>
 
             {/* Credentials */}
             <div className="mb-4">
@@ -202,7 +217,6 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
               setShowAdvancedSettings={setShowAdvancedSettings}
               teams={teams}
             />
-            
 
             <div className="flex justify-between items-center mb-4">
               <Tooltip title="Get help on our github">
@@ -211,7 +225,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                 </Typography.Link>
               </Tooltip>
               <div className="space-x-2">
-                <Button onClick={showTestModal}>Test Connect</Button>
+                <Button onClick={handleTestConnection} loading={isTestingConnection}>Test Connect</Button>
                 <Button htmlType="submit">Add Model</Button>
               </div>
             </div>
@@ -219,56 +233,34 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
         </Form>
       </Card>
       
-      {/* Test Connection Modal */}
+      {/* Test Connection Results Modal */}
       <Modal
-        title="Test Model Connection"
-        open={isTestModalVisible}
-        onCancel={() => setIsTestModalVisible(false)}
+        title="Connection Test Results"
+        open={isResultModalVisible}
+        onCancel={() => {
+          setIsResultModalVisible(false);
+          setIsTestingConnection(false);
+        }}
         footer={[
-          <Button key="cancel" onClick={() => setIsTestModalVisible(false)}>
-            Cancel
-          </Button>,
-          <Button 
-            key="test" 
-            type="primary" 
-            onClick={() => setConnectionError("Test connection logic is now in ConnectionErrorDisplay")}
-            loading={false} // You might want to add a loading state
-          >
-            Test Connection
+          <Button key="close" onClick={() => {
+            setIsResultModalVisible(false);
+            setIsTestingConnection(false);
+          }}>
+            Close
           </Button>
         ]}
-        width={connectionError ? 700 : 520}
+        width={700}
       >
-        <div className="mb-4">
-          <Typography.Text>Select the mode to test this model with:</Typography.Text>
-        </div>
-        <AntdSelect
-          style={{ width: '100%' }}
-          value={testMode}
-          onChange={(value) => setTestMode(value)}
-          options={TEST_MODES}
+        <ConnectionErrorDisplay 
+          formValues={form.getFieldsValue()}
+          accessToken={accessToken}
+          testMode={testMode}
+          modelName={form.getFieldValue('model_name') || form.getFieldValue('model')}
+          onClose={() => {
+            setIsResultModalVisible(false);
+            setIsTestingConnection(false);
+          }}
         />
-        <div className="mt-4">
-          <Typography.Text type="secondary">
-            Different models support different modes. Choose the appropriate mode for your model.
-          </Typography.Text>
-        </div>
-        
-        {/* Render the ConnectionErrorDisplay when there's an error */}
-        {connectionError && (
-          <div className="mt-4">
-            <Typography.Title level={5} type="danger">Connection Test Failed</Typography.Title>
-            <div className="border border-red-300 rounded-md overflow-hidden">
-              <ConnectionErrorDisplay 
-                formValues={form.getFieldsValue()}
-                accessToken={accessToken}
-                testMode={testMode}
-                modelName={form.getFieldValue('model_name') || form.getFieldValue('model')}
-                onClose={() => setIsTestModalVisible(false)}
-              />
-            </div>
-          </div>
-        )}
       </Modal>
     </>
   );
