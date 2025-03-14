@@ -100,19 +100,19 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
 
   return (
     <>
-      <div className="mb-4 flex justify-between items-center">
+      <div className="mb-4 flex justify-end items-center">
         <div className="flex space-x-2">
+        <button
+            onClick={() => setViewMode('table')}
+            className={`px-3 py-1 text-sm rounded-md ${viewMode === 'table' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-700'}`}
+          >
+            Table View
+          </button>
           <button
             onClick={() => setViewMode('chart')}
             className={`px-3 py-1 text-sm rounded-md ${viewMode === 'chart' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-700'}`}
           >
             Chart View
-          </button>
-          <button
-            onClick={() => setViewMode('table')}
-            className={`px-3 py-1 text-sm rounded-md ${viewMode === 'table' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-700'}`}
-          >
-            Table View
           </button>
         </div>
       </div>
