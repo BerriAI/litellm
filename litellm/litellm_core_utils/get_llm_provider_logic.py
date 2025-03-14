@@ -553,6 +553,17 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or get_secret_str("TOGETHERAI_API_KEY")
             or get_secret_str("TOGETHER_AI_TOKEN")
         )
+    elif custom_llm_provider == "netmind":
+        api_base = (
+            api_base
+            or get_secret_str("NETMIND_API_BASE")
+            or "https://api.netmind.ai/inference-api/openai/v1"
+        )
+        dynamic_api_key = api_key or (
+            get_secret_str("NETMIND_API_KEY")
+            or get_secret_str("NETMIND_TOKEN")
+        )
+
     elif custom_llm_provider == "friendliai":
         api_base = (
             api_base
