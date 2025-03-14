@@ -15,7 +15,7 @@ import asyncio
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, List, Optional, Union
+from typing import Any, List, Optional, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -743,7 +743,7 @@ async def user_update(
                 **existing_user_row.model_dump(exclude_none=True)
             )
 
-        existing_metadata = existing_user_row.metadata if existing_user_row else {}
+        existing_metadata = cast(Dict, getattr(existing_user_row, "metadata", {}) or {})
 
         non_default_values = prepare_metadata_fields(
             data=data,
