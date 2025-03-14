@@ -9,7 +9,8 @@ import AdvancedSettings from "./advanced_settings";
 import { Providers, providerLogoMap, getPlaceholder } from "../provider_info_helpers";
 import type { Team } from "../key_team_helpers/key_list";
 import { CredentialItem } from "../networking";
-import { testModelConnection } from "./handle_add_model_submit";
+import { testModelConnection } from "./test_connection_handler";
+import ConnectionErrorDisplay from "./ConnectionErrorDisplay";
 
 interface AddModelTabProps {
   form: FormInstance;
@@ -55,19 +56,34 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
   credentials,
   accessToken,
 }) => {
-  // Add state for test mode
+  // Add state for test mode and connection error
   const [testMode, setTestMode] = useState<string>("chat");
   const [isTestModalVisible, setIsTestModalVisible] = useState<boolean>(false);
+  const [connectionError, setConnectionError] = useState<Error | string | null>(null);
 
   // Add a function to handle test connection
   const handleTestConnection = async () => {
-    const formValues = form.getFieldsValue();
-    await testModelConnection(formValues, accessToken, testMode);
-    setIsTestModalVisible(false);
+    // Clear any previous errors
+    setConnectionError(null);
+    
+    try {
+      const formValues = form.getFieldsValue();
+      
+      // Call the existing testModelConnection function
+      const result = await testModelConnection(formValues, accessToken, testMode, setConnectionError);
+      
+      // Only close the modal on success
+      if (result && result.status === "success") {
+        setIsTestModalVisible(false);
+      }
+    } catch (error) {
+      console.error("Test connection failed:", error);
+    }
   };
 
   // Show test modal with mode selection
   const showTestModal = () => {
+    setConnectionError(null);
     setIsTestModalVisible(true);
   };
 
@@ -233,10 +249,16 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
           <Button key="cancel" onClick={() => setIsTestModalVisible(false)}>
             Cancel
           </Button>,
-          <Button key="test" type="primary" onClick={handleTestConnection}>
+          <Button 
+            key="test" 
+            type="primary" 
+            onClick={handleTestConnection}
+            loading={false} // You might want to add a loading state
+          >
             Test Connection
           </Button>
         ]}
+        width={connectionError ? 700 : 520}
       >
         <div className="mb-4">
           <Typography.Text>Select the mode to test this model with:</Typography.Text>
@@ -252,6 +274,19 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
             Different models support different modes. Choose the appropriate mode for your model.
           </Typography.Text>
         </div>
+        
+        {/* Render the ConnectionErrorDisplay when there's an error */}
+        {connectionError && (
+          <div className="mt-4">
+            <Typography.Title level={5} type="danger">Connection Test Failed</Typography.Title>
+            <div className="border border-red-300 rounded-md overflow-hidden">
+              <ConnectionErrorDisplay 
+                error={connectionError} 
+                modelName={form.getFieldValue('model_name') || form.getFieldValue('model')} 
+              />
+            </div>
+          </div>
+        )}
       </Modal>
     </>
   );
