@@ -39,6 +39,7 @@ import {
   getProxyUISettings
 } from "./networking";
 import { start } from "repl";
+import TopKeyView from "./top_key_view";
 console.log("process.env.NODE_ENV", process.env.NODE_ENV);
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
@@ -656,18 +657,11 @@ const UsagePage: React.FC<UsagePageProps> = ({
               <Col numColSpan={1}>
                 <Card>
                   <Title>Top API Keys</Title>
-                  <BarChart
-                    className="mt-4 h-40"
-                    data={topKeys}
-                    index="key"
-                    categories={["spend"]}
-                    colors={["cyan"]}
-                    yAxisWidth={80}
-                    tickGap={5}
-                    layout="vertical"
-                    showXAxis={false}
-                    showLegend={false}
-                    valueFormatter={(value) => `$${value.toFixed(2)}`}
+                  <TopKeyView
+                    topKeys={topKeys}
+                    accessToken={accessToken}
+                    userID={userID}
+                    userRole={userRole}
                   />
                 </Card>
               </Col>
