@@ -121,11 +121,11 @@ def extract_and_raise_litellm_exception(
 
 
 def exception_type(  # type: ignore  # noqa: PLR0915
-    model: Optional[str],
+    model,
     original_exception,
-    custom_llm_provider: Optional[str] = None,
-    completion_kwargs: Optional[dict] = {},
-    extra_kwargs: Optional[dict] = {},
+    custom_llm_provider,
+    completion_kwargs={},
+    extra_kwargs={},
 ):
     """Maps an LLM Provider Exception to OpenAI Exception Format"""
     if any(
