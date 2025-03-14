@@ -6,7 +6,7 @@ export const testModelConnection = async (
   formValues: Record<string, any>,
   accessToken: string,
   testMode: string,
-  setConnectionError?: (error: Error | string | null) => void
+  setConnectionError?: (error: Error | string | null, rawRequest?: any, rawResponse?: any) => void
 ) => {
   try {
     // Prepare the model data using the existing function
@@ -20,30 +20,30 @@ export const testModelConnection = async (
     
     // Create the request body for the test connection
     const requestBody = {
-      ...litellmParamsObj,  // Unfurl the parameters directly
+      ...litellmParamsObj,
       mode: testMode
     };
     
+    console.log("Request Body:", requestBody); // Debugging log
+
     // Call the test connection endpoint
     const response = await testConnectionRequest(accessToken, requestBody);
     
+    console.log("Response:", response); // Debugging log
+
     if (response.status === "success") {
       message.success("Connection test successful!");
-      // Clear any previous error when successful
       if (setConnectionError) {
         setConnectionError(null);
       }
     } else {
-      // Extract the detailed error message from the response
       let errorMessage = response.message || "Unknown error";
-      
-      // Check if there's a more detailed error in the result
       if (response.result && response.result.error) {
         errorMessage = response.result.error;
       }
       
       if (setConnectionError) {
-        setConnectionError(errorMessage);
+        setConnectionError(errorMessage, requestBody, response.result.raw_request_typed_dict);
       } else {
         message.error("Connection test failed: " + errorMessage);
       }
@@ -53,9 +53,8 @@ export const testModelConnection = async (
   } catch (error) {
     console.error("Test connection error:", error);
     
-    // Set the error for ConnectionErrorDisplay
     if (setConnectionError) {
-      setConnectionError(error);
+      setConnectionError(error, requestBody, null);
     } else {
       message.error("Test connection failed: " + error, 10);
     }
