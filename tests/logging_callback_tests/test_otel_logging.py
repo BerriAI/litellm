@@ -1,8 +1,5 @@
-import json
 import os
 import sys
-from datetime import datetime
-from unittest.mock import AsyncMock
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -10,7 +7,7 @@ sys.path.insert(
 
 import pytest
 import litellm
-from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig, Span
+from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 import asyncio
 import logging
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -86,6 +83,10 @@ def validate_litellm_request(span):
         "llm.usage.total_tokens",
         "gen_ai.usage.completion_tokens",
         "gen_ai.usage.prompt_tokens",
+        "gen_ai.prompt.0.role",
+        "gen_ai.prompt.0.content",
+        "gen_ai.completion.0.role",
+        "gen_ai.completion.0.content",
     ]
 
     # get the str of all the span attributes
