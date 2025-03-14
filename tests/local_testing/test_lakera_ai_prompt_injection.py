@@ -55,6 +55,7 @@ def make_config_map(config: dict):
     ),
 )
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="lakera deprecated their v1 endpoint.")
 async def test_lakera_prompt_injection_detection():
     """
     Tests to see OpenAI Moderation raises an error for a flagged response
@@ -121,6 +122,7 @@ async def test_lakera_prompt_injection_detection():
     ),
 )
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="lakera deprecated their v1 endpoint.")
 async def test_lakera_safe_prompt():
     """
     Nothing should get raised here
@@ -146,6 +148,7 @@ async def test_lakera_safe_prompt():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="lakera deprecated their v1 endpoint.")
 async def test_moderations_on_embeddings():
     try:
         temp_router = litellm.Router(
@@ -208,6 +211,7 @@ async def test_moderations_on_embeddings():
         }
     ),
 )
+@pytest.mark.skip(reason="lakera deprecated their v1 endpoint.")
 async def test_messages_for_disabled_role(spy_post):
     moderation = lakeraAI_Moderation()
     data = {
@@ -246,6 +250,7 @@ async def test_messages_for_disabled_role(spy_post):
     ),
 )
 @patch("litellm.add_function_to_prompt", False)
+@pytest.mark.skip(reason="lakera deprecated their v1 endpoint.")
 async def test_system_message_with_function_input(spy_post):
     moderation = lakeraAI_Moderation()
     data = {
@@ -290,6 +295,7 @@ async def test_system_message_with_function_input(spy_post):
     ),
 )
 @patch("litellm.add_function_to_prompt", False)
+@pytest.mark.skip(reason="lakera deprecated their v1 endpoint.")
 async def test_multi_message_with_function_input(spy_post):
     moderation = lakeraAI_Moderation()
     data = {
@@ -337,6 +343,7 @@ async def test_multi_message_with_function_input(spy_post):
         }
     ),
 )
+@pytest.mark.skip(reason="lakera deprecated their v1 endpoint.")
 async def test_message_ordering(spy_post):
     moderation = lakeraAI_Moderation()
     data = {
@@ -363,6 +370,7 @@ async def test_message_ordering(spy_post):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="lakera deprecated their v1 endpoint.")
 async def test_callback_specific_param_run_pre_call_check_lakera():
     from typing import Dict, List, Optional, Union
 
@@ -409,6 +417,7 @@ async def test_callback_specific_param_run_pre_call_check_lakera():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="lakera deprecated their v1 endpoint.")
 async def test_callback_specific_thresholds():
     from typing import Dict, List, Optional, Union
 
