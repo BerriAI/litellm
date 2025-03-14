@@ -94,9 +94,7 @@ async def route_request(
             )
 
         elif data["model"] not in router_model_names:
-            if llm_router.router_general_settings.pass_through_all_models:
-                return getattr(litellm, f"{route_type}")(**data)
-            elif (
+            if (
                 llm_router.default_deployment is not None
                 or len(llm_router.pattern_router.patterns) > 0
             ):
@@ -104,6 +102,8 @@ async def route_request(
             elif route_type == "amoderation":
                 # moderation endpoint does not require `model` parameter
                 return getattr(llm_router, f"{route_type}")(**data)
+            else:
+                return getattr(litellm, f"{route_type}")(**data)
 
     elif user_model is not None:
         return getattr(litellm, f"{route_type}")(**data)
