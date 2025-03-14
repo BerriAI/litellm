@@ -5457,18 +5457,18 @@ async def model_info_v2(
     """
     global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
 
-    if llm_model_list is None or not isinstance(llm_model_list, list):
+    if llm_router is None:
         raise HTTPException(
             status_code=500,
             detail={
-                "error": f"No model list passed, models={llm_model_list}. You can add a model through the config.yaml or on the LiteLLM Admin UI."
+                "error": f"No model list passed, models router={llm_router}. You can add a model through the config.yaml or on the LiteLLM Admin UI."
             },
         )
 
     # Load existing config
     await proxy_config.get_config()
+    all_models = copy.deepcopy(llm_router.model_list)
 
-    all_models = copy.deepcopy(llm_model_list)
     if user_model is not None:
         # if user does not use a config.yaml, https://github.com/BerriAI/litellm/issues/2061
         all_models += [user_model]
