@@ -664,6 +664,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                     accessToken={accessToken}
                     userID={userID}
                     userRole={userRole}
+                    teams={null}
                   />
                 </Card>
               </Col>
