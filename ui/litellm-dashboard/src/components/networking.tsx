@@ -2698,7 +2698,7 @@ export const credentialUpdateCall = async (
 
     const url = proxyBaseUrl ? `${proxyBaseUrl}/credentials/${credentialName}` : `/credentials/${credentialName}`;
     const response = await fetch(url, {
-      method: "PUT",
+      method: "PATCH",
       headers: {
         [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
