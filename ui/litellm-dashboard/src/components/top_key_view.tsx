@@ -43,6 +43,25 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
     setKeyData(undefined);
   };
 
+  // Handle clicking outside the modal
+  const handleOutsideClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget) {
+      handleClose();
+    }
+  };
+
+  // Handle escape key
+  React.useEffect(() => {
+    const handleEscapeKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isModalOpen) {
+        handleClose();
+      }
+    };
+
+    document.addEventListener('keydown', handleEscapeKey);
+    return () => document.removeEventListener('keydown', handleEscapeKey);
+  }, [isModalOpen]);
+
   return (
     <>
       <BarChart
@@ -61,17 +80,34 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
       />
 
       {isModalOpen && selectedKey && keyData && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-11/12 max-w-6xl max-h-[90vh] overflow-y-auto">
-            <KeyInfoView
-              keyId={selectedKey}
-              onClose={handleClose}
-              keyData={keyData}
-              accessToken={accessToken}
-              userID={userID}
-              userRole={userRole}
-              teams={teams}
-            />
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+          onClick={handleOutsideClick}
+        >
+          <div className="bg-white rounded-lg shadow-xl relative w-11/12 max-w-6xl max-h-[90vh] overflow-y-auto">
+            {/* Close button */}
+            <button
+              onClick={handleClose}
+              className="absolute top-4 right-4 text-gray-500 hover:text-gray-700 focus:outline-none"
+              aria-label="Close"
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+
+            {/* Content */}
+            <div className="p-6">
+              <KeyInfoView
+                keyId={selectedKey}
+                onClose={handleClose}
+                keyData={keyData}
+                accessToken={accessToken}
+                userID={userID}
+                userRole={userRole}
+                teams={teams}
+              />
+            </div>
           </div>
         </div>
       )}
