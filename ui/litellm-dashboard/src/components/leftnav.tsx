@@ -69,7 +69,6 @@ const menuItems: MenuItem[] = [
       { key: "10", page: "budgets", label: "Budgets", icon: <BankOutlined />, roles: all_admin_roles },
       { key: "11", page: "guardrails", label: "Guardrails", icon: <SafetyOutlined />, roles: all_admin_roles },
       { key: "18", page: "transform-request", label: "Playground", icon: <ThunderboltOutlined />, roles: all_admin_roles },
-      { key: "19", page: "credentials", label: "Credentials", icon: <LockOutlined />, roles: all_admin_roles },
     ]
   },
   {
