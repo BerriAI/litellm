@@ -3,6 +3,9 @@ import { BarChart } from "@tremor/react";
 import KeyInfoView from "./key_info_view";
 import { keyInfoV1Call } from "./networking";
 import { transformKeyInfo } from "../components/key_team_helpers/transform_key_info";
+import { DataTable } from "./view_logs/table";
+import { Tooltip } from "antd";
+import { Button } from "@tremor/react";
 
 interface TopKeyViewProps {
   topKeys: any[];
@@ -22,6 +25,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [keyData, setKeyData] = useState<any | undefined>(undefined);
+  const [viewMode, setViewMode] = useState<'chart' | 'table'>('table');
 
   const handleKeyClick = async (item: any) => {
     if (!accessToken) return;
@@ -62,22 +66,87 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
     return () => document.removeEventListener('keydown', handleEscapeKey);
   }, [isModalOpen]);
 
+  // Define columns for the table view
+  const columns = [
+    {
+      header: "Key",
+      accessorKey: "api_key",
+      cell: (info: any) => (
+        <div className="overflow-hidden">
+          <Tooltip title={info.getValue() as string}>
+            <Button 
+              size="xs"
+              variant="light"
+              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+              onClick={() => handleKeyClick(info.row.original)}
+            >
+              {info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}
+            </Button>
+          </Tooltip>
+        </div>
+      ),
+    },
+    {
+        header: "Key Alias",
+        accessorKey: "key_alias",
+        cell: (info: any) => info.getValue() || "-",
+      },
+    {
+      header: "Spend (USD)",
+      accessorKey: "spend",
+      cell: (info: any) => `$${Number(info.getValue()).toFixed(2)}`,
+    },
+  ];
+
   return (
     <>
-      <BarChart
-        className="mt-4 h-40 cursor-pointer"
-        data={topKeys}
-        index="key"
-        categories={["spend"]}
-        colors={["cyan"]}
-        yAxisWidth={80}
-        tickGap={5}
-        layout="vertical"
-        showXAxis={false}
-        showLegend={false}
-        valueFormatter={(value) => `$${value.toFixed(2)}`}
-        onValueChange={(item) => handleKeyClick(item)}
-      />
+      <div className="mb-4 flex justify-between items-center">
+        <div className="flex space-x-2">
+          <button
+            onClick={() => setViewMode('chart')}
+            className={`px-3 py-1 text-sm rounded-md ${viewMode === 'chart' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-700'}`}
+          >
+            Chart View
+          </button>
+          <button
+            onClick={() => setViewMode('table')}
+            className={`px-3 py-1 text-sm rounded-md ${viewMode === 'table' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-700'}`}
+          >
+            Table View
+          </button>
+        </div>
+      </div>
+
+      {viewMode === 'chart' ? (
+        <div className="relative">
+          <div className="mb-2 text-sm text-gray-500 italic">Click on any key to view detailed information</div>
+          <BarChart
+            className="mt-4 h-40 cursor-pointer hover:opacity-90"
+            data={topKeys}
+            index="key"
+            categories={["spend"]}
+            colors={["cyan"]}
+            yAxisWidth={80}
+            tickGap={5}
+            layout="vertical"
+            showXAxis={false}
+            showLegend={false}
+            valueFormatter={(value) => `$${value.toFixed(2)}`}
+            onValueChange={(item) => handleKeyClick(item)}
+            showTooltip={true}
+          />
+        </div>
+      ) : (
+        <div className="border rounded-lg overflow-hidden">
+          <DataTable
+            columns={columns}
+            data={topKeys}
+            renderSubComponent={() => <></>}
+            getRowCanExpand={() => false}
+            isLoading={false}
+          />
+        </div>
+      )}
 
       {isModalOpen && selectedKey && keyData && (
         <div 
