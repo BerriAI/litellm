@@ -81,6 +81,9 @@ export const prepareModelAddRequest = async (
           else if (key === "team_id") {
             modelInfoObj["team_id"] = value;
           }
+          else if (key == "mode") {
+            modelInfoObj["mode"] = value;
+          }
           else if (key === "custom_model_name") {
             litellmParamsObj["model"] = value;
           } else if (key == "litellm_extra_params") {
