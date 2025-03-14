@@ -32,6 +32,7 @@ interface ModelInfoViewProps {
   editModel: boolean;
   setEditModalVisible: (visible: boolean) => void;
   setSelectedModel: (model: any) => void;
+  onModelUpdate?: (updatedModel: any) => void;
 }
 
 export default function ModelInfoView({ 
@@ -43,7 +44,8 @@ export default function ModelInfoView({
   userRole,
   editModel,
   setEditModalVisible,
-  setSelectedModel
+  setSelectedModel,
+  onModelUpdate
 }: ModelInfoViewProps) {
   const [form] = Form.useForm();
   const [localModelData, setLocalModelData] = useState(modelData);
@@ -78,17 +80,22 @@ export default function ModelInfoView({
         model_info: {
           id: modelId,
         }
-        
       };
 
       await modelUpdateCall(accessToken, updateData);
       
-      setLocalModelData({
+      const updatedModelData = {
         ...localModelData,
         model_name: values.model_name,
         litellm_model_name: values.litellm_model_name,
         litellm_params: updateData.litellm_params
-      });
+      };
+      
+      setLocalModelData(updatedModelData);
+
+      if (onModelUpdate) {
+        onModelUpdate(updatedModelData);
+      }
 
       message.success("Model settings updated successfully");
       setIsDirty(false);
