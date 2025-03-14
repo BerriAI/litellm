@@ -71,19 +71,19 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             model=model, input=input, **response_api_optional_request_params
         )
     
-    def response_api_retrieve_optional_request_params(
+    def transform_responses_api_retrieve_request(
         self, 
-        response_api_optional_request_params: Dict, 
+        response_api_retrieve_optional_request_params: Dict, 
         litellm_params: GenericLiteLLMParams, 
         headers: Dict
     ) -> ResponsesAPIRetrieveParams:
         return ResponsesAPIRetrieveParams(
-             **response_api_optional_request_params
+             **response_api_retrieve_optional_request_params
         )
     
-    def response_api_delete_optional_request_params(
+    def transform_responses_api_delete_request(
         self, 
-        response_api_optional_request_params: Dict, 
+        response_api_delete_optional_request_params: Dict, 
         litellm_params: GenericLiteLLMParams, 
         headers: Dict
     ) -> ResponsesAPIRetrieveParams:

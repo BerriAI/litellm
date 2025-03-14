@@ -314,7 +314,7 @@ def responses_retrieve(
     response = base_llm_http_handler.response_api_retrieve_handler(
         response_id=response_id,
         responses_api_provider_config=responses_api_provider_config,
-        response_api_optional_request_params={},
+        response_api_retrieve_optional_request_params={},
         custom_llm_provider=custom_llm_provider,
         litellm_params=litellm_params,
         logging_obj=litellm_logging_obj,
@@ -381,7 +381,7 @@ def responses_delete(
     response = base_llm_http_handler.response_api_delete_handler(
         response_id=response_id,
         responses_api_provider_config=responses_api_provider_config,
-        response_api_optional_request_params={},
+        response_api_delete_optional_request_params={},
         custom_llm_provider=custom_llm_provider,
         litellm_params=litellm_params,
         logging_obj=litellm_logging_obj,

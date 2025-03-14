@@ -1193,7 +1193,7 @@ class BaseLLMHTTPHandler:
         self,
         response_id: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
-        response_api_optional_request_params: Dict,
+        response_api_retrieve_optional_request_params: Dict,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
@@ -1218,7 +1218,7 @@ class BaseLLMHTTPHandler:
             return self.async_response_api_retrieve_handler(
                 response_id = response_id,
                 responses_api_provider_config=responses_api_provider_config,
-                response_api_optional_request_params=response_api_optional_request_params,
+                response_api_retrieve_optional_request_params=response_api_retrieve_optional_request_params,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params,
                 logging_obj=logging_obj,
@@ -1237,7 +1237,7 @@ class BaseLLMHTTPHandler:
 
         headers = responses_api_provider_config.validate_environment(
             api_key=litellm_params.api_key,
-            headers=response_api_optional_request_params.get("extra_headers", {}) or {},
+            headers=response_api_retrieve_optional_request_params.get("extra_headers", {}) or {},
             model= None,
         )
 
@@ -1249,8 +1249,8 @@ class BaseLLMHTTPHandler:
             response_id = response_id
         )
 
-        data = responses_api_provider_config.response_api_retrieve_optional_request_params(
-            response_api_optional_request_params=response_api_optional_request_params,
+        data = responses_api_provider_config.transform_responses_api_retrieve_request(
+            response_api_retrieve_optional_request_params=response_api_retrieve_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -1286,7 +1286,7 @@ class BaseLLMHTTPHandler:
         self,
         response_id: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
-        response_api_optional_request_params: Dict,
+        response_api_retrieve_optional_request_params: Dict,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
@@ -1310,7 +1310,7 @@ class BaseLLMHTTPHandler:
 
         headers = responses_api_provider_config.validate_environment(
             api_key=litellm_params.api_key,
-            headers=response_api_optional_request_params.get("extra_headers", {}) or {},
+            headers=response_api_retrieve_optional_request_params.get("extra_headers", {}) or {},
             model= None,
         )
 
@@ -1323,8 +1323,8 @@ class BaseLLMHTTPHandler:
         )
 
         # Is this necessary? Perhaps for get,
-        data = responses_api_provider_config.response_api_retrieve_optional_request_params(
-            response_api_optional_request_params=response_api_optional_request_params,
+        data = responses_api_provider_config.transform_responses_api_retrieve_request(
+            response_api_retrieve_optional_request_params=response_api_retrieve_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -1362,7 +1362,7 @@ class BaseLLMHTTPHandler:
         self,
         response_id: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
-        response_api_optional_request_params: Dict,
+        response_api_delete_optional_request_params: Dict,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
@@ -1387,7 +1387,7 @@ class BaseLLMHTTPHandler:
             return self.async_response_api_delete_handler(
                 response_id = response_id,
                 responses_api_provider_config=responses_api_provider_config,
-                response_api_optional_request_params=response_api_optional_request_params,
+                response_api_delete_optional_request_params=response_api_delete_optional_request_params,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params,
                 logging_obj=logging_obj,
@@ -1406,7 +1406,7 @@ class BaseLLMHTTPHandler:
 
         headers = responses_api_provider_config.validate_environment(
             api_key=litellm_params.api_key,
-            headers=response_api_optional_request_params.get("extra_headers", {}) or {},
+            headers=response_api_delete_optional_request_params.get("extra_headers", {}) or {},
             model= None,
         )
 
@@ -1418,8 +1418,8 @@ class BaseLLMHTTPHandler:
             response_id= response_id
         )
 
-        data = responses_api_provider_config.response_api_delete_optional_request_params(
-            response_api_optional_request_params=response_api_optional_request_params,
+        data = responses_api_provider_config.transform_responses_api_delete_request(
+            response_api_delete_optional_request_params=response_api_delete_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -1455,7 +1455,7 @@ class BaseLLMHTTPHandler:
         self,
         response_id: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
-        response_api_optional_request_params: Dict,
+        response_api_delete_optional_request_params: Dict,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
@@ -1479,7 +1479,7 @@ class BaseLLMHTTPHandler:
 
         headers = responses_api_provider_config.validate_environment(
             api_key=litellm_params.api_key,
-            headers=response_api_optional_request_params.get("extra_headers", {}) or {},
+            headers=response_api_delete_optional_request_params.get("extra_headers", {}) or {},
             model= None,
         )
 
@@ -1491,8 +1491,8 @@ class BaseLLMHTTPHandler:
             response_id = response_id
         )
 
-        data = responses_api_provider_config.response_api_delete_optional_request_params(
-            response_api_optional_request_params=response_api_optional_request_params,
+        data = responses_api_provider_config.transform_responses_api_delete_request(
+            response_api_delete_optional_request_params=response_api_delete_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
         )

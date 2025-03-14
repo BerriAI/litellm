@@ -104,20 +104,20 @@ class BaseResponsesAPIConfig(ABC):
         pass
 
     @abstractmethod
-    def response_api_retrieve_optional_request_params(
+    def transform_responses_api_retrieve_request(
         self,
         id: str,
-        response_api_optional_request_params: Dict,
+        response_api_retrieve_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     )-> ResponsesAPIRetrieveParams:
         pass
 
     @abstractmethod
-    def response_api_delete_optional_request_params(
+    def transform_responses_api_delete_request(
         self,
         id: str,
-        response_api_optional_request_params: Dict,
+        response_api_delete_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     )-> ResponsesAPIDeleteParams:
