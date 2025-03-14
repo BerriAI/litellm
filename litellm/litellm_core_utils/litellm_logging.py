@@ -39,11 +39,14 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
 )
+from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import (
     AllMessageValues,
     Batch,
     FineTuningJob,
     HttpxBinaryResponseContent,
+    ResponseCompletedEvent,
+    ResponsesAPIResponse,
 )
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
@@ -851,6 +854,8 @@ class Logging(LiteLLMLoggingBaseClass):
             RerankResponse,
             Batch,
             FineTuningJob,
+            ResponsesAPIResponse,
+            ResponseCompletedEvent,
         ],
         cache_hit: Optional[bool] = None,
     ) -> Optional[float]:
@@ -1000,7 +1005,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 standard_logging_object is None
                 and result is not None
                 and self.stream is not True
-            ):  # handle streaming separately
+            ):
                 if (
                     isinstance(result, ModelResponse)
                     or isinstance(result, ModelResponseStream)
@@ -1012,6 +1017,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     or isinstance(result, RerankResponse)
                     or isinstance(result, FineTuningJob)
                     or isinstance(result, LiteLLMBatch)
+                    or isinstance(result, ResponsesAPIResponse)
                 ):
                     ## HIDDEN PARAMS ##
                     hidden_params = getattr(result, "_hidden_params", {})
@@ -1111,7 +1117,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response: Optional[
-                Union[ModelResponse, TextCompletionResponse]
+                Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse]
             ] = None
             if "complete_streaming_response" in self.model_call_details:
                 return  # break out of this.
@@ -1633,7 +1639,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if "async_complete_streaming_response" in self.model_call_details:
             return  # break out of this.
         complete_streaming_response: Optional[
-            Union[ModelResponse, TextCompletionResponse]
+            Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse]
         ] = self._get_assembled_streaming_response(
             result=result,
             start_time=start_time,
@@ -2343,16 +2349,24 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _get_assembled_streaming_response(
         self,
-        result: Union[ModelResponse, TextCompletionResponse, ModelResponseStream, Any],
+        result: Union[
+            ModelResponse,
+            TextCompletionResponse,
+            ModelResponseStream,
+            ResponseCompletedEvent,
+            Any,
+        ],
         start_time: datetime.datetime,
         end_time: datetime.datetime,
         is_async: bool,
         streaming_chunks: List[Any],
-    ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
+    ) -> Optional[Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse]]:
         if isinstance(result, ModelResponse):
             return result
         elif isinstance(result, TextCompletionResponse):
             return result
+        elif isinstance(result, ResponseCompletedEvent):
+            return result.response
         elif isinstance(result, ModelResponseStream):
             complete_streaming_response: Optional[
                 Union[ModelResponse, TextCompletionResponse]
@@ -3111,6 +3125,12 @@ class StandardLoggingPayloadSetup:
         elif isinstance(usage, Usage):
             return usage
         elif isinstance(usage, dict):
+            if ResponseAPILoggingUtils._is_response_api_usage(usage):
+                return (
+                    ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                        usage
+                    )
+                )
             return Usage(**usage)
 
         raise ValueError(f"usage is required, got={usage} of type {type(usage)}")

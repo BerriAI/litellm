@@ -63,9 +63,9 @@ model_list:
   - model_name: bedrock-claude-v1
     litellm_params:
       model: bedrock/anthropic.claude-instant-v1
-      aws_access_key_id: os.environ/CUSTOM_AWS_ACCESS_KEY_ID
-      aws_secret_access_key: os.environ/CUSTOM_AWS_SECRET_ACCESS_KEY
-      aws_region_name: os.environ/CUSTOM_AWS_REGION_NAME
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_region_name: os.environ/AWS_REGION_NAME
 ```
 
 All possible auth params: 
@@ -1792,10 +1792,14 @@ print(response)
 ### Advanced - [Pass model/provider-specific Params](https://docs.litellm.ai/docs/completion/provider_specific_params#proxy-usage)
 
 ## Image Generation
-Use this for stable diffusion on bedrock
+Use this for stable diffusion, and amazon nova canvas on bedrock
 
 
 ### Usage
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 ```python
 import os
 from litellm import image_generation
@@ -1830,6 +1834,41 @@ response = image_generation(
         )
 print(f"response: {response}")
 ```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: amazon.nova-canvas-v1:0
+    litellm_params:
+      model: bedrock/amazon.nova-canvas-v1:0
+      aws_region_name: "us-east-1"
+      aws_secret_access_key: my-key # OPTIONAL - all boto3 auth params supported
+      aws_secret_access_id: my-id # OPTIONAL - all boto3 auth params supported
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/images/generations' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer $LITELLM_VIRTUAL_KEY' \
+-d '{
+    "model": "amazon.nova-canvas-v1:0",
+    "prompt": "A cute baby sea otter"
+}'
+```
+
+</TabItem>
+</Tabs>
 
 ## Supported AWS Bedrock Image Generation Models
 
@@ -1910,6 +1949,8 @@ curl http://0.0.0.0:4000/rerank \
         "Capital punishment has existed in the United States since before it was a country."
     ],
     "top_n": 3
+
+
   }'
 ```
 

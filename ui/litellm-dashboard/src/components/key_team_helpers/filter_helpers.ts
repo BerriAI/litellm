@@ -27,7 +27,7 @@ export const fetchAllKeyAliases = async (accessToken: string | null): Promise<st
       
       // Extract aliases from this page
       const pageAliases = response.keys
-        .map(key => key.key_alias)
+        .map((key: any) => key.key_alias)
         .filter(Boolean) as string[];
       
       allAliases = [...allAliases, ...pageAliases];
@@ -41,7 +41,7 @@ export const fetchAllKeyAliases = async (accessToken: string | null): Promise<st
     }
     
     // Remove duplicates
-    return [...new Set(allAliases)];
+    return Array.from(new Set(allAliases));
   } catch (error) {
     console.error("Error fetching all key aliases:", error);
     return [];
@@ -66,8 +66,7 @@ export const fetchAllTeams = async (accessToken: string | null, organizationId?:
       const response = await teamListCall(
         accessToken,
         organizationId || null,
-        currentPage,
-        100 // larger page size to reduce number of requests
+        null,
       );
       
       // Add teams from this page
@@ -103,9 +102,7 @@ export const fetchAllOrganizations = async (accessToken: string | null): Promise
     
     while (hasMorePages) {
       const response = await organizationListCall(
-        accessToken,
-        currentPage,
-        100 // larger page size to reduce number of requests
+        accessToken
       );
       
       // Add organizations from this page

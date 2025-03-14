@@ -956,7 +956,7 @@ def test_bedrock_ptu():
 
 
 @pytest.mark.asyncio
-async def test_bedrock_extra_headers():
+async def test_bedrock_custom_api_base():
     """
     Check if a url with 'modelId' passed in, is created correctly
 
@@ -985,6 +985,44 @@ async def test_bedrock_extra_headers():
             mock_client_post.call_args.kwargs["url"]
             == "https://gateway.ai.cloudflare.com/v1/fa4cdcab1f32b95ca3b53fd36043d691/test/aws-bedrock/bedrock-runtime/us-east-1/model/anthropic.claude-3-sonnet-20240229-v1:0/converse"
         )
+        assert "test" in mock_client_post.call_args.kwargs["headers"]
+        assert mock_client_post.call_args.kwargs["headers"]["test"] == "hello world"
+        assert (
+            mock_client_post.call_args.kwargs["headers"]["Authorization"]
+            == "my-test-key"
+        )
+        mock_client_post.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
+    ],
+)
+@pytest.mark.asyncio
+async def test_bedrock_extra_headers(model):
+    """
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/9106
+    """
+    client = AsyncHTTPHandler()
+
+    with patch.object(client, "post", new=AsyncMock()) as mock_client_post:
+        litellm.set_verbose = True
+        from openai.types.chat import ChatCompletion
+
+        try:
+            response = await litellm.acompletion(
+                model=model,
+                messages=[{"role": "user", "content": "What's AWS?"}],
+                client=client,
+                extra_headers={"test": "hello world", "Authorization": "my-test-key"},
+            )
+        except Exception as e:
+            print(f"error: {e}")
+
+        print(f"mock_client_post.call_args.kwargs: {mock_client_post.call_args.kwargs}")
         assert "test" in mock_client_post.call_args.kwargs["headers"]
         assert mock_client_post.call_args.kwargs["headers"]["test"] == "hello world"
         assert (

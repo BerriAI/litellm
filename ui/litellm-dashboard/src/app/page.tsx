@@ -215,6 +215,7 @@ export default function CreateKeyPage() {
               userEmail={userEmail}
               setProxySettings={setProxySettings}
               proxySettings={proxySettings}
+              accessToken={accessToken}
             />
             <div className="flex flex-1 overflow-auto">
               <div className="mt-8">

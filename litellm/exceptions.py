@@ -118,6 +118,7 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
         litellm_debug_info: Optional[str] = None,
         max_retries: Optional[int] = None,
         num_retries: Optional[int] = None,
+        body: Optional[dict] = None,
     ):
         self.status_code = 400
         self.message = "litellm.BadRequestError: {}".format(message)
@@ -133,7 +134,7 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
         self.max_retries = max_retries
         self.num_retries = num_retries
         super().__init__(
-            self.message, response=response, body=None
+            self.message, response=response, body=body
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):
