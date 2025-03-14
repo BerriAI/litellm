@@ -194,6 +194,20 @@ def get_secret(  # noqa: PLR0915
         else:
             raise ValueError("Unsupported OIDC provider")
 
+    # Example: file//home/user/keys/azure file/~/.apikey_azure
+    if secret_name.startswith("file/"):
+        file_path = secret_name.replace("file/", "", 1)
+        file_path = os.path.expanduser(file_path)  # Handle ~ expansion
+        try:
+            with open(file_path, "r") as f:
+                return f.read().strip()  # Remove any trailing newlines
+        except FileNotFoundError:
+            raise ValueError(f"Secret file not found at path: {file_path}")
+        except PermissionError as pe:
+            raise PermissionError(f"Permission denied accessing file: {file_path}") from pe
+        except Exception as e:
+            raise ValueError(f"Error reading secret file: {str(e)}")
+
     try:
         if (
             _should_read_secret_from_secret_manager()

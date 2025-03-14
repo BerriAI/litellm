@@ -448,6 +448,19 @@ model_list:
 
 s/o to [@David Manouchehri](https://www.linkedin.com/in/davidmanouchehri/) for helping with this. 
 
+### Load API Keys / config values from Files
+
+If you need to load secrets from files, you can use the `file/` prefix followed by the file path. This works for any value in the config.yaml that accepts an os.environ environment variable reference.
+
+```yaml 
+model_list:
+  - model_name: azure-model
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_key: file//path/to/secret/file # 👈 Read from file.  Notice the double / to start from root.  That is read as 'file /' + '/path/to/secret/file'
+      api_base: file/~/.azure_api_base # 👈 Supports tilde expansion for home directory
+```
+
 ### Load API Keys from Secret Managers (Azure Vault, etc)
 
 [**Using Secret Managers with LiteLLM Proxy**](../secret)
