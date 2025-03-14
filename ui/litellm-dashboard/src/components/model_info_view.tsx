@@ -14,13 +14,15 @@ import {
   TextInput,
   NumberInput,
 } from "@tremor/react";
-import { ArrowLeftIcon, TrashIcon } from "@heroicons/react/outline";
-import { modelDeleteCall, modelUpdateCall } from "./networking";
-import { Button, Form, Input, InputNumber, message, Select } from "antd";
+import { ArrowLeftIcon, TrashIcon, KeyIcon } from "@heroicons/react/outline";
+import { modelDeleteCall, modelUpdateCall, CredentialItem, credentialGetCall, credentialCreateCall } from "./networking";
+import { Button, Form, Input, InputNumber, message, Select, Modal } from "antd";
 import EditModelModal from "./edit_model/edit_model_modal";
 import { handleEditModelSubmit } from "./edit_model/edit_model_modal";
 import { getProviderLogoAndName } from "./provider_info_helpers";
 import { getDisplayModelName } from "./view_model/model_name_display";
+import AddCredentialsModal from "./model_add/add_credentials_tab";
+import ReuseCredentialsModal from "./model_add/reuse_credentials";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -48,11 +50,51 @@ export default function ModelInfoView({
   const [form] = Form.useForm();
   const [localModelData, setLocalModelData] = useState(modelData);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isCredentialModalOpen, setIsCredentialModalOpen] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [existingCredential, setExistingCredential] = useState<CredentialItem | null>(null);
 
   const canEditModel = userRole === "Admin";
+  const isAdmin = userRole === "Admin";
+
+  const usingExistingCredential = modelData.litellm_params?.litellm_credential_name != null && modelData.litellm_params?.litellm_credential_name != undefined;
+  console.log("usingExistingCredential, ", usingExistingCredential);
+  console.log("modelData.litellm_params.litellm_credential_name, ", modelData.litellm_params.litellm_credential_name);
+  
+
+  useEffect(() => {
+    const getExistingCredential = async () => {
+      console.log("accessToken, ", accessToken);
+      if (!accessToken) return;
+      if (usingExistingCredential) return;
+      let existingCredentialResponse = await credentialGetCall(accessToken, null, modelId);
+      console.log("existingCredentialResponse, ", existingCredentialResponse);
+      setExistingCredential({
+        credential_name: existingCredentialResponse["credential_name"],
+        credential_values: existingCredentialResponse["credential_values"], 
+        credential_info: existingCredentialResponse["credential_info"]
+      });
+    }
+    getExistingCredential();
+  }, [accessToken, modelId]);
+
+  const handleReuseCredential = async (values: any) => {
+    console.log("values, ", values);
+    if (!accessToken) return;
+    let credentialItem = {
+      credential_name: values.credential_name,
+      model_id: modelId,
+      credential_info: {
+        "custom_llm_provider": localModelData.litellm_params?.custom_llm_provider,
+      }
+    }
+    message.info("Storing credential..");
+    let credentialResponse = await credentialCreateCall(accessToken, credentialItem);
+    console.log("credentialResponse, ", credentialResponse);
+    message.success("Credential stored successfully");
+  }
 
   const handleModelUpdate = async (values: any) => {
     try {
@@ -143,8 +185,16 @@ export default function ModelInfoView({
           <Title>Public Model Name: {getDisplayModelName(modelData)}</Title>
           <Text className="text-gray-500 font-mono">{modelData.model_info.id}</Text>
         </div>
-        {canEditModel && (
+        {isAdmin && (
           <div className="flex gap-2">
+            <TremorButton
+              icon={KeyIcon}
+              variant="secondary"
+              onClick={() => setIsCredentialModalOpen(true)}
+              className="flex items-center"
+            >
+              Re-use Credentials
+            </TremorButton>
             <TremorButton
               icon={TrashIcon}
               variant="secondary"
@@ -506,6 +556,25 @@ export default function ModelInfoView({
             </div>
           </div>
         </div>
+      )}
+
+      {isCredentialModalOpen && 
+      !usingExistingCredential ? (
+        <ReuseCredentialsModal
+          isVisible={isCredentialModalOpen}
+          onCancel={() => setIsCredentialModalOpen(false)}
+          onAddCredential={handleReuseCredential}
+          existingCredential={existingCredential}
+          setIsCredentialModalOpen={setIsCredentialModalOpen}
+        />
+      ): (
+        <Modal
+          open={isCredentialModalOpen}
+          onCancel={() => setIsCredentialModalOpen(false)}
+          title="Using Existing Credential"
+        >
+          <Text>{modelData.litellm_params.litellm_credential_name}</Text>
+        </Modal>
       )}
     </div>
   );
