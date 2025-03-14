@@ -9,13 +9,14 @@ import TabItem from '@theme/TabItem';
 | Provider Route on LiteLLM | `snowflake/` |
 | Link to Provider Doc | [Snowflake ↗](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-llm-rest-api) |
 | Base URL | [https://{account-id}.snowflakecomputing.com/api/v2/cortex/inference:complete/](https://{account-id}.snowflakecomputing.com/api/v2/cortex/inference:complete) |
-| Supported Operations | `/completions`|
+| Supported OpenAI Endpoints | `/chat/completions`, `/completions` |
 
 
 
 Currently, Snowflake's REST API does not have an endpoint for `snowflake-arctic-embed` embedding models. If you want to use these embedding models with Litellm, you can call them through our Hugging Face provider. 
 
 Find the Arctic Embed models [here](https://huggingface.co/collections/Snowflake/arctic-embed-661fd57d50fab5fc314e4c18) on Hugging Face.
+
 ## Supported OpenAI Parameters
 ```
     "temperature",
