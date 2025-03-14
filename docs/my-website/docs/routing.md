@@ -952,8 +952,8 @@ router_settings:
 ```
 
 Defaults:
-- allowed_fails: 0
-- cooldown_time: 60s 
+- allowed_fails: 3
+- cooldown_time: 5s (`DEFAULT_COOLDOWN_TIME_SECONDS` in constants.py)
 
 **Set Per Model**
 

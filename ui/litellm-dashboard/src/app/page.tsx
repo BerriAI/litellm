@@ -28,6 +28,7 @@ import CacheDashboard from "@/components/cache_dashboard";
 import { setGlobalLitellmHeaderName } from "@/components/networking";
 import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
+import TransformRequestPanel from "@/components/transform_request";
 import { fetchUserModels } from "@/components/create_key_button";
 import { fetchTeams } from "@/components/common_components/fetch_teams";
 import { getUISessionDetails } from "@/utils/cookieUtils";
@@ -205,6 +206,7 @@ export default function CreateKeyPage() {
               userEmail={userEmail}
               setProxySettings={setProxySettings}
               proxySettings={proxySettings}
+              accessToken={accessToken}
             />
             <div className="flex flex-1 overflow-auto">
               <div className="mt-8">
@@ -299,6 +301,8 @@ export default function CreateKeyPage() {
                 <BudgetPanel accessToken={accessToken} />
               ) : page == "guardrails" ? (
                 <GuardrailsPanel accessToken={accessToken} />
+              ) : page == "transform-request" ? (
+                <TransformRequestPanel accessToken={accessToken} />
               ) : page == "general-settings" ? (
                 <GeneralSettings
                   userID={userID}

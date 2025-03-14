@@ -54,7 +54,7 @@ async def test_get_litellm_virtual_key():
 
 
 @pytest.mark.asyncio
-async def test_vertex_proxy_route_api_key_auth():
+async def test_async_vertex_proxy_route_api_key_auth():
     """
     Critical
 
@@ -207,7 +207,7 @@ async def test_get_vertex_credentials_stored():
     router.add_vertex_credentials(
         project_id="test-project",
         location="us-central1",
-        vertex_credentials="test-creds",
+        vertex_credentials='{"credentials": "test-creds"}',
     )
 
     creds = router.get_vertex_credentials(
@@ -215,7 +215,7 @@ async def test_get_vertex_credentials_stored():
     )
     assert creds.vertex_project == "test-project"
     assert creds.vertex_location == "us-central1"
-    assert creds.vertex_credentials == "test-creds"
+    assert creds.vertex_credentials == '{"credentials": "test-creds"}'
 
 
 @pytest.mark.asyncio
@@ -227,18 +227,20 @@ async def test_add_vertex_credentials():
     router.add_vertex_credentials(
         project_id="test-project",
         location="us-central1",
-        vertex_credentials="test-creds",
+        vertex_credentials='{"credentials": "test-creds"}',
     )
 
     assert "test-project-us-central1" in router.deployment_key_to_vertex_credentials
     creds = router.deployment_key_to_vertex_credentials["test-project-us-central1"]
     assert creds.vertex_project == "test-project"
     assert creds.vertex_location == "us-central1"
-    assert creds.vertex_credentials == "test-creds"
+    assert creds.vertex_credentials == '{"credentials": "test-creds"}'
 
     # Test adding with None values
     router.add_vertex_credentials(
-        project_id=None, location=None, vertex_credentials="test-creds"
+        project_id=None,
+        location=None,
+        vertex_credentials='{"credentials": "test-creds"}',
     )
     # Should not add None values
     assert len(router.deployment_key_to_vertex_credentials) == 1

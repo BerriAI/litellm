@@ -44,7 +44,12 @@ import litellm.litellm_core_utils
 import litellm.litellm_core_utils.exception_mapping_utils
 from litellm import get_secret_str
 from litellm._logging import verbose_router_logger
-from litellm.caching.caching import DualCache, InMemoryCache, RedisCache
+from litellm.caching.caching import (
+    DualCache,
+    InMemoryCache,
+    RedisCache,
+    RedisClusterCache,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
@@ -66,7 +71,7 @@ from litellm.router_utils.batch_utils import (
     _get_router_metadata_variable_name,
     replace_model_in_jsonl,
 )
-from litellm.router_utils.client_initalization_utils import InitalizeOpenAISDKClient
+from litellm.router_utils.client_initalization_utils import InitalizeCachedClient
 from litellm.router_utils.clientside_credential_handler import (
     get_dynamic_litellm_params,
     is_clientside_credential,
@@ -351,7 +356,7 @@ class Router:
 
             # Add additional key-value pairs from cache_kwargs
             cache_config.update(cache_kwargs)
-            redis_cache = RedisCache(**cache_config)
+            redis_cache = self._create_redis_cache(cache_config)
 
         if cache_responses:
             if litellm.cache is None:
@@ -576,10 +581,7 @@ class Router:
             self._initialize_alerting()
 
         self.initialize_assistants_endpoint()
-
-        self.amoderation = self.factory_function(
-            litellm.amoderation, call_type="moderation"
-        )
+        self.initialize_router_endpoints()
 
     def discard(self):
         """
@@ -608,6 +610,18 @@ class Router:
             litellm.callbacks, self
         )
 
+    @staticmethod
+    def _create_redis_cache(
+        cache_config: Dict[str, Any]
+    ) -> Union[RedisCache, RedisClusterCache]:
+        """
+        Initializes either a RedisCache or RedisClusterCache based on the cache_config.
+        """
+        if cache_config.get("startup_nodes"):
+            return RedisClusterCache(**cache_config)
+        else:
+            return RedisCache(**cache_config)
+
     def _update_redis_cache(self, cache: RedisCache):
         """
         Update the redis cache for the router, if none set.
@@ -632,6 +646,18 @@ class Router:
         self.a_add_message = self.factory_function(litellm.a_add_message)
         self.aget_messages = self.factory_function(litellm.aget_messages)
         self.arun_thread = self.factory_function(litellm.arun_thread)
+
+    def initialize_router_endpoints(self):
+        self.amoderation = self.factory_function(
+            litellm.amoderation, call_type="moderation"
+        )
+        self.aanthropic_messages = self.factory_function(
+            litellm.anthropic_messages, call_type="anthropic_messages"
+        )
+        self.aresponses = self.factory_function(
+            litellm.aresponses, call_type="aresponses"
+        )
+        self.responses = self.factory_function(litellm.responses, call_type="responses")
 
     def routing_strategy_init(
         self, routing_strategy: Union[RoutingStrategy, str], routing_strategy_args: dict
@@ -935,6 +961,7 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
+
             _timeout_debug_deployment_dict = deployment
             end_time = time.time()
             _duration = end_time - start_time
@@ -1059,17 +1086,22 @@ class Router:
         kwargs.setdefault("litellm_trace_id", str(uuid.uuid4()))
         kwargs.setdefault("metadata", {}).update({"model_group": model})
 
-    def _update_kwargs_with_default_litellm_params(self, kwargs: dict) -> None:
+    def _update_kwargs_with_default_litellm_params(
+        self, kwargs: dict, metadata_variable_name: Optional[str] = "metadata"
+    ) -> None:
         """
         Adds default litellm params to kwargs, if set.
         """
+        self.default_litellm_params[metadata_variable_name] = (
+            self.default_litellm_params.pop("metadata", {})
+        )
         for k, v in self.default_litellm_params.items():
             if (
                 k not in kwargs and v is not None
             ):  # prioritize model-specific params > default router params
                 kwargs[k] = v
-            elif k == "metadata":
-                kwargs[k].update(v)
+            elif k == metadata_variable_name:
+                kwargs[metadata_variable_name].update(v)
 
     def _handle_clientside_credential(
         self, deployment: dict, kwargs: dict
@@ -1100,7 +1132,12 @@ class Router:
         )  # add new deployment to router
         return deployment_pydantic_obj
 
-    def _update_kwargs_with_deployment(self, deployment: dict, kwargs: dict) -> None:
+    def _update_kwargs_with_deployment(
+        self,
+        deployment: dict,
+        kwargs: dict,
+        function_name: Optional[str] = None,
+    ) -> None:
         """
         2 jobs:
         - Adds selected deployment, model_info and api_base to kwargs["metadata"] (used for logging)
@@ -1117,7 +1154,10 @@ class Router:
             deployment_model_name = deployment_pydantic_obj.litellm_params.model
             deployment_api_base = deployment_pydantic_obj.litellm_params.api_base
 
-        kwargs.setdefault("metadata", {}).update(
+        metadata_variable_name = _get_router_metadata_variable_name(
+            function_name=function_name,
+        )
+        kwargs.setdefault(metadata_variable_name, {}).update(
             {
                 "deployment": deployment_model_name,
                 "model_info": model_info,
@@ -1130,7 +1170,9 @@ class Router:
             kwargs=kwargs, data=deployment["litellm_params"]
         )
 
-        self._update_kwargs_with_default_litellm_params(kwargs=kwargs)
+        self._update_kwargs_with_default_litellm_params(
+            kwargs=kwargs, metadata_variable_name=metadata_variable_name
+        )
 
     def _get_async_openai_model_client(self, deployment: dict, kwargs: dict):
         """
@@ -2349,6 +2391,140 @@ class Router:
                 self.fail_calls[model] += 1
             raise e
 
+    async def _ageneric_api_call_with_fallbacks(
+        self, model: str, original_function: Callable, **kwargs
+    ):
+        """
+        Make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router
+
+        Args:
+            model: The model to use
+            handler_function: The handler function to call (e.g., litellm.anthropic_messages)
+            **kwargs: Additional arguments to pass to the handler function
+
+        Returns:
+            The response from the handler function
+        """
+        handler_name = original_function.__name__
+        try:
+            verbose_router_logger.debug(
+                f"Inside _ageneric_api_call() - handler: {handler_name}, model: {model}; kwargs: {kwargs}"
+            )
+            parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
+            deployment = await self.async_get_available_deployment(
+                model=model,
+                request_kwargs=kwargs,
+                messages=kwargs.get("messages", None),
+                specific_deployment=kwargs.pop("specific_deployment", None),
+            )
+            self._update_kwargs_with_deployment(
+                deployment=deployment, kwargs=kwargs, function_name="generic_api_call"
+            )
+
+            data = deployment["litellm_params"].copy()
+            model_name = data["model"]
+            self.total_calls[model_name] += 1
+
+            response = original_function(
+                **{
+                    **data,
+                    "caching": self.cache_responses,
+                    **kwargs,
+                }
+            )
+
+            rpm_semaphore = self._get_client(
+                deployment=deployment,
+                kwargs=kwargs,
+                client_type="max_parallel_requests",
+            )
+
+            if rpm_semaphore is not None and isinstance(
+                rpm_semaphore, asyncio.Semaphore
+            ):
+                async with rpm_semaphore:
+                    """
+                    - Check rpm limits before making the call
+                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
+                    """
+                    await self.async_routing_strategy_pre_call_checks(
+                        deployment=deployment, parent_otel_span=parent_otel_span
+                    )
+                    response = await response  # type: ignore
+            else:
+                await self.async_routing_strategy_pre_call_checks(
+                    deployment=deployment, parent_otel_span=parent_otel_span
+                )
+                response = await response  # type: ignore
+
+            self.success_calls[model_name] += 1
+            verbose_router_logger.info(
+                f"{handler_name}(model={model_name})\033[32m 200 OK\033[0m"
+            )
+            return response
+        except Exception as e:
+            verbose_router_logger.info(
+                f"{handler_name}(model={model})\033[31m Exception {str(e)}\033[0m"
+            )
+            if model is not None:
+                self.fail_calls[model] += 1
+            raise e
+
+    def _generic_api_call_with_fallbacks(
+        self, model: str, original_function: Callable, **kwargs
+    ):
+        """
+        Make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router
+        Args:
+            model: The model to use
+            original_function: The handler function to call (e.g., litellm.completion)
+            **kwargs: Additional arguments to pass to the handler function
+        Returns:
+            The response from the handler function
+        """
+        handler_name = original_function.__name__
+        try:
+            verbose_router_logger.debug(
+                f"Inside _generic_api_call() - handler: {handler_name}, model: {model}; kwargs: {kwargs}"
+            )
+            deployment = self.get_available_deployment(
+                model=model,
+                messages=kwargs.get("messages", None),
+                specific_deployment=kwargs.pop("specific_deployment", None),
+            )
+            self._update_kwargs_with_deployment(
+                deployment=deployment, kwargs=kwargs, function_name="generic_api_call"
+            )
+
+            data = deployment["litellm_params"].copy()
+            model_name = data["model"]
+
+            self.total_calls[model_name] += 1
+
+            # Perform pre-call checks for routing strategy
+            self.routing_strategy_pre_call_checks(deployment=deployment)
+
+            response = original_function(
+                **{
+                    **data,
+                    "caching": self.cache_responses,
+                    **kwargs,
+                }
+            )
+
+            self.success_calls[model_name] += 1
+            verbose_router_logger.info(
+                f"{handler_name}(model={model_name})\033[32m 200 OK\033[0m"
+            )
+            return response
+        except Exception as e:
+            verbose_router_logger.info(
+                f"{handler_name}(model={model})\033[31m Exception {str(e)}\033[0m"
+            )
+            if model is not None:
+                self.fail_calls[model] += 1
+            raise e
+
     def embedding(
         self,
         model: str,
@@ -2869,11 +3045,43 @@ class Router:
     def factory_function(
         self,
         original_function: Callable,
-        call_type: Literal["assistants", "moderation"] = "assistants",
+        call_type: Literal[
+            "assistants",
+            "moderation",
+            "anthropic_messages",
+            "aresponses",
+            "responses",
+        ] = "assistants",
     ):
-        async def new_function(
-            custom_llm_provider: Optional[Literal["openai", "azure"]] = None,
-            client: Optional["AsyncOpenAI"] = None,
+        """
+        Creates appropriate wrapper functions for different API call types.
+
+        Returns:
+            - A synchronous function for synchronous call types
+            - An asynchronous function for asynchronous call types
+        """
+        # Handle synchronous call types
+        if call_type == "responses":
+
+            def sync_wrapper(
+                custom_llm_provider: Optional[
+                    Literal["openai", "azure", "anthropic"]
+                ] = None,
+                client: Optional[Any] = None,
+                **kwargs,
+            ):
+                return self._generic_api_call_with_fallbacks(
+                    original_function=original_function, **kwargs
+                )
+
+            return sync_wrapper
+
+        # Handle asynchronous call types
+        async def async_wrapper(
+            custom_llm_provider: Optional[
+                Literal["openai", "azure", "anthropic"]
+            ] = None,
+            client: Optional[Any] = None,
             **kwargs,
         ):
             if call_type == "assistants":
@@ -2884,18 +3092,21 @@ class Router:
                     **kwargs,
                 )
             elif call_type == "moderation":
-
-                return await self._pass_through_moderation_endpoint_factory(  # type: ignore
+                return await self._pass_through_moderation_endpoint_factory(
+                    original_function=original_function, **kwargs
+                )
+            elif call_type in ("anthropic_messages", "aresponses"):
+                return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
                     **kwargs,
                 )
 
-        return new_function
+        return async_wrapper
 
     async def _pass_through_assistants_endpoint_factory(
         self,
         original_function: Callable,
-        custom_llm_provider: Optional[Literal["openai", "azure"]] = None,
+        custom_llm_provider: Optional[Literal["openai", "azure", "anthropic"]] = None,
         client: Optional[AsyncOpenAI] = None,
         **kwargs,
     ):
@@ -4261,10 +4472,10 @@ class Router:
         if custom_llm_provider not in litellm.provider_list:
             raise Exception(f"Unsupported provider - {custom_llm_provider}")
 
-        # init OpenAI, Azure clients
-        InitalizeOpenAISDKClient.set_client(
-            litellm_router_instance=self, model=deployment.to_json(exclude_none=True)
-        )
+        # # init OpenAI, Azure clients
+        # InitalizeOpenAISDKClient.set_client(
+        #     litellm_router_instance=self, model=deployment.to_json(exclude_none=True)
+        # )
 
         self._initialize_deployment_for_pass_through(
             deployment=deployment,
@@ -4350,6 +4561,7 @@ class Router:
         """
         # check if deployment already exists
         _deployment_model_id = deployment.model_info.id or ""
+
         _deployment_on_router: Optional[Deployment] = self.get_deployment(
             model_id=_deployment_model_id
         )
@@ -5232,6 +5444,13 @@ class Router:
             client = self.cache.get_cache(
                 key=cache_key, local_only=True, parent_otel_span=parent_otel_span
             )
+            if client is None:
+                InitalizeCachedClient.set_max_parallel_requests_client(
+                    litellm_router_instance=self, model=deployment
+                )
+                client = self.cache.get_cache(
+                    key=cache_key, local_only=True, parent_otel_span=parent_otel_span
+                )
             return client
         elif client_type == "async":
             if kwargs.get("stream") is True:
@@ -5239,36 +5458,12 @@ class Router:
                 client = self.cache.get_cache(
                     key=cache_key, local_only=True, parent_otel_span=parent_otel_span
                 )
-                if client is None:
-                    """
-                    Re-initialize the client
-                    """
-                    InitalizeOpenAISDKClient.set_client(
-                        litellm_router_instance=self, model=deployment
-                    )
-                    client = self.cache.get_cache(
-                        key=cache_key,
-                        local_only=True,
-                        parent_otel_span=parent_otel_span,
-                    )
                 return client
             else:
                 cache_key = f"{model_id}_async_client"
                 client = self.cache.get_cache(
                     key=cache_key, local_only=True, parent_otel_span=parent_otel_span
                 )
-                if client is None:
-                    """
-                    Re-initialize the client
-                    """
-                    InitalizeOpenAISDKClient.set_client(
-                        litellm_router_instance=self, model=deployment
-                    )
-                    client = self.cache.get_cache(
-                        key=cache_key,
-                        local_only=True,
-                        parent_otel_span=parent_otel_span,
-                    )
                 return client
         else:
             if kwargs.get("stream") is True:
@@ -5276,32 +5471,12 @@ class Router:
                 client = self.cache.get_cache(
                     key=cache_key, parent_otel_span=parent_otel_span
                 )
-                if client is None:
-                    """
-                    Re-initialize the client
-                    """
-                    InitalizeOpenAISDKClient.set_client(
-                        litellm_router_instance=self, model=deployment
-                    )
-                    client = self.cache.get_cache(
-                        key=cache_key, parent_otel_span=parent_otel_span
-                    )
                 return client
             else:
                 cache_key = f"{model_id}_client"
                 client = self.cache.get_cache(
                     key=cache_key, parent_otel_span=parent_otel_span
                 )
-                if client is None:
-                    """
-                    Re-initialize the client
-                    """
-                    InitalizeOpenAISDKClient.set_client(
-                        litellm_router_instance=self, model=deployment
-                    )
-                    client = self.cache.get_cache(
-                        key=cache_key, parent_otel_span=parent_otel_span
-                    )
                 return client
 
     def _pre_call_checks(  # noqa: PLR0915

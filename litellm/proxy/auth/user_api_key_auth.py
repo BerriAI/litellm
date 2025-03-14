@@ -78,6 +78,11 @@ google_ai_studio_api_key_header = APIKeyHeader(
     auto_error=False,
     description="If google ai studio client used.",
 )
+azure_apim_header = APIKeyHeader(
+    name=SpecialHeaders.azure_apim_authorization.value,
+    auto_error=False,
+    description="The default name of the subscription key header of Azure",
+)
 
 
 def _get_bearer_token(
@@ -302,6 +307,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
     azure_api_key_header: str,
     anthropic_api_key_header: Optional[str],
     google_ai_studio_api_key_header: Optional[str],
+    azure_apim_header: Optional[str],
     request_data: dict,
 ) -> UserAPIKeyAuth:
 
@@ -350,6 +356,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             request
         ):
             api_key = cookie_token
+        elif isinstance(azure_apim_header, str):
+            api_key = azure_apim_header
         elif pass_through_endpoints is not None:
             for endpoint in pass_through_endpoints:
                 if endpoint.get("path", "") == route:
@@ -795,6 +803,13 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 )
                 valid_token = None
 
+        if valid_token is None:
+            raise Exception(
+                "Invalid proxy server token passed. Received API Key (hashed)={}. Unable to find token in cache or `LiteLLM_VerificationTokenTable`".format(
+                    api_key
+                )
+            )
+
         user_obj: Optional[LiteLLM_UserTable] = None
         valid_token_dict: dict = {}
         if valid_token is not None:
@@ -1167,6 +1182,7 @@ async def user_api_key_auth(
     google_ai_studio_api_key_header: Optional[str] = fastapi.Security(
         google_ai_studio_api_key_header
     ),
+    azure_apim_header: Optional[str] = fastapi.Security(azure_apim_header),
 ) -> UserAPIKeyAuth:
     """
     Parent function to authenticate user api key / jwt token.
@@ -1180,6 +1196,7 @@ async def user_api_key_auth(
         azure_api_key_header=azure_api_key_header,
         anthropic_api_key_header=anthropic_api_key_header,
         google_ai_studio_api_key_header=google_ai_studio_api_key_header,
+        azure_apim_header=azure_apim_header,
         request_data=request_data,
     )
 
