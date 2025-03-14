@@ -69,7 +69,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
   // Define columns for the table view
   const columns = [
     {
-      header: "Key",
+      header: "Key ID",
       accessorKey: "api_key",
       cell: (info: any) => (
         <div className="overflow-hidden">
