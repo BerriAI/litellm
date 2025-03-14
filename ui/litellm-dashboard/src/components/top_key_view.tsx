@@ -1,7 +1,8 @@
 import React, { useState } from "react";
 import { BarChart } from "@tremor/react";
 import KeyInfoView from "./key_info_view";
-import { keyInfoCall } from "./networking";
+import { keyInfoV1Call } from "./networking";
+import { transformKeyInfo } from "../components/key_team_helpers/transform_key_info";
 
 interface TopKeyViewProps {
   topKeys: any[];
@@ -22,15 +23,15 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
   const [keyData, setKeyData] = useState<any | undefined>(undefined);
 
   const handleKeyClick = async (item: any) => {
-    if (!accessToken || !item.key) return;
+    if (!accessToken) return;
     
+    console.log("Clicked item:", item);
     try {
-      // Get the full key data using the API key
-      const keyInfo = await keyInfoCall(accessToken, [item.key]);
-      if (keyInfo && keyInfo.keys && keyInfo.keys.length > 0) {
-        setKeyData(keyInfo.keys[0]);
-        setSelectedKey(item.key);
-      }
+      // Use item.key instead of item.api_key
+      const keyInfo = await keyInfoV1Call(accessToken, item.api_key);
+      const transformedKeyData = transformKeyInfo(keyInfo);
+      setKeyData(transformedKeyData);
+      setSelectedKey(item.key);
     } catch (error) {
       console.error("Error fetching key info:", error);
     }
