@@ -1,5 +1,5 @@
-import httpx
-from typing import List, Optional
+from typing import Optional
+
 
 class SnowflakeBase:
     def validate_environment(
@@ -17,22 +17,18 @@ class SnowflakeBase:
             "Accept": "application/json",
             "Authorization": "Bearer " + <JWT>,
             "X-Snowflake-Authorization-Token-Type": "KEYPAIR_JWT"
-        } 
+        }
         """
 
         if JWT is None:
-                raise ValueError(
-                    "Missing Snowflake JWT key"
-                )
+            raise ValueError("Missing Snowflake JWT key")
 
         headers.update(
             {
                 "Content-Type": "application/json",
                 "Accept": "application/json",
                 "Authorization": "Bearer " + JWT,
-                "X-Snowflake-Authorization-Token-Type": "KEYPAIR_JWT"
+                "X-Snowflake-Authorization-Token-Type": "KEYPAIR_JWT",
             }
         )
         return headers
-    
-    
