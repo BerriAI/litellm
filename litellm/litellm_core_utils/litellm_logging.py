@@ -25,6 +25,7 @@ from litellm import (
     turn_off_message_logging,
 )
 from litellm._logging import _is_debugging_on, verbose_logger
+from litellm.batches.batch_utils import _handle_completed_batch
 from litellm.caching.caching import DualCache, InMemoryCache
 from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.cost_calculator import _select_model_name_for_cost_calc
@@ -33,15 +34,19 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.pagerduty.pagerduty import PagerDutyAlerting
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
 )
+from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import (
     AllMessageValues,
     Batch,
     FineTuningJob,
     HttpxBinaryResponseContent,
+    ResponseCompletedEvent,
+    ResponsesAPIResponse,
 )
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
@@ -49,9 +54,11 @@ from litellm.types.utils import (
     CallTypes,
     EmbeddingResponse,
     ImageResponse,
+    LiteLLMBatch,
     LiteLLMLoggingBaseClass,
     ModelResponse,
     ModelResponseStream,
+    RawRequestTypedDict,
     StandardCallbackDynamicParams,
     StandardLoggingAdditionalHeaders,
     StandardLoggingHiddenParams,
@@ -202,6 +209,7 @@ class Logging(LiteLLMLoggingBaseClass):
         ] = None,
         applied_guardrails: Optional[List[str]] = None,
         kwargs: Optional[Dict] = None,
+        log_raw_request_response: bool = False,
     ):
         _input: Optional[str] = messages  # save original value of messages
         if messages is not None:
@@ -230,6 +238,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.sync_streaming_chunks: List[Any] = (
             []
         )  # for generating complete stream response
+        self.log_raw_request_response = log_raw_request_response
 
         # Initialize dynamic callbacks
         self.dynamic_input_callbacks: Optional[
@@ -450,6 +459,18 @@ class Logging(LiteLLMLoggingBaseClass):
 
         return model, messages, non_default_params
 
+    def _get_raw_request_body(self, data: Optional[Union[dict, str]]) -> dict:
+        if data is None:
+            return {"error": "Received empty dictionary for raw request body"}
+        if isinstance(data, str):
+            try:
+                return json.loads(data)
+            except Exception:
+                return {
+                    "error": "Unable to parse raw request body. Got - {}".format(data)
+                }
+        return data
+
     def _pre_call(self, input, api_key, model=None, additional_args={}):
         """
         Common helper function across the sync + async pre-call function
@@ -465,6 +486,7 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["model"] = model
 
     def pre_call(self, input, api_key, model=None, additional_args={}):  # noqa: PLR0915
+
         # Log the exact input to the LLM API
         litellm.error_logs["PRE_CALL"] = locals()
         try:
@@ -482,28 +504,54 @@ class Logging(LiteLLMLoggingBaseClass):
                 additional_args=additional_args,
             )
             # log raw request to provider (like LangFuse) -- if opted in.
-            if log_raw_request_response is True:
+            if (
+                self.log_raw_request_response is True
+                or log_raw_request_response is True
+            ):
+
                 _litellm_params = self.model_call_details.get("litellm_params", {})
                 _metadata = _litellm_params.get("metadata", {}) or {}
                 try:
                     # [Non-blocking Extra Debug Information in metadata]
-                    if (
-                        turn_off_message_logging is not None
-                        and turn_off_message_logging is True
-                    ):
+                    if turn_off_message_logging is True:
+
                         _metadata["raw_request"] = (
                             "redacted by litellm. \
                             'litellm.turn_off_message_logging=True'"
                         )
                     else:
+
                         curl_command = self._get_request_curl_command(
                             api_base=additional_args.get("api_base", ""),
                             headers=additional_args.get("headers", {}),
                             additional_args=additional_args,
                             data=additional_args.get("complete_input_dict", {}),
                         )
+
                         _metadata["raw_request"] = str(curl_command)
+                        # split up, so it's easier to parse in the UI
+                        self.model_call_details["raw_request_typed_dict"] = (
+                            RawRequestTypedDict(
+                                raw_request_api_base=str(
+                                    additional_args.get("api_base") or ""
+                                ),
+                                raw_request_body=self._get_raw_request_body(
+                                    additional_args.get("complete_input_dict", {})
+                                ),
+                                raw_request_headers=self._get_masked_headers(
+                                    additional_args.get("headers", {}) or {},
+                                    ignore_sensitive_headers=True,
+                                ),
+                                error=None,
+                            )
+                        )
                 except Exception as e:
+                    self.model_call_details["raw_request_typed_dict"] = (
+                        RawRequestTypedDict(
+                            error=str(e),
+                        )
+                    )
+                    traceback.print_exc()
                     _metadata["raw_request"] = (
                         "Unable to Log \
                         raw request: {}".format(
@@ -636,9 +684,14 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 verbose_logger.debug(f"\033[92m{curl_command}\033[0m\n")
 
+    def _get_request_body(self, data: dict) -> str:
+        return str(data)
+
     def _get_request_curl_command(
-        self, api_base: str, headers: dict, additional_args: dict, data: dict
+        self, api_base: str, headers: Optional[dict], additional_args: dict, data: dict
     ) -> str:
+        if headers is None:
+            headers = {}
         curl_command = "\n\nPOST Request Sent from LiteLLM:\n"
         curl_command += "curl -X POST \\\n"
         curl_command += f"{api_base} \\\n"
@@ -646,11 +699,10 @@ class Logging(LiteLLMLoggingBaseClass):
         formatted_headers = " ".join(
             [f"-H '{k}: {v}'" for k, v in masked_headers.items()]
         )
-
         curl_command += (
             f"{formatted_headers} \\\n" if formatted_headers.strip() != "" else ""
         )
-        curl_command += f"-d '{str(data)}'\n"
+        curl_command += f"-d '{self._get_request_body(data)}'\n"
         if additional_args.get("request_str", None) is not None:
             # print the sagemaker / bedrock client request
             curl_command = "\nRequest Sent from LiteLLM:\n"
@@ -659,12 +711,20 @@ class Logging(LiteLLMLoggingBaseClass):
             curl_command = str(self.model_call_details)
         return curl_command
 
-    def _get_masked_headers(self, headers: dict):
+    def _get_masked_headers(
+        self, headers: dict, ignore_sensitive_headers: bool = False
+    ) -> dict:
         """
         Internal debugging helper function
 
         Masks the headers of the request sent from LiteLLM
         """
+        sensitive_keywords = [
+            "authorization",
+            "token",
+            "key",
+            "secret",
+        ]
         return {
             k: (
                 (v[:-44] + "*" * 44)
@@ -672,6 +732,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 else "*****"
             )
             for k, v in headers.items()
+            if not ignore_sensitive_headers
+            or not any(
+                sensitive_keyword in k.lower()
+                for sensitive_keyword in sensitive_keywords
+            )
         }
 
     def post_call(
@@ -789,6 +854,8 @@ class Logging(LiteLLMLoggingBaseClass):
             RerankResponse,
             Batch,
             FineTuningJob,
+            ResponsesAPIResponse,
+            ResponseCompletedEvent,
         ],
         cache_hit: Optional[bool] = None,
     ) -> Optional[float]:
@@ -870,6 +937,24 @@ class Logging(LiteLLMLoggingBaseClass):
 
         return None
 
+    async def _response_cost_calculator_async(
+        self,
+        result: Union[
+            ModelResponse,
+            ModelResponseStream,
+            EmbeddingResponse,
+            ImageResponse,
+            TranscriptionResponse,
+            TextCompletionResponse,
+            HttpxBinaryResponseContent,
+            RerankResponse,
+            Batch,
+            FineTuningJob,
+        ],
+        cache_hit: Optional[bool] = None,
+    ) -> Optional[float]:
+        return self._response_cost_calculator(result=result, cache_hit=cache_hit)
+
     def should_run_callback(
         self, callback: litellm.CALLBACK_TYPES, litellm_params: dict, event_hook: str
     ) -> bool:
@@ -911,13 +996,16 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["log_event_type"] = "successful_api_call"
             self.model_call_details["end_time"] = end_time
             self.model_call_details["cache_hit"] = cache_hit
+
+            if self.call_type == CallTypes.anthropic_messages.value:
+                result = self._handle_anthropic_messages_response_logging(result=result)
             ## if model in model cost map - log the response cost
             ## else set cost to None
             if (
                 standard_logging_object is None
                 and result is not None
                 and self.stream is not True
-            ):  # handle streaming separately
+            ):
                 if (
                     isinstance(result, ModelResponse)
                     or isinstance(result, ModelResponseStream)
@@ -927,8 +1015,9 @@ class Logging(LiteLLMLoggingBaseClass):
                     or isinstance(result, TextCompletionResponse)
                     or isinstance(result, HttpxBinaryResponseContent)  # tts
                     or isinstance(result, RerankResponse)
-                    or isinstance(result, Batch)
                     or isinstance(result, FineTuningJob)
+                    or isinstance(result, LiteLLMBatch)
+                    or isinstance(result, ResponsesAPIResponse)
                 ):
                     ## HIDDEN PARAMS ##
                     hidden_params = getattr(result, "_hidden_params", {})
@@ -1028,7 +1117,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response: Optional[
-                Union[ModelResponse, TextCompletionResponse]
+                Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse]
             ] = None
             if "complete_streaming_response" in self.model_call_details:
                 return  # break out of this.
@@ -1524,6 +1613,20 @@ class Logging(LiteLLMLoggingBaseClass):
         print_verbose(
             "Logging Details LiteLLM-Async Success Call, cache_hit={}".format(cache_hit)
         )
+
+        ## CALCULATE COST FOR BATCH JOBS
+        if self.call_type == CallTypes.aretrieve_batch.value and isinstance(
+            result, LiteLLMBatch
+        ):
+
+            response_cost, batch_usage, batch_models = await _handle_completed_batch(
+                batch=result, custom_llm_provider=self.custom_llm_provider
+            )
+
+            result._hidden_params["response_cost"] = response_cost
+            result._hidden_params["batch_models"] = batch_models
+            result.usage = batch_usage
+
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time,
             end_time=end_time,
@@ -1531,11 +1634,12 @@ class Logging(LiteLLMLoggingBaseClass):
             cache_hit=cache_hit,
             standard_logging_object=kwargs.get("standard_logging_object", None),
         )
+
         ## BUILD COMPLETE STREAMED RESPONSE
         if "async_complete_streaming_response" in self.model_call_details:
             return  # break out of this.
         complete_streaming_response: Optional[
-            Union[ModelResponse, TextCompletionResponse]
+            Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse]
         ] = self._get_assembled_streaming_response(
             result=result,
             start_time=start_time,
@@ -2245,16 +2349,24 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _get_assembled_streaming_response(
         self,
-        result: Union[ModelResponse, TextCompletionResponse, ModelResponseStream, Any],
+        result: Union[
+            ModelResponse,
+            TextCompletionResponse,
+            ModelResponseStream,
+            ResponseCompletedEvent,
+            Any,
+        ],
         start_time: datetime.datetime,
         end_time: datetime.datetime,
         is_async: bool,
         streaming_chunks: List[Any],
-    ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
+    ) -> Optional[Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse]]:
         if isinstance(result, ModelResponse):
             return result
         elif isinstance(result, TextCompletionResponse):
             return result
+        elif isinstance(result, ResponseCompletedEvent):
+            return result.response
         elif isinstance(result, ModelResponseStream):
             complete_streaming_response: Optional[
                 Union[ModelResponse, TextCompletionResponse]
@@ -2268,6 +2380,37 @@ class Logging(LiteLLMLoggingBaseClass):
             )
             return complete_streaming_response
         return None
+
+    def _handle_anthropic_messages_response_logging(self, result: Any) -> ModelResponse:
+        """
+        Handles logging for Anthropic messages responses.
+
+        Args:
+            result: The response object from the model call
+
+        Returns:
+            The the response object from the model call
+
+        - For Non-streaming responses, we need to transform the response to a ModelResponse object.
+        - For streaming responses, anthropic_messages handler calls success_handler with a assembled ModelResponse.
+        """
+        if self.stream and isinstance(result, ModelResponse):
+            return result
+
+        result = litellm.AnthropicConfig().transform_response(
+            raw_response=self.model_call_details["httpx_response"],
+            model_response=litellm.ModelResponse(),
+            model=self.model,
+            messages=[],
+            logging_obj=self,
+            optional_params={},
+            api_key="",
+            request_data={},
+            encoding=litellm.encoding,
+            json_mode=False,
+            litellm_params={},
+        )
+        return result
 
 
 def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
@@ -2982,6 +3125,12 @@ class StandardLoggingPayloadSetup:
         elif isinstance(usage, Usage):
             return usage
         elif isinstance(usage, dict):
+            if ResponseAPILoggingUtils._is_response_api_usage(usage):
+                return (
+                    ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                        usage
+                    )
+                )
             return Usage(**usage)
 
         raise ValueError(f"usage is required, got={usage} of type {type(usage)}")
@@ -3085,6 +3234,7 @@ class StandardLoggingPayloadSetup:
             response_cost=None,
             additional_headers=None,
             litellm_overhead_time_ms=None,
+            batch_models=None,
         )
         if hidden_params is not None:
             for key in StandardLoggingHiddenParams.__annotations__.keys():
@@ -3114,10 +3264,26 @@ class StandardLoggingPayloadSetup:
             str(original_exception.__class__.__name__) if original_exception else ""
         )
         _llm_provider_in_exception = getattr(original_exception, "llm_provider", "")
+
+        # Get traceback information (first 100 lines)
+        traceback_info = ""
+        if original_exception:
+            tb = getattr(original_exception, "__traceback__", None)
+            if tb:
+                import traceback
+
+                tb_lines = traceback.format_tb(tb)
+                traceback_info = "".join(tb_lines[:100])  # Limit to first 100 lines
+
+        # Get additional error details
+        error_message = str(original_exception)
+
         return StandardLoggingPayloadErrorInformation(
             error_code=error_status,
             error_class=error_class,
             llm_provider=_llm_provider_in_exception,
+            traceback=traceback_info,
+            error_message=error_message if original_exception else "",
         )
 
     @staticmethod
@@ -3182,6 +3348,7 @@ def get_standard_logging_object_payload(
                         api_base=None,
                         response_cost=None,
                         litellm_overhead_time_ms=None,
+                        batch_models=None,
                     )
                 )
 
@@ -3314,7 +3481,9 @@ def get_standard_logging_object_payload(
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             messages=kwargs.get("messages"),
             response=final_response_obj,
-            model_parameters=kwargs.get("optional_params", None),
+            model_parameters=ModelParamHelper.get_standard_logging_model_parameters(
+                kwargs.get("optional_params", None) or {}
+            ),
             hidden_params=clean_hidden_params,
             model_map_information=model_cost_information,
             error_str=error_str,
@@ -3464,6 +3633,7 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         response_cost=None,
         additional_headers=None,
         litellm_overhead_time_ms=None,
+        batch_models=None,
     )
 
     # Convert numeric values to appropriate types

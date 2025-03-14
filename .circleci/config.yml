@@ -49,7 +49,7 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.54.0
+            pip install openai==1.66.1
             pip install prisma==0.11.0
             pip install "detect_secrets==1.5.0"
             pip install "httpx==0.24.1"
@@ -168,7 +168,7 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.54.0
+            pip install openai==1.66.1
             pip install prisma==0.11.0
             pip install "detect_secrets==1.5.0"
             pip install "httpx==0.24.1"
@@ -267,7 +267,7 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.54.0
+            pip install openai==1.66.1
             pip install prisma==0.11.0
             pip install "detect_secrets==1.5.0"
             pip install "httpx==0.24.1"
@@ -511,7 +511,7 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.54.0
+            pip install openai==1.66.1
             pip install prisma==0.11.0
             pip install "detect_secrets==1.5.0"
             pip install "httpx==0.24.1"
@@ -678,6 +678,48 @@ jobs:
           paths:
             - llm_translation_coverage.xml
             - llm_translation_coverage
+  llm_responses_api_testing:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "respx==0.21.1"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/llm_responses_api_testing --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml llm_responses_api_coverage.xml
+            mv .coverage llm_responses_api_coverage
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - llm_responses_api_coverage.xml
+            - llm_responses_api_coverage
   litellm_mapped_tests:
     docker:
       - image: cimg/python:3.11
@@ -1234,7 +1276,7 @@ jobs:
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
-            pip install "openai==1.54.0 "
+            pip install "openai==1.66.1"
       - run:
           name: Install Grype
           command: |
@@ -1309,13 +1351,13 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -s -vv tests/*.py -x --junitxml=test-results/junit.xml --durations=5 --ignore=tests/otel_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation --ignore=tests/image_gen_tests --ignore=tests/pass_through_unit_tests
+            python -m pytest -s -vv tests/*.py -x --junitxml=test-results/junit.xml --durations=5 --ignore=tests/otel_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation --ignore=tests/llm_responses_api_testing --ignore=tests/image_gen_tests --ignore=tests/pass_through_unit_tests
           no_output_timeout: 120m
 
       # Store test results
       - store_test_results:
           path: test-results
-  e2e_openai_misc_endpoints:
+  e2e_openai_endpoints:
     machine:
       image: ubuntu-2204:2023.10.1
     resource_class: xlarge
@@ -1370,7 +1412,7 @@ jobs:
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
-            pip install "openai==1.54.0 "
+            pip install "openai==1.66.1"
             # Run pytest and generate JUnit XML report
       - run:
           name: Build Docker image
@@ -1432,7 +1474,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -s -vv tests/openai_misc_endpoints_tests --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -s -vv tests/openai_endpoints_tests --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
 
       # Store test results
@@ -1492,7 +1534,7 @@ jobs:
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
-            pip install "openai==1.54.0 "
+            pip install "openai==1.66.1"
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
@@ -1921,7 +1963,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install aiohttp
-            pip install "openai==1.54.0 "
+            pip install "openai==1.66.1"
             pip install "assemblyai==0.37.0"
             python -m pip install --upgrade pip
             pip install "pydantic==2.7.1"
@@ -1935,12 +1977,12 @@ jobs:
             pip install prisma
             pip install fastapi
             pip install jsonschema
-            pip install "httpx==0.24.1"
+            pip install "httpx==0.27.0"
             pip install "anyio==3.7.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
             pip install "google-cloud-aiplatform==1.59.0"
-            pip install "anthropic==0.21.3"
+            pip install "anthropic==0.49.0"
       # Run pytest and generate JUnit XML report
       - run:
           name: Build Docker image
@@ -1982,11 +2024,44 @@ jobs:
       - run:
           name: Wait for app to be ready
           command: dockerize -wait http://localhost:4000 -timeout 5m
+      # Add Ruby installation and testing before the existing Node.js and Python tests
+      - run:
+          name: Install Ruby and Bundler
+          command: |
+            # Import GPG keys first
+            gpg --keyserver hkp://keyserver.ubuntu.com --recv-keys 409B6B1796C275462A1703113804BB82D39DC0E3 7D2BAF1CF37B13E2069D6956105BD0E739499BDB || {
+              curl -sSL https://rvm.io/mpapis.asc | gpg --import -
+              curl -sSL https://rvm.io/pkuczynski.asc | gpg --import -
+            }
+            
+            # Install Ruby version manager (RVM)
+            curl -sSL https://get.rvm.io | bash -s stable
+            
+            # Source RVM from the correct location
+            source $HOME/.rvm/scripts/rvm
+            
+            # Install Ruby 3.2.2
+            rvm install 3.2.2
+            rvm use 3.2.2 --default
+            
+            # Install latest Bundler
+            gem install bundler
+
+      - run:
+          name: Run Ruby tests
+          command: |
+            source $HOME/.rvm/scripts/rvm
+            cd tests/pass_through_tests/ruby_passthrough_tests
+            bundle install
+            bundle exec rspec
+          no_output_timeout: 30m
       # New steps to run Node.js test
       - run:
           name: Install Node.js
           command: |
+            export DEBIAN_FRONTEND=noninteractive
             curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+            sudo apt-get update
             sudo apt-get install -y nodejs
             node --version
             npm --version
@@ -2035,7 +2110,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine llm_translation_coverage logging_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_proxy_security_tests_coverage
+            coverage combine llm_translation_coverage llm_responses_api_coverage logging_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_proxy_security_tests_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -2164,7 +2239,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
-            pip install "openai==1.54.0 "
+            pip install "openai==1.66.1"
             python -m pip install --upgrade pip
             pip install "pydantic==2.7.1"
             pip install "pytest==7.3.1"
@@ -2354,7 +2429,7 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - e2e_openai_misc_endpoints:
+      - e2e_openai_endpoints:
           filters:
             branches:
               only:
@@ -2391,6 +2466,12 @@ workflows:
                 - main
                 - /litellm_.*/
       - llm_translation_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - llm_responses_api_testing:
           filters:
             branches:
               only:
@@ -2435,6 +2516,7 @@ workflows:
       - upload-coverage:
           requires:
             - llm_translation_testing
+            - llm_responses_api_testing
             - litellm_mapped_tests
             - batches_testing
             - litellm_utils_testing
@@ -2489,10 +2571,11 @@ workflows:
           requires:
             - local_testing
             - build_and_test
-            - e2e_openai_misc_endpoints
+            - e2e_openai_endpoints
             - load_testing
             - test_bad_database_url
             - llm_translation_testing
+            - llm_responses_api_testing
             - litellm_mapped_tests
             - batches_testing
             - litellm_utils_testing

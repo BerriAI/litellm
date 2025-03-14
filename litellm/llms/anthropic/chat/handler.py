@@ -474,7 +474,10 @@ class ModelResponseIterator:
         if len(self.content_blocks) == 0:
             return False
 
-        if self.content_blocks[0]["delta"]["type"] == "text_delta":
+        if (
+            self.content_blocks[0]["delta"]["type"] == "text_delta"
+            or self.content_blocks[0]["delta"]["type"] == "thinking_delta"
+        ):
             return False
 
         for block in self.content_blocks:
@@ -527,6 +530,7 @@ class ModelResponseIterator:
         provider_specific_fields = {}
         content_block = ContentBlockDelta(**chunk)  # type: ignore
         thinking_blocks: List[ChatCompletionThinkingBlock] = []
+
         self.content_blocks.append(content_block)
         if "text" in content_block["delta"]:
             text = content_block["delta"]["text"]
@@ -544,13 +548,13 @@ class ModelResponseIterator:
             provider_specific_fields["citation"] = content_block["delta"]["citation"]
         elif (
             "thinking" in content_block["delta"]
-            or "signature_delta" == content_block["delta"]
+            or "signature" in content_block["delta"]
         ):
             thinking_blocks = [
                 ChatCompletionThinkingBlock(
                     type="thinking",
-                    thinking=content_block["delta"].get("thinking"),
-                    signature_delta=content_block["delta"].get("signature"),
+                    thinking=content_block["delta"].get("thinking") or "",
+                    signature=content_block["delta"].get("signature"),
                 )
             ]
             provider_specific_fields["thinking_blocks"] = thinking_blocks
@@ -616,9 +620,11 @@ class ModelResponseIterator:
                         "index": self.tool_index,
                     }
             elif type_chunk == "content_block_stop":
+
                 ContentBlockStop(**chunk)  # type: ignore
                 # check if tool call content block
                 is_empty = self.check_empty_tool_call_args()
+
                 if is_empty:
                     tool_use = {
                         "id": None,
@@ -810,9 +816,7 @@ class ModelResponseIterator:
         except ValueError as e:
             raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
-    def convert_str_chunk_to_generic_chunk(
-        self, chunk: str
-    ) -> Union[GenericStreamingChunk, ModelResponseStream]:
+    def convert_str_chunk_to_generic_chunk(self, chunk: str) -> ModelResponseStream:
         """
         Convert a string chunk to a GenericStreamingChunk
 
@@ -832,11 +836,4 @@ class ModelResponseIterator:
             data_json = json.loads(str_line[5:])
             return self.chunk_parser(chunk=data_json)
         else:
-            return GenericStreamingChunk(
-                text="",
-                is_finished=False,
-                finish_reason="",
-                usage=None,
-                index=0,
-                tool_use=None,
-            )
+            return ModelResponseStream()

@@ -7,4 +7,5 @@ export interface UserInfo {
   key_count: number;
   created_at: string;
   updated_at: string;
-} 
+  sso_user_id: string | null;
+}

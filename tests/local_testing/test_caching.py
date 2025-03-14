@@ -2561,3 +2561,30 @@ def test_redis_caching_multiple_namespaces():
 
     # request 4 without a namespace should not be cached under the same key as request 3
     assert response_4.id != response_3.id
+
+
+def test_caching_with_reasoning_content():
+    """
+    Test that reasoning content is cached
+    """
+
+    import uuid
+
+    messages = [{"role": "user", "content": f"what is litellm? {uuid.uuid4()}"}]
+    litellm.cache = Cache()
+
+    response_1 = completion(
+        model="anthropic/claude-3-7-sonnet-latest",
+        messages=messages,
+        thinking={"type": "enabled", "budget_tokens": 1024},
+    )
+
+    response_2 = completion(
+        model="anthropic/claude-3-7-sonnet-latest",
+        messages=messages,
+        thinking={"type": "enabled", "budget_tokens": 1024},
+    )
+
+    print(f"response 2: {response_2.model_dump_json(indent=4)}")
+    assert response_2._hidden_params["cache_hit"] == True
+    assert response_2.choices[0].message.reasoning_content is not None

@@ -39,6 +39,9 @@ import { InfoCircleOutlined } from '@ant-design/icons';
 import { Tooltip } from 'antd';
 import Createuser from "./create_user_button";
 import debounce from 'lodash/debounce';
+import { rolesWithWriteAccess } from '../utils/roles';
+
+
 
 const { Option } = Select;
 
@@ -335,11 +338,13 @@ const CreateKey: React.FC<CreateKeyProps> = ({
 
   return (
     <div>
-      <Button className="mx-auto" onClick={() => setIsModalVisible(true)}>
-        + Create New Key
-      </Button>
+      {userRole && rolesWithWriteAccess.includes(userRole) && (
+        <Button className="mx-auto" onClick={() => setIsModalVisible(true)}>
+          + Create New Key
+        </Button>
+      )}
       <Modal
-        title="Create Key"
+        // title="Create Key"
         visible={isModalVisible}
         width={1000}
         footer={null}
@@ -355,7 +360,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         >
           {/* Section 1: Key Ownership */}
           <div className="mb-8">
-            <Title className="mb-4">1. Key Ownership</Title>
+            <Title className="mb-4">Key Ownership</Title>
             <Form.Item 
               label={
                 <span>
@@ -444,7 +449,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
 
           {/* Section 2: Key Details */}
           <div className="mb-8">
-            <Title className="mb-4">2. Key Details</Title>
+            <Title className="mb-4">Key Details</Title>
             <Form.Item
               label={
                 <span>
@@ -503,7 +508,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           <div className="mb-8">
             <Accordion className="mt-4 mb-4">
               <AccordionHeader>
-                <Title className="m-0">3. Optional Settings</Title>
+                <Title className="m-0">Optional Settings</Title>
               </AccordionHeader>
               <AccordionBody>
                 <Form.Item

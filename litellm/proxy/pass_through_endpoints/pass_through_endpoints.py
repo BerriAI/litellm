@@ -3,10 +3,10 @@ import asyncio
 import json
 from base64 import b64encode
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional, Union
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
-from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 
@@ -23,9 +23,11 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
+from litellm.types.utils import StandardLoggingUserAPIKeyMetadata
 
 from .streaming_handler import PassThroughStreamingHandler
 from .success_handler import PassThroughEndpointLogging
@@ -105,7 +107,6 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
-        get_custom_headers,
         llm_router,
         proxy_config,
         proxy_logging_obj,
@@ -134,7 +135,7 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
         data["model"] = (
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args
-            or data["model"]  # default passed in http request
+            or data.get("model", None)  # default passed in http request
         )
         if user_model:
             data["model"] = user_model
@@ -230,7 +231,7 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
         verbose_proxy_logger.debug("final response: %s", response)
 
         fastapi_response.headers.update(
-            get_custom_headers(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
@@ -307,6 +308,21 @@ class HttpPassThroughEndpointHelpers:
         return EndpointType.GENERIC
 
     @staticmethod
+    def get_merged_query_parameters(
+        existing_url: httpx.URL, request_query_params: Dict[str, Union[str, list]]
+    ) -> Dict[str, Union[str, List[str]]]:
+        # Get the existing query params from the target URL
+        existing_query_string = existing_url.query.decode("utf-8")
+        existing_query_params = parse_qs(existing_query_string)
+
+        # parse_qs returns a dict where each value is a list, so let's flatten it
+        updated_existing_query_params = {
+            k: v[0] if len(v) == 1 else v for k, v in existing_query_params.items()
+        }
+        # Merge the query params, giving priority to the existing ones
+        return {**request_query_params, **updated_existing_query_params}
+
+    @staticmethod
     async def _make_non_streaming_http_request(
         request: Request,
         async_client: httpx.AsyncClient,
@@ -345,6 +361,7 @@ async def pass_through_request(  # noqa: PLR0915
     user_api_key_dict: UserAPIKeyAuth,
     custom_body: Optional[dict] = None,
     forward_headers: Optional[bool] = False,
+    merge_query_params: Optional[bool] = False,
     query_params: Optional[dict] = None,
     stream: Optional[bool] = None,
 ):
@@ -359,6 +376,18 @@ async def pass_through_request(  # noqa: PLR0915
         headers = HttpPassThroughEndpointHelpers.forward_headers_from_request(
             request=request, headers=headers, forward_headers=forward_headers
         )
+
+        if merge_query_params:
+
+            # Create a new URL with the merged query params
+            url = url.copy_with(
+                query=urlencode(
+                    HttpPassThroughEndpointHelpers.get_merged_query_parameters(
+                        existing_url=url,
+                        request_query_params=dict(request.query_params),
+                    )
+                ).encode("ascii")
+            )
 
         endpoint_type: EndpointType = HttpPassThroughEndpointHelpers.get_endpoint_type(
             str(url)
@@ -607,12 +636,19 @@ def _init_kwargs_for_pass_through_endpoint(
 ) -> dict:
     _parsed_body = _parsed_body or {}
     _litellm_metadata: Optional[dict] = _parsed_body.pop("litellm_metadata", None)
-    _metadata = {
-        "user_api_key": user_api_key_dict.api_key,
-        "user_api_key_user_id": user_api_key_dict.user_id,
-        "user_api_key_team_id": user_api_key_dict.team_id,
-        "user_api_key_end_user_id": user_api_key_dict.end_user_id,
-    }
+    _metadata = dict(
+        StandardLoggingUserAPIKeyMetadata(
+            user_api_key_hash=user_api_key_dict.api_key,
+            user_api_key_alias=user_api_key_dict.key_alias,
+            user_api_key_user_email=user_api_key_dict.user_email,
+            user_api_key_user_id=user_api_key_dict.user_id,
+            user_api_key_team_id=user_api_key_dict.team_id,
+            user_api_key_org_id=user_api_key_dict.org_id,
+            user_api_key_team_alias=user_api_key_dict.team_alias,
+            user_api_key_end_user_id=user_api_key_dict.end_user_id,
+        )
+    )
+    _metadata["user_api_key"] = user_api_key_dict.api_key
     if _litellm_metadata:
         _metadata.update(_litellm_metadata)
 
@@ -649,6 +685,7 @@ def create_pass_through_route(
     target: str,
     custom_headers: Optional[dict] = None,
     _forward_headers: Optional[bool] = False,
+    _merge_query_params: Optional[bool] = False,
     dependencies: Optional[List] = None,
 ):
     # check if target is an adapter.py or a url
@@ -695,6 +732,7 @@ def create_pass_through_route(
                 custom_headers=custom_headers or {},
                 user_api_key_dict=user_api_key_dict,
                 forward_headers=_forward_headers,
+                merge_query_params=_merge_query_params,
                 query_params=query_params,
                 stream=stream,
                 custom_body=custom_body,
@@ -724,6 +762,7 @@ async def initialize_pass_through_endpoints(pass_through_endpoints: list):
             custom_headers=_custom_headers
         )
         _forward_headers = endpoint.get("forward_headers", None)
+        _merge_query_params = endpoint.get("merge_query_params", None)
         _auth = endpoint.get("auth", None)
         _dependencies = None
         if _auth is not None and str(_auth).lower() == "true":
@@ -745,7 +784,12 @@ async def initialize_pass_through_endpoints(pass_through_endpoints: list):
         app.add_api_route(  # type: ignore
             path=_path,
             endpoint=create_pass_through_route(  # type: ignore
-                _path, _target, _custom_headers, _forward_headers, _dependencies
+                _path,
+                _target,
+                _custom_headers,
+                _forward_headers,
+                _merge_query_params,
+                _dependencies,
             ),
             methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
             dependencies=_dependencies,

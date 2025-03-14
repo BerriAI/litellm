@@ -507,9 +507,9 @@ def test_call_with_user_over_budget(prisma_client):
 
             # update spend using track_cost callback, make 2nd request, it should fail
             from litellm import Choices, Message, ModelResponse, Usage
-            from litellm.proxy.proxy_server import (
-                _PROXY_track_cost_callback as track_cost_callback,
-            )
+            from litellm.proxy.proxy_server import _ProxyDBLogger
+
+            proxy_db_logger = _ProxyDBLogger()
 
             resp = ModelResponse(
                 id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
@@ -526,7 +526,7 @@ def test_call_with_user_over_budget(prisma_client):
                 model="gpt-35-turbo",  # azure always has model written like this
                 usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
             )
-            await track_cost_callback(
+            await proxy_db_logger._PROXY_track_cost_callback(
                 kwargs={
                     "stream": False,
                     "litellm_params": {
@@ -604,9 +604,9 @@ def test_call_with_end_user_over_budget(prisma_client):
 
             # update spend using track_cost callback, make 2nd request, it should fail
             from litellm import Choices, Message, ModelResponse, Usage
-            from litellm.proxy.proxy_server import (
-                _PROXY_track_cost_callback as track_cost_callback,
-            )
+            from litellm.proxy.proxy_server import _ProxyDBLogger
+
+            proxy_db_logger = _ProxyDBLogger()
 
             resp = ModelResponse(
                 id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
@@ -623,7 +623,7 @@ def test_call_with_end_user_over_budget(prisma_client):
                 model="gpt-35-turbo",  # azure always has model written like this
                 usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
             )
-            await track_cost_callback(
+            await proxy_db_logger._PROXY_track_cost_callback(
                 kwargs={
                     "stream": False,
                     "litellm_params": {
@@ -711,9 +711,9 @@ def test_call_with_proxy_over_budget(prisma_client):
 
             # update spend using track_cost callback, make 2nd request, it should fail
             from litellm import Choices, Message, ModelResponse, Usage
-            from litellm.proxy.proxy_server import (
-                _PROXY_track_cost_callback as track_cost_callback,
-            )
+            from litellm.proxy.proxy_server import _ProxyDBLogger
+
+            proxy_db_logger = _ProxyDBLogger()
 
             resp = ModelResponse(
                 id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
@@ -730,7 +730,7 @@ def test_call_with_proxy_over_budget(prisma_client):
                 model="gpt-35-turbo",  # azure always has model written like this
                 usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
             )
-            await track_cost_callback(
+            await proxy_db_logger._PROXY_track_cost_callback(
                 kwargs={
                     "stream": False,
                     "litellm_params": {
@@ -802,9 +802,9 @@ def test_call_with_user_over_budget_stream(prisma_client):
 
             # update spend using track_cost callback, make 2nd request, it should fail
             from litellm import Choices, Message, ModelResponse, Usage
-            from litellm.proxy.proxy_server import (
-                _PROXY_track_cost_callback as track_cost_callback,
-            )
+            from litellm.proxy.proxy_server import _ProxyDBLogger
+
+            proxy_db_logger = _ProxyDBLogger()
 
             resp = ModelResponse(
                 id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
@@ -821,7 +821,7 @@ def test_call_with_user_over_budget_stream(prisma_client):
                 model="gpt-35-turbo",  # azure always has model written like this
                 usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
             )
-            await track_cost_callback(
+            await proxy_db_logger._PROXY_track_cost_callback(
                 kwargs={
                     "stream": True,
                     "complete_streaming_response": resp,
@@ -908,9 +908,9 @@ def test_call_with_proxy_over_budget_stream(prisma_client):
 
             # update spend using track_cost callback, make 2nd request, it should fail
             from litellm import Choices, Message, ModelResponse, Usage
-            from litellm.proxy.proxy_server import (
-                _PROXY_track_cost_callback as track_cost_callback,
-            )
+            from litellm.proxy.proxy_server import _ProxyDBLogger
+
+            proxy_db_logger = _ProxyDBLogger()
 
             resp = ModelResponse(
                 id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
@@ -927,7 +927,7 @@ def test_call_with_proxy_over_budget_stream(prisma_client):
                 model="gpt-35-turbo",  # azure always has model written like this
                 usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
             )
-            await track_cost_callback(
+            await proxy_db_logger._PROXY_track_cost_callback(
                 kwargs={
                     "stream": True,
                     "complete_streaming_response": resp,
@@ -1519,9 +1519,9 @@ def test_call_with_key_over_budget(prisma_client):
             # update spend using track_cost callback, make 2nd request, it should fail
             from litellm import Choices, Message, ModelResponse, Usage
             from litellm.caching.caching import Cache
-            from litellm.proxy.proxy_server import (
-                _PROXY_track_cost_callback as track_cost_callback,
-            )
+            from litellm.proxy.proxy_server import _ProxyDBLogger
+
+            proxy_db_logger = _ProxyDBLogger()
 
             litellm.cache = Cache()
             import time
@@ -1544,7 +1544,7 @@ def test_call_with_key_over_budget(prisma_client):
                 model="gpt-35-turbo",  # azure always has model written like this
                 usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
             )
-            await track_cost_callback(
+            await proxy_db_logger._PROXY_track_cost_callback(
                 kwargs={
                     "model": "chatgpt-v-2",
                     "stream": False,
@@ -1636,9 +1636,7 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
             print("result from user auth with new key", result)
 
             # update spend using track_cost callback, make 2nd request, it should fail
-            from litellm.proxy.proxy_server import (
-                _PROXY_track_cost_callback as track_cost_callback,
-            )
+            from litellm.proxy.proxy_server import _ProxyDBLogger
             from litellm.proxy.proxy_server import user_api_key_cache
 
             user_api_key_cache.in_memory_cache.cache_dict = {}
@@ -1668,7 +1666,8 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
                 model="gpt-35-turbo",  # azure always has model written like this
                 usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
             )
-            await track_cost_callback(
+            proxy_db_logger = _ProxyDBLogger()
+            await proxy_db_logger._PROXY_track_cost_callback(
                 kwargs={
                     "model": "chatgpt-v-2",
                     "stream": False,
@@ -1874,9 +1873,9 @@ async def test_call_with_key_never_over_budget(prisma_client):
         import uuid
 
         from litellm import Choices, Message, ModelResponse, Usage
-        from litellm.proxy.proxy_server import (
-            _PROXY_track_cost_callback as track_cost_callback,
-        )
+        from litellm.proxy.proxy_server import _ProxyDBLogger
+
+        proxy_db_logger = _ProxyDBLogger()
 
         request_id = f"chatcmpl-{uuid.uuid4()}"
 
@@ -1897,7 +1896,7 @@ async def test_call_with_key_never_over_budget(prisma_client):
                 prompt_tokens=210000, completion_tokens=200000, total_tokens=41000
             ),
         )
-        await track_cost_callback(
+        await proxy_db_logger._PROXY_track_cost_callback(
             kwargs={
                 "model": "chatgpt-v-2",
                 "stream": False,
@@ -1965,9 +1964,9 @@ async def test_call_with_key_over_budget_stream(prisma_client):
         import uuid
 
         from litellm import Choices, Message, ModelResponse, Usage
-        from litellm.proxy.proxy_server import (
-            _PROXY_track_cost_callback as track_cost_callback,
-        )
+        from litellm.proxy.proxy_server import _ProxyDBLogger
+
+        proxy_db_logger = _ProxyDBLogger()
 
         request_id = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{uuid.uuid4()}"
         resp = ModelResponse(
@@ -1985,7 +1984,7 @@ async def test_call_with_key_over_budget_stream(prisma_client):
             model="gpt-35-turbo",  # azure always has model written like this
             usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
         )
-        await track_cost_callback(
+        await proxy_db_logger._PROXY_track_cost_callback(
             kwargs={
                 "call_type": "acompletion",
                 "model": "sagemaker-chatgpt-v-2",
@@ -2409,9 +2408,7 @@ async def track_cost_callback_helper_fn(generated_key: str, user_id: str):
     import uuid
 
     from litellm import Choices, Message, ModelResponse, Usage
-    from litellm.proxy.proxy_server import (
-        _PROXY_track_cost_callback as track_cost_callback,
-    )
+    from litellm.proxy.proxy_server import _ProxyDBLogger
 
     request_id = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{uuid.uuid4()}"
     resp = ModelResponse(
@@ -2429,7 +2426,8 @@ async def track_cost_callback_helper_fn(generated_key: str, user_id: str):
         model="gpt-35-turbo",  # azure always has model written like this
         usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
     )
-    await track_cost_callback(
+    proxy_db_logger = _ProxyDBLogger()
+    await proxy_db_logger._PROXY_track_cost_callback(
         kwargs={
             "call_type": "acompletion",
             "model": "sagemaker-chatgpt-v-2",

@@ -75,4 +75,4 @@ class HealthCheckCacheParams(BaseModel):
     port: Optional[Union[str, int]] = None
     redis_kwargs: Optional[Dict[str, Any]] = None
     namespace: Optional[str] = None
-    redis_version: Optional[str] = None
+    redis_version: Optional[Union[str, int, float]] = None

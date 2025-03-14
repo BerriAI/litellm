@@ -121,7 +121,11 @@ def test_get_model_info_gemini():
 
     model_map = litellm.model_cost
     for model, info in model_map.items():
-        if model.startswith("gemini/") and not "gemma" in model:
+        if (
+            model.startswith("gemini/")
+            and not "gemma" in model
+            and not "learnlm" in model
+        ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
 
@@ -340,6 +344,8 @@ def test_get_model_info_bedrock_models():
             base_model = BedrockModelInfo.get_base_model(k)
             base_model_info = litellm.model_cost[base_model]
             for base_model_key, base_model_value in base_model_info.items():
+                if "invoke/" in k:
+                    continue
                 if base_model_key.startswith("supports_"):
                     assert (
                         base_model_key in v

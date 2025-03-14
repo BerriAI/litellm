@@ -8,6 +8,7 @@ Returns a UserAPIKeyAuth object if the API key is valid
 """
 
 import asyncio
+import re
 import secrets
 from datetime import datetime, timezone
 from typing import Optional, cast
@@ -75,6 +76,11 @@ google_ai_studio_api_key_header = APIKeyHeader(
     name=SpecialHeaders.google_ai_studio_authorization.value,
     auto_error=False,
     description="If google ai studio client used.",
+)
+azure_apim_header = APIKeyHeader(
+    name=SpecialHeaders.azure_apim_authorization.value,
+    auto_error=False,
+    description="The default name of the subscription key header of Azure",
 )
 
 
@@ -279,12 +285,28 @@ def get_rbac_role(jwt_handler: JWTHandler, scopes: List[str]) -> str:
         return LitellmUserRoles.TEAM
 
 
+def get_model_from_request(request_data: dict, route: str) -> Optional[str]:
+
+    # First try to get model from request_data
+    model = request_data.get("model")
+
+    # If model not in request_data, try to extract from route
+    if model is None:
+        # Parse model from route that follows the pattern /openai/deployments/{model}/*
+        match = re.match(r"/openai/deployments/([^/]+)", route)
+        if match:
+            model = match.group(1)
+
+    return model
+
+
 async def _user_api_key_auth_builder(  # noqa: PLR0915
     request: Request,
     api_key: str,
     azure_api_key_header: str,
     anthropic_api_key_header: Optional[str],
     google_ai_studio_api_key_header: Optional[str],
+    azure_apim_header: Optional[str],
     request_data: dict,
 ) -> UserAPIKeyAuth:
 
@@ -328,6 +350,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             api_key = anthropic_api_key_header
         elif isinstance(google_ai_studio_api_key_header, str):
             api_key = google_ai_studio_api_key_header
+        elif isinstance(azure_apim_header, str):
+            api_key = azure_apim_header
         elif pass_through_endpoints is not None:
             for endpoint in pass_through_endpoints:
                 if endpoint.get("path", "") == route:
@@ -770,6 +794,13 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 )
                 valid_token = None
 
+        if valid_token is None:
+            raise Exception(
+                "Invalid proxy server token passed. Received API Key (hashed)={}. Unable to find token in cache or `LiteLLM_VerificationTokenTable`".format(
+                    api_key
+                )
+            )
+
         user_obj: Optional[LiteLLM_UserTable] = None
         valid_token_dict: dict = {}
         if valid_token is not None:
@@ -807,7 +838,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 # the validation will occur when checking the team has access to this model
                 pass
             else:
-                model = request_data.get("model", None)
+                model = get_model_from_request(request_data, route)
                 fallback_models = cast(
                     Optional[List[ALL_FALLBACK_MODEL_VALUES]],
                     request_data.get("fallbacks", None),
@@ -1142,6 +1173,7 @@ async def user_api_key_auth(
     google_ai_studio_api_key_header: Optional[str] = fastapi.Security(
         google_ai_studio_api_key_header
     ),
+    azure_apim_header: Optional[str] = fastapi.Security(azure_apim_header),
 ) -> UserAPIKeyAuth:
     """
     Parent function to authenticate user api key / jwt token.
@@ -1155,6 +1187,7 @@ async def user_api_key_auth(
         azure_api_key_header=azure_api_key_header,
         anthropic_api_key_header=anthropic_api_key_header,
         google_ai_studio_api_key_header=google_ai_studio_api_key_header,
+        azure_apim_header=azure_apim_header,
         request_data=request_data,
     )
 

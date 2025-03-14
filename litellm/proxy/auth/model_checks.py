@@ -1,5 +1,6 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
+import copy
 from typing import Dict, List, Optional, Set
 
 import litellm
@@ -30,7 +31,7 @@ def get_provider_models(provider: str) -> Optional[List[str]]:
         return get_valid_models()
 
     if provider in litellm.models_by_provider:
-        provider_models = litellm.models_by_provider[provider]
+        provider_models = copy.deepcopy(litellm.models_by_provider[provider])
         for idx, _model in enumerate(provider_models):
             if provider not in _model:
                 provider_models[idx] = f"{provider}/{_model}"

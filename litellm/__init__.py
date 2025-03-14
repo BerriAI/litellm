@@ -8,12 +8,14 @@ import os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
+from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
 from litellm.types.utils import (
     ImageObject,
     BudgetConfig,
     all_litellm_params,
     all_litellm_params as _litellm_completion_params,
+    CredentialItem,
 )  # maintain backwards compatibility for root param
 from litellm._logging import (
     set_verbose,
@@ -53,6 +55,7 @@ from litellm.constants import (
     cohere_embedding_models,
     bedrock_embedding_models,
     known_tokenizer_config,
+    BEDROCK_INVOKE_PROVIDERS_LITERAL,
 )
 from litellm.types.guardrails import GuardrailItem
 from litellm.proxy._types import (
@@ -180,6 +183,7 @@ baseten_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 novita_api_key: Optional[str] = None
+snowflake_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
@@ -189,15 +193,17 @@ ssl_verify: Union[str, bool] = True
 ssl_certificate: Optional[str] = None
 disable_streaming_logging: bool = False
 disable_add_transform_inline_image_block: bool = False
-in_memory_llm_clients_cache: InMemoryCache = InMemoryCache()
+in_memory_llm_clients_cache: LLMClientCache = LLMClientCache()
 safe_memory_mode: bool = False
 enable_azure_ad_token_refresh: Optional[bool] = False
 ### DEFAULT AZURE API VERSION ###
-AZURE_DEFAULT_API_VERSION = "2024-08-01-preview"  # this is updated to the latest
+AZURE_DEFAULT_API_VERSION = "2025-02-01-preview"  # this is updated to the latest
 ### DEFAULT WATSONX API VERSION ###
 WATSONX_DEFAULT_API_VERSION = "2024-03-13"
 ### COHERE EMBEDDINGS DEFAULT TYPE ###
 COHERE_DEFAULT_EMBEDDING_INPUT_TYPE: COHERE_EMBEDDING_INPUT_TYPES = "search_document"
+### CREDENTIALS ###
+credential_list: List[CredentialItem] = []
 ### GUARDRAILS ###
 llamaguard_model_name: Optional[str] = None
 openai_moderations_model_name: Optional[str] = None
@@ -277,8 +283,6 @@ disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 custom_prometheus_metadata_labels: List[str] = []
 #### REQUEST PRIORITIZATION ####
 priority_reservation: Optional[Dict[str, float]] = None
-
-
 force_ipv4: bool = (
     False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 )
@@ -362,17 +366,7 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-2-11b-instruct-v1:0",
     "meta.llama3-2-90b-instruct-v1:0",
 ]
-BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
-    "cohere",
-    "anthropic",
-    "mistral",
-    "amazon",
-    "meta",
-    "llama",
-    "ai21",
-    "nova",
-    "deepseek_r1",
-]
+
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models: List = []
 open_ai_text_completion_models: List = []
@@ -425,6 +419,7 @@ galadriel_models: List = []
 sambanova_models: List = []
 novita_models: List = []
 assemblyai_models: List = []
+snowflake_models: List = []
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
     """
@@ -579,6 +574,8 @@ def add_known_models():
             assemblyai_models.append(key)
         elif value.get("litellm_provider") == "jina_ai":
             jina_ai_models.append(key)
+        elif value.get("litellm_provider") == "snowflake":
+            snowflake_models.append(key)
 
 
 add_known_models()
@@ -607,6 +604,7 @@ petals_models = [
 ollama_models = ["llama2"]
 
 maritalk_models = ["maritalk"]
+
 
 model_list = (
     open_ai_chat_completion_models
@@ -653,6 +651,7 @@ model_list = (
     + novita_models
     + assemblyai_models
     + jina_ai_models
+    + snowflake_models
 )
 
 model_list_set = set(model_list)
@@ -709,6 +708,7 @@ models_by_provider: dict = {
     "novita": novita_models,
     "assemblyai": assemblyai_models,
     "jina_ai": jina_ai_models,
+    "snowflake": snowflake_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -814,9 +814,6 @@ from .llms.oobabooga.chat.transformation import OobaboogaConfig
 from .llms.maritalk import MaritalkConfig
 from .llms.openrouter.chat.transformation import OpenrouterConfig
 from .llms.anthropic.chat.transformation import AnthropicConfig
-from .llms.anthropic.experimental_pass_through.transformation import (
-    AnthropicExperimentalPassThroughConfig,
-)
 from .llms.groq.stt.transformation import GroqSTTConfig
 from .llms.anthropic.completion.transformation import AnthropicTextConfig
 from .llms.triton.completion.transformation import TritonConfig
@@ -828,6 +825,7 @@ from .llms.databricks.embed.transformation import DatabricksEmbeddingConfig
 from .llms.predibase.chat.transformation import PredibaseConfig
 from .llms.replicate.chat.transformation import ReplicateConfig
 from .llms.cohere.completion.transformation import CohereTextConfig as CohereConfig
+from .llms.snowflake.chat.transformation import SnowflakeConfig
 from .llms.cohere.rerank.transformation import CohereRerankConfig
 from .llms.cohere.rerank_v2.transformation import CohereRerankV2Config
 from .llms.azure_ai.rerank.transformation import AzureAIRerankConfig
@@ -835,6 +833,9 @@ from .llms.infinity.rerank.transformation import InfinityRerankConfig
 from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
+from .llms.anthropic.experimental_pass_through.messages.transformation import (
+    AnthropicMessagesConfig,
+)
 from .llms.together_ai.chat import TogetherAIConfig
 from .llms.together_ai.completion.transformation import TogetherAITextCompletionConfig
 from .llms.cloudflare.chat.transformation import CloudflareChatConfig
@@ -916,6 +917,7 @@ from .llms.bedrock.chat.invoke_transformations.base_invoke_transformation import
 
 from .llms.bedrock.image.amazon_stability1_transformation import AmazonStabilityConfig
 from .llms.bedrock.image.amazon_stability3_transformation import AmazonStability3Config
+from .llms.bedrock.image.amazon_nova_canvas_transformation import AmazonNovaCanvasConfig
 from .llms.bedrock.embed.amazon_titan_g1_transformation import AmazonTitanG1Config
 from .llms.bedrock.embed.amazon_titan_multimodal_transformation import (
     AmazonTitanMultimodalEmbeddingG1Config,
@@ -938,10 +940,13 @@ from .llms.groq.chat.transformation import GroqChatConfig
 from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
 from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from .llms.mistral.mistral_chat_transformation import MistralConfig
+from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from .llms.openai.chat.o_series_transformation import (
     OpenAIOSeriesConfig as OpenAIO1Config,  # maintain backwards compatibility
     OpenAIOSeriesConfig,
 )
+
+from .llms.snowflake.chat.transformation import SnowflakeConfig
 
 openaiOSeriesConfig = OpenAIOSeriesConfig()
 from .llms.openai.chat.gpt_transformation import (
@@ -1026,6 +1031,8 @@ from .assistants.main import *
 from .batches.main import *
 from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
+from .llms.anthropic.experimental_pass_through.messages.handler import *
+from .responses.main import *
 from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
 from .files.main import *
