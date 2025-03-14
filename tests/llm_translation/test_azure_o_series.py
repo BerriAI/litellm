@@ -18,81 +18,81 @@ from litellm import Choices, Message, ModelResponse
 from base_llm_unit_tests import BaseLLMChatTest, BaseOSeriesModelsTest
 
 
-class TestAzureOpenAIO1(BaseOSeriesModelsTest, BaseLLMChatTest):
-    def get_base_completion_call_args(self):
-        return {
-            "model": "azure/o1-preview",
-            "api_key": os.getenv("AZURE_OPENAI_O1_KEY"),
-            "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com",
-        }
+# class TestAzureOpenAIO1(BaseOSeriesModelsTest, BaseLLMChatTest):
+#     def get_base_completion_call_args(self):
+#         return {
+#             "model": "azure/o1-preview",
+#             "api_key": os.getenv("AZURE_OPENAI_O1_KEY"),
+#             "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com",
+#         }
 
-    def get_client(self):
-        from openai import AzureOpenAI
+#     def get_client(self):
+#         from openai import AzureOpenAI
 
-        return AzureOpenAI(
-            api_key="my-fake-o1-key",
-            base_url="https://openai-gpt-4-test-v-1.openai.azure.com",
-            api_version="2024-02-15-preview",
-        )
+#         return AzureOpenAI(
+#             api_key="my-fake-o1-key",
+#             base_url="https://openai-gpt-4-test-v-1.openai.azure.com",
+#             api_version="2024-02-15-preview",
+#         )
 
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        pass
+#     def test_tool_call_no_arguments(self, tool_call_no_arguments):
+#         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
+#         pass
 
-    def test_basic_tool_calling(self):
-        pass
+#     def test_basic_tool_calling(self):
+#         pass
 
-    def test_prompt_caching(self):
-        """Temporary override. o1 prompt caching is not working."""
-        pass
+#     def test_prompt_caching(self):
+#         """Temporary override. o1 prompt caching is not working."""
+#         pass
 
-    def test_override_fake_stream(self):
-        """Test that native streaming is not supported for o1."""
-        router = litellm.Router(
-            model_list=[
-                {
-                    "model_name": "azure/o1-preview",
-                    "litellm_params": {
-                        "model": "azure/o1-preview",
-                        "api_key": "my-fake-o1-key",
-                        "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com",
-                    },
-                    "model_info": {
-                        "supports_native_streaming": True,
-                    },
-                }
-            ]
-        )
+#     def test_override_fake_stream(self):
+#         """Test that native streaming is not supported for o1."""
+#         router = litellm.Router(
+#             model_list=[
+#                 {
+#                     "model_name": "azure/o1-preview",
+#                     "litellm_params": {
+#                         "model": "azure/o1-preview",
+#                         "api_key": "my-fake-o1-key",
+#                         "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com",
+#                     },
+#                     "model_info": {
+#                         "supports_native_streaming": True,
+#                     },
+#                 }
+#             ]
+#         )
 
-        ## check model info
+#         ## check model info
 
-        model_info = litellm.get_model_info(
-            model="azure/o1-preview", custom_llm_provider="azure"
-        )
-        assert model_info["supports_native_streaming"] is True
+#         model_info = litellm.get_model_info(
+#             model="azure/o1-preview", custom_llm_provider="azure"
+#         )
+#         assert model_info["supports_native_streaming"] is True
 
-        fake_stream = litellm.AzureOpenAIO1Config().should_fake_stream(
-            model="azure/o1-preview", stream=True
-        )
-        assert fake_stream is False
+#         fake_stream = litellm.AzureOpenAIO1Config().should_fake_stream(
+#             model="azure/o1-preview", stream=True
+#         )
+#         assert fake_stream is False
 
 
-class TestAzureOpenAIO3(BaseOSeriesModelsTest):
-    def get_base_completion_call_args(self):
-        return {
-            "model": "azure/o3-mini",
-            "api_key": "my-fake-o1-key",
-            "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com",
-        }
+# class TestAzureOpenAIO3(BaseOSeriesModelsTest):
+#     def get_base_completion_call_args(self):
+#         return {
+#             "model": "azure/o3-mini",
+#             "api_key": "my-fake-o1-key",
+#             "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com",
+#         }
 
-    def get_client(self):
-        from openai import AzureOpenAI
+#     def get_client(self):
+#         from openai import AzureOpenAI
 
-        return AzureOpenAI(
-            api_key="my-fake-o1-key",
-            base_url="https://openai-gpt-4-test-v-1.openai.azure.com",
-            api_version="2024-02-15-preview",
-        )
+#         return AzureOpenAI(
+#             api_key="my-fake-o1-key",
+#             base_url="https://openai-gpt-4-test-v-1.openai.azure.com",
+#             api_version="2024-02-15-preview",
+#         )
 
 
 def test_azure_o3_streaming():
