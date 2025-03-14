@@ -1598,6 +1598,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     sso_user_id: Optional[str] = None
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
+    metadata: Optional[dict] = None
 
     @model_validator(mode="before")
     @classmethod
