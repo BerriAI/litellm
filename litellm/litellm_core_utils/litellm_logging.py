@@ -719,25 +719,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
         Masks the headers of the request sent from LiteLLM
         """
-        sensitive_keywords = [
-            "authorization",
-            "token",
-            "key",
-            "secret",
-        ]
-        return {
-            k: (
-                (v[:-44] + "*" * 44)
-                if (isinstance(v, str) and len(v) > 44)
-                else "*****"
-            )
-            for k, v in headers.items()
-            if not ignore_sensitive_headers
-            or not any(
-                sensitive_keyword in k.lower()
-                for sensitive_keyword in sensitive_keywords
-            )
-        }
+        return _get_masked_values(
+            headers, ignore_sensitive_values=ignore_sensitive_headers
+        )
 
     def post_call(
         self, original_response, input=None, api_key=None, additional_args={}
@@ -2411,6 +2395,58 @@ class Logging(LiteLLMLoggingBaseClass):
             litellm_params={},
         )
         return result
+
+
+def _get_masked_values(
+    sensitive_object: dict,
+    ignore_sensitive_values: bool = False,
+    mask_all_values: bool = False,
+    unmasked_length: int = 44,
+    number_of_asterisks: Optional[int] = None,
+) -> dict:
+    """
+    Internal debugging helper function
+
+    Masks the headers of the request sent from LiteLLM
+
+    Args:
+        masked_length: Optional length for the masked portion (number of *). If set, will use exactly this many *
+                     regardless of original string length. The total length will be unmasked_length + masked_length.
+    """
+    sensitive_keywords = [
+        "authorization",
+        "token",
+        "key",
+        "secret",
+    ]
+    return {
+        k: (
+            (
+                v[: unmasked_length // 2]
+                + "*" * number_of_asterisks
+                + v[-unmasked_length // 2 :]
+            )
+            if (
+                isinstance(v, str)
+                and len(v) > unmasked_length
+                and number_of_asterisks is not None
+            )
+            else (
+                (
+                    v[: unmasked_length // 2]
+                    + "*" * (len(v) - unmasked_length)
+                    + v[-unmasked_length // 2 :]
+                )
+                if (isinstance(v, str) and len(v) > unmasked_length)
+                else "*****"
+            )
+        )
+        for k, v in sensitive_object.items()
+        if not ignore_sensitive_values
+        or not any(
+            sensitive_keyword in k.lower() for sensitive_keyword in sensitive_keywords
+        )
+    }
 
 
 def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
