@@ -56,6 +56,16 @@ run the following command on the root of the litellm directory
 make test-unit
 ```
 
+## 3.5 Running Linting Tests
+
+run the following command on the root of the litellm directory
+
+```shell
+make lint
+```
+
+LiteLLM uses mypy for linting.
+
 ## 4. Submit a PR with your changes!
 
 - push your fork to your GitHub repo
