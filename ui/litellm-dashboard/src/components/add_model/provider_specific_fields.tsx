@@ -1,10 +1,11 @@
 import React from "react";
-import { Form, Select } from "antd";
+import { Form, Select, Space, Typography } from "antd";
 import { TextInput, Text } from "@tremor/react";
-import { Row, Col, Typography, Button as Button2, Upload, UploadProps } from "antd";
-import { UploadOutlined } from "@ant-design/icons";
+import { Row, Col, Typography as AntTypography, Button as Button2, Upload, UploadProps } from "antd";
+import { UploadOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import { Providers } from "../provider_info_helpers";
-const { Link } = Typography;
+
+const { Link } = AntTypography;
 
 interface ProviderSpecificFieldsProps {
   selectedProvider: Providers;
@@ -102,13 +103,41 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
         selectedProviderEnum === Providers.OpenAI_Compatible ||
         selectedProviderEnum === Providers.OpenAI_Text_Compatible
       ) && (
-        <Form.Item
-          rules={[{ required: true, message: "Required" }]}
-          label="API Base"
-          name="api_base"
-        >
-          <TextInput placeholder="https://..." />
-        </Form.Item>
+        <>
+          <Form.Item
+            rules={[{ required: true, message: "Required" }]}
+            label="API Base"
+            name="api_base"
+          >
+            <TextInput placeholder="https://..." />
+          </Form.Item>
+          
+          {selectedProviderEnum === Providers.Azure_AI_Studio && (
+            <>
+              <Row className="mt-2">
+                <Col span={10}></Col>
+                <Col span={14}>
+                  <Space className="mb-4 text-gray-500" align="start" size={12}>
+                    <InfoCircleOutlined className="text-blue-500 mt-1" />
+                    <div className="bg-gray-50 p-3 rounded-md border border-gray-100">
+                      <Typography.Text strong className="block mb-2">
+                        Enter your full Target URI from Azure Foundry here
+                      </Typography.Text>
+                      <Typography.Text className="block mb-1 text-xs">
+                        Example API Base:
+                      </Typography.Text>
+                      <div className="bg-gray-100 p-2 rounded border border-gray-200">
+                        <Typography.Text code className="text-xs block break-all">
+                          https://litellm8397336933.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-10-21
+                        </Typography.Text>
+                      </div>
+                    </div>
+                  </Space>
+                </Col>
+              </Row>
+            </>
+          )}
+        </>
       )}
 
       {selectedProviderEnum === Providers.Azure && (
