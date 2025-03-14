@@ -2304,17 +2304,22 @@ export const testConnectionRequest = async (
     const data = await response.json();
     
     if (!response.ok || data.status === "error") {
-      // Handle the specific error format you're receiving
-      if (data.status === "error" && data.result && data.result.error) {
-        throw new Error(data.result.error);
+      // Return the error response instead of throwing an error
+      // This allows the caller to handle the error format properly
+      if (data.status === "error") {
+        return data; // Return the full error response
       } else {
-        throw new Error(data.error?.message || `Connection test failed: ${response.status} ${response.statusText}`);
+        return {
+          status: "error",
+          message: data.error?.message || `Connection test failed: ${response.status} ${response.statusText}`
+        };
       }
     }
 
     return data;
   } catch (error) {
     console.error("Model connection test error:", error);
+    // For network errors or other exceptions, still throw
     throw error;
   }
 };
