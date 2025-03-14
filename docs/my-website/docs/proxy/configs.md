@@ -474,6 +474,7 @@ credential_list:
 #### Key Parameters
 - `credential_name`: Unique identifier for the credential set
 - `credential_values`: Key-value pairs of credentials/secrets (supports `os.environ/` syntax)
+- `credential_info`: Key-value pairs of user provided credentials information.  No key-value pairs are required, but the dictionary must exist.
 
 ### Load API Keys from Secret Managers (Azure Vault, etc)
 
