@@ -10,19 +10,26 @@ model/{model_id}/update - PATCH endpoint for model update.
 
 #### MODEL MANAGEMENT ####
 
+import asyncio
 import json
 import uuid
+from datetime import datetime, timezone
 from typing import Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._types import (
+    AUDIT_ACTIONS,
     CommonProxyErrors,
+    LiteLLM_AuditLogs,
     LiteLLM_ProxyModelTable,
+    LitellmTableNames,
     LitellmUserRoles,
+    ModelInfoDelete,
     PrismaCompatibleUpdateDBModel,
     ProxyErrorTypes,
     ProxyException,
@@ -36,6 +43,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     team_model_add,
     update_team,
 )
+from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 from litellm.proxy.utils import PrismaClient
 from litellm.types.router import (
     Deployment,
@@ -329,3 +337,101 @@ def check_if_team_id_matches_key(
         if user_api_key_dict.team_id != team_id:
             can_make_call = False
     return can_make_call
+
+
+#### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
+@router.post(
+    "/model/delete",
+    description="Allows deleting models in the model list in the config.yaml",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def delete_model(
+    model_info: ModelInfoDelete,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    global llm_router, llm_model_list, general_settings, user_config_file_path, proxy_config
+    try:
+        """
+        [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
+
+        - Check if id in db
+        - Delete
+        """
+
+        from litellm.proxy.proxy_server import (
+            llm_router,
+            prisma_client,
+            store_model_in_db,
+        )
+
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "No DB Connected. Here's how to do it - https://docs.litellm.ai/docs/proxy/virtual_keys"
+                },
+            )
+
+        # update DB
+        if store_model_in_db is True:
+            """
+            - store model_list in db
+            - store keys separately
+            """
+            # encrypt litellm params #
+            result = await prisma_client.db.litellm_proxymodeltable.delete(
+                where={"model_id": model_info.id}
+            )
+
+            if result is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": f"Model with id={model_info.id} not found in db"},
+                )
+
+            ## DELETE FROM ROUTER ##
+            if llm_router is not None:
+                llm_router.delete_deployment(id=model_info.id)
+
+            ## CREATE AUDIT LOG ##
+            asyncio.create_task(
+                create_object_audit_log(
+                    object_id=model_info.id,
+                    action="deleted",
+                    user_api_key_dict=user_api_key_dict,
+                    table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+                    before_value=result.model_dump_json(exclude_none=True),
+                    after_value=None,
+                    litellm_changed_by=user_api_key_dict.user_id,
+                    litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+                )
+            )
+            return {"message": f"Model: {result.model_id} deleted successfully"}
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
+                },
+            )
+
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            f"Failed to delete model. Due to error - {str(e)}"
+        )
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type=ProxyErrorTypes.auth_error,
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type=ProxyErrorTypes.auth_error,
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_400_BAD_REQUEST,
+        )
