@@ -10,6 +10,7 @@ from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.bedrock.rerank.handler import BedrockRerankHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.together_ai.rerank.handler import TogetherAIRerank
+from litellm.llms.hosted_vllm.rerank.handler import HostedVLLMRerank
 from litellm.rerank_api.rerank_utils import get_optional_rerank_params
 from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.rerank import OptionalRerankParams, RerankResponse
@@ -21,6 +22,7 @@ from litellm.utils import ProviderConfigManager, client, exception_type
 together_rerank = TogetherAIRerank()
 bedrock_rerank = BedrockRerankHandler()
 base_llm_http_handler = BaseLLMHTTPHandler()
+hosted_vllm_rerank = HostedVLLMRerank()
 #################################################
 
 
@@ -75,7 +77,7 @@ def rerank(  # noqa: PLR0915
     query: str,
     documents: List[Union[str, Dict[str, Any]]],
     custom_llm_provider: Optional[
-        Literal["cohere", "together_ai", "azure_ai", "infinity", "litellm_proxy"]
+        Literal["cohere", "together_ai", "azure_ai", "infinity", "litellm_proxy", "hosted_vllm"]
     ] = None,
     top_n: Optional[int] = None,
     rank_fields: Optional[List[str]] = None,
@@ -320,6 +322,37 @@ def rerank(  # noqa: PLR0915
                 api_base=api_base,
                 logging_obj=litellm_logging_obj,
                 client=client,
+            )
+        elif _custom_llm_provider == "hosted_vllm":
+            # Implement Hosted VLLM rerank logic
+            api_key = (
+                dynamic_api_key
+                or optional_params.api_key
+                or get_secret_str("HOSTED_VLLM_API_KEY")
+            )
+
+            api_base = (
+                dynamic_api_base
+                or optional_params.api_base
+                or get_secret_str("HOSTED_VLLM_API_BASE")
+            )
+
+            if api_base is None:
+                raise ValueError(
+                    "api_base must be provided for Hosted VLLM rerank. Set in call or via HOSTED_VLLM_API_BASE env var."
+                )
+
+            response = hosted_vllm_rerank.rerank(
+                model=model,
+                query=query,
+                documents=documents,
+                top_n=top_n,
+                rank_fields=rank_fields,
+                return_documents=return_documents,
+                max_chunks_per_doc=max_chunks_per_doc,
+                api_key=api_key,
+                api_base=api_base,
+                _is_async=_is_async,
             )
         else:
             raise ValueError(f"Unsupported provider: {_custom_llm_provider}")
