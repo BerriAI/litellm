@@ -3,11 +3,10 @@ import { provider_map, Providers } from "../provider_info_helpers";
 import { modelCreateCall, Model } from "../networking";
 
 
-export const handleAddModelSubmit = async (
+export const prepareModelAddRequest = async (
     formValues: Record<string, any>,
     accessToken: string,
     form: any,
-    callback?: ()=>void
   ) => {
     try {
       console.log("handling submit for formValues:", formValues);
@@ -135,20 +134,45 @@ export const handleAddModelSubmit = async (
             litellmParamsObj[key] = value;
           }
         }
-  
-        const new_model: Model = {
-          model_name: modelName,
-          litellm_params: litellmParamsObj,
-          model_info: modelInfoObj,
-        };
-  
-        const response: any = await modelCreateCall(accessToken, new_model);
-        console.log(`response for model create call: ${response["data"]}`);
-      }
 
-      callback && callback()
-      form.resetFields();
+        return { litellmParamsObj, modelInfoObj, modelName };
+      }
     } catch (error) {
       message.error("Failed to create model: " + error, 10);
     }
   };
+
+export const handleAddModelSubmit = async (
+    accessToken: string,
+    form: any,
+    callback?: () => void,
+  ) => {
+    try {
+      const formValues = form.getFieldsValue();
+      const result = await prepareModelAddRequest(formValues, accessToken, form);
+      
+      if (!result) {
+        return; // Exit if preparation failed
+      }
+      
+      const { litellmParamsObj, modelInfoObj, modelName } = result;
+      
+      const new_model: Model = {
+        model_name: modelName,
+        litellm_params: litellmParamsObj,
+        model_info: modelInfoObj,
+      };
+      
+      const response: any = await modelCreateCall(accessToken, new_model);
+      console.log(`response for model create call: ${response["data"]}`);
+      
+      callback && callback();
+      form.resetFields();
+      
+      message.success("Model added successfully");
+    } catch (error) {
+      message.error("Failed to add model: " + error, 10);
+    }
+  };
+
+     
