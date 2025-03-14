@@ -4668,17 +4668,27 @@ def test_completion_novita_ai():
                 "content": "Hey",
             },
         ]
-        response = completion(
-            model="novita/meta-llama/llama-3.3-70b-instruct",
-            messages=messages,
-        )
-        print(response)
+        
+        from openai import OpenAI
+        openai_client = OpenAI(api_key="fake-key")
+        
+        with patch.object(
+            openai_client.chat.completions, "create", new=MagicMock()
+        ) as mock_call:
+            completion(
+                model="novita/meta-llama/llama-3.3-70b-instruct",
+                messages=messages,
+                client=openai_client,
+                api_base="https://api.novita.ai/v3/openai",
+            )
+            
+            mock_call.assert_called_once()
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.parametrize(
-    "api_key", [("my-bad-api-key", None)]
+    "api_key", ["my-bad-api-key"]
 )
 def test_completion_novita_ai_dynamic_params(api_key):
     try:
@@ -4690,14 +4700,29 @@ def test_completion_novita_ai_dynamic_params(api_key):
                 "content": "Hey",
             },
         ]
-        response = completion(
-            model="novita/meta-llama/llama-3.3-70b-instruct",
-            messages=messages,
-            api_key=api_key,
-        )
-        pytest.fail(f"This call should have failed!")
+        
+        from openai import OpenAI
+        openai_client = OpenAI(api_key="fake-key")
+        
+        with patch.object(
+            openai_client.chat.completions, "create", side_effect=Exception("Invalid API key")
+        ) as mock_call:
+            try:
+                completion(
+                    model="novita/meta-llama/llama-3.3-70b-instruct",
+                    messages=messages,
+                    api_key=api_key,
+                    client=openai_client,
+                    api_base="https://api.novita.ai/v3/openai",
+                )
+                pytest.fail(f"This call should have failed!")
+            except Exception as e:
+                # This should fail with the mocked exception
+                assert "Invalid API key" in str(e)
+                
+            mock_call.assert_called_once()
     except Exception as e:
-        pass
+        pytest.fail(f"Unexpected error: {e}")
 
 def test_deepseek_reasoning_content_completion():
     try:
