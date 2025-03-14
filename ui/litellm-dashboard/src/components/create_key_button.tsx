@@ -266,6 +266,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       message.success("API Key Created");
       form.resetFields();
       localStorage.removeItem("userData" + userID);
+      
+      // Add this line to refresh the keys list immediately
+      if (window.refreshKeysList) {
+        window.refreshKeysList();
+      }
     } catch (error) {
       console.log("error in create key:", error);
       message.error(`Error creating the key: ${error}`);
