@@ -18,19 +18,27 @@ def test_transform_usage():
     usage = ConverseTokenUsageBlock(
         **{
             "cacheReadInputTokenCount": 0,
-            "cacheReadInputTokens": 10,
-            "cacheCreationInputTokenCount": 0,
-            "cacheCreationInputTokens": 0,
-            "inputTokens": 12,
-            "outputTokens": 56,
-            "totalTokens": 78,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 1789,
+            "cacheWriteInputTokens": 1789,
+            "inputTokens": 3,
+            "outputTokens": 401,
+            "totalTokens": 2193,
         }
     )
     config = AmazonConverseConfig()
     openai_usage = config._transform_usage(usage)
-    assert openai_usage.prompt_tokens == 22
-    assert openai_usage.completion_tokens == 56
-    assert openai_usage.total_tokens == 78
-    assert openai_usage.prompt_tokens_details.cached_tokens == 10
-    assert openai_usage._cache_creation_input_tokens == 0
-    assert openai_usage._cache_read_input_tokens == 10
+    assert (
+        openai_usage.prompt_tokens
+        == usage["inputTokens"]
+        + usage["cacheWriteInputTokens"]
+        + usage["cacheReadInputTokens"]
+    )
+    assert openai_usage.completion_tokens == usage["outputTokens"]
+    assert openai_usage.total_tokens == usage["totalTokens"]
+    assert (
+        openai_usage.prompt_tokens_details.cached_tokens
+        == usage["cacheReadInputTokens"]
+    )
+    assert openai_usage._cache_creation_input_tokens == usage["cacheWriteInputTokens"]
+    assert openai_usage._cache_read_input_tokens == usage["cacheReadInputTokens"]
