@@ -237,3 +237,12 @@ class TestOpenAIResponsesAPIConfig:
         result = self.config.get_complete_url(api_base=api_base, model=self.model)
 
         assert result == "https://custom-openai.example.com/v1/responses"
+
+        # Test wil response_id path parameter
+        api_base = "https://custom-openai.example.com/v1/"
+
+        result = self.config.get_complete_url(api_base=api_base, response_id="resp_1234")
+
+        assert result == "https://custom-openai.example.com/v1/responses/resp_1234"
+
+
