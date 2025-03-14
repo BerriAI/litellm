@@ -840,3 +840,32 @@ async def test_openai_responses_litellm_router_with_metadata():
         ), "metadata in request body should match what was passed"
         mock_post.assert_called_once()
 
+def test_bad_request_bad_param_error():
+    """Raise a BadRequestError when an invalid parameter value is provided"""
+    try:
+        litellm.responses(model="gpt-4o", input="This should fail", temperature=2000)
+        pytest.fail("Expected BadRequestError but no exception was raised")
+    except litellm.BadRequestError as e:
+        print(f"Exception raised: {e}")
+        print(f"Exception type: {type(e)}")
+        print(f"Exception args: {e.args}")
+        print(f"Exception details: {e.__dict__}")
+    except Exception as e:
+        pytest.fail(f"Unexpected exception raised: {e}")
+
+
+@pytest.mark.asyncio()
+async def test_async_bad_request_bad_param_error():
+    """Raise a BadRequestError when an invalid parameter value is provided"""
+    try:
+        await litellm.aresponses(
+            model="gpt-4o", input="This should fail", temperature=2000
+        )
+        pytest.fail("Expected BadRequestError but no exception was raised")
+    except litellm.BadRequestError as e:
+        print(f"Exception raised: {e}")
+        print(f"Exception type: {type(e)}")
+        print(f"Exception args: {e.args}")
+        print(f"Exception details: {e.__dict__}")
+    except Exception as e:
+        pytest.fail(f"Unexpected exception raised: {e}")
