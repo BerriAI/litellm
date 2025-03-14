@@ -2,7 +2,7 @@
 CRUD endpoints for storing reusable credentials.
 """
 
-from typing import Optional, Union
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
