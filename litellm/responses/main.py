@@ -58,14 +58,23 @@ async def aresponses(
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     timeout: Optional[Union[float, httpx.Timeout]] = None,
+    # LiteLLM specific params,
+    custom_llm_provider: Optional[str] = None,
     **kwargs,
 ) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
     """
     Async: Handles responses API requests by reusing the synchronous function
     """
+    local_vars = locals()
     try:
         loop = asyncio.get_event_loop()
         kwargs["aresponses"] = True
+
+        # get custom llm provider so we can use this for mapping exceptions
+        if custom_llm_provider is None:
+            _, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                model=model, api_base=local_vars.get("base_url", None)
+            )
 
         func = partial(
             responses,
@@ -91,6 +100,7 @@ async def aresponses(
             extra_query=extra_query,
             extra_body=extra_body,
             timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
             **kwargs,
         )
 
@@ -104,7 +114,13 @@ async def aresponses(
             response = init_response
         return response
     except Exception as e:
-        raise e
+        raise litellm.exception_type(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
 
 
 @client
@@ -133,85 +149,97 @@ def responses(
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     timeout: Optional[Union[float, httpx.Timeout]] = None,
+    # LiteLLM specific params,
+    custom_llm_provider: Optional[str] = None,
     **kwargs,
 ):
     """
     Synchronous version of the Responses API.
     Uses the synchronous HTTP handler to make requests.
     """
-    litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-    litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
-    _is_async = kwargs.pop("aresponses", False) is True
-
-    # get llm provider logic
-    litellm_params = GenericLiteLLMParams(**kwargs)
-    model, custom_llm_provider, dynamic_api_key, dynamic_api_base = (
-        litellm.get_llm_provider(
-            model=model,
-            custom_llm_provider=kwargs.get("custom_llm_provider", None),
-            api_base=litellm_params.api_base,
-            api_key=litellm_params.api_key,
-        )
-    )
-
-    # get provider config
-    responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
-        ProviderConfigManager.get_provider_responses_api_config(
-            model=model,
-            provider=litellm.LlmProviders(custom_llm_provider),
-        )
-    )
-
-    if responses_api_provider_config is None:
-        raise litellm.BadRequestError(
-            model=model,
-            llm_provider=custom_llm_provider,
-            message=f"Responses API not available for custom_llm_provider={custom_llm_provider}, model: {model}",
-        )
-
-    # Get all parameters using locals() and combine with kwargs
     local_vars = locals()
-    local_vars.update(kwargs)
-    # Get ResponsesAPIOptionalRequestParams with only valid parameters
-    response_api_optional_params: ResponsesAPIOptionalRequestParams = (
-        ResponsesAPIRequestUtils.get_requested_response_api_optional_param(local_vars)
-    )
+    try:
+        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        _is_async = kwargs.pop("aresponses", False) is True
 
-    # Get optional parameters for the responses API
-    responses_api_request_params: Dict = (
-        ResponsesAPIRequestUtils.get_optional_params_responses_api(
-            model=model,
-            responses_api_provider_config=responses_api_provider_config,
-            response_api_optional_params=response_api_optional_params,
+        # get llm provider logic
+        litellm_params = GenericLiteLLMParams(**kwargs)
+        model, custom_llm_provider, dynamic_api_key, dynamic_api_base = (
+            litellm.get_llm_provider(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                api_base=litellm_params.api_base,
+                api_key=litellm_params.api_key,
+            )
         )
-    )
 
-    # Pre Call logging
-    litellm_logging_obj.update_environment_variables(
-        model=model,
-        user=user,
-        optional_params=dict(responses_api_request_params),
-        litellm_params={
-            "litellm_call_id": litellm_call_id,
-            **responses_api_request_params,
-        },
-        custom_llm_provider=custom_llm_provider,
-    )
+        # get provider config
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+            ProviderConfigManager.get_provider_responses_api_config(
+                model=model,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
+        )
 
-    # Call the handler with _is_async flag instead of directly calling the async handler
-    response = base_llm_http_handler.response_api_handler(
-        model=model,
-        input=input,
-        responses_api_provider_config=responses_api_provider_config,
-        response_api_optional_request_params=responses_api_request_params,
-        custom_llm_provider=custom_llm_provider,
-        litellm_params=litellm_params,
-        logging_obj=litellm_logging_obj,
-        extra_headers=extra_headers,
-        extra_body=extra_body,
-        timeout=timeout or request_timeout,
-        _is_async=_is_async,
-        client=kwargs.get("client"),
-    )
+        if responses_api_provider_config is None:
+            raise litellm.BadRequestError(
+                model=model,
+                llm_provider=custom_llm_provider,
+                message=f"Responses API not available for custom_llm_provider={custom_llm_provider}, model: {model}",
+            )
 
-    return response
+        local_vars.update(kwargs)
+        # Get ResponsesAPIOptionalRequestParams with only valid parameters
+        response_api_optional_params: ResponsesAPIOptionalRequestParams = (
+            ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
+                local_vars
+            )
+        )
+
+        # Get optional parameters for the responses API
+        responses_api_request_params: Dict = (
+            ResponsesAPIRequestUtils.get_optional_params_responses_api(
+                model=model,
+                responses_api_provider_config=responses_api_provider_config,
+                response_api_optional_params=response_api_optional_params,
+            )
+        )
+
+        # Pre Call logging
+        litellm_logging_obj.update_environment_variables(
+            model=model,
+            user=user,
+            optional_params=dict(responses_api_request_params),
+            litellm_params={
+                "litellm_call_id": litellm_call_id,
+                **responses_api_request_params,
+            },
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        # Call the handler with _is_async flag instead of directly calling the async handler
+        response = base_llm_http_handler.response_api_handler(
+            model=model,
+            input=input,
+            responses_api_provider_config=responses_api_provider_config,
+            response_api_optional_request_params=responses_api_request_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            logging_obj=litellm_logging_obj,
+            extra_headers=extra_headers,
+            extra_body=extra_body,
+            timeout=timeout or request_timeout,
+            _is_async=_is_async,
+            client=kwargs.get("client"),
+        )
+
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )

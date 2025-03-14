@@ -248,6 +248,13 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/realtime",
         "/realtime?{model}",
         "/v1/realtime?{model}",
+        # responses API
+        "/responses",
+        "/v1/responses",
+        "/responses/{response_id}",
+        "/v1/responses/{response_id}",
+        "/responses/{response_id}/input_items",
+        "/v1/responses/{response_id}/input_items",
     ]
 
     mapped_pass_through_routes = [
