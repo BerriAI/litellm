@@ -13,19 +13,15 @@ model/{model_id}/update - PATCH endpoint for model update.
 import asyncio
 import json
 import uuid
-from datetime import datetime, timezone
 from typing import Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._types import (
-    AUDIT_ACTIONS,
     CommonProxyErrors,
-    LiteLLM_AuditLogs,
     LiteLLM_ProxyModelTable,
     LitellmTableNames,
     LitellmUserRoles,
@@ -350,13 +346,7 @@ async def delete_model(
     model_info: ModelInfoDelete,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    from litellm.proxy.proxy_server import (
-        general_settings,
-        llm_model_list,
-        llm_router,
-        proxy_config,
-        user_config_file_path,
-    )
+    from litellm.proxy.proxy_server import llm_router
 
     try:
         """
@@ -457,19 +447,14 @@ async def add_new_model(
 ):
     from litellm.proxy.proxy_server import (
         general_settings,
-        llm_model_list,
-        llm_router,
-        master_key,
         premium_user,
         prisma_client,
         proxy_config,
         proxy_logging_obj,
         store_model_in_db,
-        user_config_file_path,
     )
 
     try:
-        import base64
 
         if prisma_client is None:
             raise HTTPException(
@@ -607,19 +592,12 @@ async def update_model(
     """
     from litellm.proxy.proxy_server import (
         LITELLM_PROXY_ADMIN_NAME,
-        general_settings,
-        llm_model_list,
         llm_router,
-        master_key,
         prisma_client,
-        proxy_config,
-        proxy_logging_obj,
         store_model_in_db,
-        user_config_file_path,
     )
 
     try:
-        import base64
 
         if prisma_client is None:
             raise HTTPException(

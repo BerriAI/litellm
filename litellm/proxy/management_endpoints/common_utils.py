@@ -1,18 +1,11 @@
-import uuid
-from datetime import datetime, timezone
-from typing import Any, Optional, Union
+from typing import Any, Union
 
-import litellm
 from litellm.proxy._types import (
-    AUDIT_ACTIONS,
     GenerateKeyRequest,
-    LiteLLM_AuditLogs,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLM_TeamTable,
-    LitellmTableNames,
     UserAPIKeyAuth,
 )
-from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.utils import _premium_user_check
 
 
