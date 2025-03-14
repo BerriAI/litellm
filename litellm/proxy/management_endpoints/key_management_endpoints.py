@@ -627,8 +627,7 @@ def prepare_metadata_fields(
 
 def prepare_key_update_data(
     data: Union[UpdateKeyRequest, RegenerateKeyRequest], 
-    existing_key_row,
-    user_api_key_dict: Optional[UserAPIKeyAuth] = None
+    existing_key_row
 ):
     data_json: dict = data.model_dump(exclude_unset=True)
     data_json.pop("key", None)
@@ -638,30 +637,10 @@ def prepare_key_update_data(
             continue
         non_default_values[k] = v
 
-    # Check if user is trying to modify user_id or team_id
-    if user_api_key_dict is not None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
-        # For internal users, prevent changing user_id to null or to another user's id
-        if "user_id" in non_default_values:
-            new_user_id = non_default_values["user_id"]
-            if new_user_id is None or (user_api_key_dict.user_id is not None and new_user_id != user_api_key_dict.user_id):
-                raise HTTPException(
-                    status_code=403,
-                    detail={"error": "You are not authorized to change the user_id of this key"}
-                )
-        
-        # For internal users, prevent changing team_id to null or to a team they don't belong to
-        if "team_id" in non_default_values:
-            new_team_id = non_default_values["team_id"]
-            user_teams = user_api_key_dict.teams or []
-            if new_team_id is None or (len(user_teams) > 0 and new_team_id not in user_teams):
-                raise HTTPException(
-                    status_code=403,
-                    detail={"error": "You are not authorized to change the team_id to a team you don't belong to"}
-                )
-
-    # Preserve user_id if not explicitly provided
-    if "user_id" not in non_default_values and existing_key_row.user_id:
-        non_default_values["user_id"] = existing_key_row.user_id
+    # Ensure user_id is preserved from existing key and not set to null
+    if existing_key_row.user_id:
+        if "user_id" not in non_default_values or non_default_values["user_id"] is None:
+            non_default_values["user_id"] = existing_key_row.user_id
 
     if "duration" in non_default_values:
         duration = non_default_values.pop("duration")
@@ -793,7 +772,6 @@ async def update_key_fn(
         non_default_values = prepare_key_update_data(
             data=data, 
             existing_key_row=existing_key_row,
-            user_api_key_dict=user_api_key_dict
         )
 
         await _enforce_unique_key_alias(
@@ -1790,7 +1768,7 @@ async def regenerate_key_fn(
         if data is not None:
             # Update with any provided parameters from GenerateKeyRequest
             non_default_values = prepare_key_update_data(
-                data=data, existing_key_row=_key_in_db, user_api_key_dict=user_api_key_dict
+                data=data, existing_key_row=_key_in_db
             )
             verbose_proxy_logger.debug("non_default_values: %s", non_default_values)
 
