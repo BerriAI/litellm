@@ -152,7 +152,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
           className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
           onClick={handleOutsideClick}
         >
-          <div className="bg-white rounded-lg shadow-xl relative w-11/12 max-w-6xl max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-lg shadow-xl relative w-11/12 max-w-6xl max-h-[90vh] overflow-y-auto min-h-[750px]">
             {/* Close button */}
             <button
               onClick={handleClose}
@@ -165,7 +165,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
             </button>
 
             {/* Content */}
-            <div className="p-6">
+            <div className="p-6 h-full">
               <KeyInfoView
                 keyId={selectedKey}
                 onClose={handleClose}
