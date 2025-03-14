@@ -719,7 +719,7 @@ async def user_update(
             
     
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
     try:
         data_json: dict = data.json()
@@ -732,9 +732,16 @@ async def user_update(
             data_json=data_json, data=data
         )
 
-        existing_user_row = await prisma_client.get_data(
-            user_id=data.user_id, table_name="user", query_type="find_unique"
-        )
+        existing_user_row: Optional[BaseModel] = None
+        if data.user_id is not None:
+            existing_user_row = await prisma_client.db.litellm_usertable.find_first(
+                where={"user_id": data.user_id}
+            )
+            if existing_user_row is None:
+                raise Exception(f"User not found, passed user_id={data.user_id}")
+            existing_user_row = LiteLLM_UserTable(
+                **existing_user_row.model_dump(exclude_none=True)
+            )
 
         existing_metadata = existing_user_row.metadata if existing_user_row else {}
 
@@ -781,6 +788,41 @@ async def user_update(
                         data=non_default_values,
                         table_name="user",
                     )
+
+        if response is not None:  # emit audit log
+            try:
+                user_row: BaseModel = (
+                    await prisma_client.db.litellm_usertable.find_first(
+                        where={"user_id": response["user_id"]}
+                    )
+                )
+
+                user_row_litellm_typed = LiteLLM_UserTable(
+                    **user_row.model_dump(exclude_none=True)
+                )
+                asyncio.create_task(
+                    create_internal_user_audit_log(
+                        user_id=user_row_litellm_typed.user_id,
+                        action="updated",
+                        litellm_changed_by=user_api_key_dict.user_id,
+                        user_api_key_dict=user_api_key_dict,
+                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        before_value=(
+                            existing_user_row.model_dump_json(exclude_none=True)
+                            if existing_user_row
+                            else None
+                        ),
+                        after_value=user_row_litellm_typed.model_dump_json(
+                            exclude_none=True
+                        ),
+                    )
+                )
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    "Unable to create audit log for user on `/user/update` - {}".format(
+                        str(e)
+                    )
+                )
         return response  # type: ignore
         # update based on remaining passed in values
     except Exception as e:
