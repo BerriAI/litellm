@@ -2273,6 +2273,37 @@ export const keyInfoCall = async (accessToken: String, keys: String[]) => {
   }
 };
 
+
+export const keyInfoV1Call = async (accessToken: string, key: string) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/key/info` : `/key/info`;
+    url = `${url}?key=${key}`; // Add key as query parameter
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      // Remove body since this is a GET request
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch key info:", error);
+    throw error;
+  }
+};
+
+
+
 export const keyListCall = async (
   accessToken: String, 
   organizationID: string | null,
