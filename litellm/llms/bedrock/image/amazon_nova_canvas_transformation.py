@@ -5,7 +5,8 @@ from openai.types.image import Image
 
 from litellm.types.llms.bedrock import (
     AmazonNovaCanvasTextToImageRequest, AmazonNovaCanvasTextToImageResponse,
-    AmazonNovaCanvasTextToImageParams, AmazonNovaCanvasRequestBase,
+    AmazonNovaCanvasTextToImageParams, AmazonNovaCanvasRequestBase, AmazonNovaCanvasColorGuidedGenerationParams,
+    AmazonNovaCanvasColorGuidedRequest,
 )
 from litellm.types.utils import ImageResponse
 
@@ -68,6 +69,13 @@ class AmazonNovaCanvasConfig:
             text_to_image_params = {"text" :text, **text_to_image_params}
             text_to_image_params = AmazonNovaCanvasTextToImageParams(**text_to_image_params)
             return AmazonNovaCanvasTextToImageRequest(textToImageParams=text_to_image_params, taskType=task_type,
+                                                      imageGenerationConfig=image_generation_config)
+        if task_type == "COLOR_GUIDED_GENERATION":
+            color_guided_generation_params = image_generation_config.pop("colorGuidedGenerationParams", {})
+            color_guided_generation_params = {"text": text, **color_guided_generation_params}
+            color_guided_generation_params = AmazonNovaCanvasColorGuidedGenerationParams(**color_guided_generation_params)
+            return AmazonNovaCanvasColorGuidedRequest(taskType=task_type,
+                                                      colorGuidedGenerationParams=color_guided_generation_params,
                                                       imageGenerationConfig=image_generation_config)
         raise NotImplementedError(f"Task type {task_type} is not supported")
 

@@ -1857,6 +1857,7 @@ litellm --config /path/to/config.yaml
 
 3. Test it! 
 
+Text to Image : 
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/v1/images/generations' \
 -H 'Content-Type: application/json' \
@@ -1867,16 +1868,29 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/images/generations' \
 }'
 ```
 
+Color Guided Generation:
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/images/generations' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer $LITELLM_VIRTUAL_KEY' \
+-d '{
+    "model": "amazon.nova-canvas-v1:0",
+    "prompt": "A cute baby sea otter",
+    "taskType": "COLOR_GUIDED_GENERATION",
+    "colorGuidedGenerationParams":{"colors":["#FFFFFF"]}
+}'
+```
 </TabItem>
 </Tabs>
 
 ## Supported AWS Bedrock Image Generation Models
 
-| Model Name           | Function Call                               |
-|----------------------|---------------------------------------------|
-| Stable Diffusion 3 - v0 | `embedding(model="bedrock/stability.stability.sd3-large-v1:0", prompt=prompt)` |
-| Stable Diffusion - v0 | `embedding(model="bedrock/stability.stable-diffusion-xl-v0", prompt=prompt)` |
-| Stable Diffusion - v0 | `embedding(model="bedrock/stability.stable-diffusion-xl-v1", prompt=prompt)` |
+| Model Name              | Function Call                               |
+|-------------------------|---------------------------------------------|
+| Stable Diffusion 3 - v0 | `image_generation(model="bedrock/stability.stability.sd3-large-v1:0", prompt=prompt)` |
+| Stable Diffusion - v0   | `image_generation(model="bedrock/stability.stable-diffusion-xl-v0", prompt=prompt)` |
+| Stable Diffusion - v1   | `image_generation(model="bedrock/stability.stable-diffusion-xl-v1", prompt=prompt)` |
+| Amazon Nova Canvas - v0 | `image_generation(model="bedrock/amazon.nova-canvas-v1:0", prompt=prompt)` |
 
 
 ## Rerank API 
