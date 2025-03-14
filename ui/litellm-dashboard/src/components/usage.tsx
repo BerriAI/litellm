@@ -401,6 +401,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
         const top_keys = await adminTopKeysCall(accessToken);
         return top_keys.map((k: any) => ({
           key: (k["key_alias"] || k["key_name"] || k["api_key"]).substring(0, 10),
+          api_key: k["api_key"],
           spend: Number(k["total_spend"].toFixed(2)),
         }));
       },
