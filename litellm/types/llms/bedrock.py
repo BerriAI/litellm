@@ -111,8 +111,8 @@ class ConverseTokenUsageBlock(TypedDict):
     totalTokens: int
     cacheReadInputTokenCount: int
     cacheReadInputTokens: int
-    cacheCreationInputTokenCount: int
-    cacheCreationInputTokens: int
+    cacheWriteInputTokenCount: int
+    cacheWriteInputTokens: int
 
 
 class ConverseResponseBlock(TypedDict):

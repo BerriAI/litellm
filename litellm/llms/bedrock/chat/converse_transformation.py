@@ -612,8 +612,8 @@ class AmazonConverseConfig(BaseConfig):
         if "cacheReadInputTokens" in usage:
             cache_read_input_tokens = usage["cacheReadInputTokens"]
             input_tokens += cache_read_input_tokens
-        if "cacheCreationInputTokens" in usage:
-            cache_creation_input_tokens = usage["cacheCreationInputTokens"]
+        if "cacheWriteInputTokens" in usage:
+            cache_creation_input_tokens = usage["cacheWriteInputTokens"]
             input_tokens += cache_creation_input_tokens
 
         prompt_tokens_details = PromptTokensDetailsWrapper(
