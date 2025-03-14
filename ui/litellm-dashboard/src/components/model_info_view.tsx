@@ -128,6 +128,14 @@ export default function ModelInfoView({
       if (!accessToken) return;
       await modelDeleteCall(accessToken, modelId);
       message.success("Model deleted successfully");
+      
+      if (onModelUpdate) {
+        onModelUpdate({ 
+          deleted: true, 
+          model_info: { id: modelId } 
+        });
+      }
+      
       onClose();
     } catch (error) {
       console.error("Error deleting the model:", error);
