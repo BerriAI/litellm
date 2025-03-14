@@ -8,12 +8,14 @@ import os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
+from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
 from litellm.types.utils import (
     ImageObject,
     BudgetConfig,
     all_litellm_params,
     all_litellm_params as _litellm_completion_params,
+    CredentialItem,
 )  # maintain backwards compatibility for root param
 from litellm._logging import (
     set_verbose,
@@ -189,15 +191,17 @@ ssl_verify: Union[str, bool] = True
 ssl_certificate: Optional[str] = None
 disable_streaming_logging: bool = False
 disable_add_transform_inline_image_block: bool = False
-in_memory_llm_clients_cache: InMemoryCache = InMemoryCache()
+in_memory_llm_clients_cache: LLMClientCache = LLMClientCache()
 safe_memory_mode: bool = False
 enable_azure_ad_token_refresh: Optional[bool] = False
 ### DEFAULT AZURE API VERSION ###
-AZURE_DEFAULT_API_VERSION = "2024-08-01-preview"  # this is updated to the latest
+AZURE_DEFAULT_API_VERSION = "2025-02-01-preview"  # this is updated to the latest
 ### DEFAULT WATSONX API VERSION ###
 WATSONX_DEFAULT_API_VERSION = "2024-03-13"
 ### COHERE EMBEDDINGS DEFAULT TYPE ###
 COHERE_DEFAULT_EMBEDDING_INPUT_TYPE: COHERE_EMBEDDING_INPUT_TYPES = "search_document"
+### CREDENTIALS ###
+credential_list: List[CredentialItem] = []
 ### GUARDRAILS ###
 llamaguard_model_name: Optional[str] = None
 openai_moderations_model_name: Optional[str] = None

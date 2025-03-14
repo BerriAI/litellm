@@ -242,6 +242,7 @@ class BaseLLMHTTPHandler:
             model=model,
             optional_params=optional_params,
             stream=stream,
+            litellm_params=litellm_params,
         )
 
         data = provider_config.transform_request(
@@ -612,6 +613,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             model=model,
             optional_params=optional_params,
+            litellm_params=litellm_params,
         )
 
         data = provider_config.transform_embedding_request(
@@ -907,6 +909,7 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         atranscription: bool = False,
         headers: dict = {},
+        litellm_params: dict = {},
     ) -> TranscriptionResponse:
         provider_config = ProviderConfigManager.get_provider_audio_transcription_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
@@ -930,6 +933,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             model=model,
             optional_params=optional_params,
+            litellm_params=litellm_params,
         )
 
         # Handle the audio file based on type
