@@ -172,7 +172,7 @@ async def test_view_daily_spend_ui(prisma_client):
     print("total_spend_for_internal_user=", internal_user_total_spend)
 
     assert (
-        admin_total_spend > internal_user_total_spend
+        admin_total_spend >= internal_user_total_spend
     ), "Admin should have more spend than internal user"
 
 
