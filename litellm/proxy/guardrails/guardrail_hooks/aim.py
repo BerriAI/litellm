@@ -121,7 +121,7 @@ class AimGuardrail(CustomGuardrail):
 
     async def call_aim_guardrail_on_output(
         self, request_data: dict, output: str, hook: str
-    ) -> None:
+    ) -> Optional[str]:
         user_email = (
             request_data.get("metadata", {}).get("headers", {}).get("x-aim-user-email")
         )
