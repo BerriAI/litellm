@@ -1,7 +1,8 @@
 import { message } from "antd";
 import { provider_map, Providers } from "../provider_info_helpers";
-import { modelCreateCall, Model } from "../networking";
-
+import { modelCreateCall, Model, testConnectionRequest } from "../networking";
+import React, { useState } from 'react';
+import ConnectionErrorDisplay from './ConnectionErrorDisplay';
 
 export const prepareModelAddRequest = async (
     formValues: Record<string, any>,
@@ -174,5 +175,61 @@ export const handleAddModelSubmit = async (
       message.error("Failed to add model: " + error, 10);
     }
   };
+
+export const testModelConnection = async (
+  formValues: Record<string, any>,
+  accessToken: string,
+  testMode: string,
+  setConnectionError?: (error: Error | string | null) => void
+) => {
+  try {
+    // Prepare the model data using the existing function
+    const result = await prepareModelAddRequest(formValues, accessToken, null);
+    
+    if (!result) {
+      throw new Error("Failed to prepare model data");
+    }
+    
+    const { litellmParamsObj, modelInfoObj } = result;
+    
+    // Create the request body for the test connection
+    const requestBody = {
+      ...litellmParamsObj,  // Unfurl the parameters directly
+      mode: testMode
+    };
+    
+    // Call the test connection endpoint
+    const response = await testConnectionRequest(accessToken, requestBody);
+    
+    if (response.status === "success") {
+      message.success("Connection test successful!");
+      // Clear any previous error when successful
+      if (setConnectionError) {
+        setConnectionError(null);
+      }
+    } else {
+      // Set the error for ConnectionErrorDisplay instead of showing a message
+      const errorMessage = response.message || "Unknown error";
+      if (setConnectionError) {
+        setConnectionError(errorMessage);
+      } else {
+        message.error("Connection test failed: " + errorMessage);
+      }
+    }
+    
+    return response;
+  } catch (error) {
+    console.error("Test connection error:", error);
+    
+    // Set the error for ConnectionErrorDisplay
+    if (setConnectionError) {
+      setConnectionError(error);
+    } else {
+      message.error("Test connection failed: " + error, 10);
+    }
+    
+    throw error;
+  }
+};
 
      

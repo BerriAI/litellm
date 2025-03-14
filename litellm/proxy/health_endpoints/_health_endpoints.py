@@ -613,7 +613,6 @@ async def health_liveliness_options():
 )
 async def test_model_connection(
     request: Request,
-    model: str = fastapi.Body(..., description="The model to test connection with"),
     mode: Optional[
         Literal[
             "chat",
@@ -657,7 +656,7 @@ async def test_model_connection(
     """
     try:
         # Create basic params for the model
-        model_params = {"model": model}
+        model_params = await request.json()
 
         # Run the health check with timeout
         result = await run_with_timeout(
