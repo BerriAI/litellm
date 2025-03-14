@@ -350,7 +350,14 @@ async def delete_model(
     model_info: ModelInfoDelete,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    global llm_router, llm_model_list, general_settings, user_config_file_path, proxy_config
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_model_list,
+        llm_router,
+        proxy_config,
+        user_config_file_path,
+    )
+
     try:
         """
         [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
