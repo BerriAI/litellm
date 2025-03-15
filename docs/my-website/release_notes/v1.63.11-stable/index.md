@@ -110,17 +110,15 @@ Here's a Demo Instance to test changes:
 
 ## Security
 
-6. Fix: Internal User Viewer Permissions [PR](https://github.com/BerriAI/litellm/pull/9148)
-1. Support master key rotations [PR](https://github.com/BerriAI/litellm/pull/9041)
-1. Emit audit logs on All user + model Create/Update/Delete endpoints [PR](https://github.com/BerriAI/litellm/pull/9223)
-JWT
-4. Using K/V pairs in 1 AWS Secret [PR](https://github.com/BerriAI/litellm/pull/9039)
-5. Handle ManagedIdentityCredential in Azure AD token provider [PR](https://github.com/BerriAI/litellm/pull/9135)
-6. Prioritize api_key over tenant_id for Azure AD token provider [PR](https://github.com/BerriAI/litellm/pull/8701)
-
-
-- Support multiple JWT URLs [PR](https://github.com/BerriAI/litellm/pull/9047)
-- Fix JWT access with Groups not working when team is assigned All Proxy Models access [PR](https://github.com/BerriAI/litellm/pull/8934)
+1. Support for Rotating Master Keys [Getting Started](https://docs.litellm.ai/docs/proxy/master_key_rotations)
+2. Fix: Internal User Viewer Permissions, don't allow viewers to see `Test Key Page` or `Create Key Button` **MISSING DOC**
+3. Emit audit logs on All user + model Create/Update/Delete endpoints [Get Started](https://docs.litellm.ai/docs/proxy/multiple_admins)
+4. JWT
+    - Support multiple JWT URLs **MISSING DOC**
+    - Fix JWT access with Groups not working when team is assigned All Proxy Models access [PR](https://github.com/BerriAI/litellm/pull/8934)
+5. Using K/V pairs in 1 AWS Secret [Get Started](https://docs.litellm.ai/docs/secret#using-kv-pairs-in-1-aws-secret)
+6. Handle ManagedIdentityCredential in Azure AD token provider [PR](https://github.com/BerriAI/litellm/pull/9135)
+7. Fix: Prioritize api_key over tenant_id for Azure AD token provider [PR](https://github.com/BerriAI/litellm/pull/8701)
 
 
 ## Logging / Guardrail Integrations
