@@ -57,27 +57,27 @@ Here's a Demo Instance to test changes:
 <Image img={require('../../img/release_notes/responses_api.png')} />
 
 1. **New Endpoints**
-1. Responses API
-1. Add OpenAI Responses API to LiteLLM Python SDK [PR](https://github.com/BerriAI/litellm/pull/9155)
-2. Add Responses API on LiteLLM Proxy [PR](https://github.com/BerriAI/litellm/pull/9183)
-3. Fix: Allow /responses and subpaths as LLM API route + Add exception mapping for responses API [PR](https://github.com/BerriAI/litellm/pull/9220)
+- Responses API
+- Add OpenAI Responses API to LiteLLM Python SDK [PR](https://github.com/BerriAI/litellm/pull/9155)
+- Add Responses API on LiteLLM Proxy [PR](https://github.com/BerriAI/litellm/pull/9183)
+- Fix: Allow /responses and subpaths as LLM API route + Add exception mapping for responses API [PR](https://github.com/BerriAI/litellm/pull/9220)
 
 2. **New LLM Providers**
 - Snowflake Cortex [PR](https://github.com/BerriAI/litellm/pull/9222)
 
 3. **New models**
 
-1. Display `thinking` tokens on OpenWebUI (Bedrock, Anthropic, Deepseek) [PR](https://github.com/BerriAI/litellm/pull/9029)
-2. Support OpenRouter `reasoning_content` on streaming [PR](https://github.com/BerriAI/litellm/pull/9094)
-3. Fix Bedrock chunk parsing [PR](https://github.com/BerriAI/litellm/pull/9166)
-4. Fix Azure Function Calling Bug & Update Default API Version to `2025-02-01-preview` [PR](https://github.com/BerriAI/litellm/pull/9191)
-5. Support Bedrock converse cache token tracking [PR](https://github.com/BerriAI/litellm/pull/9221)
-6. Fix incorrect streaming response [PR](https://github.com/BerriAI/litellm/pull/9081)
-7. Fix Triton streaming completions bug [PR](https://github.com/BerriAI/litellm/pull/8386)
-8. Fix: String data stripped from entire content in streamed Gemini responses [PR](https://github.com/BerriAI/litellm/pull/9070)
-9. Fix: Support bytes.IO when handling audio files for transcription [PR](https://github.com/BerriAI/litellm/pull/9071)
-10. Fix: "system" role has become unacceptable in Ollama [PR](https://github.com/BerriAI/litellm/pull/9261)
-11. Handle HTTP 201 status code in Vertex AI response [PR](https://github.com/BerriAI/litellm/pull/9193)
+- Display `thinking` tokens on OpenWebUI (Bedrock, Anthropic, Deepseek) [PR](https://github.com/BerriAI/litellm/pull/9029)
+- Support OpenRouter `reasoning_content` on streaming [PR](https://github.com/BerriAI/litellm/pull/9094)
+- Fix Bedrock chunk parsing [PR](https://github.com/BerriAI/litellm/pull/9166)
+- Fix Azure Function Calling Bug & Update Default API Version to `2025-02-01-preview` [PR](https://github.com/BerriAI/litellm/pull/9191)
+- Support Bedrock converse cache token tracking [PR](https://github.com/BerriAI/litellm/pull/9221)
+- Fix incorrect streaming response [PR](https://github.com/BerriAI/litellm/pull/9081)
+- Fix Triton streaming completions bug [PR](https://github.com/BerriAI/litellm/pull/8386)
+- Fix: String data stripped from entire content in streamed Gemini responses [PR](https://github.com/BerriAI/litellm/pull/9070)
+- Fix: Support bytes.IO when handling audio files for transcription [PR](https://github.com/BerriAI/litellm/pull/9071)
+- Fix: "system" role has become unacceptable in Ollama [PR](https://github.com/BerriAI/litellm/pull/9261)
+- Handle HTTP 201 status code in Vertex AI response [PR](https://github.com/BerriAI/litellm/pull/9193)
 
 ## New Features
 
