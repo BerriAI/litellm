@@ -22,7 +22,7 @@ These are the changes since `v1.63.2-stable`.
 
 This release is primarily focused on:
 - [Beta] Responses API Support
-- Snowflake Cortex Support
+- Snowflake Cortex Support, Amazon Nova Image Generation
 - UI - Credential Management, re-use credentials when adding new models
 - UI - Test Connection to LLM Provider before adding a model
 
