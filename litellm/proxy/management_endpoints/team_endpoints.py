@@ -1352,9 +1352,9 @@ async def team_info(
         else:
             _team_info = LiteLLM_TeamTable()
 
-        ## UNFURL 'all-proxy-models' into the team_info.models list ##
-        if llm_router is not None:
-            _team_info = _unfurl_all_proxy_models(_team_info, llm_router)
+        # ## UNFURL 'all-proxy-models' into the team_info.models list ##
+        # if llm_router is not None:
+        #     _team_info = _unfurl_all_proxy_models(_team_info, llm_router)
         response_object = TeamInfoResponseObject(
             team_id=team_id,
             team_info=_team_info,
@@ -1615,11 +1615,6 @@ async def list_team(
         )
 
         try:
-            # unfurl all-proxy-models
-            if llm_router is not None:
-                team = _unfurl_all_proxy_models(
-                    LiteLLM_TeamTable(**team.model_dump()), llm_router
-                )
             returned_responses.append(
                 TeamListResponseObject(
                     **team.model_dump(),
