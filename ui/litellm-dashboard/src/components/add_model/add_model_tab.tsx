@@ -10,6 +10,7 @@ import { Providers, providerLogoMap, getPlaceholder } from "../provider_info_hel
 import type { Team } from "../key_team_helpers/key_list";
 import { CredentialItem } from "../networking";
 import ConnectionErrorDisplay from "./ConnectionErrorDisplay";
+import { TEST_MODES } from "./add_model_modes";
 
 interface AddModelTabProps {
   form: FormInstance;
@@ -28,17 +29,6 @@ interface AddModelTabProps {
 }
 
 const { Title, Link } = Typography;
-
-// Define the available test modes
-const TEST_MODES = [
-  { value: "chat", label: "Chat" },
-  { value: "completion", label: "Completion" },
-  { value: "embedding", label: "Embedding" },
-  { value: "audio_speech", label: "Audio Speech" },
-  { value: "audio_transcription", label: "Audio Transcription" },
-  { value: "image_generation", label: "Image Generation" },
-  { value: "rerank", label: "Rerank" }
-];
 
 const AddModelTab: React.FC<AddModelTabProps> = ({
   form,
@@ -139,9 +129,9 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                         
             {/* Select Mode */}
             <Form.Item
-              label="Test Mode"
-              name="test_mode"
-              tooltip="Select the mode to test this model with"
+              label="Mode"
+              name="mode"
+              tooltip="Optional - When mode is set litellm will use this for health checks. If mode is `embedding` then /embeddings will be used when trying to check health."
             >
               <AntdSelect
                 style={{ width: '100%' }}
