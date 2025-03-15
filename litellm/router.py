@@ -111,6 +111,7 @@ from litellm.types.router import (
     AlertingConfig,
     AllowedFailsPolicy,
     AssistantsTypedDict,
+    CredentialLiteLLMParams,
     CustomRoutingStrategyBase,
     Deployment,
     DeploymentTypedDict,
@@ -636,29 +637,6 @@ class Router:
         if self.cache.redis_cache is None:
             self.cache.redis_cache = cache
 
-    def initialize_assistants_endpoint(self):
-        ## INITIALIZE PASS THROUGH ASSISTANTS ENDPOINT ##
-        self.acreate_assistants = self.factory_function(litellm.acreate_assistants)
-        self.adelete_assistant = self.factory_function(litellm.adelete_assistant)
-        self.aget_assistants = self.factory_function(litellm.aget_assistants)
-        self.acreate_thread = self.factory_function(litellm.acreate_thread)
-        self.aget_thread = self.factory_function(litellm.aget_thread)
-        self.a_add_message = self.factory_function(litellm.a_add_message)
-        self.aget_messages = self.factory_function(litellm.aget_messages)
-        self.arun_thread = self.factory_function(litellm.arun_thread)
-
-    def initialize_router_endpoints(self):
-        self.amoderation = self.factory_function(
-            litellm.amoderation, call_type="moderation"
-        )
-        self.aanthropic_messages = self.factory_function(
-            litellm.anthropic_messages, call_type="anthropic_messages"
-        )
-        self.aresponses = self.factory_function(
-            litellm.aresponses, call_type="aresponses"
-        )
-        self.responses = self.factory_function(litellm.responses, call_type="responses")
-
     def routing_strategy_init(
         self, routing_strategy: Union[RoutingStrategy, str], routing_strategy_args: dict
     ):
@@ -723,6 +701,29 @@ class Router:
                 litellm.logging_callback_manager.add_litellm_callback(self.lowestcost_logger)  # type: ignore
         else:
             pass
+
+    def initialize_assistants_endpoint(self):
+        ## INITIALIZE PASS THROUGH ASSISTANTS ENDPOINT ##
+        self.acreate_assistants = self.factory_function(litellm.acreate_assistants)
+        self.adelete_assistant = self.factory_function(litellm.adelete_assistant)
+        self.aget_assistants = self.factory_function(litellm.aget_assistants)
+        self.acreate_thread = self.factory_function(litellm.acreate_thread)
+        self.aget_thread = self.factory_function(litellm.aget_thread)
+        self.a_add_message = self.factory_function(litellm.a_add_message)
+        self.aget_messages = self.factory_function(litellm.aget_messages)
+        self.arun_thread = self.factory_function(litellm.arun_thread)
+
+    def initialize_router_endpoints(self):
+        self.amoderation = self.factory_function(
+            litellm.amoderation, call_type="moderation"
+        )
+        self.aanthropic_messages = self.factory_function(
+            litellm.anthropic_messages, call_type="anthropic_messages"
+        )
+        self.aresponses = self.factory_function(
+            litellm.aresponses, call_type="aresponses"
+        )
+        self.responses = self.factory_function(litellm.responses, call_type="responses")
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
@@ -4624,6 +4625,17 @@ class Router:
                     else:
                         raise Exception("Model invalid format - {}".format(type(model)))
         return None
+
+    def get_deployment_credentials(self, model_id: str) -> Optional[dict]:
+        """
+        Returns -> dict of credentials for a given model id
+        """
+        deployment = self.get_deployment(model_id=model_id)
+        if deployment is None:
+            return None
+        return CredentialLiteLLMParams(
+            **deployment.litellm_params.model_dump(exclude_none=True)
+        ).model_dump(exclude_none=True)
 
     def get_deployment_by_model_group_name(
         self, model_group_name: str
