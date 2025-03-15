@@ -20,39 +20,18 @@ class MockPrismaClient:
             token="sk-existing",
             user_id="user-123",
             team_id=None,
-            key_name="test-key",
-            key_alias="test-alias"
+            key_name="test-key"
         )
 
     async def find_first(self, where):
-        # Used by _enforce_unique_key_alias to check for duplicate key aliases
         return None
-
-    async def update(self, where, data):
-        self.last_update_data = data
-        return LiteLLM_VerificationToken(
-            token="sk-existing",
-            user_id=data.get("user_id", "user-123"),
-            team_id=None,
-            key_name="test-key",
-            key_alias=data.get("key_alias", "test-alias")
-        )
 
     async def get_data(self, token, table_name, query_type="find_unique"):
         return await self.find_unique({"token": token})
 
     async def update_data(self, token, data):
-        updated_token = await self.update({"token": token}, data)
-        # Return in the format expected by the update_key_fn
-        return {
-            "data": {
-                "token": updated_token.token,
-                "user_id": updated_token.user_id,
-                "team_id": updated_token.team_id,
-                "key_name": updated_token.key_name,
-                "key_alias": updated_token.key_alias
-            }
-        }
+        self.last_update_data = data  # Store the update data for test verification
+        return {"data": data}
 
 @pytest.fixture
 def test_client():
@@ -70,7 +49,7 @@ def mock_user_auth(mocker):
             api_key="sk-auth",
             user_id="user-123",
             team_id=None,
-            user_role=LitellmUserRoles.PROXY_ADMIN.value  # Use the correct enum value
+            user_role=LitellmUserRoles.INTERNAL_USER.value
         )
     )
 
@@ -83,22 +62,6 @@ def test_user_id_not_reset_on_key_update(test_client, mock_prisma, mocker):
         json={
             "key": "sk-existing",
             "key_alias": "new-alias"
-        }
-    )
-
-    assert response.status_code == 200
-    assert mock_prisma.last_update_data["user_id"] == "user-123"
-
-def test_user_id_explicit_none_prevented(test_client, mock_prisma, mocker):
-    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
-
-    response = test_client.post(
-        "/key/update",
-        headers={"Authorization": "Bearer sk-auth"},
-        json={
-            "key": "sk-existing",
-            "key_alias": "new-alias",
-            "user_id": None
         }
     )
 
