@@ -74,6 +74,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.realtime_api.main import _realtime_health_check
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import RawRequestTypedDict
 from litellm.utils import (
     CustomStreamWrapper,
     ProviderConfigManager,
@@ -2986,9 +2987,11 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
                 return response
             response = model_response
-        elif custom_llm_provider == "snowflake" or model in litellm.snowflake_models: 
+        elif custom_llm_provider == "snowflake" or model in litellm.snowflake_models:
             try:
-                client = HTTPHandler(timeout=timeout) if stream is False else None # Keep this here, otherwise, the httpx.client closes and streaming is impossible
+                client = (
+                    HTTPHandler(timeout=timeout) if stream is False else None
+                )  # Keep this here, otherwise, the httpx.client closes and streaming is impossible
                 response = base_llm_http_handler.completion(
                     model=model,
                     messages=messages,
@@ -3001,12 +3004,11 @@ def completion(  # type: ignore # noqa: PLR0915
                     optional_params=optional_params,
                     litellm_params=litellm_params,
                     timeout=timeout,  # type: ignore
-                    client= client,
+                    client=client,
                     custom_llm_provider=custom_llm_provider,
                     encoding=encoding,
                     stream=stream,
-                )   
-
+                )
 
             except Exception as e:
                 ## LOGGING - log the original exception returned
@@ -3017,7 +3019,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     additional_args={"headers": headers},
                 )
                 raise e
-            
+
         elif custom_llm_provider == "custom":
             url = litellm.api_base or api_base or ""
             if url is None or url == "":
@@ -5449,6 +5451,17 @@ async def ahealth_check(
             "x-ms-region": str,
         }
     """
+    # Map modes to their corresponding health check calls
+    litellm_logging_obj = Logging(
+        model="",
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        litellm_call_id="1234",
+        start_time=datetime.datetime.now(),
+        function_id="1234",
+        log_raw_request_response=True,
+    )
     try:
         model: Optional[str] = model_params.get("model", None)
         if model is None:
@@ -5471,7 +5484,8 @@ async def ahealth_check(
                 custom_llm_provider=custom_llm_provider,
                 model_params=model_params,
             )
-        # Map modes to their corresponding health check calls
+        model_params["litellm_logging_obj"] = litellm_logging_obj
+
         mode_handlers = {
             "chat": lambda: litellm.acompletion(**model_params),
             "completion": lambda: litellm.atext_completion(
@@ -5536,7 +5550,15 @@ async def ahealth_check(
             + "\nstack trace: "
             + stack_trace
         )
-        return {"error": error_to_return}
+
+        raw_request_typed_dict = litellm_logging_obj.model_call_details.get(
+            "raw_request_typed_dict"
+        )
+
+        return {
+            "error": error_to_return,
+            "raw_request_typed_dict": raw_request_typed_dict,
+        }
 
 
 ####### HELPER FUNCTIONS ################

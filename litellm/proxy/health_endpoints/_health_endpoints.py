@@ -657,6 +657,7 @@ async def test_model_connection(
     try:
         # Create basic params for the model
         model_params = await request.json()
+        model_params.pop("mode")
 
         # Run the health check with timeout
         result = await run_with_timeout(
