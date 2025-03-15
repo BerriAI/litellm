@@ -60,7 +60,7 @@ Here's a Demo Instance to test changes:
 
 4. **Bug Fixes**
 
-- Return `code`, `param` and `type` on OpenAI bad request error [LiteLLM Exception Mapping](https://docs.litellm.ai/docs/exception_mapping)
+- Return `code`, `param` and `type` on OpenAI bad request error [More information on litellm exceptions](https://docs.litellm.ai/docs/exception_mapping)
 - Fix Bedrock converse chunk parsing to only return empty dict on tool use [PR](https://github.com/BerriAI/litellm/pull/9166)
 - Fix Azure Function Calling Bug & Update Default API Version to `2025-02-01-preview` [PR](https://github.com/BerriAI/litellm/pull/9191)
 - Fix Perplexity incorrect streaming response [PR](https://github.com/BerriAI/litellm/pull/9081)
