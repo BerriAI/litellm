@@ -5487,7 +5487,9 @@ async def ahealth_check(
         model_params["litellm_logging_obj"] = litellm_logging_obj
 
         mode_handlers = {
-            "chat": lambda: litellm.acompletion(**model_params),
+            "chat": lambda: litellm.acompletion(
+                **model_params,
+            ),
             "completion": lambda: litellm.atext_completion(
                 **_filter_model_params(model_params),
                 prompt=prompt or "test",
@@ -5544,12 +5546,7 @@ async def ahealth_check(
                 "error": f"error:{str(e)}. Missing `mode`. Set the `mode` for the model - https://docs.litellm.ai/docs/proxy/health#embedding-models  \nstacktrace: {stack_trace}"
             }
 
-        error_to_return = (
-            str(e)
-            + "\nHave you set 'mode' - https://docs.litellm.ai/docs/proxy/health#embedding-models"
-            + "\nstack trace: "
-            + stack_trace
-        )
+        error_to_return = str(e) + "\nstack trace: " + stack_trace
 
         raw_request_typed_dict = litellm_logging_obj.model_call_details.get(
             "raw_request_typed_dict"
