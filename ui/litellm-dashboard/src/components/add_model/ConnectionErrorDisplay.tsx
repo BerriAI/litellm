@@ -232,12 +232,6 @@ ${formattedBody}
         >
           View Documentation
         </Button>
-        
-        {onClose && (
-          <Button onClick={onClose} type="primary">
-            Close
-          </Button>
-        )}
       </div>
     </div>
   );
