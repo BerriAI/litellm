@@ -61,32 +61,35 @@ Here's a Demo Instance to test changes:
 <Image img={require('../../img/release_notes/responses_api.png')} />
 
 1. **New Endpoints**
-- [Beta] POST `/responses` API. [Get Started](https://docs.litellm.ai/docs/response_api)
+- [Beta] POST `/responses` API. [Getting Started](https://docs.litellm.ai/docs/response_api)
 
 2. **New LLM Providers**
-- Snowflake Cortex [Get Started](https://docs.litellm.ai/docs/providers/snowflake)
+- Snowflake Cortex [Getting Started](https://docs.litellm.ai/docs/providers/snowflake)
 
 3. **New models**
 
-- Support OpenRouter `reasoning_content` on streaming [Get Started](https://docs.litellm.ai/docs/reasoning_content)
-- Support Bedrock converse cache token tracking [Get Started](https://docs.litellm.ai/docs/completion/prompt_caching)
+- Support OpenRouter `reasoning_content` on streaming [Getting Started](https://docs.litellm.ai/docs/reasoning_content)
+- Support Bedrock converse cache token tracking [Getting Started](https://docs.litellm.ai/docs/completion/prompt_caching)
 
 4. **Bug Fixes**
 
-- Return `code`, `param` and `type` on OpenAI bad request error [More information on litellm exceptions](https://docs.litellm.ai/docs/exception_mapping)
-- Fix Bedrock converse chunk parsing to only return empty dict on tool use [PR](https://github.com/BerriAI/litellm/pull/9166)
-- Fix Azure Function Calling Bug & Update Default API Version to `2025-02-01-preview` [PR](https://github.com/BerriAI/litellm/pull/9191)
-- Fix Perplexity incorrect streaming response [PR](https://github.com/BerriAI/litellm/pull/9081)
-- Fix Triton streaming completions bug [PR](https://github.com/BerriAI/litellm/pull/8386)
-- Fix: String `data:` stripped from entire content in streamed Gemini responses [PR](https://github.com/BerriAI/litellm/pull/9070)
-- Fix: Support bytes.IO when handling audio files for transcription [PR](https://github.com/BerriAI/litellm/pull/9071)
-- Fix: "system" role has become unacceptable in Ollama [PR](https://github.com/BerriAI/litellm/pull/9261)
-- Handle HTTP 201 status code in Vertex AI response [PR](https://github.com/BerriAI/litellm/pull/9193)
+- OpenAI: Return `code`, `param` and `type` on bad request error [More information on litellm exceptions](https://docs.litellm.ai/docs/exception_mapping)
+- Bedrock: Fix converse chunk parsing to only return empty dict on tool use [PR](https://github.com/BerriAI/litellm/pull/9166)
+- Bedrock: Support extra_headers [PR](https://github.com/BerriAI/litellm/pull/9113)
+- Azure: Fix Function Calling Bug & Update Default API Version to `2025-02-01-preview` [PR](https://github.com/BerriAI/litellm/pull/9191)
+- Azure: Fix AI services URL [PR](https://github.com/BerriAI/litellm/pull/9185)
+- Vertex AI: Handle HTTP 201 status code in response [PR](https://github.com/BerriAI/litellm/pull/9193)
+- Perplexity: Fix incorrect streaming response [PR](https://github.com/BerriAI/litellm/pull/9081)
+- Triton: Fix streaming completions bug [PR](https://github.com/BerriAI/litellm/pull/8386)
+- (Deepgram): Support bytes.IO when handling audio files for transcription [PR](https://github.com/BerriAI/litellm/pull/9071)
+- Ollama: Fix "system" role has become unacceptable [PR](https://github.com/BerriAI/litellm/pull/9261)
+- All Providers (Streaming): Fix String `data:` stripped from entire content in streamed responses [PR](https://github.com/BerriAI/litellm/pull/9070)
+
 
 
 ## Spend Tracking Improvements
 
-2. Cost Tracking for Responses API [Get Started](https://docs.litellm.ai/docs/response_api)
+2. Cost Tracking for Responses API [Getting Started](https://docs.litellm.ai/docs/response_api)
 3. Fix Azure Whisper cost tracking [PR](https://github.com/BerriAI/litellm/pull/9166)
 
 
@@ -123,41 +126,38 @@ Before adding a model you can test the connection to the LLM provider to verify 
    - UI Improvements: Keep expanded log in focus on LiteLLM UI
    - UI Improvements: Minor improvements to logs page
    - Fix: Allow internal user to query their own logs
+5. Sign In/Sign Out
+   - Fix: Correctly use `PROXY_LOGOUT_URL` when set [Getting Started](https://docs.litellm.ai/docs/proxy/self_serve#setting-custom-logout-urls)
 
 
 ## Security
 
 1. Support for Rotating Master Keys [Getting Started](https://docs.litellm.ai/docs/proxy/master_key_rotations)
-2. Fix: Internal User Viewer Permissions, don't allow `internal_user_viewer` role to see `Test Key Page` or `Create Key Button` [Role based access controls](https://docs.litellm.ai/docs/proxy/access_control)
-3. Emit audit logs on All user + model Create/Update/Delete endpoints [Get Started](https://docs.litellm.ai/docs/proxy/multiple_admins)
+2. Fix: Internal User Viewer Permissions, don't allow `internal_user_viewer` role to see `Test Key Page` or `Create Key Button` [More information on role based access controls](https://docs.litellm.ai/docs/proxy/access_control)
+3. Emit audit logs on All user + model Create/Update/Delete endpoints [Getting Started](https://docs.litellm.ai/docs/proxy/multiple_admins)
 4. JWT
-    - Support multiple JWT OIDC providers [Get Started](https://docs.litellm.ai/docs/proxy/token_auth)
+    - Support multiple JWT OIDC providers [Getting Started](https://docs.litellm.ai/docs/proxy/token_auth)
     - Fix JWT access with Groups not working when team is assigned All Proxy Models access
-5. Using K/V pairs in 1 AWS Secret [Get Started](https://docs.litellm.ai/docs/secret#using-kv-pairs-in-1-aws-secret)
+5. Using K/V pairs in 1 AWS Secret [Getting Started](https://docs.litellm.ai/docs/secret#using-kv-pairs-in-1-aws-secret)
 
 
 ## Logging Integrations
 
-1. Prometheus: Track Azure LLM API latency metric [Get Started here](https://docs.litellm.ai/docs/proxy/prometheus#request-latency-metrics)
-2. Allow switching off storing Error Logs in DB [Get Started here](https://docs.litellm.ai/docs/proxy/ui_logs)
-3. Added tags, user_feedback and model_options to additional_keys which can be sent to Athina [Get Started here](https://docs.litellm.ai/docs/observability/athina_integration)
+1. Prometheus: Track Azure LLM API latency metric [Getting Started](https://docs.litellm.ai/docs/proxy/prometheus#request-latency-metrics)
+2. Allow switching off storing Error Logs in DB [Getting Started](https://docs.litellm.ai/docs/proxy/ui_logs)
+3. Added tags, user_feedback and model_options to additional_keys which can be sent to Athina [Getting Started](https://docs.litellm.ai/docs/observability/athina_integration)
 
 
 ## Performance / Reliability improvements
 
-1. Fix Redis cluster mode for routers [PR](https://github.com/BerriAI/litellm/pull/9010)
-2. Delegate router Azure client init logic to Azure provider [PR](https://github.com/BerriAI/litellm/pull/9140)
-3. Fix Azure AI services URL [PR](https://github.com/BerriAI/litellm/pull/9185)
-4. Support extra_headers on Bedrock [PR](https://github.com/BerriAI/litellm/pull/9113)
+1. Redis + litellm router - Fix Redis cluster mode for litellm router [PR](https://github.com/BerriAI/litellm/pull/9010)
 
 
 ## General Improvements
-1. UI API Playground for testing LiteLLM translation [PR](https://github.com/BerriAI/litellm/pull/9073)
-2. Fix: Correctly use `PROXY_LOGOUT_URL` when set [PR](https://github.com/BerriAI/litellm/pull/9117)
 3. Bing Search Pass Through endpoint [PR](https://github.com/BerriAI/litellm/pull/8019)
 4. OpenWebUI Integration - display `thinking` tokens
-- Guide on getting started with LiteLLM x OpenWebUI. [Get Started](https://docs.litellm.ai/docs/tutorials/openweb_ui)
-- Display `thinking` tokens on OpenWebUI (Bedrock, Anthropic, Deepseek) [Get Started](https://docs.litellm.ai/docs/tutorials/openweb_ui#render-thinking-content-on-openweb-ui)
+- Guide on getting started with LiteLLM x OpenWebUI. [Getting Started](https://docs.litellm.ai/docs/tutorials/openweb_ui)
+- Display `thinking` tokens on OpenWebUI (Bedrock, Anthropic, Deepseek) [Getting Started](https://docs.litellm.ai/docs/tutorials/openweb_ui#render-thinking-content-on-openweb-ui)
 
 <Image img={require('../../img/litellm_thinking_openweb.gif')} />
 
