@@ -289,6 +289,7 @@ jobs:
             pip install "diskcache==5.6.1"
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
+            pip install "websockets==13.1.0"
       - save_cache:
           paths:
             - ./venv
