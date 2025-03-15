@@ -264,12 +264,21 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       const response = await keyCreateCall(accessToken, userID, formValues);
 
       console.log("key create Response:", response);
-      setData((prevData) => (prevData ? [...prevData, response] : [response])); // Check if prevData is null
+      
+      // Update the data state in this component
+      setData((prevData) => (prevData ? [...prevData, response] : [response]));
+      
+      // Also directly update the keys list in AllKeysTable without an API call
+      if (window.addNewKeyToList) {
+        window.addNewKeyToList(response);
+      }
+      
       setApiKey(response["key"]);
       setSoftBudget(response["soft_budget"]);
       message.success("API Key Created");
       form.resetFields();
       localStorage.removeItem("userData" + userID);
+
     } catch (error) {
       console.log("error in create key:", error);
       message.error(`Error creating the key: ${error}`);
