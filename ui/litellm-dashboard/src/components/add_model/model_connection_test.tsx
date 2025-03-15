@@ -6,7 +6,7 @@ import { prepareModelAddRequest } from "./handle_add_model_submit";
 
 const { Text } = Typography;
 
-interface ConnectionErrorDisplayProps {
+interface ModelConnectionTestProps {
   formValues: Record<string, any>;
   accessToken: string;
   testMode: string;
@@ -15,7 +15,7 @@ interface ConnectionErrorDisplayProps {
   onTestComplete?: () => void;
 }
 
-const ConnectionErrorDisplay: React.FC<ConnectionErrorDisplayProps> = ({ 
+const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({ 
   formValues, 
   accessToken, 
   testMode, 
@@ -255,4 +255,4 @@ ${formattedBody}
   );
 };
 
-export default ConnectionErrorDisplay; 
+export default ModelConnectionTest; 
