@@ -59,6 +59,8 @@ Here's a Demo Instance to test changes:
 - Support Bedrock converse cache token tracking [Get Started](https://docs.litellm.ai/docs/completion/prompt_caching)
 
 4. **Bug Fixes**
+
+- Return `code`, `param` and `type` on OpenAI bad request error [LiteLLM Exception Mapping](https://docs.litellm.ai/docs/exception_mapping)
 - Fix Bedrock converse chunk parsing to only return empty dict on tool use [PR](https://github.com/BerriAI/litellm/pull/9166)
 - Fix Azure Function Calling Bug & Update Default API Version to `2025-02-01-preview` [PR](https://github.com/BerriAI/litellm/pull/9191)
 - Fix Perplexity incorrect streaming response [PR](https://github.com/BerriAI/litellm/pull/9081)
@@ -67,7 +69,6 @@ Here's a Demo Instance to test changes:
 - Fix: Support bytes.IO when handling audio files for transcription [PR](https://github.com/BerriAI/litellm/pull/9071)
 - Fix: "system" role has become unacceptable in Ollama [PR](https://github.com/BerriAI/litellm/pull/9261)
 - Handle HTTP 201 status code in Vertex AI response [PR](https://github.com/BerriAI/litellm/pull/9193)
-- Return `code`, `param` and `type` on OpenAI bad request error [PR](https://github.com/BerriAI/litellm/pull/9109)
 
 
 ### New Models Added to Model Cost Map
@@ -123,14 +124,12 @@ Before adding a model you can test the connection to the LLM provider to verify 
 ## Security
 
 1. Support for Rotating Master Keys [Getting Started](https://docs.litellm.ai/docs/proxy/master_key_rotations)
-2. Fix: Internal User Viewer Permissions, don't allow viewers to see `Test Key Page` or `Create Key Button` **MISSING DOC**
+2. Fix: Internal User Viewer Permissions, don't allow `internal_user_viewer` role to see `Test Key Page` or `Create Key Button` [Role based access controls](https://docs.litellm.ai/docs/proxy/access_control)
 3. Emit audit logs on All user + model Create/Update/Delete endpoints [Get Started](https://docs.litellm.ai/docs/proxy/multiple_admins)
 4. JWT
-    - Support multiple JWT URLs **MISSING DOC**
-    - Fix JWT access with Groups not working when team is assigned All Proxy Models access [PR](https://github.com/BerriAI/litellm/pull/8934)
+    - Support multiple JWT OIDC providers [Get Started](https://docs.litellm.ai/docs/proxy/token_auth)
+    - Fix JWT access with Groups not working when team is assigned All Proxy Models access
 5. Using K/V pairs in 1 AWS Secret [Get Started](https://docs.litellm.ai/docs/secret#using-kv-pairs-in-1-aws-secret)
-6. Handle ManagedIdentityCredential in Azure AD token provider [PR](https://github.com/BerriAI/litellm/pull/9135)
-7. Fix: Prioritize api_key over tenant_id for Azure AD token provider [PR](https://github.com/BerriAI/litellm/pull/8701)
 
 
 ## Logging Integrations
