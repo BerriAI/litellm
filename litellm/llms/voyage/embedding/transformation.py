@@ -132,7 +132,7 @@ class VoyageEmbeddingConfig(BaseEmbeddingConfig):
         model_response.object = raw_response_json.get("object")
 
         usage = Usage(
-            prompt_tokens=raw_response_json.get("usage", {}).get("prompt_tokens", 0),
+            prompt_tokens=raw_response_json.get("usage", {}).get("total_tokens", 0),
             total_tokens=raw_response_json.get("usage", {}).get("total_tokens", 0),
         )
         model_response.usage = usage
