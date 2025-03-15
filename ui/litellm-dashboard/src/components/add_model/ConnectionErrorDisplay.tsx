@@ -38,14 +38,24 @@ const ConnectionErrorDisplay: React.FC<ConnectionErrorDisplayProps> = ({
     setRawResponse(null);
     setIsSuccess(false);
     
+    // Add a small delay to ensure form values are fully populated
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
     try {
+      console.log("Testing connection with form values:", formValues);
       const result = await prepareModelAddRequest(formValues, accessToken, null);
-      if (!result) throw new Error("Failed to prepare model data");
+      
+      if (!result) {
+        console.log("No result from prepareModelAddRequest");
+        setError("Failed to prepare model data. Please check your form inputs.");
+        setIsSuccess(false);
+        setIsLoading(false);
+        return;
+      }
 
-      console.log("result from prepareModelAddRequest:", result);
+      console.log("Result from prepareModelAddRequest:", result);
 
       const { litellmParamsObj, modelInfoObj, modelName: returnedModelName } = result;
-
 
       const response = await testConnectionRequest(accessToken, litellmParamsObj, modelInfoObj?.mode);
       if (response.status === "success") {
@@ -70,8 +80,14 @@ const ConnectionErrorDisplay: React.FC<ConnectionErrorDisplayProps> = ({
   };
 
   React.useEffect(() => {
-    testModelConnection();
-  }, []);
+    // Run the test once when component mounts
+    // Add a small timeout to ensure form values are ready
+    const timer = setTimeout(() => {
+      testModelConnection();
+    }, 200);
+    
+    return () => clearTimeout(timer);
+  }, []); // Empty dependency array means this runs once on mount
 
   const getCleanErrorMessage = (errorMsg: string) => {
     if (!errorMsg) return "Unknown error";
