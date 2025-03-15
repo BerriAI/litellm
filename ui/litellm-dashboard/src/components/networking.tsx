@@ -2290,7 +2290,11 @@ export const testConnectionRequest = async (
         'Content-Type': 'application/json',
         [globalLitellmHeaderName]: `Bearer ${accessToken}`
       },
-      body: JSON.stringify(requestBody)
+      body: JSON.stringify(
+        {
+          litellm_params: requestBody
+        }
+      )
     });
 
     // Check for non-JSON responses first
