@@ -48,21 +48,19 @@ Here's a Demo Instance to test changes:
 <Image img={require('../../img/release_notes/responses_api.png')} />
 
 1. **New Endpoints**
-- Responses API
-- Add OpenAI Responses API to LiteLLM Python SDK [PR](https://github.com/BerriAI/litellm/pull/9155)
-- Add Responses API on LiteLLM Proxy [PR](https://github.com/BerriAI/litellm/pull/9183)
-- Fix: Allow /responses and subpaths as LLM API route + Add exception mapping for responses API [PR](https://github.com/BerriAI/litellm/pull/9220)
+- [Beta] POST `/responses` API. [Get Started](https://docs.litellm.ai/docs/response_api)
 
 2. **New LLM Providers**
-- Snowflake Cortex [PR](https://github.com/BerriAI/litellm/pull/9222)
+- Snowflake Cortex [Get Started](https://docs.litellm.ai/docs/providers/snowflake)
 
 3. **New models**
 
-- Display `thinking` tokens on OpenWebUI (Bedrock, Anthropic, Deepseek) [PR](https://github.com/BerriAI/litellm/pull/9029)
 - Support OpenRouter `reasoning_content` on streaming [PR](https://github.com/BerriAI/litellm/pull/9094)
+- Support Bedrock converse cache token tracking [PR](https://github.com/BerriAI/litellm/pull/9221)
+
+4. Bug Fixes
 - Fix Bedrock chunk parsing [PR](https://github.com/BerriAI/litellm/pull/9166)
 - Fix Azure Function Calling Bug & Update Default API Version to `2025-02-01-preview` [PR](https://github.com/BerriAI/litellm/pull/9191)
-- Support Bedrock converse cache token tracking [PR](https://github.com/BerriAI/litellm/pull/9221)
 - Fix incorrect streaming response [PR](https://github.com/BerriAI/litellm/pull/9081)
 - Fix Triton streaming completions bug [PR](https://github.com/BerriAI/litellm/pull/8386)
 - Fix: String data stripped from entire content in streamed Gemini responses [PR](https://github.com/BerriAI/litellm/pull/9070)
@@ -132,6 +130,12 @@ JWT
 3. Added tags, user_feedback and model_options to additional_keys which can be sent to Athina [PR](https://github.com/BerriAI/litellm/pull/8845)
 4. Return `code`, `param` and `type` on OpenAI bad request error [PR](https://github.com/BerriAI/litellm/pull/9109)
 
+## OpenWebUI Integration - display `thinking` tokens
+- Guide on getting started with LiteLLM x OpenWebUI. [Get Started](https://docs.litellm.ai/docs/tutorials/openweb_ui)
+- Display `thinking` tokens on OpenWebUI (Bedrock, Anthropic, Deepseek) [Get Started](https://docs.litellm.ai/docs/tutorials/openweb_ui#render-thinking-content-on-openweb-ui)
+
+<Image img={require('../../img/litellm_thinking_openweb.gif')} />
+
 ## Performance / Reliability improvements
 
 1. Fix Redis cluster mode for routers [PR](https://github.com/BerriAI/litellm/pull/9010)
@@ -144,6 +148,7 @@ JWT
 5. UI API Playground for testing LiteLLM translation [PR](https://github.com/BerriAI/litellm/pull/9073)
 4. Fix: Correctly use `PROXY_LOGOUT_URL` when set [PR](https://github.com/BerriAI/litellm/pull/9117)
 Bing Search Pass Thru [PR](https://github.com/BerriAI/litellm/pull/8019)
+
 
 ## Complete Git Diff
 
