@@ -2,7 +2,7 @@ import { message } from "antd";
 import { provider_map, Providers } from "../provider_info_helpers";
 import { modelCreateCall, Model, testConnectionRequest } from "../networking";
 import React, { useState } from 'react';
-import ConnectionErrorDisplay from './ConnectionErrorDisplay';
+import ConnectionErrorDisplay from './model_connection_test';
 
 export const prepareModelAddRequest = async (
     formValues: Record<string, any>,

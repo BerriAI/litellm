@@ -9,7 +9,7 @@ import AdvancedSettings from "./advanced_settings";
 import { Providers, providerLogoMap, getPlaceholder } from "../provider_info_helpers";
 import type { Team } from "../key_team_helpers/key_list";
 import { CredentialItem } from "../networking";
-import ConnectionErrorDisplay from "./ConnectionErrorDisplay";
+import ConnectionErrorDisplay from "./model_connection_test";
 import { TEST_MODES } from "./add_model_modes";
 import { Row, Col } from "antd";
 import { Text, TextInput } from "@tremor/react";
