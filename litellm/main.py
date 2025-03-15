@@ -1114,7 +1114,8 @@ def completion(  # type: ignore # noqa: PLR0915
             thinking=thinking,
             **non_default_params,
         )
-
+        
+        
         if litellm.add_function_to_prompt and optional_params.get(
             "functions_unsupported_model", None
         ):  # if user opts to add it to prompt, when API doesn't support function calling

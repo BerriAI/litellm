@@ -33,6 +33,7 @@ from litellm.types.utils import PromptTokensDetailsWrapper
 from litellm.utils import ModelResponse, Usage, add_dummy_tool, has_tool_call_blocks
 
 from ..common_utils import AnthropicError, process_anthropic_headers
+from ...parameter_mapping import ParameterMapping
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -93,11 +94,12 @@ class AnthropicConfig(BaseConfig):
             "extra_headers",
             "parallel_tool_calls",
             "response_format",
-            "user",
+            "user"
         ]
 
         if "claude-3-7-sonnet" in model:
             params.append("thinking")
+            params.append("reasoning_effort")
 
         return params
 
@@ -311,6 +313,7 @@ class AnthropicConfig(BaseConfig):
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=tool_value
                 )
+            
             if param == "tool_choice" or param == "parallel_tool_calls":
                 _tool_choice: Optional[AnthropicMessagesToolChoice] = (
                     self._map_tool_choice(
@@ -362,6 +365,12 @@ class AnthropicConfig(BaseConfig):
                 optional_params["metadata"] = {"user_id": value}
             if param == "thinking":
                 optional_params["thinking"] = value
+            if param == "reasoning_effort" and optional_params.get("thinking",None)==None:               
+                thinking_config = ParameterMapping.map_reasoning_to_thinking(value)
+                if thinking_config:
+                    optional_params["thinking"] = thinking_config
+                    optional_params["max_tokens"] = int(thinking_config.get("budget_tokens",16000) * 1.5) # replace the default 4096 max_tokens
+                
         return optional_params
 
     def _create_json_tool_call_for_response_format(
