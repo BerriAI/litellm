@@ -1140,6 +1140,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 setShowAdvancedSettings={setShowAdvancedSettings}
                 teams={teams}
                 credentials={credentialsList}
+                accessToken={accessToken}
               />
             </TabPanel>
             <TabPanel>
