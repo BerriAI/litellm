@@ -2954,8 +2954,11 @@ def test_bedrock_application_inference_profile():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 
     client = HTTPHandler()
+    client2 = HTTPHandler()
 
-    with patch.object(client, "post") as mock_post:
+    with patch.object(client, "post") as mock_post, patch.object(
+        client2, "post"
+    ) as mock_post2:
         try:
             resp = completion(
                 model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -2966,10 +2969,20 @@ def test_bedrock_application_inference_profile():
         except Exception as e:
             print(e)
 
-        mock_post.assert_called_once()
+        try:
+            resp = completion(
+                model="bedrock/converse/arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                client=client2,
+            )
+        except Exception as e:
+            print(e)
 
+        mock_post.assert_called_once()
+        mock_post2.assert_called_once()
         print(mock_post.call_args.kwargs)
         json_data = mock_post.call_args.kwargs["data"]
         assert mock_post.call_args.kwargs["url"].startswith(
             "https://bedrock-runtime.eu-central-1.amazonaws.com/"
         )
+        assert mock_post2.call_args.kwargs["url"] == mock_post.call_args.kwargs["url"]
