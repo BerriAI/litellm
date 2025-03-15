@@ -55,8 +55,8 @@ Here's a Demo Instance to test changes:
 
 3. **New models**
 
-- Support OpenRouter `reasoning_content` on streaming **MISSING DOC**
-- Support Bedrock converse cache token tracking **MISSING DOC**
+- Support OpenRouter `reasoning_content` on streaming [Get Started](https://docs.litellm.ai/docs/reasoning_content)
+- Support Bedrock converse cache token tracking [Get Started](https://docs.litellm.ai/docs/completion/prompt_caching)
 
 4. **Bug Fixes**
 - Fix Bedrock chunk parsing [PR](https://github.com/BerriAI/litellm/pull/9166)
