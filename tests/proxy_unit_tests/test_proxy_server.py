@@ -2224,7 +2224,7 @@ def test_get_timeout_from_request():
 )
 def test_response_cost_rounding(response_cost, expected_rounded_cost):
     """Test that response cost is safely rounded to 6 decimal places"""
-    from litellm.proxy.proxy_server import _safely_round_response_cost
+    from litellm.proxy.utils import _safely_round_response_cost
     
     # Call the helper method directly
     result = _safely_round_response_cost(response_cost)

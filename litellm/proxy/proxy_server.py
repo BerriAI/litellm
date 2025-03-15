@@ -781,21 +781,6 @@ db_writer_client: Optional[AsyncHTTPHandler] = None
 ### logger ###
 
 
-def _safely_round_response_cost(response_cost: Optional[Union[float, str]]) -> str:
-    """
-    Safely round response cost to 6 decimal places.
-    If rounding fails, return the original response cost as a string.
-    """
-    if response_cost is None:
-        return "None"
-    
-    try:
-        return str(round(float(response_cost), 6))
-    except Exception:
-        # If rounding fails for any reason, return the original value
-        return str(response_cost)
-
-
 def get_custom_headers(
     *,
     user_api_key_dict: UserAPIKeyAuth,

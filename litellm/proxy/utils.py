@@ -115,6 +115,21 @@ def safe_deep_copy(data):
     return new_data
 
 
+def _safely_round_response_cost(response_cost: Optional[Union[float, str]]) -> str:
+    """
+    Safely round response cost to 6 decimal places.
+    If rounding fails, return the original response cost as a string.
+    """
+    if response_cost is None:
+        return "None"
+
+    try:
+        return str(round(float(response_cost), 6))
+    except Exception:
+        # If rounding fails for any reason, return the original value
+        return str(response_cost)
+
+
 class InternalUsageCache:
     def __init__(self, dual_cache: DualCache):
         self.dual_cache: DualCache = dual_cache
