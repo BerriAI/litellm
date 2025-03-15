@@ -72,7 +72,6 @@ export const prepareModelAddRequest = async (
           } else if (key == "model") {
             continue;
           }
-  
           // Check if key is "base_model"
           else if (key === "base_model") {
             // Add key-value pair to model_info dictionary
@@ -82,7 +81,11 @@ export const prepareModelAddRequest = async (
             modelInfoObj["team_id"] = value;
           }
           else if (key == "mode") {
+            console.log("placing mode in modelInfo")
             modelInfoObj["mode"] = value;
+
+            // remove "mode" from litellmParams
+            delete litellmParamsObj["mode"];
           }
           else if (key === "custom_model_name") {
             litellmParamsObj["model"] = value;
@@ -147,13 +150,13 @@ export const prepareModelAddRequest = async (
   };
 
 export const handleAddModelSubmit = async (
+    values: any,
     accessToken: string,
     form: any,
     callback?: () => void,
   ) => {
     try {
-      const formValues = form.getFieldsValue();
-      const result = await prepareModelAddRequest(formValues, accessToken, form);
+      const result = await prepareModelAddRequest(values, accessToken, form);
       
       if (!result) {
         return; // Exit if preparation failed
@@ -172,8 +175,6 @@ export const handleAddModelSubmit = async (
       
       callback && callback();
       form.resetFields();
-      
-      message.success("Model added successfully");
     } catch (error) {
       message.error("Failed to add model: " + error, 10);
     }

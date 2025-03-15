@@ -42,8 +42,11 @@ const ConnectionErrorDisplay: React.FC<ConnectionErrorDisplayProps> = ({
       const result = await prepareModelAddRequest(formValues, accessToken, null);
       if (!result) throw new Error("Failed to prepare model data");
 
-      const { litellmParamsObj } = result;
+      console.log("result from prepareModelAddRequest:", result);
+
+      const { litellmParamsObj, modelInfoObj, modelName: returnedModelName } = result;
       const requestBody = { ...litellmParamsObj, mode: testMode };
+
 
       const response = await testConnectionRequest(accessToken, requestBody);
       if (response.status === "success") {
