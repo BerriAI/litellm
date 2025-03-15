@@ -121,7 +121,10 @@ class AzureOpenAIConfig(BaseConfig):
         - check if api_version is supported for response_format
         """
 
-        is_supported = int(api_version_year) <= 2024 and int(api_version_month) >= 8
+        is_supported = (
+            int(api_version_year) >= 2025
+            or (int(api_version_year) >= 2024 and int(api_version_month) >= 8)
+        )
 
         return is_supported
 
