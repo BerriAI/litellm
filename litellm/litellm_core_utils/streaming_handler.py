@@ -799,6 +799,7 @@ class CustomStreamWrapper:
                 "provider_specific_fields" in response_obj
                 and response_obj["provider_specific_fields"] is not None
             )
+            or (getattr(model_response, "usage", None) is not None)
         ):
             return True
         else:
@@ -937,11 +938,7 @@ class CustomStreamWrapper:
             and model_response.choices[0].delta.audio is not None
         ):
             return model_response
-
-        else:
-            if hasattr(model_response, "usage"):
-                self.chunks.append(model_response)
-            return
+        return
 
     def _optional_combine_thinking_block_in_choices(
         self, model_response: ModelResponseStream
@@ -1542,7 +1539,7 @@ class CustomStreamWrapper:
                 else:
                     chunk = next(self.completion_stream)
                 if chunk is not None and chunk != b"":
-                    print_verbose(
+                    verbose_logger.debug(
                         f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}; custom_llm_provider: {self.custom_llm_provider}"
                     )
                     response: Optional[ModelResponseStream] = self.chunk_creator(
