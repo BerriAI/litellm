@@ -12,6 +12,7 @@ interface ConnectionErrorDisplayProps {
   testMode: string;
   modelName?: string;
   onClose?: () => void;
+  onTestComplete?: () => void;
 }
 
 const ConnectionErrorDisplay: React.FC<ConnectionErrorDisplayProps> = ({ 
@@ -19,7 +20,8 @@ const ConnectionErrorDisplay: React.FC<ConnectionErrorDisplayProps> = ({
   accessToken, 
   testMode, 
   modelName = "this model", 
-  onClose 
+  onClose,
+  onTestComplete
 }) => {
   const [error, setError] = React.useState<Error | string | null>(null);
   const [rawRequest, setRawRequest] = React.useState<any>(null);
@@ -30,6 +32,12 @@ const ConnectionErrorDisplay: React.FC<ConnectionErrorDisplayProps> = ({
 
   const testModelConnection = async () => {
     setIsLoading(true);
+    setShowDetails(false);
+    setError(null);
+    setRawRequest(null);
+    setRawResponse(null);
+    setIsSuccess(false);
+    
     try {
       const result = await prepareModelAddRequest(formValues, accessToken, null);
       if (!result) throw new Error("Failed to prepare model data");
@@ -55,6 +63,7 @@ const ConnectionErrorDisplay: React.FC<ConnectionErrorDisplayProps> = ({
       setIsSuccess(false);
     } finally {
       setIsLoading(false);
+      if (onTestComplete) onTestComplete();
     }
   };
 
