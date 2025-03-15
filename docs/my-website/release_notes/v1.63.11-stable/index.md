@@ -42,15 +42,6 @@ Here's a Demo Instance to test changes:
     - Username: admin
     - Password: sk-1234
 
-## New Models / Updated Models
-
-1. Add support for Amazon Nova Canvas model [PR](https://github.com/BerriAI/litellm/pull/7838)
-2. Add pricing for Jamba new models [PR](https://github.com/BerriAI/litellm/pull/9032)
-3. Add pricing for Amazon EU models [PR](https://github.com/BerriAI/litellm/pull/9056)
-4. Add Bedrock Deepseek R1 model pricing [PR](https://github.com/BerriAI/litellm/pull/9108)
-5. Update Gemini pricing: Gemma 3, Flash 2 thinking update, LearnLM [PR](https://github.com/BerriAI/litellm/pull/9190)
-6. Mark Cohere Embedding 3 models as Multimodal [PR](https://github.com/BerriAI/litellm/pull/9176)
-7. Add Azure Data Zone pricing [PR](https://github.com/BerriAI/litellm/pull/9185)
 
 ## LLM Translation
 
@@ -79,13 +70,15 @@ Here's a Demo Instance to test changes:
 - Fix: "system" role has become unacceptable in Ollama [PR](https://github.com/BerriAI/litellm/pull/9261)
 - Handle HTTP 201 status code in Vertex AI response [PR](https://github.com/BerriAI/litellm/pull/9193)
 
-## New Features
 
-### Credential Management
-
-4. Using K/V pairs in 1 AWS Secret [PR](https://github.com/BerriAI/litellm/pull/9039)
-5. Handle ManagedIdentityCredential in Azure AD token provider [PR](https://github.com/BerriAI/litellm/pull/9135)
-6. Prioritize api_key over tenant_id for Azure AD token provider [PR](https://github.com/BerriAI/litellm/pull/8701)
+### New Models Added to Model Cost Map
+- Add support for Amazon Nova Canvas model [PR](https://github.com/BerriAI/litellm/pull/7838)
+- Add pricing for Jamba new models [PR](https://github.com/BerriAI/litellm/pull/9032)
+- Add pricing for Amazon EU models [PR](https://github.com/BerriAI/litellm/pull/9056)
+- Add Bedrock Deepseek R1 model pricing [PR](https://github.com/BerriAI/litellm/pull/9108)
+- Update Gemini pricing: Gemma 3, Flash 2 thinking update, LearnLM [PR](https://github.com/BerriAI/litellm/pull/9190)
+- Mark Cohere Embedding 3 models as Multimodal [PR](https://github.com/BerriAI/litellm/pull/9176)
+- Add Azure Data Zone pricing [PR](https://github.com/BerriAI/litellm/pull/9185)
 
 
 ### New Provider Integrations
@@ -95,7 +88,6 @@ Here's a Demo Instance to test changes:
 ## Spend Tracking Improvements
 
 1. Fix Batches API cost tracking + Log batch models in spend logs / standard logging payload [PR](https://github.com/BerriAI/litellm/pull/9077)
-2. Track Azure LLM API latency metric [PR](https://github.com/BerriAI/litellm/pull/9217)
 3. Fix Azure Whisper cost tracking [PR](https://github.com/BerriAI/litellm/pull/9166)
 
 ## Management Endpoints / UI
@@ -131,6 +123,10 @@ General Improvements
 1. Support master key rotations [PR](https://github.com/BerriAI/litellm/pull/9041)
 1. Emit audit logs on All user + model Create/Update/Delete endpoints [PR](https://github.com/BerriAI/litellm/pull/9223)
 JWT
+4. Using K/V pairs in 1 AWS Secret [PR](https://github.com/BerriAI/litellm/pull/9039)
+5. Handle ManagedIdentityCredential in Azure AD token provider [PR](https://github.com/BerriAI/litellm/pull/9135)
+6. Prioritize api_key over tenant_id for Azure AD token provider [PR](https://github.com/BerriAI/litellm/pull/8701)
+
 
 - Support multiple JWT URLs [PR](https://github.com/BerriAI/litellm/pull/9047)
 - Fix JWT access with Groups not working when team is assigned All Proxy Models access [PR](https://github.com/BerriAI/litellm/pull/8934)
@@ -138,6 +134,7 @@ JWT
 
 ## Logging / Guardrail Integrations
 
+2. Track Azure LLM API latency metric [PR](https://github.com/BerriAI/litellm/pull/9217)
 2. Allow switching off storing Error Logs in DB [PR](https://github.com/BerriAI/litellm/pull/9084)
 3. Added tags, user_feedback and model_options to additional_keys which can be sent to Athina [PR](https://github.com/BerriAI/litellm/pull/8845)
 4. Return `code`, `param` and `type` on OpenAI bad request error [PR](https://github.com/BerriAI/litellm/pull/9109)
