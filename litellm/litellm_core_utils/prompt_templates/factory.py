@@ -188,7 +188,7 @@ def ollama_pt(
             messages=messages,
         )
     else:
-        user_message_types = {"user", "tool", "function"}
+        user_message_types = {"user", "tool", "function", "system"}
         msg_i = 0
         images = []
         prompt = ""

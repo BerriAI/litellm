@@ -2948,3 +2948,21 @@ async def test_bedrock_stream_thinking_content_openwebui():
     assert (
         len(response_content) > 0
     ), "There should be non-empty content after thinking tags"
+
+
+def test_bedrock_completion_with_converse_cris_model():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    with patch.object(client, "post") as mock_post:
+        try:
+            resp = litellm.completion(
+                model="bedrock/us.deepseek.r1-v1:0",
+                messages=[{"role": "user", "content": "Hello world"}],
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        mock_post.assert_called_once()
+        assert "converse" in mock_post.call_args.kwargs["url"]
