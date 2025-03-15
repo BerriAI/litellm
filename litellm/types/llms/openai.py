@@ -49,6 +49,11 @@ from openai.types.responses.response_create_params import (
     ToolChoice,
     ToolParam,
 )
+
+from openai.types.responses.response_retrieve_params import (
+    ResponseRetrieveParams
+)
+    
 from pydantic import BaseModel, Discriminator, Field, PrivateAttr
 from typing_extensions import Annotated, Dict, Required, TypedDict, override
 
@@ -731,6 +736,14 @@ class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
     input: Union[str, ResponseInputParam]
     model: str
 
+class ResponsesAPIRetrieveParams(ResponsesAPIOptionalRequestParams, total=False):
+    """TypedDict for retrieve parameters supported by the responses API."""
+    id: str
+
+class ResponsesAPIDeleteParams:
+    """TypedDict for delete parameters supported by the responses API. Delete does not support any optional params"""
+    id: str
+
 
 class BaseLiteLLMOpenAIResponseObject(BaseModel):
     def __getitem__(self, key):
@@ -793,6 +806,11 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     user: Optional[str]
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+class ResponsesAPIDeleteResponse(BaseLiteLLMOpenAIResponseObject):
+    id: str
+    object:str
+    deleted: bool
 
 
 class ResponsesAPIStreamEvents(str, Enum):
