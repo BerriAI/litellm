@@ -122,7 +122,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
           <BarChart
             className="mt-4 h-40 cursor-pointer hover:opacity-90"
             data={topKeys}
-            index="key"
+            index="key_alias"
             categories={["spend"]}
             colors={["cyan"]}
             yAxisWidth={80}
@@ -130,9 +130,26 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
             layout="vertical"
             showXAxis={false}
             showLegend={false}
-            valueFormatter={(value) => `$${value.toFixed(2)}`}
+            valueFormatter={(value) => value ? `$${value.toFixed(2)}` : "No Key Alias"}
             onValueChange={(item) => handleKeyClick(item)}
             showTooltip={true}
+            customTooltip={(props) => {
+              const item = props.payload?.[0]?.payload;
+              return (
+                <div className="p-3 bg-black/90 shadow-lg rounded-lg text-white">
+                  <div className="space-y-1.5">
+                    <div className="text-sm">
+                      <span className="text-gray-300">Key: </span>
+                      <span className="font-mono text-gray-100">{item?.key?.slice(0, 10)}...</span>
+                    </div>
+                    <div className="text-sm">
+                      <span className="text-gray-300">Spend: </span>
+                      <span className="text-white font-medium">${item?.spend.toFixed(2)}</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            }}
           />
         </div>
       ) : (
