@@ -1270,6 +1270,7 @@ class BaseLLMHTTPHandler:
             response = sync_httpx_client.get(
                 url=api_base,
                 headers=headers,
+                params=data
             )
         except Exception as e:
             raise self._handle_error(
@@ -1322,7 +1323,6 @@ class BaseLLMHTTPHandler:
             response_id = response_id
         )
 
-        # Is this necessary? Perhaps for get,
         data = responses_api_provider_config.transform_responses_api_retrieve_request(
             response_api_retrieve_optional_request_params=response_api_retrieve_optional_request_params,
             litellm_params=litellm_params,
@@ -1345,6 +1345,7 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.get(
                 url=api_base,
                 headers=headers,
+                params=data
             )
 
         except Exception as e:

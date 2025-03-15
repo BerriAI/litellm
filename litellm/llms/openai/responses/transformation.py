@@ -77,6 +77,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams, 
         headers: Dict
     ) -> ResponsesAPIRetrieveParams:
+        # Replace 'include' with 'include[]' format, otherwise the reponse won't go through
+        include = response_api_retrieve_optional_request_params.pop("include", None)
+        if include is not None:
+            response_api_retrieve_optional_request_params["include[]"] = include
         return ResponsesAPIRetrieveParams(
              **response_api_retrieve_optional_request_params
         )
