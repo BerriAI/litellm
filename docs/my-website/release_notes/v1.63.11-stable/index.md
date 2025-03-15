@@ -128,7 +128,7 @@ Before adding a model you can test the connection to the LLM provider to verify 
 ## Logging Integrations
 
 1. Prometheus: Track Azure LLM API latency metric [Get Started here](https://docs.litellm.ai/docs/proxy/prometheus#request-latency-metrics)
-2. Allow switching off storing Error Logs in DB **MISSING DOC**
+2. Allow switching off storing Error Logs in DB [Get Started here](https://docs.litellm.ai/docs/proxy/ui_logs)
 3. Added tags, user_feedback and model_options to additional_keys which can be sent to Athina [Get Started here](https://docs.litellm.ai/docs/observability/athina_integration)
 
 ## OpenWebUI Integration - display `thinking` tokens
