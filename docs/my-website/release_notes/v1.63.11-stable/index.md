@@ -21,10 +21,10 @@ import Image from '@theme/IdealImage';
 These are the changes since `v1.63.2-stable`.
 
 This release is primarily focused on:
-- Credential Management (UI + API)
-- Thinking Content Improvements (OpenWebUI, Bedrock, Anthropic, Deepseek)
-- New Responses API
-- New Provider Integrations (Snowflake Cortex)
+- [Beta] Responses API Support
+- Snowflake Cortex Support
+- UI - Credential Management, re-use credentials when adding new models
+- UI - Test Connection to LLM Provider before adding a model
 
 :::info
 
@@ -55,18 +55,19 @@ Here's a Demo Instance to test changes:
 
 3. **New models**
 
-- Support OpenRouter `reasoning_content` on streaming [PR](https://github.com/BerriAI/litellm/pull/9094)
-- Support Bedrock converse cache token tracking [PR](https://github.com/BerriAI/litellm/pull/9221)
+- Support OpenRouter `reasoning_content` on streaming **MISSING DOC**
+- Support Bedrock converse cache token tracking **MISSING DOC**
 
-4. Bug Fixes
+4. **Bug Fixes**
 - Fix Bedrock chunk parsing [PR](https://github.com/BerriAI/litellm/pull/9166)
 - Fix Azure Function Calling Bug & Update Default API Version to `2025-02-01-preview` [PR](https://github.com/BerriAI/litellm/pull/9191)
-- Fix incorrect streaming response [PR](https://github.com/BerriAI/litellm/pull/9081)
+- Fix Perplexity incorrect streaming response [PR](https://github.com/BerriAI/litellm/pull/9081)
 - Fix Triton streaming completions bug [PR](https://github.com/BerriAI/litellm/pull/8386)
-- Fix: String data stripped from entire content in streamed Gemini responses [PR](https://github.com/BerriAI/litellm/pull/9070)
+- Fix: String `data:` stripped from entire content in streamed Gemini responses [PR](https://github.com/BerriAI/litellm/pull/9070)
 - Fix: Support bytes.IO when handling audio files for transcription [PR](https://github.com/BerriAI/litellm/pull/9071)
 - Fix: "system" role has become unacceptable in Ollama [PR](https://github.com/BerriAI/litellm/pull/9261)
 - Handle HTTP 201 status code in Vertex AI response [PR](https://github.com/BerriAI/litellm/pull/9193)
+- Return `code`, `param` and `type` on OpenAI bad request error [PR](https://github.com/BerriAI/litellm/pull/9109)
 
 
 ### New Models Added to Model Cost Map
@@ -76,13 +77,14 @@ Here's a Demo Instance to test changes:
 - Add Bedrock Deepseek R1 model pricing [PR](https://github.com/BerriAI/litellm/pull/9108)
 - Update Gemini pricing: Gemma 3, Flash 2 thinking update, LearnLM [PR](https://github.com/BerriAI/litellm/pull/9190)
 - Mark Cohere Embedding 3 models as Multimodal [PR](https://github.com/BerriAI/litellm/pull/9176)
-- Add Azure Data Zone pricing [PR](https://github.com/BerriAI/litellm/pull/9185)
 
 
 ## Spend Tracking Improvements
 
-1. Fix Batches API cost tracking + Log batch models in spend logs / standard logging payload [PR](https://github.com/BerriAI/litellm/pull/9077)
+1. Add Azure Data Zone pricing [PR](https://github.com/BerriAI/litellm/pull/9185)
+2. Cost Tracking for Responses API
 3. Fix Azure Whisper cost tracking [PR](https://github.com/BerriAI/litellm/pull/9166)
+
 
 ## UI
 
@@ -131,12 +133,11 @@ Before adding a model you can test the connection to the LLM provider to verify 
 7. Fix: Prioritize api_key over tenant_id for Azure AD token provider [PR](https://github.com/BerriAI/litellm/pull/8701)
 
 
-## Logging / Guardrail Integrations
+## Logging Integrations
 
-2. Track Azure LLM API latency metric [PR](https://github.com/BerriAI/litellm/pull/9217)
-2. Allow switching off storing Error Logs in DB [PR](https://github.com/BerriAI/litellm/pull/9084)
-3. Added tags, user_feedback and model_options to additional_keys which can be sent to Athina [PR](https://github.com/BerriAI/litellm/pull/8845)
-4. Return `code`, `param` and `type` on OpenAI bad request error [PR](https://github.com/BerriAI/litellm/pull/9109)
+1. Prometheus: Track Azure LLM API latency metric [Get Started here](https://docs.litellm.ai/docs/proxy/prometheus#request-latency-metrics)
+2. Allow switching off storing Error Logs in DB **MISSING DOC**
+3. Added tags, user_feedback and model_options to additional_keys which can be sent to Athina [Get Started here](https://docs.litellm.ai/docs/observability/athina_integration)
 
 ## OpenWebUI Integration - display `thinking` tokens
 - Guide on getting started with LiteLLM x OpenWebUI. [Get Started](https://docs.litellm.ai/docs/tutorials/openweb_ui)
@@ -153,9 +154,9 @@ Before adding a model you can test the connection to the LLM provider to verify 
 
 
 ## General Improvements
-5. UI API Playground for testing LiteLLM translation [PR](https://github.com/BerriAI/litellm/pull/9073)
-4. Fix: Correctly use `PROXY_LOGOUT_URL` when set [PR](https://github.com/BerriAI/litellm/pull/9117)
-Bing Search Pass Thru [PR](https://github.com/BerriAI/litellm/pull/8019)
+1. UI API Playground for testing LiteLLM translation [PR](https://github.com/BerriAI/litellm/pull/9073)
+2. Fix: Correctly use `PROXY_LOGOUT_URL` when set [PR](https://github.com/BerriAI/litellm/pull/9117)
+3. Bing Search Pass Through endpoint [PR](https://github.com/BerriAI/litellm/pull/8019)
 
 
 ## Complete Git Diff
