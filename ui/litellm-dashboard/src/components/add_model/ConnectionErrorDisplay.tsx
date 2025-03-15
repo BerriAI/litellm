@@ -26,6 +26,7 @@ const ConnectionErrorDisplay: React.FC<ConnectionErrorDisplayProps> = ({
   const [rawResponse, setRawResponse] = React.useState<any>(null);
   const [isLoading, setIsLoading] = React.useState<boolean>(true);
   const [isSuccess, setIsSuccess] = React.useState<boolean>(false);
+  const [showDetails, setShowDetails] = React.useState<boolean>(false);
 
   const testModelConnection = async () => {
     setIsLoading(true);
@@ -61,7 +62,19 @@ const ConnectionErrorDisplay: React.FC<ConnectionErrorDisplayProps> = ({
     testModelConnection();
   }, []);
 
-  const errorMessage = typeof error === 'string' ? error : error?.message;
+  const getCleanErrorMessage = (errorMsg: string) => {
+    if (!errorMsg) return "Unknown error";
+    
+    const mainError = errorMsg.split('stack trace:')[0].trim();
+    
+    const cleanedError = mainError.replace(/^litellm\.(.*?)Error: /, '');
+    
+    return cleanedError;
+  };
+
+  const errorMessage = typeof error === 'string' 
+    ? getCleanErrorMessage(error) 
+    : error?.message ? getCleanErrorMessage(error.message) : "Unknown error";
 
   const formatCurlCommand = (apiBase: string, requestBody: Record<string, any>, requestHeaders: Record<string, string>) => {
     const formattedBody = JSON.stringify(requestBody, null, 2)
@@ -103,14 +116,61 @@ ${formattedBody}
       ) : (
         <>
           <div>
-            <Text type="danger" style={{ fontSize: '16px' }}>Connection to {modelName} failed</Text>
-            <Divider style={{ margin: '16px 0' }} />
-            <Text type="danger">{errorMessage}</Text>
-            <Divider style={{ margin: '16px 0' }} />
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: '16px' }}>
+              <WarningOutlined style={{ color: '#ff4d4f', fontSize: '20px', marginRight: '8px' }} />
+              <Text type="danger" style={{ fontSize: '16px' }}>Connection to {modelName} failed</Text>
+            </div>
+            
+            <div style={{ 
+              backgroundColor: '#fff2f0', 
+              border: '1px solid #ffccc7', 
+              borderRadius: '6px', 
+              padding: '16px', 
+              marginBottom: '16px' 
+            }}>
+              <Text strong>Error: </Text>
+              <Text type="danger">{errorMessage}</Text>
+              
+              {error && (
+                <div style={{ marginTop: '8px' }}>
+                  <Button 
+                    type="link" 
+                    onClick={() => setShowDetails(!showDetails)}
+                    style={{ paddingLeft: 0 }}
+                  >
+                    {showDetails ? 'Hide Details' : 'Show Details'}
+                  </Button>
+                </div>
+              )}
+            </div>
+            
+            {showDetails && (
+              <div style={{ marginBottom: '16px' }}>
+                <h4>Troubleshooting Details</h4>
+                <pre style={{ 
+                  backgroundColor: '#f5f5f5', 
+                  padding: '12px', 
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  maxHeight: '200px',
+                  overflow: 'auto'
+                }}>
+                  {typeof error === 'string' ? error : JSON.stringify(error, null, 2)}
+                </pre>
+              </div>
+            )}
+            
             <div>
-              <h3>Raw Request</h3>
-              <pre style={{ backgroundColor: '#f5f5f5', padding: '16px', borderRadius: '6px' }}>
-                {curlCommand || "No request data"}
+              <h4>API Request</h4>
+              <pre style={{ 
+                backgroundColor: '#f5f5f5', 
+                padding: '12px', 
+                borderRadius: '6px',
+                fontSize: '12px',
+                maxHeight: '200px',
+                overflow: 'auto'
+              }}>
+                {curlCommand || "No request data available"}
               </pre>
               <Button 
                 type="text" 
@@ -127,7 +187,7 @@ ${formattedBody}
         </>
       )}
       <Divider style={{ margin: '16px 0' }} />
-      <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
         <Button 
           type="link" 
           href="https://docs.litellm.ai/docs/providers" 
@@ -136,6 +196,7 @@ ${formattedBody}
         >
           View Documentation
         </Button>
+        
       </div>
     </div>
   );
