@@ -86,26 +86,26 @@ Here's a Demo Instance to test changes:
 
 ## Management Endpoints / UI
 1. Add Models Page
-   - Allow adding Text-Completion OpenAI models through UI [PR](https://github.com/BerriAI/litellm/pull/9102)
-   - Allow adding EU OpenAI models [PR](https://github.com/BerriAI/litellm/pull/9042)
-   - Allow adding Cerebras, Sambanova, Perplexity, Fireworks, Openrouter, TogetherAI Models on Admin UI [PR](https://github.com/BerriAI/litellm/pull/9069)
-   - Fix: Instantly show edit + deletes to models [PR](https://github.com/BerriAI/litellm/pull/9258)
-    - UI Test Connection feature [PR](https://github.com/BerriAI/litellm/pull/9272)
-    - Support credential management on Proxy via CRUD endpoints - `credentials/*` [PR](https://github.com/BerriAI/litellm/pull/9124)
-    - Add UI for credential management [PR](https://github.com/BerriAI/litellm/pull/9186)
-    - Support reusing existing model credentials [PR](https://github.com/BerriAI/litellm/pull/9267)
+   - Allow adding Text-Completion OpenAI models through UI
+   - Allow adding EU OpenAI models
+   - Allow adding Cerebras, Sambanova, Perplexity, Fireworks, Openrouter, TogetherAI Models on Admin UI
+   - Fix: Instantly show edit + deletes to models
+   - UI Test Connection feature
+   - Support credential management on Proxy via CRUD endpoints - `credentials/*`
+   - Add UI for credential management
+   - Support reusing existing model credentials
 2. Keys Page
-   - Fix: Instantly show newly created keys on Admin UI (don't require refresh) [PR](https://github.com/BerriAI/litellm/pull/9257)
-   - Fix: Allow clicking into Top Keys when showing users Top API Key [PR](https://github.com/BerriAI/litellm/pull/9225)
-   - Fix: Allow Filter Keys by Team Alias, Key Alias and Org [PR](https://github.com/BerriAI/litellm/pull/9083)
-   - UI Improvements: Show 100 Keys Per Page, Use full height, increase width of key alias [PR](https://github.com/BerriAI/litellm/pull/9064)
+   - Fix: Instantly show newly created keys on Admin UI (don't require refresh)
+   - Fix: Allow clicking into Top Keys when showing users Top API Key
+   - Fix: Allow Filter Keys by Team Alias, Key Alias and Org
+   - UI Improvements: Show 100 Keys Per Page, Use full height, increase width of key alias
 3. Users Page
-   - Fix: Show correct count of internal user keys on Users Page [PR](https://github.com/BerriAI/litellm/pull/9082)
-   - Fix: Metadata not updating in Team UI [PR](https://github.com/BerriAI/litellm/pull/9180)
+   - Fix: Show correct count of internal user keys on Users Page
+   - Fix: Metadata not updating in Team UI
 4. Logs Page
-   - UI Improvements: Keep expanded log in focus on LiteLLM UI [PR](https://github.com/BerriAI/litellm/pull/9061)
-   - UI Improvements: Minor improvements to logs page [PR](https://github.com/BerriAI/litellm/pull/9076)
-   - Fix: Allow internal user to query their own logs [PR](https://github.com/BerriAI/litellm/pull/9162)
+   - UI Improvements: Keep expanded log in focus on LiteLLM UI
+   - UI Improvements: Minor improvements to logs page
+   - Fix: Allow internal user to query their own logs
 
 
 ## Security
