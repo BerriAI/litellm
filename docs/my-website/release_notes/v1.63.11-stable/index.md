@@ -59,7 +59,7 @@ Here's a Demo Instance to test changes:
 - Support Bedrock converse cache token tracking [Get Started](https://docs.litellm.ai/docs/completion/prompt_caching)
 
 4. **Bug Fixes**
-- Fix Bedrock chunk parsing [PR](https://github.com/BerriAI/litellm/pull/9166)
+- Fix Bedrock converse chunk parsing to only return empty dict on tool use [PR](https://github.com/BerriAI/litellm/pull/9166)
 - Fix Azure Function Calling Bug & Update Default API Version to `2025-02-01-preview` [PR](https://github.com/BerriAI/litellm/pull/9191)
 - Fix Perplexity incorrect streaming response [PR](https://github.com/BerriAI/litellm/pull/9081)
 - Fix Triton streaming completions bug [PR](https://github.com/BerriAI/litellm/pull/8386)
