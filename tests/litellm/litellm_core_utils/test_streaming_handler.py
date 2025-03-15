@@ -10,7 +10,13 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-from litellm.types.utils import ModelResponseStream
+from litellm.types.utils import (
+    Delta,
+    ModelResponseStream,
+    PromptTokensDetailsWrapper,
+    StreamingChoices,
+    Usage,
+)
 
 
 @pytest.fixture
@@ -277,3 +283,90 @@ def test_strip_sse_data_from_chunk():
 
     # Test with None input
     assert CustomStreamWrapper._strip_sse_data_from_chunk(None) is None
+
+
+def test_chunk_with_usage(initialized_custom_stream_wrapper: CustomStreamWrapper):
+    """Test that a chunk with usage is properly handled"""
+    args = {
+        "completion_obj": {"content": ""},
+        "model_response": ModelResponseStream(
+            id="chatcmpl-e6abdd00-9d27-4be5-9fce-9b68fa97ac01",
+            created=1742054811,
+            model=None,
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        provider_specific_fields=None,
+                        content="",
+                        role="assistant",
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields={},
+            usage=Usage(
+                completion_tokens=392,
+                prompt_tokens=1799,
+                total_tokens=2191,
+                completion_tokens_details=None,
+                prompt_tokens_details=PromptTokensDetailsWrapper(
+                    audio_tokens=None,
+                    cached_tokens=1796,
+                    text_tokens=None,
+                    image_tokens=None,
+                ),
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=1796,
+            ),
+        ),
+        "response_obj": {
+            "finish_reason": None,
+            "is_finished": False,
+            "logprobs": None,
+            "original_chunk": ModelResponseStream(
+                id="chatcmpl-e6abdd00-9d27-4be5-9fce-9b68fa97ac01",
+                created=1742054811,
+                model=None,
+                object="chat.completion.chunk",
+                system_fingerprint=None,
+                choices=[
+                    StreamingChoices(
+                        finish_reason=None,
+                        index=0,
+                        delta=Delta(
+                            provider_specific_fields=None,
+                            content="",
+                            role="assistant",
+                            function_call=None,
+                            tool_calls=None,
+                            audio=None,
+                        ),
+                        logprobs=None,
+                    )
+                ],
+                provider_specific_fields={},
+                usage=Usage(
+                    completion_tokens=392,
+                    prompt_tokens=1799,
+                    total_tokens=2191,
+                    completion_tokens_details=None,
+                    prompt_tokens_details=PromptTokensDetailsWrapper(
+                        audio_tokens=None,
+                        cached_tokens=1796,
+                        text_tokens=None,
+                        image_tokens=None,
+                    ),
+                    cache_creation_input_tokens=0,
+                    cache_read_input_tokens=1796,
+                ),
+            ),
+        },
+    }
+    assert initialized_custom_stream_wrapper.is_chunk_non_empty(**args)
