@@ -1030,6 +1030,8 @@ def test_streaming_handler_with_usage():
         ),
     )
 
-    for chunk in response:
-        if hasattr(chunk, "usage"):
-            assert chunk.usage == final_usage_block
+    with patch("litellm.main.token_counter") as mock_token_counter:
+        for chunk in response:
+            if hasattr(chunk, "usage"):
+                assert chunk.usage == final_usage_block
+        assert mock_token_counter.assert_not_called()
