@@ -880,9 +880,9 @@ class CustomStreamWrapper:
                             "provider_specific_fields"
                         ]
                     model_response.choices[0].delta = Delta(**completion_obj)
-                    _index: Optional[int] = completion_obj.get("index")
-                    if _index is not None:
-                        model_response.choices[0].index = _index
+                    # _index: Optional[int] = completion_obj.get("index")
+                    # if _index is not None:
+                    #     model_response.choices[0].index = _index
 
                 self._optional_combine_thinking_block_in_choices(
                     model_response=model_response
@@ -1333,6 +1333,7 @@ class CustomStreamWrapper:
                     )
                 if original_chunk.choices and len(original_chunk.choices) > 0:
                     delta = original_chunk.choices[0].delta
+                    model_response.choices[0].index = original_chunk.choices[0].index
                     if delta is not None and (
                         delta.function_call is not None or delta.tool_calls is not None
                     ):
