@@ -799,7 +799,7 @@ class CustomStreamWrapper:
                 "provider_specific_fields" in response_obj
                 and response_obj["provider_specific_fields"] is not None
             )
-            or (getattr(model_response, "usage", None) is not None)
+            or (response_obj.get("original_chunk", None) is not None)
         ):
             return True
         else:
@@ -831,8 +831,8 @@ class CustomStreamWrapper:
                 ## check if openai/azure chunk
                 original_chunk = response_obj.get("original_chunk", None)
                 if original_chunk:
+                    choices = []
                     if len(original_chunk.choices) > 0:
-                        choices = []
                         for choice in original_chunk.choices:
                             try:
                                 if isinstance(choice, BaseModel):
@@ -845,9 +845,8 @@ class CustomStreamWrapper:
                             except Exception:
                                 choices.append(StreamingChoices())
                         print_verbose(f"choices in streaming: {choices}")
-                        setattr(model_response, "choices", choices)
-                    else:
-                        return
+
+                    setattr(model_response, "choices", choices)
                     model_response.system_fingerprint = (
                         original_chunk.system_fingerprint
                     )
@@ -870,6 +869,8 @@ class CustomStreamWrapper:
                     verbose_logger.debug(
                         f"model_response.choices[0].delta: {model_response.choices[0].delta}"
                     )
+                    if hasattr(original_chunk, "usage"):
+                        setattr(model_response, "usage", original_chunk.usage)
                 else:
                     ## else
                     completion_obj["content"] = model_response_str
@@ -1545,7 +1546,9 @@ class CustomStreamWrapper:
                     response: Optional[ModelResponseStream] = self.chunk_creator(
                         chunk=chunk
                     )
-                    print_verbose(f"PROCESSED CHUNK POST CHUNK CREATOR: {response}")
+                    verbose_logger.debug(
+                        f"PROCESSED CHUNK POST CHUNK CREATOR: {response}"
+                    )
 
                     if response is None:
                         continue
@@ -1870,7 +1873,7 @@ def calculate_total_usage(chunks: List[ModelResponse]) -> Usage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     for chunk in chunks:
-        if "usage" in chunk:
+        if "usage" in chunk and chunk.get("usage", None) is not None:
             if "prompt_tokens" in chunk["usage"]:
                 prompt_tokens = chunk["usage"].get("prompt_tokens", 0) or 0
             if "completion_tokens" in chunk["usage"]:

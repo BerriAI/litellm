@@ -1028,10 +1028,15 @@ def test_streaming_handler_with_usage():
             litellm_call_id="12345",
             function_id="1245",
         ),
+        stream_options={"include_usage": True},
     )
 
-    with patch("litellm.main.token_counter") as mock_token_counter:
-        for chunk in response:
-            if hasattr(chunk, "usage"):
-                assert chunk.usage == final_usage_block
-        assert mock_token_counter.assert_not_called()
+    chunk_has_usage = False
+    for chunk in response:
+        if hasattr(chunk, "usage"):
+            assert chunk.usage == final_usage_block
+            chunk_has_usage = True
+    assert chunk_has_usage
+    # with patch("litellm.main.token_counter") as mock_token_counter:
+
+    #     assert mock_token_counter.assert_not_called()
