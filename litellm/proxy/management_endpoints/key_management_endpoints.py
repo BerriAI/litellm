@@ -636,6 +636,11 @@ def prepare_key_update_data(
             continue
         non_default_values[k] = v
 
+    # Ensure user_id is preserved from existing key and not set to null
+    if existing_key_row.user_id:
+        if "user_id" not in non_default_values or non_default_values["user_id"] is None:
+            non_default_values["user_id"] = existing_key_row.user_id
+
     if "duration" in non_default_values:
         duration = non_default_values.pop("duration")
         if duration and (isinstance(duration, str)) and len(duration) > 0:
