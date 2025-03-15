@@ -81,10 +81,6 @@ Here's a Demo Instance to test changes:
 - Add Azure Data Zone pricing [PR](https://github.com/BerriAI/litellm/pull/9185)
 
 
-### New Provider Integrations
-
-3. Bing Search Pass Thru [PR](https://github.com/BerriAI/litellm/pull/8019)
-
 ## Spend Tracking Improvements
 
 1. Fix Batches API cost tracking + Log batch models in spend logs / standard logging payload [PR](https://github.com/BerriAI/litellm/pull/9077)
@@ -113,9 +109,6 @@ Here's a Demo Instance to test changes:
    - UI Improvements: Minor improvements to logs page [PR](https://github.com/BerriAI/litellm/pull/9076)
    - Fix: Allow internal user to query their own logs [PR](https://github.com/BerriAI/litellm/pull/9162)
 
-General Improvements
-5. UI API Playground for testing LiteLLM translation [PR](https://github.com/BerriAI/litellm/pull/9073)
-4. Fix: Correctly use `PROXY_LOGOUT_URL` when set [PR](https://github.com/BerriAI/litellm/pull/9117)
 
 ## Security
 
@@ -145,6 +138,12 @@ JWT
 2. Delegate router Azure client init logic to Azure provider [PR](https://github.com/BerriAI/litellm/pull/9140)
 3. Fix Azure AI services URL [PR](https://github.com/BerriAI/litellm/pull/9185)
 4. Support extra_headers on Bedrock [PR](https://github.com/BerriAI/litellm/pull/9113)
+
+
+## General Improvements
+5. UI API Playground for testing LiteLLM translation [PR](https://github.com/BerriAI/litellm/pull/9073)
+4. Fix: Correctly use `PROXY_LOGOUT_URL` when set [PR](https://github.com/BerriAI/litellm/pull/9117)
+Bing Search Pass Thru [PR](https://github.com/BerriAI/litellm/pull/8019)
 
 ## Complete Git Diff
 
