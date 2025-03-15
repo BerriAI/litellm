@@ -44,14 +44,15 @@ Here's a Demo Instance to test changes:
 
 
 
-## New / Updated Models in Model Cost Map
-- Add support for Amazon Nova Canvas model [PR](https://github.com/BerriAI/litellm/pull/7838)
-- Add pricing for Jamba new models [PR](https://github.com/BerriAI/litellm/pull/9032)
-- Add pricing for Amazon EU models [PR](https://github.com/BerriAI/litellm/pull/9056)
-- Add Bedrock Deepseek R1 model pricing [PR](https://github.com/BerriAI/litellm/pull/9108)
-- Update Gemini pricing: Gemma 3, Flash 2 thinking update, LearnLM [PR](https://github.com/BerriAI/litellm/pull/9190)
-- Mark Cohere Embedding 3 models as Multimodal [PR](https://github.com/BerriAI/litellm/pull/9176)
-- Add Azure Data Zone pricing [PR](https://github.com/BerriAI/litellm/pull/9185)
+## New Models / Updated Models
+
+- Image Generation support for Amazon Nova Canvas [Getting Started](https://docs.litellm.ai/docs/providers/bedrock#image-generation)
+- Add pricing for Jamba new models [PR](https://github.com/BerriAI/litellm/pull/9032/files)
+- Add pricing for Amazon EU models [PR](https://github.com/BerriAI/litellm/pull/9056/files)
+- Add Bedrock Deepseek R1 model pricing [PR](https://github.com/BerriAI/litellm/pull/9108/files)
+- Update Gemini pricing: Gemma 3, Flash 2 thinking update, LearnLM [PR](https://github.com/BerriAI/litellm/pull/9190/files)
+- Mark Cohere Embedding 3 models as Multimodal [PR](https://github.com/BerriAI/litellm/pull/9176/commits/c9a576ce4221fc6e50dc47cdf64ab62736c9da41)
+- Add Azure Data Zone pricing [PR](https://github.com/BerriAI/litellm/pull/9185/files#diff-19ad91c53996e178c1921cbacadf6f3bae20cfe062bd03ee6bfffb72f847ee37)
    - LiteLLM Tracks cost for `azure/eu` and `azure/us` models
 
 
@@ -66,10 +67,9 @@ Here's a Demo Instance to test changes:
 2. **New LLM Providers**
 - Snowflake Cortex [Getting Started](https://docs.litellm.ai/docs/providers/snowflake)
 
-3. **New models**
+3. **New LLM Features**
 
 - Support OpenRouter `reasoning_content` on streaming [Getting Started](https://docs.litellm.ai/docs/reasoning_content)
-- Support Bedrock converse cache token tracking [Getting Started](https://docs.litellm.ai/docs/completion/prompt_caching)
 
 4. **Bug Fixes**
 
@@ -81,7 +81,7 @@ Here's a Demo Instance to test changes:
 - Vertex AI: Handle HTTP 201 status code in response [PR](https://github.com/BerriAI/litellm/pull/9193)
 - Perplexity: Fix incorrect streaming response [PR](https://github.com/BerriAI/litellm/pull/9081)
 - Triton: Fix streaming completions bug [PR](https://github.com/BerriAI/litellm/pull/8386)
-- (Deepgram): Support bytes.IO when handling audio files for transcription [PR](https://github.com/BerriAI/litellm/pull/9071)
+- Deepgram: Support bytes.IO when handling audio files for transcription [PR](https://github.com/BerriAI/litellm/pull/9071)
 - Ollama: Fix "system" role has become unacceptable [PR](https://github.com/BerriAI/litellm/pull/9261)
 - All Providers (Streaming): Fix String `data:` stripped from entire content in streamed responses [PR](https://github.com/BerriAI/litellm/pull/9070)
 
@@ -89,9 +89,9 @@ Here's a Demo Instance to test changes:
 
 ## Spend Tracking Improvements
 
+1. Support Bedrock converse cache token tracking [Getting Started](https://docs.litellm.ai/docs/completion/prompt_caching)
 2. Cost Tracking for Responses API [Getting Started](https://docs.litellm.ai/docs/response_api)
-3. Fix Azure Whisper cost tracking [PR](https://github.com/BerriAI/litellm/pull/9166)
-
+3. Fix Azure Whisper cost tracking [Getting Started](https://docs.litellm.ai/docs/audio_transcription)
 
 
 ## UI
@@ -126,6 +126,7 @@ Before adding a model you can test the connection to the LLM provider to verify 
    - UI Improvements: Keep expanded log in focus on LiteLLM UI
    - UI Improvements: Minor improvements to logs page
    - Fix: Allow internal user to query their own logs
+   - Allow switching off storing Error Logs in DB [Getting Started](https://docs.litellm.ai/docs/proxy/ui_logs)
 5. Sign In/Sign Out
    - Fix: Correctly use `PROXY_LOGOUT_URL` when set [Getting Started](https://docs.litellm.ai/docs/proxy/self_serve#setting-custom-logout-urls)
 
@@ -144,8 +145,7 @@ Before adding a model you can test the connection to the LLM provider to verify 
 ## Logging Integrations
 
 1. Prometheus: Track Azure LLM API latency metric [Getting Started](https://docs.litellm.ai/docs/proxy/prometheus#request-latency-metrics)
-2. Allow switching off storing Error Logs in DB [Getting Started](https://docs.litellm.ai/docs/proxy/ui_logs)
-3. Added tags, user_feedback and model_options to additional_keys which can be sent to Athina [Getting Started](https://docs.litellm.ai/docs/observability/athina_integration)
+2. Athina: Added tags, user_feedback and model_options to additional_keys which can be sent to Athina [Getting Started](https://docs.litellm.ai/docs/observability/athina_integration)
 
 
 ## Performance / Reliability improvements
@@ -154,8 +154,8 @@ Before adding a model you can test the connection to the LLM provider to verify 
 
 
 ## General Improvements
-3. Bing Search Pass Through endpoint [PR](https://github.com/BerriAI/litellm/pull/8019)
-4. OpenWebUI Integration - display `thinking` tokens
+
+1. OpenWebUI Integration - display `thinking` tokens
 - Guide on getting started with LiteLLM x OpenWebUI. [Getting Started](https://docs.litellm.ai/docs/tutorials/openweb_ui)
 - Display `thinking` tokens on OpenWebUI (Bedrock, Anthropic, Deepseek) [Getting Started](https://docs.litellm.ai/docs/tutorials/openweb_ui#render-thinking-content-on-openweb-ui)
 
