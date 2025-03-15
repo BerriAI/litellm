@@ -290,3 +290,36 @@ def validate_redacted_message_span_attributes(span):
     assert _all_attributes == set(expected_attributes)
 
     pass
+
+@pytest.mark.asyncio
+async def test_otel_disable_exporter():
+    from opentelemetry import trace
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
+    # set up a tracer provider outside of the integration
+    provider = TracerProvider(resource=Resource(attributes={}))
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    trace.set_tracer_provider(provider)
+
+    # disable the exporter
+    litellm.callbacks = [OpenTelemetry(config=OpenTelemetryConfig(exporter="none"))]
+
+    response = await litellm.acompletion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "hi"}])
+
+    print("response", response)
+    assert response is not None
+
+    await asyncio.sleep(1)
+
+    # assert that integration created spans with the existing tracer provider
+    spans = exporter.get_finished_spans()
+    print("spans", spans)
+    assert len(spans) == 2
+
+    _span_names = [span.name for span in spans]
+    print("recorded span names", _span_names)
+    assert set(_span_names) == set(EXPECTED_SPAN_NAMES)
+
+    exporter.clear()
