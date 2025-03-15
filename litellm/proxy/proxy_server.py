@@ -457,7 +457,7 @@ async def proxy_startup_event(app: FastAPI):
 
     ## CHECK PREMIUM USER
     verbose_proxy_logger.debug(
-        "litellm.proxy.proxy_server.py::startup() - CHECKING PREMIUM USER - {}".format(
+        "litellm/proxy/proxy_server.py::startup() - CHECKING PREMIUM USER - {}".format(
             premium_user
         )
     )
@@ -789,33 +789,160 @@ db_writer_client: Optional[AsyncHTTPHandler] = None
 ### logger ###
 
 
+def get_custom_headers(
+    *,
+    user_api_key_dict: UserAPIKeyAuth,
+    call_id: Optional[str] = None,
+    model_id: Optional[str] = None,
+    cache_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+    version: Optional[str] = None,
+    model_region: Optional[str] = None,
+    response_cost: Optional[Union[float, str]] = None,
+    hidden_params: Optional[dict] = None,
+    fastest_response_batch_completion: Optional[bool] = None,
+    request_data: Optional[dict] = {},
+    timeout: Optional[Union[float, int, httpx.Timeout]] = None,
+    **kwargs,
+) -> dict:
+    exclude_values = {"", None, "None"}
+    hidden_params = hidden_params or {}
+    headers = {
+        "x-litellm-call-id": call_id,
+        "x-litellm-model-id": model_id,
+        "x-litellm-cache-key": cache_key,
+        "x-litellm-model-api-base": api_base,
+        "x-litellm-version": version,
+        "x-litellm-model-region": model_region,
+        "x-litellm-response-cost": _safely_round_response_cost(response_cost),
+        "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
+        "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
+        "x-litellm-key-max-budget": str(user_api_key_dict.max_budget),
+        "x-litellm-key-spend": str(user_api_key_dict.spend),
+        "x-litellm-response-duration-ms": str(hidden_params.get("_response_ms", None)),
+        "x-litellm-overhead-duration-ms": str(
+            hidden_params.get("litellm_overhead_time_ms", None)
+        ),
+        "x-litellm-fastest_response_batch_completion": (
+            str(fastest_response_batch_completion)
+            if fastest_response_batch_completion is not None
+            else None
+        ),
+        "x-litellm-timeout": str(timeout) if timeout is not None else None,
+        **{k: str(v) for k, v in kwargs.items()},
+    }
+    if request_data:
+        remaining_tokens_header = get_remaining_tokens_and_requests_from_request_data(
+            request_data
+        )
+        headers.update(remaining_tokens_header)
+
+        logging_caching_headers = get_logging_caching_headers(request_data)
+        if logging_caching_headers:
+            headers.update(logging_caching_headers)
+
+    try:
+        return {
+            key: str(value)
+            for key, value in headers.items()
+            if value not in exclude_values
+        }
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error setting custom headers: {e}")
+        return {}
+
+
 async def check_request_disconnection(request: Request, llm_api_call_task):
     """
     Asynchronously checks if the request is disconnected at regular intervals.
-    If the request is disconnected
-    - cancel the litellm.router task
-    - raises an HTTPException with status code 499 and detail "Client disconnected the request".
-
-    Parameters:
-    - request: Request: The request object to check for disconnection.
-    Returns:
-    - None
+    If the request is disconnected, cancels the provided llm_api_call_task.
     """
-
-    # only run this function for 10 mins -> if these don't get cancelled -> we don't want the server to have many while loops
-    start_time = time.time()
-    while time.time() - start_time < 600:
-        await asyncio.sleep(1)
+    while True:
         if await request.is_disconnected():
-
-            # cancel the LLM API Call task if any passed - this is passed from individual providers
-            # Example OpenAI, Azure, VertexAI etc
-            llm_api_call_task.cancel()
-
-            raise HTTPException(
-                status_code=499,
-                detail="Client disconnected the request",
+            verbose_proxy_logger.debug(
+                f"Request disconnected, cancelling llm api call task"
             )
+            llm_api_call_task.cancel()
+            break
+        await asyncio.sleep(0.1)  # Check every 100ms
+
+
+def get_custom_headers(
+    *,
+    user_api_key_dict: UserAPIKeyAuth,
+    call_id: Optional[str] = None,
+    model_id: Optional[str] = None,
+    cache_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+    version: Optional[str] = None,
+    model_region: Optional[str] = None,
+    response_cost: Optional[Union[float, str]] = None,
+    hidden_params: Optional[dict] = None,
+    fastest_response_batch_completion: Optional[bool] = None,
+    request_data: Optional[dict] = {},
+    timeout: Optional[Union[float, int, httpx.Timeout]] = None,
+    **kwargs,
+) -> dict:
+    exclude_values = {"", None, "None"}
+    hidden_params = hidden_params or {}
+    headers = {
+        "x-litellm-call-id": call_id,
+        "x-litellm-model-id": model_id,
+        "x-litellm-cache-key": cache_key,
+        "x-litellm-model-api-base": api_base,
+        "x-litellm-version": version,
+        "x-litellm-model-region": model_region,
+        "x-litellm-response-cost": _safely_round_response_cost(response_cost),
+        "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
+        "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
+        "x-litellm-key-max-budget": str(user_api_key_dict.max_budget),
+        "x-litellm-key-spend": str(user_api_key_dict.spend),
+        "x-litellm-response-duration-ms": str(hidden_params.get("_response_ms", None)),
+        "x-litellm-overhead-duration-ms": str(
+            hidden_params.get("litellm_overhead_time_ms", None)
+        ),
+        "x-litellm-fastest_response_batch_completion": (
+            str(fastest_response_batch_completion)
+            if fastest_response_batch_completion is not None
+            else None
+        ),
+        "x-litellm-timeout": str(timeout) if timeout is not None else None,
+        **{k: str(v) for k, v in kwargs.items()},
+    }
+    if request_data:
+        remaining_tokens_header = get_remaining_tokens_and_requests_from_request_data(
+            request_data
+        )
+        headers.update(remaining_tokens_header)
+
+        logging_caching_headers = get_logging_caching_headers(request_data)
+        if logging_caching_headers:
+            headers.update(logging_caching_headers)
+
+    try:
+        return {
+            key: str(value)
+            for key, value in headers.items()
+            if value not in exclude_values
+        }
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error setting custom headers: {e}")
+        return {}
+
+
+async def check_request_disconnection(request: Request, llm_api_call_task):
+    """
+    Asynchronously checks if the request is disconnected at regular intervals.
+    If the request is disconnected, cancels the provided llm_api_call_task.
+    """
+    while True:
+        if await request.is_disconnected():
+            verbose_proxy_logger.debug(
+                f"Request disconnected, cancelling llm api call task"
+            )
+            llm_api_call_task.cancel()
+            break
+        await asyncio.sleep(0.1)  # Check every 100ms
 
 
 def _resolve_typed_dict_type(typ):
@@ -1589,7 +1716,7 @@ class ProxyConfig:
             litellm.default_in_memory_ttl = cache_params["default_in_memory_ttl"]
 
         if "default_redis_ttl" in cache_params:
-            litellm.default_redis_ttl = cache_params["default_in_redis_ttl"]
+            litellm.default_redis_ttl = cache_params["default_redis_ttl"]
 
         litellm.cache = Cache(**cache_params)
 
@@ -2189,7 +2316,6 @@ class ProxyConfig:
                     )
                     if _logger is not None:
                         litellm.logging_callback_manager.add_litellm_callback(_logger)
-        pass
 
     def initialize_secret_manager(self, key_management_system: Optional[str]):
         """
@@ -5185,7 +5311,7 @@ async def run_thread(
         api_base = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
-            ProxyBaseLLMRequestProcessing.get_custom_headers(
+            get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
@@ -5308,7 +5434,7 @@ async def moderations(
         api_base = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
-            ProxyBaseLLMRequestProcessing.get_custom_headers(
+            get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
