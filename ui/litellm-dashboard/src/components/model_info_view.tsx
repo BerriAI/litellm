@@ -15,7 +15,7 @@ import {
   NumberInput,
 } from "@tremor/react";
 import { ArrowLeftIcon, TrashIcon, KeyIcon } from "@heroicons/react/outline";
-import { modelDeleteCall, modelUpdateCall, CredentialItem, credentialGetCall, credentialCreateCall } from "./networking";
+import { modelDeleteCall, modelUpdateCall, CredentialItem, credentialGetCall, credentialCreateCall, modelInfoCall, modelInfoV1Call } from "./networking";
 import { Button, Form, Input, InputNumber, message, Select, Modal } from "antd";
 import EditModelModal from "./edit_model/edit_model_modal";
 import { handleEditModelSubmit } from "./edit_model/edit_model_modal";
@@ -48,7 +48,7 @@ export default function ModelInfoView({
   setSelectedModel
 }: ModelInfoViewProps) {
   const [form] = Form.useForm();
-  const [localModelData, setLocalModelData] = useState(modelData);
+  const [localModelData, setLocalModelData] = useState<any>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isCredentialModalOpen, setIsCredentialModalOpen] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
@@ -77,7 +77,16 @@ export default function ModelInfoView({
         credential_info: existingCredentialResponse["credential_info"]
       });
     }
+
+    const getModelInfo = async () => {
+      if (!accessToken) return;
+      let modelInfoResponse = await modelInfoV1Call(accessToken, modelId);
+      console.log("modelInfoResponse, ", modelInfoResponse);
+      let specificModelData = modelInfoResponse.data[0];
+      setLocalModelData(specificModelData);
+    }
     getExistingCredential();
+    getModelInfo();
   }, [accessToken, modelId]);
 
   const handleReuseCredential = async (values: any) => {
@@ -292,24 +301,25 @@ export default function ModelInfoView({
                   </TremorButton>
                 )}
               </div>
-              <Form
-                form={form}
-                onFinish={handleModelUpdate}
-                initialValues={{
+              {localModelData ? (
+                <Form
+                  form={form}
+                  onFinish={handleModelUpdate}
+                  initialValues={{
                   model_name: localModelData.model_name,
                   litellm_model_name: localModelData.litellm_model_name,
-                  api_base: localModelData.litellm_params?.api_base,
-                  custom_llm_provider: localModelData.litellm_params?.custom_llm_provider,
-                  organization: localModelData.litellm_params?.organization,
-                  tpm: localModelData.litellm_params?.tpm,
-                  rpm: localModelData.litellm_params?.rpm,
-                  max_retries: localModelData.litellm_params?.max_retries,
-                  timeout: localModelData.litellm_params?.timeout,
-                  stream_timeout: localModelData.litellm_params?.stream_timeout,
-                  input_cost: localModelData.litellm_params?.input_cost_per_token ? 
-                    (localModelData.litellm_params.input_cost_per_token * 1_000_000) : modelData.input_cost * 1_000_000,
+                  api_base: localModelData.litellm_params.api_base,
+                  custom_llm_provider: localModelData.litellm_params.custom_llm_provider,
+                  organization: localModelData.litellm_params.organization,
+                  tpm: localModelData.litellm_params.tpm,
+                  rpm: localModelData.litellm_params.rpm,
+                  max_retries: localModelData.litellm_params.max_retries,
+                  timeout: localModelData.litellm_params.timeout,
+                  stream_timeout: localModelData.litellm_params.stream_timeout,
+                  input_cost: localModelData.litellm_params.input_cost_per_token ? 
+                    (localModelData.litellm_params.input_cost_per_token * 1_000_000) : localModelData.model_info?.input_cost_per_token * 1_000_000 || null,
                   output_cost: localModelData.litellm_params?.output_cost_per_token ? 
-                    (localModelData.litellm_params.output_cost_per_token * 1_000_000) : modelData.output_cost * 1_000_000,
+                    (localModelData.litellm_params.output_cost_per_token * 1_000_000) : localModelData.model_info?.output_cost_per_token * 1_000_000 || null,
                 }}
                 layout="vertical"
                 onValuesChange={() => setIsDirty(true)}
@@ -346,9 +356,9 @@ export default function ModelInfoView({
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
-                          {localModelData.litellm_params?.input_cost_per_token 
-                            ? (localModelData.litellm_params.input_cost_per_token * 1_000_000).toFixed(4) 
-                            : modelData.input_cost * 1_000_000}
+                          {localModelData?.litellm_params?.input_cost_per_token 
+                            ? (localModelData.litellm_params?.input_cost_per_token * 1_000_000).toFixed(4) 
+                            : localModelData?.model_info?.input_cost_per_token ? (localModelData.model_info.input_cost_per_token * 1_000_000).toFixed(4) : null}
                         </div>
                       )}
                     </div>
@@ -361,9 +371,9 @@ export default function ModelInfoView({
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
-                          {localModelData.litellm_params?.output_cost_per_token 
+                          {localModelData?.litellm_params?.output_cost_per_token 
                             ? (localModelData.litellm_params.output_cost_per_token * 1_000_000).toFixed(4) 
-                            : modelData.output_cost * 1_000_000}
+                            : localModelData?.model_info?.output_cost_per_token ? (localModelData.model_info.output_cost_per_token * 1_000_000).toFixed(4) : null}
                         </div>
                       )}
                     </div>
@@ -502,7 +512,10 @@ export default function ModelInfoView({
                     </div>
                   )}
                 </div>
-              </Form>
+                </Form>
+              ) : (
+                <Text>Loading...</Text>
+              )}
             </Card>
           </TabPanel>
 
