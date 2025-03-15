@@ -1040,6 +1040,18 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           userRole={userRole}
           setEditModalVisible={setEditModalVisible}
           setSelectedModel={setSelectedModel}
+          onModelUpdate={(updatedModel) => {
+            // Update the model in the modelData.data array
+            const updatedModelData = {
+              ...modelData,
+              data: modelData.data.map((model: any) => 
+                model.model_info.id === updatedModel.model_info.id ? updatedModel : model
+              )
+            };
+            setModelData(updatedModelData);
+            // Trigger a refresh to update UI
+            handleRefreshClick();
+          }}
         />
       ) : (
         <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
