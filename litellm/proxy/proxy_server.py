@@ -122,7 +122,7 @@ from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
 from litellm.proxy.anthropic_endpoints.endpoints import router as anthropic_router
-from litellm.proxy.auth.auth_checks import log_db_metrics
+from litellm.proxy.auth.auth_checks import get_team_object, log_db_metrics
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
@@ -213,7 +213,10 @@ from litellm.proxy.management_endpoints.team_callback_endpoints import (
     router as team_callback_router,
 )
 from litellm.proxy.management_endpoints.team_endpoints import router as team_router
-from litellm.proxy.management_endpoints.team_endpoints import update_team
+from litellm.proxy.management_endpoints.team_endpoints import (
+    update_team,
+    validate_membership,
+)
 from litellm.proxy.management_endpoints.ui_sso import (
     get_disabled_non_admin_personal_key_creation,
 )
@@ -3380,13 +3383,14 @@ class ProxyStartupEvent:
 async def model_list(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     return_wildcard_routes: Optional[bool] = False,
+    team_id: Optional[str] = None,
 ):
     """
     Use `/model/info` - to get detailed model information, example - pricing, mode, etc.
 
     This is just for compatibility with openai projects like aider.
     """
-    global llm_model_list, general_settings, llm_router
+    global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
     all_models = []
     model_access_groups: Dict[str, List[str]] = defaultdict(list)
     ## CHECK IF MODEL RESTRICTIONS ARE SET AT KEY/TEAM LEVEL ##
@@ -3401,19 +3405,33 @@ async def model_list(
         model_access_groups=model_access_groups,
     )
 
+    team_models: List[str] = user_api_key_dict.team_models
+
+    if team_id:
+        team_object = await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        validate_membership(user_api_key_dict=user_api_key_dict, team_table=team_object)
+        team_models = team_object.models
+
     team_models = get_team_models(
-        user_api_key_dict=user_api_key_dict,
+        team_models=team_models,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
     )
+
     all_models = get_complete_model_list(
-        key_models=key_models,
+        key_models=key_models if not team_models else [],
         team_models=team_models,
         proxy_model_list=proxy_model_list,
         user_model=user_model,
         infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
         return_wildcard_routes=return_wildcard_routes,
     )
+
     return dict(
         data=[
             {
@@ -6117,7 +6135,7 @@ async def model_info_v1(  # noqa: PLR0915
         model_access_groups=model_access_groups,
     )
     team_models = get_team_models(
-        user_api_key_dict=user_api_key_dict,
+        team_models=user_api_key_dict.team_models,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
     )
@@ -6344,7 +6362,7 @@ async def model_group_info(
         model_access_groups=model_access_groups,
     )
     team_models = get_team_models(
-        user_api_key_dict=user_api_key_dict,
+        team_models=user_api_key_dict.team_models,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
     )
