@@ -80,13 +80,6 @@ Here's a Demo Instance to test changes:
 - Mark Cohere Embedding 3 models as Multimodal [PR](https://github.com/BerriAI/litellm/pull/9176)
 
 
-## Spend Tracking Improvements
-
-1. Add Azure Data Zone pricing [PR](https://github.com/BerriAI/litellm/pull/9185)
-2. Cost Tracking for Responses API
-3. Fix Azure Whisper cost tracking [PR](https://github.com/BerriAI/litellm/pull/9166)
-
-
 ## UI
 
 ### Re-Use Credentials on UI
@@ -143,6 +136,14 @@ Before adding a model you can test the connection to the LLM provider to verify 
 - Display `thinking` tokens on OpenWebUI (Bedrock, Anthropic, Deepseek) [Get Started](https://docs.litellm.ai/docs/tutorials/openweb_ui#render-thinking-content-on-openweb-ui)
 
 <Image img={require('../../img/litellm_thinking_openweb.gif')} />
+
+
+## Spend Tracking Improvements
+
+1. Add Azure Data Zone pricing [PR](https://github.com/BerriAI/litellm/pull/9185)
+   - LiteLLM Tracks cost for `azure/eu` and `azure/us` models
+2. Cost Tracking for Responses API [Get Started](https://docs.litellm.ai/docs/response_api)
+3. Fix Azure Whisper cost tracking [PR](https://github.com/BerriAI/litellm/pull/9166)
 
 ## Performance / Reliability improvements
 
