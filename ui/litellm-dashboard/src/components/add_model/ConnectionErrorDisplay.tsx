@@ -45,10 +45,9 @@ const ConnectionErrorDisplay: React.FC<ConnectionErrorDisplayProps> = ({
       console.log("result from prepareModelAddRequest:", result);
 
       const { litellmParamsObj, modelInfoObj, modelName: returnedModelName } = result;
-      const requestBody = { ...litellmParamsObj, mode: testMode };
 
 
-      const response = await testConnectionRequest(accessToken, requestBody);
+      const response = await testConnectionRequest(accessToken, litellmParamsObj, modelInfoObj?.mode);
       if (response.status === "success") {
         message.success("Connection test successful!");
         setError(null);
@@ -56,7 +55,7 @@ const ConnectionErrorDisplay: React.FC<ConnectionErrorDisplayProps> = ({
       } else {
         const errorMessage = response.result?.error || response.message || "Unknown error";
         setError(errorMessage);
-        setRawRequest(requestBody);
+        setRawRequest(litellmParamsObj);
         setRawResponse(response.result?.raw_request_typed_dict);
         setIsSuccess(false);
       }
