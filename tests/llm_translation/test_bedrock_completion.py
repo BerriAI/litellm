@@ -2948,3 +2948,17 @@ async def test_bedrock_stream_thinking_content_openwebui():
     assert (
         len(response_content) > 0
     ), "There should be non-empty content after thinking tags"
+
+
+def test_bedrock_streaming():
+    resp = completion(
+        model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        messages=[{"role": "user", "content": "Hello who is this?"}],
+        stream=True,
+        max_tokens=1080,
+        stream_options={"include_usage": True},
+    )
+
+    for chunk in resp:
+        if hasattr(chunk, "usage"):
+            print(f"received chunk usage: {chunk.usage}")

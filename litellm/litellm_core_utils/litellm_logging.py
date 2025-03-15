@@ -2351,18 +2351,6 @@ class Logging(LiteLLMLoggingBaseClass):
             return result
         elif isinstance(result, ResponseCompletedEvent):
             return result.response
-        elif isinstance(result, ModelResponseStream):
-            complete_streaming_response: Optional[
-                Union[ModelResponse, TextCompletionResponse]
-            ] = _assemble_complete_response_from_streaming_chunks(
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-                request_kwargs=self.model_call_details,
-                streaming_chunks=streaming_chunks,
-                is_async=is_async,
-            )
-            return complete_streaming_response
         return None
 
     def _handle_anthropic_messages_response_logging(self, result: Any) -> ModelResponse:

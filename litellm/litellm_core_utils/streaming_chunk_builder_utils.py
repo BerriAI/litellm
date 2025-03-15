@@ -13,6 +13,7 @@ from litellm.types.utils import (
     Function,
     FunctionCall,
     ModelResponse,
+    ModelResponseStream,
     PromptTokensDetails,
     Usage,
 )
@@ -319,8 +320,12 @@ class ChunkProcessor:
             usage_chunk: Optional[Usage] = None
             if "usage" in chunk:
                 usage_chunk = chunk["usage"]
-            elif isinstance(chunk, ModelResponse) and hasattr(chunk, "_hidden_params"):
+            elif (
+                isinstance(chunk, ModelResponse)
+                or isinstance(chunk, ModelResponseStream)
+            ) and hasattr(chunk, "_hidden_params"):
                 usage_chunk = chunk._hidden_params.get("usage", None)
+
             if usage_chunk is not None:
                 usage_chunk_dict = self._usage_chunk_calculation_helper(usage_chunk)
                 if (
