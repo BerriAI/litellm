@@ -101,7 +101,8 @@ const sidebars = {
             "proxy/admin_ui_sso",
             "proxy/self_serve",
             "proxy/public_teams",
-            "proxy/custom_sso"
+            "proxy/custom_sso",
+            "proxy/ui_logs"
           ],
         },
         {
