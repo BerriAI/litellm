@@ -436,3 +436,18 @@ def test_router_get_async_openai_model_client():
         deployment=MagicMock(), kwargs={}
     )
     assert model_client is None
+
+
+def test_router_get_deployment_credentials():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gemini/*",
+                "litellm_params": {"model": "gemini/*", "api_key": "123"},
+                "model_info": {"id": "1"},
+            }
+        ]
+    )
+    credentials = router.get_deployment_credentials(model_id="1")
+    assert credentials is not None
+    assert credentials["api_key"] == "123"

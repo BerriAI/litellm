@@ -230,6 +230,7 @@ def test_select_azure_base_url_called(setup_mocks):
             "anthropic_messages",
             "add_message",
             "arun_thread_stream",
+            "aresponses",
         ]
     ],
 )

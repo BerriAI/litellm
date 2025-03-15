@@ -10,6 +10,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -209,11 +210,13 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         except Exception as e:
             raise e
 
+    @track_llm_api_timing()
     async def make_azure_openai_chat_completion_request(
         self,
         azure_client: AsyncAzureOpenAI,
         data: dict,
         timeout: Union[float, httpx.Timeout],
+        logging_obj: LiteLLMLoggingObj,
     ):
         """
         Helper to:
@@ -504,6 +507,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 azure_client=azure_client,
                 data=data,
                 timeout=timeout,
+                logging_obj=logging_obj,
             )
             logging_obj.model_call_details["response_headers"] = headers
 
@@ -662,6 +666,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 azure_client=azure_client,
                 data=data,
                 timeout=timeout,
+                logging_obj=logging_obj,
             )
             logging_obj.model_call_details["response_headers"] = headers
 

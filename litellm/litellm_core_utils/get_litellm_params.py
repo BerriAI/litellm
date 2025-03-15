@@ -58,6 +58,7 @@ def get_litellm_params(
     async_call: Optional[bool] = None,
     ssl_verify: Optional[bool] = None,
     merge_reasoning_content_in_choices: Optional[bool] = None,
+    api_version: Optional[str] = None,
     max_retries: Optional[int] = None,
     **kwargs,
 ) -> dict:
@@ -100,6 +101,7 @@ def get_litellm_params(
         "async_call": async_call,
         "ssl_verify": ssl_verify,
         "merge_reasoning_content_in_choices": merge_reasoning_content_in_choices,
+        "api_version": api_version,
         "azure_ad_token": kwargs.get("azure_ad_token"),
         "tenant_id": kwargs.get("tenant_id"),
         "client_id": kwargs.get("client_id"),

@@ -111,6 +111,7 @@ from litellm.types.router import (
     AlertingConfig,
     AllowedFailsPolicy,
     AssistantsTypedDict,
+    CredentialLiteLLMParams,
     CustomRoutingStrategyBase,
     Deployment,
     DeploymentTypedDict,
@@ -581,13 +582,7 @@ class Router:
             self._initialize_alerting()
 
         self.initialize_assistants_endpoint()
-
-        self.amoderation = self.factory_function(
-            litellm.amoderation, call_type="moderation"
-        )
-        self.aanthropic_messages = self.factory_function(
-            litellm.anthropic_messages, call_type="anthropic_messages"
-        )
+        self.initialize_router_endpoints()
 
     def discard(self):
         """
@@ -641,17 +636,6 @@ class Router:
         """
         if self.cache.redis_cache is None:
             self.cache.redis_cache = cache
-
-    def initialize_assistants_endpoint(self):
-        ## INITIALIZE PASS THROUGH ASSISTANTS ENDPOINT ##
-        self.acreate_assistants = self.factory_function(litellm.acreate_assistants)
-        self.adelete_assistant = self.factory_function(litellm.adelete_assistant)
-        self.aget_assistants = self.factory_function(litellm.aget_assistants)
-        self.acreate_thread = self.factory_function(litellm.acreate_thread)
-        self.aget_thread = self.factory_function(litellm.aget_thread)
-        self.a_add_message = self.factory_function(litellm.a_add_message)
-        self.aget_messages = self.factory_function(litellm.aget_messages)
-        self.arun_thread = self.factory_function(litellm.arun_thread)
 
     def routing_strategy_init(
         self, routing_strategy: Union[RoutingStrategy, str], routing_strategy_args: dict
@@ -717,6 +701,29 @@ class Router:
                 litellm.logging_callback_manager.add_litellm_callback(self.lowestcost_logger)  # type: ignore
         else:
             pass
+
+    def initialize_assistants_endpoint(self):
+        ## INITIALIZE PASS THROUGH ASSISTANTS ENDPOINT ##
+        self.acreate_assistants = self.factory_function(litellm.acreate_assistants)
+        self.adelete_assistant = self.factory_function(litellm.adelete_assistant)
+        self.aget_assistants = self.factory_function(litellm.aget_assistants)
+        self.acreate_thread = self.factory_function(litellm.acreate_thread)
+        self.aget_thread = self.factory_function(litellm.aget_thread)
+        self.a_add_message = self.factory_function(litellm.a_add_message)
+        self.aget_messages = self.factory_function(litellm.aget_messages)
+        self.arun_thread = self.factory_function(litellm.arun_thread)
+
+    def initialize_router_endpoints(self):
+        self.amoderation = self.factory_function(
+            litellm.amoderation, call_type="moderation"
+        )
+        self.aanthropic_messages = self.factory_function(
+            litellm.anthropic_messages, call_type="anthropic_messages"
+        )
+        self.aresponses = self.factory_function(
+            litellm.aresponses, call_type="aresponses"
+        )
+        self.responses = self.factory_function(litellm.responses, call_type="responses")
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
@@ -1080,17 +1087,22 @@ class Router:
         kwargs.setdefault("litellm_trace_id", str(uuid.uuid4()))
         kwargs.setdefault("metadata", {}).update({"model_group": model})
 
-    def _update_kwargs_with_default_litellm_params(self, kwargs: dict) -> None:
+    def _update_kwargs_with_default_litellm_params(
+        self, kwargs: dict, metadata_variable_name: Optional[str] = "metadata"
+    ) -> None:
         """
         Adds default litellm params to kwargs, if set.
         """
+        self.default_litellm_params[metadata_variable_name] = (
+            self.default_litellm_params.pop("metadata", {})
+        )
         for k, v in self.default_litellm_params.items():
             if (
                 k not in kwargs and v is not None
             ):  # prioritize model-specific params > default router params
                 kwargs[k] = v
-            elif k == "metadata":
-                kwargs[k].update(v)
+            elif k == metadata_variable_name:
+                kwargs[metadata_variable_name].update(v)
 
     def _handle_clientside_credential(
         self, deployment: dict, kwargs: dict
@@ -1121,7 +1133,12 @@ class Router:
         )  # add new deployment to router
         return deployment_pydantic_obj
 
-    def _update_kwargs_with_deployment(self, deployment: dict, kwargs: dict) -> None:
+    def _update_kwargs_with_deployment(
+        self,
+        deployment: dict,
+        kwargs: dict,
+        function_name: Optional[str] = None,
+    ) -> None:
         """
         2 jobs:
         - Adds selected deployment, model_info and api_base to kwargs["metadata"] (used for logging)
@@ -1138,7 +1155,10 @@ class Router:
             deployment_model_name = deployment_pydantic_obj.litellm_params.model
             deployment_api_base = deployment_pydantic_obj.litellm_params.api_base
 
-        kwargs.setdefault("metadata", {}).update(
+        metadata_variable_name = _get_router_metadata_variable_name(
+            function_name=function_name,
+        )
+        kwargs.setdefault(metadata_variable_name, {}).update(
             {
                 "deployment": deployment_model_name,
                 "model_info": model_info,
@@ -1151,7 +1171,9 @@ class Router:
             kwargs=kwargs, data=deployment["litellm_params"]
         )
 
-        self._update_kwargs_with_default_litellm_params(kwargs=kwargs)
+        self._update_kwargs_with_default_litellm_params(
+            kwargs=kwargs, metadata_variable_name=metadata_variable_name
+        )
 
     def _get_async_openai_model_client(self, deployment: dict, kwargs: dict):
         """
@@ -2396,22 +2418,18 @@ class Router:
                 messages=kwargs.get("messages", None),
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
-            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+            self._update_kwargs_with_deployment(
+                deployment=deployment, kwargs=kwargs, function_name="generic_api_call"
+            )
 
             data = deployment["litellm_params"].copy()
             model_name = data["model"]
-
-            model_client = self._get_async_openai_model_client(
-                deployment=deployment,
-                kwargs=kwargs,
-            )
             self.total_calls[model_name] += 1
 
             response = original_function(
                 **{
                     **data,
                     "caching": self.cache_responses,
-                    "client": model_client,
                     **kwargs,
                 }
             )
@@ -2439,6 +2457,61 @@ class Router:
                     deployment=deployment, parent_otel_span=parent_otel_span
                 )
                 response = await response  # type: ignore
+
+            self.success_calls[model_name] += 1
+            verbose_router_logger.info(
+                f"{handler_name}(model={model_name})\033[32m 200 OK\033[0m"
+            )
+            return response
+        except Exception as e:
+            verbose_router_logger.info(
+                f"{handler_name}(model={model})\033[31m Exception {str(e)}\033[0m"
+            )
+            if model is not None:
+                self.fail_calls[model] += 1
+            raise e
+
+    def _generic_api_call_with_fallbacks(
+        self, model: str, original_function: Callable, **kwargs
+    ):
+        """
+        Make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router
+        Args:
+            model: The model to use
+            original_function: The handler function to call (e.g., litellm.completion)
+            **kwargs: Additional arguments to pass to the handler function
+        Returns:
+            The response from the handler function
+        """
+        handler_name = original_function.__name__
+        try:
+            verbose_router_logger.debug(
+                f"Inside _generic_api_call() - handler: {handler_name}, model: {model}; kwargs: {kwargs}"
+            )
+            deployment = self.get_available_deployment(
+                model=model,
+                messages=kwargs.get("messages", None),
+                specific_deployment=kwargs.pop("specific_deployment", None),
+            )
+            self._update_kwargs_with_deployment(
+                deployment=deployment, kwargs=kwargs, function_name="generic_api_call"
+            )
+
+            data = deployment["litellm_params"].copy()
+            model_name = data["model"]
+
+            self.total_calls[model_name] += 1
+
+            # Perform pre-call checks for routing strategy
+            self.routing_strategy_pre_call_checks(deployment=deployment)
+
+            response = original_function(
+                **{
+                    **data,
+                    "caching": self.cache_responses,
+                    **kwargs,
+                }
+            )
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info(
@@ -2974,14 +3047,42 @@ class Router:
         self,
         original_function: Callable,
         call_type: Literal[
-            "assistants", "moderation", "anthropic_messages"
+            "assistants",
+            "moderation",
+            "anthropic_messages",
+            "aresponses",
+            "responses",
         ] = "assistants",
     ):
-        async def new_function(
+        """
+        Creates appropriate wrapper functions for different API call types.
+
+        Returns:
+            - A synchronous function for synchronous call types
+            - An asynchronous function for asynchronous call types
+        """
+        # Handle synchronous call types
+        if call_type == "responses":
+
+            def sync_wrapper(
+                custom_llm_provider: Optional[
+                    Literal["openai", "azure", "anthropic"]
+                ] = None,
+                client: Optional[Any] = None,
+                **kwargs,
+            ):
+                return self._generic_api_call_with_fallbacks(
+                    original_function=original_function, **kwargs
+                )
+
+            return sync_wrapper
+
+        # Handle asynchronous call types
+        async def async_wrapper(
             custom_llm_provider: Optional[
                 Literal["openai", "azure", "anthropic"]
             ] = None,
-            client: Optional["AsyncOpenAI"] = None,
+            client: Optional[Any] = None,
             **kwargs,
         ):
             if call_type == "assistants":
@@ -2992,18 +3093,16 @@ class Router:
                     **kwargs,
                 )
             elif call_type == "moderation":
-
-                return await self._pass_through_moderation_endpoint_factory(  # type: ignore
-                    original_function=original_function,
-                    **kwargs,
+                return await self._pass_through_moderation_endpoint_factory(
+                    original_function=original_function, **kwargs
                 )
-            elif call_type == "anthropic_messages":
-                return await self._ageneric_api_call_with_fallbacks(  # type: ignore
+            elif call_type in ("anthropic_messages", "aresponses"):
+                return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
                     **kwargs,
                 )
 
-        return new_function
+        return async_wrapper
 
     async def _pass_through_assistants_endpoint_factory(
         self,
@@ -4526,6 +4625,17 @@ class Router:
                     else:
                         raise Exception("Model invalid format - {}".format(type(model)))
         return None
+
+    def get_deployment_credentials(self, model_id: str) -> Optional[dict]:
+        """
+        Returns -> dict of credentials for a given model id
+        """
+        deployment = self.get_deployment(model_id=model_id)
+        if deployment is None:
+            return None
+        return CredentialLiteLLMParams(
+            **deployment.litellm_params.model_dump(exclude_none=True)
+        ).model_dump(exclude_none=True)
 
     def get_deployment_by_model_group_name(
         self, model_group_name: str

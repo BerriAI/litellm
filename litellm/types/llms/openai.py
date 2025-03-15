@@ -742,6 +742,9 @@ class BaseLiteLLMOpenAIResponseObject(BaseModel):
     def __contains__(self, key):
         return key in self.__dict__
 
+    def items(self):
+        return self.__dict__.items()
+
 
 class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     reasoning_tokens: int

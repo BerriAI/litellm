@@ -133,7 +133,7 @@ class LitellmTableNames(str, enum.Enum):
     TEAM_TABLE_NAME = "LiteLLM_TeamTable"
     USER_TABLE_NAME = "LiteLLM_UserTable"
     KEY_TABLE_NAME = "LiteLLM_VerificationToken"
-    PROXY_MODEL_TABLE_NAME = "LiteLLM_ModelTable"
+    PROXY_MODEL_TABLE_NAME = "LiteLLM_ProxyModelTable"
 
 
 def hash_token(token: str):
@@ -248,6 +248,13 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/realtime",
         "/realtime?{model}",
         "/v1/realtime?{model}",
+        # responses API
+        "/responses",
+        "/v1/responses",
+        "/responses/{response_id}",
+        "/v1/responses/{response_id}",
+        "/responses/{response_id}/input_items",
+        "/v1/responses/{response_id}/input_items",
     ]
 
     mapped_pass_through_routes = [
@@ -1584,11 +1591,11 @@ class NewOrganizationResponse(LiteLLM_OrganizationTable):
 
 class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     user_id: str
-    max_budget: Optional[float]
+    max_budget: Optional[float] = None
     spend: float = 0.0
     model_max_budget: Optional[Dict] = {}
     model_spend: Optional[Dict] = {}
-    user_email: Optional[str]
+    user_email: Optional[str] = None
     models: list = []
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
@@ -1598,6 +1605,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     sso_user_id: Optional[str] = None
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
+    metadata: Optional[dict] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1677,18 +1685,16 @@ class LiteLLM_ErrorLogs(LiteLLMPydanticObjectBase):
     endTime: Union[str, datetime, None]
 
 
+AUDIT_ACTIONS = Literal["created", "updated", "deleted", "blocked"]
+
+
 class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
     id: str
     updated_at: datetime
     changed_by: Optional[Any] = None
     changed_by_api_key: Optional[str] = None
-    action: Literal["created", "updated", "deleted", "blocked"]
-    table_name: Literal[
-        LitellmTableNames.TEAM_TABLE_NAME,
-        LitellmTableNames.USER_TABLE_NAME,
-        LitellmTableNames.KEY_TABLE_NAME,
-        LitellmTableNames.PROXY_MODEL_TABLE_NAME,
-    ]
+    action: AUDIT_ACTIONS
+    table_name: LitellmTableNames
     object_id: str
     before_value: Optional[Json] = None
     updated_values: Optional[Json] = None
