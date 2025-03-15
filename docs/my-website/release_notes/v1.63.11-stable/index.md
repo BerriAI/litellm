@@ -84,16 +84,26 @@ Here's a Demo Instance to test changes:
 1. Fix Batches API cost tracking + Log batch models in spend logs / standard logging payload [PR](https://github.com/BerriAI/litellm/pull/9077)
 3. Fix Azure Whisper cost tracking [PR](https://github.com/BerriAI/litellm/pull/9166)
 
-## Management Endpoints / UI
+## UI
+
+### Re-Use Credentials on UI
+
+You can now onboard LLM provider credentials on LiteLLM UI. Once these credentials are added you can re-use them when adding new models
+
+<Image img={require('../../img/release_notes/credentials.jpg')} />
+
+
+### Test Connections before adding models
+
+Before adding a model you can test the connection to the LLM provider to verify you have setup your API Base + API Key correctly
+
+<Image img={require('../../img/release_notes/litellm_test_connection.gif')} />
+
+### General UI Improvements
 1. Add Models Page
-   - Allow adding Text-Completion OpenAI models through UI
+   - Allow adding Cerebras, Sambanova, Perplexity, Fireworks, Openrouter, TogetherAI Models, Text-Completion OpenAI on Admin UI
    - Allow adding EU OpenAI models
-   - Allow adding Cerebras, Sambanova, Perplexity, Fireworks, Openrouter, TogetherAI Models on Admin UI
    - Fix: Instantly show edit + deletes to models
-   - UI Test Connection feature
-   - Support credential management on Proxy via CRUD endpoints - `credentials/*`
-   - Add UI for credential management
-   - Support reusing existing model credentials
 2. Keys Page
    - Fix: Instantly show newly created keys on Admin UI (don't require refresh)
    - Fix: Allow clicking into Top Keys when showing users Top API Key
