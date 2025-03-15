@@ -325,13 +325,6 @@ general_settings:
     team_id_jwt_field: "client_id" # 👈 KEY CHANGE
 ```
 
-## All Params
-
-[**See Code**](https://github.com/BerriAI/litellm/blob/b204f0c01c703317d812a1553363ab0cb989d5b6/litellm/proxy/_types.py#L95)
-
-
-
-
 ### Block Teams 
 
 To block all requests for a certain team id, use `/team/block`
@@ -497,3 +490,9 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
   ]
 }'
 ```
+
+## All JWT Params
+
+[**See Code**](https://github.com/BerriAI/litellm/blob/b204f0c01c703317d812a1553363ab0cb989d5b6/litellm/proxy/_types.py#L95)
+
+
