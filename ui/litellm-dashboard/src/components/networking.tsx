@@ -1284,6 +1284,7 @@ export const modelInfoV1Call = async (accessToken: String, modelId: String) => {
   }
 };
 
+
 export const modelHubCall = async (accessToken: String) => {
   /**
    * Get all models on proxy
@@ -1581,7 +1582,8 @@ export const modelAvailableCall = async (
   accessToken: String,
   userID: String,
   userRole: String,
-  return_wildcard_routes: boolean = false
+  return_wildcard_routes: boolean = false,
+  teamID: String | null = null
 ) => {
   /**
    * Get all the models user has access to
@@ -1589,8 +1591,15 @@ export const modelAvailableCall = async (
   console.log("in /models calls, globalLitellmHeaderName", globalLitellmHeaderName)
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/models` : `/models`;
+    const params = new URLSearchParams();
     if (return_wildcard_routes === true) {
-      url += `?return_wildcard_routes=True`;
+      params.append('return_wildcard_routes', 'True');
+    }
+    if (teamID) {
+      params.append('team_id', teamID.toString());
+    }
+    if (params.toString()) {
+      url += `?${params.toString()}`;
     }
 
     //message.info("Requesting model data");
