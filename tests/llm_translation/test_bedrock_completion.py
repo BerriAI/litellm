@@ -2948,3 +2948,28 @@ async def test_bedrock_stream_thinking_content_openwebui():
     assert (
         len(response_content) > 0
     ), "There should be non-empty content after thinking tags"
+
+
+def test_bedrock_application_inference_profile():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            resp = completion(
+                model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                model_id="arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        mock_post.assert_called_once()
+
+        print(mock_post.call_args.kwargs)
+        json_data = mock_post.call_args.kwargs["data"]
+        assert mock_post.call_args.kwargs["url"].startswith(
+            "https://bedrock-runtime.eu-central-1.amazonaws.com/"
+        )
