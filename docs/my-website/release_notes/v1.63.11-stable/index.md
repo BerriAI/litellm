@@ -43,6 +43,19 @@ Here's a Demo Instance to test changes:
     - Password: sk-1234
 
 
+
+## New / Updated Models in Model Cost Map
+- Add support for Amazon Nova Canvas model [PR](https://github.com/BerriAI/litellm/pull/7838)
+- Add pricing for Jamba new models [PR](https://github.com/BerriAI/litellm/pull/9032)
+- Add pricing for Amazon EU models [PR](https://github.com/BerriAI/litellm/pull/9056)
+- Add Bedrock Deepseek R1 model pricing [PR](https://github.com/BerriAI/litellm/pull/9108)
+- Update Gemini pricing: Gemma 3, Flash 2 thinking update, LearnLM [PR](https://github.com/BerriAI/litellm/pull/9190)
+- Mark Cohere Embedding 3 models as Multimodal [PR](https://github.com/BerriAI/litellm/pull/9176)
+- Add Azure Data Zone pricing [PR](https://github.com/BerriAI/litellm/pull/9185)
+   - LiteLLM Tracks cost for `azure/eu` and `azure/us` models
+
+
+
 ## LLM Translation
 
 <Image img={require('../../img/release_notes/responses_api.png')} />
@@ -71,13 +84,11 @@ Here's a Demo Instance to test changes:
 - Handle HTTP 201 status code in Vertex AI response [PR](https://github.com/BerriAI/litellm/pull/9193)
 
 
-### New Models Added to Model Cost Map
-- Add support for Amazon Nova Canvas model [PR](https://github.com/BerriAI/litellm/pull/7838)
-- Add pricing for Jamba new models [PR](https://github.com/BerriAI/litellm/pull/9032)
-- Add pricing for Amazon EU models [PR](https://github.com/BerriAI/litellm/pull/9056)
-- Add Bedrock Deepseek R1 model pricing [PR](https://github.com/BerriAI/litellm/pull/9108)
-- Update Gemini pricing: Gemma 3, Flash 2 thinking update, LearnLM [PR](https://github.com/BerriAI/litellm/pull/9190)
-- Mark Cohere Embedding 3 models as Multimodal [PR](https://github.com/BerriAI/litellm/pull/9176)
+## Spend Tracking Improvements
+
+2. Cost Tracking for Responses API [Get Started](https://docs.litellm.ai/docs/response_api)
+3. Fix Azure Whisper cost tracking [PR](https://github.com/BerriAI/litellm/pull/9166)
+
 
 
 ## UI
@@ -131,19 +142,6 @@ Before adding a model you can test the connection to the LLM provider to verify 
 2. Allow switching off storing Error Logs in DB [Get Started here](https://docs.litellm.ai/docs/proxy/ui_logs)
 3. Added tags, user_feedback and model_options to additional_keys which can be sent to Athina [Get Started here](https://docs.litellm.ai/docs/observability/athina_integration)
 
-## OpenWebUI Integration - display `thinking` tokens
-- Guide on getting started with LiteLLM x OpenWebUI. [Get Started](https://docs.litellm.ai/docs/tutorials/openweb_ui)
-- Display `thinking` tokens on OpenWebUI (Bedrock, Anthropic, Deepseek) [Get Started](https://docs.litellm.ai/docs/tutorials/openweb_ui#render-thinking-content-on-openweb-ui)
-
-<Image img={require('../../img/litellm_thinking_openweb.gif')} />
-
-
-## Spend Tracking Improvements
-
-1. Add Azure Data Zone pricing [PR](https://github.com/BerriAI/litellm/pull/9185)
-   - LiteLLM Tracks cost for `azure/eu` and `azure/us` models
-2. Cost Tracking for Responses API [Get Started](https://docs.litellm.ai/docs/response_api)
-3. Fix Azure Whisper cost tracking [PR](https://github.com/BerriAI/litellm/pull/9166)
 
 ## Performance / Reliability improvements
 
@@ -157,6 +155,11 @@ Before adding a model you can test the connection to the LLM provider to verify 
 1. UI API Playground for testing LiteLLM translation [PR](https://github.com/BerriAI/litellm/pull/9073)
 2. Fix: Correctly use `PROXY_LOGOUT_URL` when set [PR](https://github.com/BerriAI/litellm/pull/9117)
 3. Bing Search Pass Through endpoint [PR](https://github.com/BerriAI/litellm/pull/8019)
+4. OpenWebUI Integration - display `thinking` tokens
+- Guide on getting started with LiteLLM x OpenWebUI. [Get Started](https://docs.litellm.ai/docs/tutorials/openweb_ui)
+- Display `thinking` tokens on OpenWebUI (Bedrock, Anthropic, Deepseek) [Get Started](https://docs.litellm.ai/docs/tutorials/openweb_ui#render-thinking-content-on-openweb-ui)
+
+<Image img={require('../../img/litellm_thinking_openweb.gif')} />
 
 
 ## Complete Git Diff
