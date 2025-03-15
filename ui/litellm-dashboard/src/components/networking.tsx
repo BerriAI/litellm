@@ -2276,10 +2276,11 @@ export const keyInfoCall = async (accessToken: String, keys: String[]) => {
 
 export const testConnectionRequest = async (
   accessToken: string,
-  requestBody: Record<string, any>
+  litellm_params: Record<string, any>,
+  mode: string,
 ) => {
   try {
-    console.log("Sending model connection test request:", JSON.stringify(requestBody));
+    console.log("Sending model connection test request:", JSON.stringify(litellm_params));
     
     // Construct the URL based on environment
     const url = proxyBaseUrl ? `${proxyBaseUrl}/health/test_connection` : `/health/test_connection`;
@@ -2292,7 +2293,8 @@ export const testConnectionRequest = async (
       },
       body: JSON.stringify(
         {
-          litellm_params: requestBody
+          litellm_params: litellm_params,
+          mode: mode,
         }
       )
     });
