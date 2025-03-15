@@ -939,8 +939,9 @@ def test_get_team_models():
     model_access_groups["default"].extend(["gpt-4o-mini"])
     model_access_groups["team2"].extend(["gpt-3.5-turbo"])
 
+    team_models = user_api_key_dict.team_models
     result = get_team_models(
-        user_api_key_dict=user_api_key_dict,
+        team_models=team_models,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
     )
