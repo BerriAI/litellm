@@ -104,6 +104,16 @@ curl --location 'http://0.0.0.0:4000/v1/chat/completions' \
 
 ## Advanced
 
+### Multiple OIDC providers
+
+Use this if you want LiteLLM to validate your JWT against multiple OIDC providers (e.g. Google Cloud, GitHub Auth)
+
+Set `JWT_PUBLIC_KEY_URL` in your environment to a comma-separated list of URLs for your OIDC providers.
+
+```bash
+export JWT_PUBLIC_KEY_URL="https://demo.duendesoftware.com/.well-known/openid-configuration/jwks,https://accounts.google.com/.well-known/openid-configuration/jwks"
+```
+
 ### Set Accepted JWT Scope Names 
 
 Change the string in JWT 'scopes', that litellm evaluates to see if a user has admin access.
