@@ -102,6 +102,7 @@ const sidebars = {
             "proxy/self_serve",
             "proxy/public_teams",
             "proxy/custom_sso",
+            "proxy/ui_credentials",
             "proxy/ui_logs"
           ],
         },
