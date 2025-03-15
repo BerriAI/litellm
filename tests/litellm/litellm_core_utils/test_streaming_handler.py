@@ -1,14 +1,17 @@
 import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
+import traceback
+from typing import Optional
 
+import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.utils import (
@@ -374,10 +377,10 @@ def test_chunk_with_usage(initialized_custom_stream_wrapper: CustomStreamWrapper
     assert initialized_custom_stream_wrapper.is_chunk_non_empty(**args)
 
 
-def test_streaming_handler_with_usage():
+def test_streaming_handler_with_usage(final_usage_block: Optional[Usage] = None):
     import time
 
-    final_usage_block = Usage(
+    final_usage_block = final_usage_block or Usage(
         completion_tokens=392,
         prompt_tokens=1799,
         total_tokens=2191,
@@ -1018,7 +1021,7 @@ def test_streaming_handler_with_usage():
     response = CustomStreamWrapper(
         completion_stream=completion_stream,
         model="bedrock/claude-3-5-sonnet-20240620-v1:0",
-        custom_llm_provider="cached_response",
+        custom_llm_provider="bedrock",
         logging_obj=Logging(
             model="bedrock/claude-3-5-sonnet-20240620-v1:0",
             messages=[{"role": "user", "content": "Hey"}],
@@ -1031,12 +1034,54 @@ def test_streaming_handler_with_usage():
         stream_options={"include_usage": True},
     )
 
+    def mock_token_counter_func(*args, **kwargs):
+        print("Mock called from:\n" + "".join(traceback.format_stack()))
+
     chunk_has_usage = False
     for chunk in response:
         if hasattr(chunk, "usage"):
             assert chunk.usage == final_usage_block
             chunk_has_usage = True
     assert chunk_has_usage
-    # with patch("litellm.main.token_counter") as mock_token_counter:
 
-    #     assert mock_token_counter.assert_not_called()
+
+def test_streaming_with_usage_and_logging():
+    import time
+
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class MockCallback(CustomLogger):
+        pass
+
+    mock_callback = MockCallback()
+    litellm.success_callback = [mock_callback]
+
+    final_usage_block = Usage(
+        completion_tokens=392,
+        prompt_tokens=1799,
+        total_tokens=2191,
+        completion_tokens_details=None,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=None,
+            cached_tokens=1796,
+            text_tokens=None,
+            image_tokens=None,
+        ),
+        cache_creation_input_tokens=0,
+        cache_read_input_tokens=1796,
+    )
+    with patch.object(
+        mock_callback, "log_success_event"
+    ) as mock_log_success_event, patch.object(
+        mock_callback, "log_stream_event"
+    ) as mock_log_stream_event:
+        test_streaming_handler_with_usage(final_usage_block)
+        time.sleep(1)
+        mock_log_success_event.assert_called_once()
+        mock_log_stream_event.assert_called()
+
+        print(mock_log_success_event.call_args.kwargs.keys())
+
+        mock_log_success_event.call_args.kwargs[
+            "response_obj"
+        ].usage == final_usage_block

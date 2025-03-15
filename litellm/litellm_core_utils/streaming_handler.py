@@ -1600,12 +1600,17 @@ class CustomStreamWrapper:
                         "usage",
                         getattr(complete_streaming_response, "usage"),
                     )
-
-                ## LOGGING
-                threading.Thread(
-                    target=self.logging_obj.success_handler,
-                    args=(response, None, None, cache_hit),
-                ).start()  # log response
+                    ## LOGGING
+                    threading.Thread(
+                        target=self.logging_obj.success_handler,
+                        args=(complete_streaming_response, None, None, cache_hit),
+                    ).start()  # log response
+                else:
+                    ## LOGGING
+                    threading.Thread(
+                        target=self.logging_obj.success_handler,
+                        args=(response, None, None, cache_hit),
+                    ).start()  # log response
 
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
