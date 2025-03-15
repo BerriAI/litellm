@@ -11,6 +11,8 @@ import type { Team } from "../key_team_helpers/key_list";
 import { CredentialItem } from "../networking";
 import ConnectionErrorDisplay from "./ConnectionErrorDisplay";
 import { TEST_MODES } from "./add_model_modes";
+import { Row, Col } from "antd";
+import { Text, TextInput } from "@tremor/react";
 
 interface AddModelTabProps {
   form: FormInstance;
@@ -136,7 +138,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
             <Form.Item
               label="Mode"
               name="mode"
-              tooltip="Optional - When mode is set litellm will use this for health checks. If mode is `embedding` then /embeddings will be used when trying to check health."
+              className="mb-1"
             >
               <AntdSelect
                 style={{ width: '100%' }}
@@ -145,6 +147,14 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                 options={TEST_MODES}
               />
             </Form.Item>
+            <Row>
+              <Col span={10}></Col>
+              <Col span={10}>
+                <Text className="mb-5 mt-1">
+                  <strong>Optional</strong> - LiteLLM endpoint to use when health checking this model <Link href="https://docs.litellm.ai/docs/proxy/health#health" target="_blank">Learn more</Link>
+                </Text>
+              </Col>
+            </Row>
 
             {/* Credentials */}
             <div className="mb-4">
