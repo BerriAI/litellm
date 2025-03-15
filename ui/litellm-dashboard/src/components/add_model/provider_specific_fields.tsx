@@ -181,7 +181,7 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     {
       key: "api_base",
       label: "API Base",
-      placeholder: "Enter your full Target URI from Azure Foundry here, ex. https://litellm8397336933.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-10-21",
+      placeholder: "https://litellm8397336933.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-10-21",
       required: true
     },
     {
