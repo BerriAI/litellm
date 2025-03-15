@@ -25,12 +25,15 @@ View Spend, Token Usage, Key, Team Name for Each Request to LiteLLM
 
 ## Tracking - Request / Response Content in Logs Page 
 
-If you want to switch on request and response content tracking, you need to opt in with this setting
+If you want to view request and response content on LiteLLM Logs, you need to opt in with this setting
 
 ```yaml
 general_settings:
   store_prompts_in_spend_logs: true
 ```
+
+<Image img={require('../../img/ui_request_logs_content.png')}/>
+
 
 ## Stop storing Error Logs in DB
 
