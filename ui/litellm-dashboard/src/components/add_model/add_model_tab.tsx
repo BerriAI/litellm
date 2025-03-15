@@ -45,16 +45,21 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
   credentials,
   accessToken,
 }) => {
-  // Add state for test mode and connection error
+  // State for test mode and connection testing
   const [testMode, setTestMode] = useState<string>("chat");
   const [isResultModalVisible, setIsResultModalVisible] = useState<boolean>(false);
   const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);
+  // Using a unique ID to force the ConnectionErrorDisplay to remount and run a fresh test
+  const [connectionTestId, setConnectionTestId] = useState<string>("");
 
-  // Test connection directly when button is clicked
+  // Test connection when button is clicked
   const handleTestConnection = async () => {
     setIsTestingConnection(true);
+    // Generate a new test ID (using timestamp for uniqueness)
+    // This forces React to create a new instance of ConnectionErrorDisplay
+    setConnectionTestId(`test-${Date.now()}`);
+    // Show the modal with the fresh test
     setIsResultModalVisible(true);
-    // The actual testing is handled in ConnectionErrorDisplay component
   };
 
   return (
@@ -241,16 +246,22 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
         ]}
         width={700}
       >
-        <ConnectionErrorDisplay 
-          formValues={form.getFieldsValue()}
-          accessToken={accessToken}
-          testMode={testMode}
-          modelName={form.getFieldValue('model_name') || form.getFieldValue('model')}
-          onClose={() => {
-            setIsResultModalVisible(false);
-            setIsTestingConnection(false);
-          }}
-        />
+        {/* Only render the ConnectionErrorDisplay when modal is visible and we have a test ID */}
+        {isResultModalVisible && (
+          <ConnectionErrorDisplay 
+            // The key prop tells React to create a fresh component instance when it changes
+            key={connectionTestId}
+            formValues={form.getFieldsValue()}
+            accessToken={accessToken}
+            testMode={testMode}
+            modelName={form.getFieldValue('model_name') || form.getFieldValue('model')}
+            onClose={() => {
+              setIsResultModalVisible(false);
+              setIsTestingConnection(false);
+            }}
+            onTestComplete={() => setIsTestingConnection(false)}
+          />
+        )}
       </Modal>
     </>
   );
