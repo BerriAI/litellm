@@ -414,26 +414,10 @@ async def proxy_shutdown_event():
     global is_shutting_down
     is_shutting_down = True
 
-    verbose_proxy_logger.info(
-        f"Graceful shutdown initiated. Waiting up to {shutdown_timeout}s for requests to complete..."
-    )
-    # Get all running tasks except the current one
-    current_task = asyncio.current_task()
-    tasks = [task for task in asyncio.all_tasks() if task is not current_task]
+    if scheduler is not None:
+        scheduler.shutdown()
+        verbose_proxy_logger.info("Background scheduler shutdown complete")
 
-    try:
-        # Wait for tasks to complete with timeout
-        await asyncio.wait_for(
-            asyncio.gather(*tasks, return_exceptions=True), timeout=shutdown_timeout
-        )
-    except asyncio.TimeoutError:
-        # If timeout occurs, cancel remaining tasks
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-
-        # Wait for cancellation to complete
-        await asyncio.gather(*tasks, return_exceptions=True)
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
     if prisma_client:
@@ -462,6 +446,27 @@ async def proxy_shutdown_event():
 
     ## RESET CUSTOM VARIABLES ##
     cleanup_router_config_variables()
+
+    verbose_proxy_logger.info(
+        f"Graceful shutdown initiated. Waiting up to {shutdown_timeout}s for requests to complete..."
+    )
+    # Get all running tasks except the current one
+    current_task = asyncio.current_task()
+    tasks = [task for task in asyncio.all_tasks() if task is not current_task]
+
+    try:
+        # Wait for tasks to complete with timeout
+        await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True), timeout=shutdown_timeout
+        )
+    except asyncio.TimeoutError:
+        # If timeout occurs, cancel remaining tasks
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+
+        # Wait for cancellation to complete
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def register_signal_handlers():
@@ -781,6 +786,7 @@ experimental = False
 llm_router: Optional[Router] = None
 llm_model_list: Optional[list] = None
 general_settings: dict = {}
+scheduler: Optional[AsyncIOScheduler] = None
 callback_settings: dict = {}
 is_shutting_down = False
 shutdown_timeout = 60  # default 60s, configurable via general_settings
@@ -3326,7 +3332,7 @@ class ProxyStartupEvent:
         proxy_logging_obj: ProxyLogging,
     ):
         """Initializes scheduled background jobs"""
-        global store_model_in_db
+        global store_model_in_db, scheduler
         scheduler = AsyncIOScheduler()
         interval = random.randint(
             proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time
