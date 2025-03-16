@@ -490,6 +490,7 @@ const sidebars = {
             "projects/LiteLLM Proxy",
             "projects/llm_cord",
             "projects/pgai",
+            "projects/Pydantic2",
           ],
         },
         "proxy/pii_masking",
