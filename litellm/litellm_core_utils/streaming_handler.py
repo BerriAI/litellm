@@ -799,7 +799,6 @@ class CustomStreamWrapper:
                 "provider_specific_fields" in response_obj
                 and response_obj["provider_specific_fields"] is not None
             )
-            or (getattr(model_response, "usage", None) is not None)
         ):
             return True
         else:
@@ -899,7 +898,7 @@ class CustomStreamWrapper:
                     return model_response
 
                 # Default - return StopIteration
-                raise StopIteration
+                return model_response
             # flush any remaining holding chunk
             if len(self.holding_chunk) > 0:
                 if model_response.choices[0].delta.content is None:
