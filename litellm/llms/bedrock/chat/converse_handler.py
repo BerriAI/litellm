@@ -13,7 +13,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.types.utils import ModelResponse
-from litellm.utils import CustomStreamWrapper, get_secret
+from litellm.utils import CustomStreamWrapper
 
 from ..base_aws_llm import BaseAWSLLM, Credentials
 from ..common_utils import BedrockError
@@ -300,24 +300,6 @@ class BedrockConverseLLM(BaseAWSLLM):
         aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
         aws_sts_endpoint = optional_params.pop("aws_sts_endpoint", None)
         optional_params.pop("aws_region_name", None)
-
-        # if aws_region_name is None:
-        #     # check env #
-        #     litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
-
-        #     if litellm_aws_region_name is not None and isinstance(
-        #         litellm_aws_region_name, str
-        #     ):
-        #         aws_region_name = litellm_aws_region_name
-
-        #     standard_aws_region_name = get_secret("AWS_REGION", None)
-        #     if standard_aws_region_name is not None and isinstance(
-        #         standard_aws_region_name, str
-        #     ):
-        #         aws_region_name = standard_aws_region_name
-
-        #     if aws_region_name is None:
-        #         aws_region_name = "us-west-2"
 
         litellm_params["aws_region_name"] = (
             aws_region_name  # [DO NOT DELETE] important for async calls
