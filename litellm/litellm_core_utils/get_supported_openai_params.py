@@ -205,6 +205,11 @@ def get_supported_openai_params(  # noqa: PLR0915
                     model=model
                 )
             )
+    elif custom_llm_provider == "bitdeerai":
+        if request_type == "chat_completion":
+            return litellm.BitdeerAIChatConfig().get_supported_openai_params(model=model)
+        elif request_type == "embeddings":
+            return litellm.BitdeerAIEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider in litellm._custom_providers:
         if request_type == "chat_completion":
             provider_config = litellm.ProviderConfigManager.get_provider_chat_config(

@@ -564,6 +564,17 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or get_secret_str("FRIENDLIAI_API_KEY")
             or get_secret_str("FRIENDLI_TOKEN")
         )
+    elif custom_llm_provider == "bitdeerai":
+        api_base = (
+            api_base
+            or get_secret("BITDEERAI_API_BASE")
+            or "https://api-inference.bitdeer.ai/v1"
+        )  # type: ignore
+        dynamic_api_key = (
+            api_key
+            or get_secret_str("BITDEERAI_API_KEY")
+            or get_secret_str("BITDEERAI_TOKEN")
+        )
     elif custom_llm_provider == "galadriel":
         api_base = (
             api_base
