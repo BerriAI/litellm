@@ -1279,7 +1279,7 @@ async def team_info(
     --header 'Authorization: Bearer your_api_key_here'
     ```
     """
-    from litellm.proxy.proxy_server import llm_router, prisma_client
+    from litellm.proxy.proxy_server import prisma_client
 
     try:
         if prisma_client is None:
@@ -1352,9 +1352,9 @@ async def team_info(
         else:
             _team_info = LiteLLM_TeamTable()
 
-        ## UNFURL 'all-proxy-models' into the team_info.models list ##
-        if llm_router is not None:
-            _team_info = _unfurl_all_proxy_models(_team_info, llm_router)
+        # ## UNFURL 'all-proxy-models' into the team_info.models list ##
+        # if llm_router is not None:
+        #     _team_info = _unfurl_all_proxy_models(_team_info, llm_router)
         response_object = TeamInfoResponseObject(
             team_id=team_id,
             team_info=_team_info,
@@ -1556,7 +1556,7 @@ async def list_team(
     - user_id: str - Optional. If passed will only return teams that the user_id is a member of.
     - organization_id: str - Optional. If passed will only return teams that belong to the organization_id. Pass 'default_organization' to get all teams without organization_id.
     """
-    from litellm.proxy.proxy_server import llm_router, prisma_client
+    from litellm.proxy.proxy_server import prisma_client
 
     if not allowed_route_check_inside_route(
         user_api_key_dict=user_api_key_dict, requested_user_id=user_id
@@ -1615,11 +1615,6 @@ async def list_team(
         )
 
         try:
-            # unfurl all-proxy-models
-            if llm_router is not None:
-                team = _unfurl_all_proxy_models(
-                    LiteLLM_TeamTable(**team.model_dump()), llm_router
-                )
             returned_responses.append(
                 TeamListResponseObject(
                     **team.model_dump(),

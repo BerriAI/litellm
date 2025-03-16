@@ -23,6 +23,11 @@ from typing import (
     get_origin,
     get_type_hints,
 )
+from litellm.types.utils import (
+    ModelResponse,
+    ModelResponseStream,
+    TextCompletionResponse,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -122,7 +127,7 @@ from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
 from litellm.proxy.anthropic_endpoints.endpoints import router as anthropic_router
-from litellm.proxy.auth.auth_checks import log_db_metrics
+from litellm.proxy.auth.auth_checks import get_team_object, log_db_metrics
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
@@ -213,7 +218,10 @@ from litellm.proxy.management_endpoints.team_callback_endpoints import (
     router as team_callback_router,
 )
 from litellm.proxy.management_endpoints.team_endpoints import router as team_router
-from litellm.proxy.management_endpoints.team_endpoints import update_team
+from litellm.proxy.management_endpoints.team_endpoints import (
+    update_team,
+    validate_membership,
+)
 from litellm.proxy.management_endpoints.ui_sso import (
     get_disabled_non_admin_personal_key_creation,
 )
@@ -1499,6 +1507,10 @@ async def _run_background_health_check():
             health_check_interval, float
         ):
             await asyncio.sleep(health_check_interval)
+
+
+class StreamingCallbackError(Exception):
+    pass
 
 
 class ProxyConfig:
@@ -3161,8 +3173,7 @@ async def async_data_generator(
 ):
     verbose_proxy_logger.debug("inside generator")
     try:
-        time.time()
-        async for chunk in response:
+        async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(user_api_key_dict=user_api_key_dict, response=response, request_data=request_data):
             verbose_proxy_logger.debug(
                 "async_data_generator: received streaming chunk - {}".format(chunk)
             )
@@ -3199,6 +3210,8 @@ async def async_data_generator(
 
         if isinstance(e, HTTPException):
             raise e
+        elif isinstance(e, StreamingCallbackError):
+            error_msg = str(e)
         else:
             error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}\n\n{error_traceback}"
@@ -3506,13 +3519,14 @@ class ProxyStartupEvent:
 async def model_list(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     return_wildcard_routes: Optional[bool] = False,
+    team_id: Optional[str] = None,
 ):
     """
     Use `/model/info` - to get detailed model information, example - pricing, mode, etc.
 
     This is just for compatibility with openai projects like aider.
     """
-    global llm_model_list, general_settings, llm_router
+    global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
     all_models = []
     model_access_groups: Dict[str, List[str]] = defaultdict(list)
     ## CHECK IF MODEL RESTRICTIONS ARE SET AT KEY/TEAM LEVEL ##
@@ -3527,19 +3541,33 @@ async def model_list(
         model_access_groups=model_access_groups,
     )
 
+    team_models: List[str] = user_api_key_dict.team_models
+
+    if team_id:
+        team_object = await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        validate_membership(user_api_key_dict=user_api_key_dict, team_table=team_object)
+        team_models = team_object.models
+
     team_models = get_team_models(
-        user_api_key_dict=user_api_key_dict,
+        team_models=team_models,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
     )
+
     all_models = get_complete_model_list(
-        key_models=key_models,
+        key_models=key_models if not team_models else [],
         team_models=team_models,
         proxy_model_list=proxy_model_list,
         user_model=user_model,
         infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
         return_wildcard_routes=return_wildcard_routes,
     )
+
     return dict(
         data=[
             {
@@ -5529,11 +5557,11 @@ async def token_counter(request: TokenCountRequest):
 )
 async def supported_openai_params(model: str):
     """
-    Returns supported openai params for a given litellm model name 
+    Returns supported openai params for a given litellm model name
 
-    e.g. `gpt-4` vs `gpt-3.5-turbo` 
+    e.g. `gpt-4` vs `gpt-3.5-turbo`
 
-    Example curl: 
+    Example curl:
     ```
     curl -X GET --location 'http://localhost:4000/utils/supported_openai_params?model=gpt-3.5-turbo-16k' \
         --header 'Authorization: Bearer sk-1234'
@@ -5583,18 +5611,18 @@ async def model_info_v2(
     """
     global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
 
-    if llm_model_list is None or not isinstance(llm_model_list, list):
+    if llm_router is None:
         raise HTTPException(
             status_code=500,
             detail={
-                "error": f"No model list passed, models={llm_model_list}. You can add a model through the config.yaml or on the LiteLLM Admin UI."
+                "error": f"No model list passed, models router={llm_router}. You can add a model through the config.yaml or on the LiteLLM Admin UI."
             },
         )
 
     # Load existing config
     await proxy_config.get_config()
+    all_models = copy.deepcopy(llm_router.model_list)
 
-    all_models = copy.deepcopy(llm_model_list)
     if user_model is not None:
         # if user does not use a config.yaml, https://github.com/BerriAI/litellm/issues/2061
         all_models += [user_model]
@@ -6243,7 +6271,7 @@ async def model_info_v1(  # noqa: PLR0915
         model_access_groups=model_access_groups,
     )
     team_models = get_team_models(
-        user_api_key_dict=user_api_key_dict,
+        team_models=user_api_key_dict.team_models,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
     )
@@ -6302,7 +6330,7 @@ async def model_group_info(
     - /model_group/info returns all model groups. End users of proxy should use /model_group/info since those models will be used for /chat/completions, /embeddings, etc.
     - /model_group/info?model_group=rerank-english-v3.0 returns all model groups for a specific model group (`model_name` in config.yaml)
 
-    
+
 
     Example Request (All Models):
     ```shell
@@ -6320,10 +6348,10 @@ async def model_group_info(
     -H 'Authorization: Bearer sk-1234'
     ```
 
-    Example Request (Specific Wildcard Model Group): (e.g. `model_name: openai/*` on config.yaml) 
+    Example Request (Specific Wildcard Model Group): (e.g. `model_name: openai/*` on config.yaml)
     ```shell
     curl -X 'GET' \
-    'http://localhost:4000/model_group/info?model_group=openai/tts-1' 
+    'http://localhost:4000/model_group/info?model_group=openai/tts-1'
     -H 'accept: application/json' \
     -H 'Authorization: Bearersk-1234'
     ```
@@ -6470,7 +6498,7 @@ async def model_group_info(
         model_access_groups=model_access_groups,
     )
     team_models = get_team_models(
-        user_api_key_dict=user_api_key_dict,
+        team_models=user_api_key_dict.team_models,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
     )
@@ -7350,7 +7378,7 @@ async def invitation_update(
 ):
     """
     Update when invitation is accepted
-    
+
     ```
     curl -X POST 'http://localhost:4000/invitation/update' \
         -H 'Content-Type: application/json' \
@@ -7411,7 +7439,7 @@ async def invitation_delete(
 ):
     """
     Delete invitation link
-    
+
     ```
     curl -X POST 'http://localhost:4000/invitation/delete' \
         -H 'Content-Type: application/json' \
