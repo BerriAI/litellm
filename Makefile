@@ -9,6 +9,7 @@ help:
 	@echo "  make test               - Run all tests"
 	@echo "  make test-unit          - Run unit tests"
 	@echo "  make test-integration   - Run integration tests"
+	@echo "  make test-unit-helm     - Run helm unit tests"
 
 install-dev:
 	poetry install --with dev
@@ -25,4 +26,7 @@ test-unit:
 	poetry run pytest tests/litellm/
 
 test-integration:
-	poetry run pytest tests/ -k "not litellm" 
+	poetry run pytest tests/ -k "not litellm"
+
+test-unit-helm:
+	helm unittest -f 'tests/*.yaml' deploy/charts/litellm-helm
