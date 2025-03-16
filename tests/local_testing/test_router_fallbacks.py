@@ -1348,7 +1348,7 @@ async def test_anthropic_streaming_fallbacks(sync_mode):
         print(f"RETURNED response: {response}")
 
         mock_client.assert_called_once()
-        print(chunks)
+        print(f"chunks: {chunks}, in sync mode: {sync_mode}")
         assert len(chunks) > 0
 
 

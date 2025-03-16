@@ -1582,9 +1582,7 @@ class CustomStreamWrapper:
             if self.sent_stream_usage is False and self.send_stream_usage is True:
                 self.sent_stream_usage = True
                 return response
-        elif (
-            self.received_finish_reason is not None and self.sent_finish_reason is False
-        ):
+        else:
             """
             Case 2: Finish reason received, but not sent yet.
             """
@@ -1602,7 +1600,6 @@ class CustomStreamWrapper:
             )
             self.sent_finish_reason_in_chunk(processed_chunk)
             return processed_chunk
-
         if sync_mode:
             raise StopIteration
         raise StopAsyncIteration
