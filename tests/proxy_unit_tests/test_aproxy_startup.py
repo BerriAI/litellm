@@ -3,6 +3,7 @@
 import sys, os, json
 import traceback
 from dotenv import load_dotenv
+import time
 
 load_dotenv()
 import os, io
@@ -91,6 +92,52 @@ async def test_proxy_gunicorn_startup_config_dict():
         # restore DATABASE_URL after the test
         if database_url is not None:
             os.environ["DATABASE_URL"] = database_url
+
+
+@pytest.mark.asyncio
+async def test_proxy_shutdown_timeout(monkeypatch):
+    """
+    Test that proxy shutdown respects the configured timeout
+    """
+    try:
+        # Set up
+        monkeypatch.setattr(litellm.proxy.proxy_server, "shutdown_timeout", 3)
+
+        task_cancelled = False
+
+        # Create a mock long-running task that takes 5 seconds
+        async def mock_long_task():
+            nonlocal task_cancelled
+            try:
+                await asyncio.sleep(5)  # Task that would normally take 5s
+            except asyncio.CancelledError:
+                task_cancelled = True
+                raise  # Re-raise to properly handle cancellation
+
+        # Start the long-running task
+        task = asyncio.create_task(mock_long_task())
+
+        # Record start time
+        start_time = time.time()
+
+        # Trigger shutdown event
+        await proxy_shutdown_event()
+
+        # Record end time
+        end_time = time.time()
+
+        # Verify shutdown happened within expected timeout (with small buffer for processing)
+        duration = end_time - start_time
+        assert (
+            2.9 <= duration <= 3.5
+        ), f"Shutdown took {duration} seconds, expected ~3 seconds"
+
+        # Verify task was cancelled
+        assert task_cancelled, "Long running task should have been cancelled"
+        assert task.cancelled(), "Task should be in cancelled state"
+
+    except Exception as e:
+        pytest.fail(f"An exception occurred during shutdown timeout test: {str(e)}")
 
 
 # test_proxy_gunicorn_startup()

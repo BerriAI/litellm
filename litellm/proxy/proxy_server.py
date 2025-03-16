@@ -417,7 +417,23 @@ async def proxy_shutdown_event():
     verbose_proxy_logger.info(
         f"Graceful shutdown initiated. Waiting up to {shutdown_timeout}s for requests to complete..."
     )
-    await asyncio.sleep(shutdown_timeout)
+    # Get all running tasks except the current one
+    current_task = asyncio.current_task()
+    tasks = [task for task in asyncio.all_tasks() if task is not current_task]
+
+    try:
+        # Wait for tasks to complete with timeout
+        await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True), timeout=shutdown_timeout
+        )
+    except asyncio.TimeoutError:
+        # If timeout occurs, cancel remaining tasks
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+
+        # Wait for cancellation to complete
+        await asyncio.gather(*tasks, return_exceptions=True)
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
     if prisma_client:
