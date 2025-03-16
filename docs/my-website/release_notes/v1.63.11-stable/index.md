@@ -98,7 +98,7 @@ Here's a Demo Instance to test changes:
 
 ### Re-Use Credentials on UI
 
-You can now onboard LLM provider credentials on LiteLLM UI. Once these credentials are added you can re-use them when adding new models
+You can now onboard LLM provider credentials on LiteLLM UI. Once these credentials are added you can re-use them when adding new models [Getting Started](https://docs.litellm.ai/docs/proxy/ui_credentials)
 
 <Image img={require('../../img/release_notes/credentials.jpg')} />
 
