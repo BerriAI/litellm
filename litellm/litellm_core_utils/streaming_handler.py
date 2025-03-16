@@ -836,14 +836,15 @@ class CustomStreamWrapper:
                             try:
                                 if isinstance(choice, BaseModel):
                                     choice_json = choice.model_dump()  # type: ignore
-                                    if self.is_delta_empty(choice):
-                                        choice_json.pop(
+                                    if not self.is_delta_empty(choice):
+                                        _finish_reason = choice_json.pop(
                                             "finish_reason", None
                                         )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
+                                        if _finish_reason is not None:
+                                            self.received_finish_reason = _finish_reason
                                     choices.append(StreamingChoices(**choice_json))
                             except Exception:
                                 choices.append(StreamingChoices())
-                        print_verbose(f"choices in streaming: {choices}")
 
                     setattr(model_response, "choices", choices)
                     model_response.system_fingerprint = (

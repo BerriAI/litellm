@@ -582,3 +582,47 @@ async def test_streaming_with_usage_and_logging(sync_mode: bool):
         mock_log_success_event.call_args.kwargs[
             "response_obj"
         ].usage == final_usage_block
+
+
+def test_streaming_handler_with_stop_chunk(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    args = {
+        "completion_obj": {"content": ""},
+        "response_obj": {
+            "text": "",
+            "is_finished": True,
+            "finish_reason": "length",
+            "logprobs": None,
+            "original_chunk": ModelResponseStream(
+                id="chatcmpl-ad517c2e-c197-48de-a2e6-a559cca48124",
+                created=1742093326,
+                model=None,
+                object="chat.completion.chunk",
+                system_fingerprint=None,
+                choices=[
+                    StreamingChoices(
+                        finish_reason="length",
+                        index=0,
+                        delta=Delta(
+                            provider_specific_fields=None,
+                            content="",
+                            role="assistant",
+                            function_call=None,
+                            tool_calls=None,
+                            audio=None,
+                        ),
+                        logprobs=None,
+                    )
+                ],
+                provider_specific_fields={},
+                usage=None,
+            ),
+            "usage": None,
+        },
+    }
+
+    returned_chunk = initialized_custom_stream_wrapper.return_processed_chunk_logic(
+        **args, model_response=ModelResponseStream()
+    )
+    assert returned_chunk.choices[0].finish_reason is None
