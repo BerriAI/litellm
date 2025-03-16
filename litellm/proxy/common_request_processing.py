@@ -60,11 +60,11 @@ class ProxyBaseLLMRequestProcessing:
             "x-litellm-model-api-base": api_base,
             "x-litellm-version": version,
             "x-litellm-model-region": model_region,
-            "x-litellm-response-cost": str(response_cost),
+            "x-litellm-response-cost": ProxyBaseLLMRequestProcessing._safely_round_response_cost(response_cost),
             "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
             "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
-            "x-litellm-key-max-budget": str(user_api_key_dict.max_budget),
-            "x-litellm-key-spend": str(user_api_key_dict.spend),
+            "x-litellm-key-max-budget": ProxyBaseLLMRequestProcessing._safely_round_response_cost(user_api_key_dict.max_budget),
+            "x-litellm-key-spend": ProxyBaseLLMRequestProcessing._safely_round_response_cost(user_api_key_dict.spend),
             "x-litellm-response-duration-ms": str(
                 hidden_params.get("_response_ms", None)
             ),
