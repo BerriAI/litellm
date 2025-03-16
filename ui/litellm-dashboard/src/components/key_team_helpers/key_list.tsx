@@ -100,6 +100,7 @@ isLoading: boolean;
 error: Error | null;
 pagination: PaginationData;
 refresh: (params?: Record<string, unknown>) => Promise<void>;
+setKeys: (newKeysOrUpdater: KeyResponse[] | ((prevKeys: KeyResponse[]) => KeyResponse[])) => void;
 }
 
 const useKeyList = ({
@@ -149,16 +150,30 @@ const useKeyList = ({
         console.log("selectedTeam", selectedTeam, "currentOrg", currentOrg, "accessToken", accessToken);
     }, [selectedTeam, currentOrg, accessToken]);
 
+    const setKeys = (newKeysOrUpdater: KeyResponse[] | ((prevKeys: KeyResponse[]) => KeyResponse[])) => {
+        setKeyData(prevData => {
+            const newKeys = typeof newKeysOrUpdater === 'function' 
+                ? newKeysOrUpdater(prevData.keys) 
+                : newKeysOrUpdater;
+                
+            return {
+                ...prevData,
+                keys: newKeys
+            };
+        });
+    };
+
     return {
         keys: keyData.keys,
         isLoading,
         error,
         pagination: {
-        currentPage: keyData.current_page,
-        totalPages: keyData.total_pages,
-        totalCount: keyData.total_count
+            currentPage: keyData.current_page,
+            totalPages: keyData.total_pages,
+            totalCount: keyData.total_count
         },
-        refresh: fetchKeys
+        refresh: fetchKeys,
+        setKeys
     };
 };
 

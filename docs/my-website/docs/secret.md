@@ -96,7 +96,7 @@ litellm --config /path/to/config.yaml
 ```
 
 
-### Using K/V pairs in 1 AWS Secret
+#### Using K/V pairs in 1 AWS Secret
 
 You can read multiple keys from a single AWS Secret using the `primary_secret_name` parameter:
 

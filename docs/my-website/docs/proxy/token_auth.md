@@ -102,7 +102,19 @@ curl --location 'http://0.0.0.0:4000/v1/chat/completions' \
 </TabItem>
 </Tabs>
 
-## Advanced - Set Accepted JWT Scope Names 
+## Advanced
+
+### Multiple OIDC providers
+
+Use this if you want LiteLLM to validate your JWT against multiple OIDC providers (e.g. Google Cloud, GitHub Auth)
+
+Set `JWT_PUBLIC_KEY_URL` in your environment to a comma-separated list of URLs for your OIDC providers.
+
+```bash
+export JWT_PUBLIC_KEY_URL="https://demo.duendesoftware.com/.well-known/openid-configuration/jwks,https://accounts.google.com/.well-known/openid-configuration/jwks"
+```
+
+### Set Accepted JWT Scope Names 
 
 Change the string in JWT 'scopes', that litellm evaluates to see if a user has admin access.
 
@@ -114,7 +126,7 @@ general_settings:
     admin_jwt_scope: "litellm-proxy-admin"
 ```
 
-## Tracking End-Users / Internal Users / Team / Org
+### Tracking End-Users / Internal Users / Team / Org
 
 Set the field in the jwt token, which corresponds to a litellm user / team / org.
 
@@ -156,7 +168,7 @@ scope: ["litellm-proxy-admin",...]
 scope: "litellm-proxy-admin ..."
 ```
 
-## Control model access with Teams
+### Control model access with Teams
 
 
 1. Specify the JWT field that contains the team ids, that the user belongs to. 
@@ -207,11 +219,11 @@ OIDC Auth for API: [**See Walkthrough**](https://www.loom.com/share/00fe2deab59a
 - If all checks pass, allow the request
 
 
-## Advanced - Custom Validate
+### Custom JWT Validate
 
 Validate a JWT Token using custom logic, if you need an extra way to verify if tokens are valid for LiteLLM Proxy.
 
-### 1. Setup custom validate function
+#### 1. Setup custom validate function
 
 ```python
 from typing import Literal
@@ -230,7 +242,7 @@ def my_custom_validate(token: str) -> Literal[True]:
   return True
 ```
 
-### 2. Setup config.yaml
+#### 2. Setup config.yaml
 
 ```yaml
 general_settings:
@@ -243,7 +255,7 @@ general_settings:
     custom_validate: custom_validate.my_custom_validate # 👈 custom validate function
 ```
 
-### 3. Test the flow
+#### 3. Test the flow
 
 **Expected JWT**
 
@@ -265,7 +277,7 @@ general_settings:
 
 
 
-## Advanced - Allowed Routes 
+### Allowed Routes 
 
 Configure which routes a JWT can access via the config.
 
@@ -297,7 +309,7 @@ general_settings:
     team_allowed_routes: ["/v1/chat/completions"] # 👈 Set accepted routes
 ```
 
-## Advanced - Caching Public Keys 
+### Caching Public Keys 
 
 Control how long public keys are cached for (in seconds).
 
@@ -311,7 +323,7 @@ general_settings:
     public_key_ttl: 600 # 👈 KEY CHANGE
 ```
 
-## Advanced - Custom JWT Field 
+### Custom JWT Field 
 
 Set a custom field in which the team_id exists. By default, the 'client_id' field is checked. 
 
@@ -323,14 +335,7 @@ general_settings:
     team_id_jwt_field: "client_id" # 👈 KEY CHANGE
 ```
 
-## All Params
-
-[**See Code**](https://github.com/BerriAI/litellm/blob/b204f0c01c703317d812a1553363ab0cb989d5b6/litellm/proxy/_types.py#L95)
-
-
-
-
-## Advanced - Block Teams 
+### Block Teams 
 
 To block all requests for a certain team id, use `/team/block`
 
@@ -357,7 +362,7 @@ curl --location 'http://0.0.0.0:4000/team/unblock' \
 ```
 
 
-## Advanced - Upsert Users + Allowed Email Domains 
+### Upsert Users + Allowed Email Domains 
 
 Allow users who belong to a specific email domain, automatic access to the proxy.
  
@@ -495,3 +500,9 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
   ]
 }'
 ```
+
+## All JWT Params
+
+[**See Code**](https://github.com/BerriAI/litellm/blob/b204f0c01c703317d812a1553363ab0cb989d5b6/litellm/proxy/_types.py#L95)
+
+

@@ -34,6 +34,7 @@ interface ModelInfoViewProps {
   editModel: boolean;
   setEditModalVisible: (visible: boolean) => void;
   setSelectedModel: (model: any) => void;
+  onModelUpdate?: (updatedModel: any) => void;
 }
 
 export default function ModelInfoView({ 
@@ -45,7 +46,8 @@ export default function ModelInfoView({
   userRole,
   editModel,
   setEditModalVisible,
-  setSelectedModel
+  setSelectedModel,
+  onModelUpdate
 }: ModelInfoViewProps) {
   const [form] = Form.useForm();
   const [localModelData, setLocalModelData] = useState<any>(null);
@@ -129,17 +131,22 @@ export default function ModelInfoView({
         model_info: {
           id: modelId,
         }
-        
       };
 
       await modelUpdateCall(accessToken, updateData);
       
-      setLocalModelData({
+      const updatedModelData = {
         ...localModelData,
         model_name: values.model_name,
         litellm_model_name: values.litellm_model_name,
         litellm_params: updateData.litellm_params
-      });
+      };
+      
+      setLocalModelData(updatedModelData);
+
+      if (onModelUpdate) {
+        onModelUpdate(updatedModelData);
+      }
 
       message.success("Model settings updated successfully");
       setIsDirty(false);
@@ -172,6 +179,14 @@ export default function ModelInfoView({
       if (!accessToken) return;
       await modelDeleteCall(accessToken, modelId);
       message.success("Model deleted successfully");
+      
+      if (onModelUpdate) {
+        onModelUpdate({ 
+          deleted: true, 
+          model_info: { id: modelId } 
+        });
+      }
+      
       onClose();
     } catch (error) {
       console.error("Error deleting the model:", error);

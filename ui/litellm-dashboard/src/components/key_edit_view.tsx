@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Form, Input, InputNumber, Select } from "antd";
 import { Button, TextInput } from "@tremor/react";
 import { KeyResponse } from "./key_team_helpers/key_list";
-import { getTeamModels } from "../components/create_key_button";
+import { fetchTeamModels } from "../components/create_key_button";
 import { modelAvailableCall } from "./networking";
 
 interface KeyEditViewProps {
@@ -45,31 +45,36 @@ export function KeyEditView({
   const [form] = Form.useForm();
   const [userModels, setUserModels] = useState<string[]>([]);
   const team = teams?.find(team => team.team_id === keyData.team_id);
-  const availableModels = getTeamModels(team, userModels);
-  
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
 
   useEffect(() => {
-    const fetchUserModels = async () => {
+    const fetchModels = async () => {
+      if (!userID || !userRole || !accessToken) return;
+
       try {
-        if (accessToken && userID && userRole) {
+        if (keyData.team_id === null) {
+          // Fetch user models if no team
           const model_available = await modelAvailableCall(
             accessToken,
-            userID,
+            userID, 
             userRole
           );
-          let available_model_names = model_available["data"].map(
+          const available_model_names = model_available["data"].map(
             (element: { id: string }) => element.id
           );
-          console.log("available_model_names:", available_model_names);
-          setUserModels(available_model_names);
+          setAvailableModels(available_model_names);
+        } else if (team?.team_id) {
+          // Fetch team models if team exists
+          const models = await fetchTeamModels(userID, userRole, accessToken, team.team_id);
+          setAvailableModels(Array.from(new Set([...team.models, ...models])));
         }
       } catch (error) {
-        console.error("Error fetching user models:", error);
+        console.error("Error fetching models:", error);
       }
     };
 
-    fetchUserModels();
-  }, []);
+    fetchModels();
+  }, [userID, userRole, accessToken, team, keyData.team_id]);
 
   // Convert API budget duration to form format
   const getBudgetDuration = (duration: string | null) => {

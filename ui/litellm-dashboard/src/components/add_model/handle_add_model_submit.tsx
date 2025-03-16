@@ -1,13 +1,13 @@
 import { message } from "antd";
 import { provider_map, Providers } from "../provider_info_helpers";
-import { modelCreateCall, Model } from "../networking";
+import { modelCreateCall, Model, testConnectionRequest } from "../networking";
+import React, { useState } from 'react';
+import ConnectionErrorDisplay from './model_connection_test';
 
-
-export const handleAddModelSubmit = async (
+export const prepareModelAddRequest = async (
     formValues: Record<string, any>,
     accessToken: string,
     form: any,
-    callback?: ()=>void
   ) => {
     try {
       console.log("handling submit for formValues:", formValues);
@@ -72,7 +72,6 @@ export const handleAddModelSubmit = async (
           } else if (key == "model") {
             continue;
           }
-  
           // Check if key is "base_model"
           else if (key === "base_model") {
             // Add key-value pair to model_info dictionary
@@ -80,6 +79,13 @@ export const handleAddModelSubmit = async (
           }
           else if (key === "team_id") {
             modelInfoObj["team_id"] = value;
+          }
+          else if (key == "mode") {
+            console.log("placing mode in modelInfo")
+            modelInfoObj["mode"] = value;
+
+            // remove "mode" from litellmParams
+            delete litellmParamsObj["mode"];
           }
           else if (key === "custom_model_name") {
             litellmParamsObj["model"] = value;
@@ -135,20 +141,43 @@ export const handleAddModelSubmit = async (
             litellmParamsObj[key] = value;
           }
         }
-  
-        const new_model: Model = {
-          model_name: modelName,
-          litellm_params: litellmParamsObj,
-          model_info: modelInfoObj,
-        };
-  
-        const response: any = await modelCreateCall(accessToken, new_model);
-        console.log(`response for model create call: ${response["data"]}`);
-      }
 
-      callback && callback()
-      form.resetFields();
+        return { litellmParamsObj, modelInfoObj, modelName };
+      }
     } catch (error) {
       message.error("Failed to create model: " + error, 10);
     }
   };
+
+export const handleAddModelSubmit = async (
+    values: any,
+    accessToken: string,
+    form: any,
+    callback?: () => void,
+  ) => {
+    try {
+      const result = await prepareModelAddRequest(values, accessToken, form);
+      
+      if (!result) {
+        return; // Exit if preparation failed
+      }
+      
+      const { litellmParamsObj, modelInfoObj, modelName } = result;
+      
+      const new_model: Model = {
+        model_name: modelName,
+        litellm_params: litellmParamsObj,
+        model_info: modelInfoObj,
+      };
+      
+      const response: any = await modelCreateCall(accessToken, new_model);
+      console.log(`response for model create call: ${response["data"]}`);
+      
+      callback && callback();
+      form.resetFields();
+    } catch (error) {
+      message.error("Failed to add model: " + error, 10);
+    }
+  };
+
+     
