@@ -756,7 +756,9 @@ class CustomStreamWrapper:
                 setattr(model_response, k, v)
         return model_response
 
-    def is_delta_empty(self, delta: BaseModel) -> bool:
+    def is_delta_empty(self, delta: Optional[BaseModel]) -> bool:
+        if delta is None:
+            return True
         is_empty = True
         json_delta = delta.model_dump()
         for k, v in json_delta.items():
@@ -836,7 +838,9 @@ class CustomStreamWrapper:
                             try:
                                 if isinstance(choice, BaseModel):
                                     choice_json = choice.model_dump()  # type: ignore
-                                    if not self.is_delta_empty(choice):
+                                    if not self.is_delta_empty(
+                                        getattr(choice, "delta", None)
+                                    ):
                                         _finish_reason = choice_json.pop(
                                             "finish_reason", None
                                         )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
