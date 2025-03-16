@@ -1523,7 +1523,9 @@ class CustomStreamWrapper:
         if chunk is not None and chunk.choices[0].finish_reason is not None:
             self.sent_finish_reason = True
 
-    def handle_stop_iteration(self, cache_hit: bool, sync_mode: bool):
+    def handle_stop_iteration(
+        self, cache_hit: bool, sync_mode: bool
+    ) -> ModelResponseStream:
         if self.sent_finish_reason is True:
             """
             Case 1: Finish reason sent, now
@@ -1580,8 +1582,6 @@ class CustomStreamWrapper:
             if self.sent_stream_usage is False and self.send_stream_usage is True:
                 self.sent_stream_usage = True
                 return response
-
-            raise  # Re-raise StopIteration
         elif (
             self.received_finish_reason is not None and self.sent_finish_reason is False
         ):
@@ -1602,8 +1602,10 @@ class CustomStreamWrapper:
             )
             self.sent_finish_reason_in_chunk(processed_chunk)
             return processed_chunk
-        else:
-            raise
+
+        if sync_mode:
+            raise StopIteration
+        raise StopAsyncIteration
 
     def __next__(self):  # noqa: PLR0915
         cache_hit = False
@@ -1679,7 +1681,10 @@ class CustomStreamWrapper:
                     return response
 
         except StopIteration:
-            self.handle_stop_iteration(cache_hit, sync_mode=True)
+            try:
+                return self.handle_stop_iteration(cache_hit, sync_mode=True)
+            except Exception:
+                raise
         except Exception as e:
             traceback_exception = traceback.format_exc()
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
@@ -1815,7 +1820,7 @@ class CustomStreamWrapper:
                         return processed_chunk
         except (StopAsyncIteration, StopIteration):
             try:
-                self.handle_stop_iteration(cache_hit, sync_mode=False)
+                return self.handle_stop_iteration(cache_hit, sync_mode=False)
             except (StopAsyncIteration, StopIteration):
                 raise StopAsyncIteration
             except Exception as e:
