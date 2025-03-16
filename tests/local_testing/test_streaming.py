@@ -3445,7 +3445,8 @@ def test_unit_test_custom_stream_wrapper_openai():
     """
     Test if last streaming chunk ends with '?', if the message repeats itself.
     """
-    litellm.set_verbose = False
+    litellm._turn_on_debug()
+    litellm.set_verbose = True
     chunk = {
         "id": "chatcmpl-9mWtyDnikZZoB75DyfUzWUxiiE2Pi",
         "choices": [
@@ -3491,7 +3492,9 @@ def test_unit_test_custom_stream_wrapper_openai():
     assert stream_finish_reason == "content_filter"
 
 
-def test_aamazing_unit_test_custom_stream_wrapper_n():
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_aamazing_unit_test_custom_stream_wrapper_n(sync_mode):
     """
     Test if the translated output maps exactly to the received openai input
 
@@ -3728,7 +3731,7 @@ def test_aamazing_unit_test_custom_stream_wrapper_n():
         ),
     )
 
-    for idx, chunk in enumerate(response):
+    def check_chunk(chunk: litellm.ModelResponseStream, idx: int):
         chunk_dict = {}
         try:
             chunk_dict = chunk.model_dump(exclude_none=True)
@@ -3736,6 +3739,8 @@ def test_aamazing_unit_test_custom_stream_wrapper_n():
             chunk_dict = chunk.dict(exclude_none=True)
 
         chunk_dict.pop("created")
+        print(f"idx: {idx}, len(chunks): {len(chunks)}")
+        print(f"chunk_dict: {chunk_dict}")
         chunks[idx].pop("created")
         if chunks[idx]["system_fingerprint"] is None:
             chunks[idx].pop("system_fingerprint", None)
@@ -3754,6 +3759,16 @@ def test_aamazing_unit_test_custom_stream_wrapper_n():
         assert (
             chunk_dict == chunks[idx]
         ), f"idx={idx} translated chunk = {chunk_dict} != openai chunk = {chunks[idx]}"
+
+    if sync_mode:
+        for idx, chunk in enumerate(response):
+            check_chunk(chunk, idx)
+    else:
+        idx = 0
+        async for chunk in response:
+            assert chunk is not None, f"Got None chunk, on idx={idx}"
+            check_chunk(chunk, idx)
+            idx += 1
 
 
 def test_unit_test_custom_stream_wrapper_function_call():
@@ -3967,7 +3982,8 @@ def test_aastreaming_tool_calls_valid_json_str(model):
     tool_call_id_arg_map = {}
     curr_tool_call_id = None
     curr_tool_call_str = ""
-    for chunk in chunks:
+    for idx, chunk in enumerate(chunks):
+        assert chunk is not None, f"Got None chunk, at idx={idx}"
         if chunk.choices[0].delta.tool_calls is not None:
             if chunk.choices[0].delta.tool_calls[0].id is not None:
                 # flush prev tool call

@@ -71,6 +71,7 @@ class CustomStreamWrapper:
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
         self.sent_last_chunk = False
+        self.sent_finish_reason = False
 
         litellm_params: GenericLiteLLMParams = GenericLiteLLMParams(
             **self.logging_obj.model_call_details.get("litellm_params", {})
@@ -722,16 +723,6 @@ class CustomStreamWrapper:
             model_response.choices = [StreamingChoices(finish_reason=None)]
         return model_response
 
-    def is_delta_empty(self, delta: Delta) -> bool:
-        is_empty = True
-        if delta.content:
-            is_empty = False
-        elif delta.tool_calls is not None:
-            is_empty = False
-        elif delta.function_call is not None:
-            is_empty = False
-        return is_empty
-
     def set_model_id(
         self, id: str, model_response: ModelResponseStream
     ) -> ModelResponseStream:
@@ -764,6 +755,14 @@ class CustomStreamWrapper:
             for k, v in provider_specific_fields.items():
                 setattr(model_response, k, v)
         return model_response
+
+    def is_delta_empty(self, delta: BaseModel) -> bool:
+        is_empty = True
+        json_delta = delta.model_dump()
+        for k, v in json_delta.items():
+            if v:
+                is_empty = False
+        return is_empty
 
     def is_chunk_non_empty(
         self,
@@ -837,10 +836,10 @@ class CustomStreamWrapper:
                             try:
                                 if isinstance(choice, BaseModel):
                                     choice_json = choice.model_dump()  # type: ignore
-                                    choice_json.pop(
-                                        "finish_reason", None
-                                    )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
-                                    print_verbose(f"choice_json: {choice_json}")
+                                    if self.is_delta_empty(choice):
+                                        choice_json.pop(
+                                            "finish_reason", None
+                                        )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
                                     choices.append(StreamingChoices(**choice_json))
                             except Exception:
                                 choices.append(StreamingChoices())
@@ -1520,6 +1519,92 @@ class CustomStreamWrapper:
             model_response.choices[0].finish_reason = "tool_calls"
         return model_response
 
+    def sent_finish_reason_in_chunk(self, chunk: Optional[ModelResponseStream]):
+        if chunk is not None and chunk.choices[0].finish_reason is not None:
+            self.sent_finish_reason = True
+
+    def handle_stop_iteration(self, cache_hit: bool, sync_mode: bool):
+        if self.sent_finish_reason is True:
+            """
+            Case 1: Finish reason sent, now
+            - return the usage chunk - if stream_options={"include_usage": True}
+            - log the complete streaming response to logging object.
+            """
+            complete_streaming_response = litellm.stream_chunk_builder(
+                chunks=self.chunks, messages=self.messages
+            )
+            response = self.model_response_creator()
+            if complete_streaming_response is not None:
+                setattr(
+                    response,
+                    "usage",
+                    getattr(complete_streaming_response, "usage"),
+                )
+                ## LOGGING
+                if not sync_mode:
+                    asyncio.create_task(
+                        self.logging_obj.async_success_handler(
+                            complete_streaming_response,
+                            cache_hit=cache_hit,
+                            start_time=None,
+                            end_time=None,
+                        )
+                    )
+
+                executor.submit(
+                    self.logging_obj.success_handler,
+                    complete_streaming_response,
+                    cache_hit=cache_hit,
+                    start_time=None,
+                    end_time=None,
+                )
+            else:
+                ## LOGGING
+                executor.submit(
+                    self.logging_obj.success_handler,
+                    complete_streaming_response,
+                    cache_hit=cache_hit,
+                    start_time=None,
+                    end_time=None,
+                )
+                if not sync_mode:
+                    asyncio.create_task(
+                        self.logging_obj.async_success_handler(
+                            complete_streaming_response,
+                            cache_hit=cache_hit,
+                            start_time=None,
+                            end_time=None,
+                        )
+                    )
+
+            if self.sent_stream_usage is False and self.send_stream_usage is True:
+                self.sent_stream_usage = True
+                return response
+
+            raise  # Re-raise StopIteration
+        elif (
+            self.received_finish_reason is not None and self.sent_finish_reason is False
+        ):
+            """
+            Case 2: Finish reason received, but not sent yet.
+            """
+            processed_chunk = self.finish_reason_handler()
+            if self.stream_options is None:  # add usage as hidden param
+                usage = calculate_total_usage(chunks=self.chunks)
+                processed_chunk._hidden_params["usage"] = usage
+            ## LOGGING
+            executor.submit(
+                self.logging_obj.success_handler,
+                processed_chunk,
+                cache_hit=cache_hit,
+                start_time=None,
+                end_time=None,
+            )
+            self.sent_finish_reason_in_chunk(processed_chunk)
+            return processed_chunk
+        else:
+            raise
+
     def __next__(self):  # noqa: PLR0915
         cache_hit = False
         if (
@@ -1582,52 +1667,19 @@ class CustomStreamWrapper:
                             chunk=obj_dict, hidden_params=response._hidden_params
                         )
                     # add usage as hidden param
-                    if self.sent_last_chunk is True and self.stream_options is None:
+                    if (
+                        self.sent_last_chunk is True
+                        and self.stream_options is None
+                        and response is not None
+                    ):
                         usage = calculate_total_usage(chunks=self.chunks)
                         response._hidden_params["usage"] = usage
+                    self.sent_finish_reason_in_chunk(response)
                     # RETURN RESULT
                     return response
 
         except StopIteration:
-            if self.sent_last_chunk is True:
-                complete_streaming_response = litellm.stream_chunk_builder(
-                    chunks=self.chunks, messages=self.messages
-                )
-                response = self.model_response_creator()
-                if complete_streaming_response is not None:
-                    setattr(
-                        response,
-                        "usage",
-                        getattr(complete_streaming_response, "usage"),
-                    )
-                    ## LOGGING
-                    threading.Thread(
-                        target=self.logging_obj.success_handler,
-                        args=(complete_streaming_response, None, None, cache_hit),
-                    ).start()  # log response
-                else:
-                    ## LOGGING
-                    threading.Thread(
-                        target=self.logging_obj.success_handler,
-                        args=(response, None, None, cache_hit),
-                    ).start()  # log response
-
-                if self.sent_stream_usage is False and self.send_stream_usage is True:
-                    self.sent_stream_usage = True
-                    return response
-                raise  # Re-raise StopIteration
-            else:
-                self.sent_last_chunk = True
-                processed_chunk = self.finish_reason_handler()
-                if self.stream_options is None:  # add usage as hidden param
-                    usage = calculate_total_usage(chunks=self.chunks)
-                    processed_chunk._hidden_params["usage"] = usage
-                ## LOGGING
-                threading.Thread(
-                    target=self.run_success_logging_and_cache_storage,
-                    args=(processed_chunk, cache_hit),
-                ).start()  # log response
-                return processed_chunk
+            self.handle_stop_iteration(cache_hit, sync_mode=True)
         except Exception as e:
             traceback_exception = traceback.format_exc()
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
@@ -1724,6 +1776,7 @@ class CustomStreamWrapper:
                         # Create a new object without the removed attribute
                         processed_chunk = self.model_response_creator(chunk=obj_dict)
                     print_verbose(f"final returned processed chunk: {processed_chunk}")
+                    self.sent_finish_reason_in_chunk(processed_chunk)
                     return processed_chunk
                 raise StopAsyncIteration
             else:  # temporary patch for non-aiohttp async calls
@@ -1758,46 +1811,15 @@ class CustomStreamWrapper:
                         )
                         # RETURN RESULT
                         self.chunks.append(processed_chunk)
+                        self.sent_finish_reason_in_chunk(processed_chunk)
                         return processed_chunk
         except (StopAsyncIteration, StopIteration):
-            if self.sent_last_chunk is True:
-                # log the final chunk with accurate streaming values
-                complete_streaming_response = litellm.stream_chunk_builder(
-                    chunks=self.chunks, messages=self.messages
-                )
-                response = self.model_response_creator()
-                if complete_streaming_response is not None:
-                    setattr(
-                        response,
-                        "usage",
-                        getattr(complete_streaming_response, "usage"),
-                    )
-                if self.sent_stream_usage is False and self.send_stream_usage is True:
-                    self.sent_stream_usage = True
-                    return response
-
-                asyncio.create_task(
-                    self.logging_obj.async_success_handler(
-                        complete_streaming_response,
-                        cache_hit=cache_hit,
-                        start_time=None,
-                        end_time=None,
-                    )
-                )
-
-                executor.submit(
-                    self.logging_obj.success_handler,
-                    complete_streaming_response,
-                    cache_hit=cache_hit,
-                    start_time=None,
-                    end_time=None,
-                )
-
-                raise StopAsyncIteration  # Re-raise StopIteration
-            else:
-                self.sent_last_chunk = True
-                processed_chunk = self.finish_reason_handler()
-                return processed_chunk
+            try:
+                self.handle_stop_iteration(cache_hit, sync_mode=False)
+            except (StopAsyncIteration, StopIteration):
+                raise StopAsyncIteration
+            except Exception as e:
+                raise e
         except httpx.TimeoutException as e:  # if httpx read timeout error occues
             traceback_exception = traceback.format_exc()
             ## ADD DEBUG INFORMATION - E.G. LITELLM REQUEST TIMEOUT
