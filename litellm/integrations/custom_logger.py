@@ -239,6 +239,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             "image_generation",
             "moderation",
             "audio_transcription",
+            "responses",
         ],
     ) -> Any:
         pass

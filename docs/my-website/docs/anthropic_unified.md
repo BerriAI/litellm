@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# [BETA] `/v1/messages`
+# /v1/messages [BETA] 
 
 LiteLLM provides a BETA endpoint in the spec of Anthropic's `/v1/messages` endpoint. 
 

@@ -20,6 +20,7 @@ import {
   SafetyOutlined,
   ExperimentOutlined,
   ThunderboltOutlined,
+  LockOutlined
 } from '@ant-design/icons';
 import { old_admin_roles, v2_admin_role_names, all_admin_roles, rolesAllowedToSeeUsage, rolesWithWriteAccess } from '../utils/roles';
 
@@ -67,7 +68,6 @@ const menuItems: MenuItem[] = [
       { key: "9", page: "caching", label: "Caching", icon: <DatabaseOutlined />, roles: all_admin_roles },
       { key: "10", page: "budgets", label: "Budgets", icon: <BankOutlined />, roles: all_admin_roles },
       { key: "11", page: "guardrails", label: "Guardrails", icon: <SafetyOutlined />, roles: all_admin_roles },
-      { key: "18", page: "transform-request", label: "Playground", icon: <ThunderboltOutlined />, roles: all_admin_roles },
     ]
   },
   {

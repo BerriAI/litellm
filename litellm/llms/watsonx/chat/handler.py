@@ -31,7 +31,7 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
         logging_obj,
         optional_params: dict,
         acompletion=None,
-        litellm_params=None,
+        litellm_params: dict = {},
         headers: Optional[dict] = None,
         logger_fn=None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
@@ -63,6 +63,7 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
             api_base=api_base,
             model=model,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             stream=optional_params.get("stream", False),
         )
 

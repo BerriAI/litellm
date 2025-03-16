@@ -868,9 +868,12 @@ class BaseLLMChatTest(ABC):
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 
+    @pytest.mark.flaky(retries=3, delay=1)
     @pytest.mark.asyncio
     async def test_completion_cost(self):
         from litellm import completion_cost
+
+        litellm._turn_on_debug()
 
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")

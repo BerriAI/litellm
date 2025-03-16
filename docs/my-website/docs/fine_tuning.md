@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# [Beta] Fine-tuning API
+# /fine_tuning
 
 
 :::info

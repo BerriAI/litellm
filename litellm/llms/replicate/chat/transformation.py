@@ -141,6 +141,7 @@ class ReplicateConfig(BaseConfig):
         api_base: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         version_id = self.model_to_version_id(model)

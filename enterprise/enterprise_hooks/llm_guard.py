@@ -126,6 +126,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
             "image_generation",
             "moderation",
             "audio_transcription",
+            "responses",
         ],
     ):
         """

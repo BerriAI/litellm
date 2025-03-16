@@ -55,6 +55,7 @@ class TopazImageVariationConfig(BaseImageVariationConfig):
         api_base: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         api_base = api_base or "https://api.topazlabs.com"

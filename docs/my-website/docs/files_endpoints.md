@@ -2,7 +2,7 @@
 import TabItem from '@theme/TabItem';
 import Tabs from '@theme/Tabs';
 
-# Files API
+# /files
 
 Files are used to upload documents that can be used with features like Assistants, Fine-tuning, and Batch API.
 

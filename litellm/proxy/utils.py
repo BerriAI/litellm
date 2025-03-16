@@ -537,6 +537,7 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal[
             "completion",
+            "responses",
             "embeddings",
             "image_generation",
             "moderation",

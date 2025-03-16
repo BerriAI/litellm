@@ -25,7 +25,7 @@ from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
 )
 from litellm.types.router import *
-from litellm.utils import supports_httpx_timeout
+from litellm.utils import get_litellm_params, supports_httpx_timeout
 
 ####### ENVIRONMENT VARIABLES ###################
 openai_files_instance = OpenAIFilesAPI()
@@ -546,6 +546,7 @@ def create_file(
     try:
         _is_async = kwargs.pop("acreate_file", False) is True
         optional_params = GenericLiteLLMParams(**kwargs)
+        litellm_params_dict = get_litellm_params(**kwargs)
 
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
@@ -630,6 +631,7 @@ def create_file(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 create_file_data=_create_file_request,
+                litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "vertex_ai":
             api_base = optional_params.api_base or ""

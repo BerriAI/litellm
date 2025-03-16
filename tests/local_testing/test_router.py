@@ -194,6 +194,9 @@ def test_router_specific_model_via_id():
     router.completion(model="1234", messages=[{"role": "user", "content": "Hey!"}])
 
 
+@pytest.mark.skip(
+    reason="Router no longer creates clients, this is delegated to the provider integration."
+)
 def test_router_azure_ai_client_init():
 
     _deployment = {
@@ -219,6 +222,9 @@ def test_router_azure_ai_client_init():
     assert not isinstance(_client, AsyncAzureOpenAI)
 
 
+@pytest.mark.skip(
+    reason="Router no longer creates clients, this is delegated to the provider integration."
+)
 def test_router_azure_ad_token_provider():
     _deployment = {
         "model_name": "gpt-4o_2024-05-13",
@@ -247,8 +253,10 @@ def test_router_azure_ad_token_provider():
         assert isinstance(_client, AsyncAzureOpenAI)
         assert _client._azure_ad_token_provider is not None
         assert isinstance(_client._azure_ad_token_provider.__closure__, tuple)
-        assert isinstance(_client._azure_ad_token_provider.__closure__[0].cell_contents._credential,
-                        getattr(identity, os.environ["AZURE_CREDENTIAL"]))
+        assert isinstance(
+            _client._azure_ad_token_provider.__closure__[0].cell_contents._credential,
+            getattr(identity, os.environ["AZURE_CREDENTIAL"]),
+        )
 
 
 def test_router_sensitive_keys():
@@ -312,91 +320,6 @@ def test_router_order():
         assert response._hidden_params["model_id"] == "1"
 
 
-@pytest.mark.parametrize("num_retries", [None, 2])
-@pytest.mark.parametrize("max_retries", [None, 4])
-def test_router_num_retries_init(num_retries, max_retries):
-    """
-    - test when num_retries set v/s not
-    - test client value when max retries set v/s not
-    """
-    router = Router(
-        model_list=[
-            {
-                "model_name": "gpt-3.5-turbo",  # openai model name
-                "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
-                    "api_key": "bad-key",
-                    "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
-                    "max_retries": max_retries,
-                },
-                "model_info": {"id": 12345},
-            },
-        ],
-        num_retries=num_retries,
-    )
-
-    if num_retries is not None:
-        assert router.num_retries == num_retries
-    else:
-        assert router.num_retries == openai.DEFAULT_MAX_RETRIES
-
-    model_client = router._get_client(
-        {"model_info": {"id": 12345}}, client_type="async", kwargs={}
-    )
-
-    if max_retries is not None:
-        assert getattr(model_client, "max_retries") == max_retries
-    else:
-        assert getattr(model_client, "max_retries") == 0
-
-
-@pytest.mark.parametrize(
-    "timeout", [10, 1.0, httpx.Timeout(timeout=300.0, connect=20.0)]
-)
-@pytest.mark.parametrize("ssl_verify", [True, False])
-def test_router_timeout_init(timeout, ssl_verify):
-    """
-    Allow user to pass httpx.Timeout
-
-    related issue - https://github.com/BerriAI/litellm/issues/3162
-    """
-    litellm.ssl_verify = ssl_verify
-
-    router = Router(
-        model_list=[
-            {
-                "model_name": "test-model",
-                "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
-                    "api_key": os.getenv("AZURE_API_KEY"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
-                    "api_version": os.getenv("AZURE_API_VERSION"),
-                    "timeout": timeout,
-                },
-                "model_info": {"id": 1234},
-            }
-        ]
-    )
-
-    model_client = router._get_client(
-        deployment={"model_info": {"id": 1234}}, client_type="sync_client", kwargs={}
-    )
-
-    assert getattr(model_client, "timeout") == timeout
-
-    print(f"vars model_client: {vars(model_client)}")
-    http_client = getattr(model_client, "_client")
-    print(f"http client: {vars(http_client)}, ssl_Verify={ssl_verify}")
-    if ssl_verify == False:
-        assert http_client._transport._pool._ssl_context.verify_mode.name == "CERT_NONE"
-    else:
-        assert (
-            http_client._transport._pool._ssl_context.verify_mode.name
-            == "CERT_REQUIRED"
-        )
-
-
 @pytest.mark.parametrize("sync_mode", [False, True])
 @pytest.mark.asyncio
 async def test_router_retries(sync_mode):
@@ -445,6 +368,9 @@ async def test_router_retries(sync_mode):
         "https://Mistral-large-nmefg-serverless.eastus2.inference.ai.azure.com",
     ],
 )
+@pytest.mark.skip(
+    reason="Router no longer creates clients, this is delegated to the provider integration."
+)
 def test_router_azure_ai_studio_init(mistral_api_base):
     router = Router(
         model_list=[
@@ -460,16 +386,21 @@ def test_router_azure_ai_studio_init(mistral_api_base):
         ]
     )
 
-    model_client = router._get_client(
-        deployment={"model_info": {"id": 1234}}, client_type="sync_client", kwargs={}
+    # model_client = router._get_client(
+    #     deployment={"model_info": {"id": 1234}}, client_type="sync_client", kwargs={}
+    # )
+    # url = getattr(model_client, "_base_url")
+    # uri_reference = str(getattr(url, "_uri_reference"))
+
+    # print(f"uri_reference: {uri_reference}")
+
+    # assert "/v1/" in uri_reference
+    # assert uri_reference.count("v1") == 1
+    response = router.completion(
+        model="azure/mistral-large-latest",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
     )
-    url = getattr(model_client, "_base_url")
-    uri_reference = str(getattr(url, "_uri_reference"))
-
-    print(f"uri_reference: {uri_reference}")
-
-    assert "/v1/" in uri_reference
-    assert uri_reference.count("v1") == 1
+    assert response is not None
 
 
 def test_exception_raising():

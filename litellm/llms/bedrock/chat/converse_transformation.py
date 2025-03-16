@@ -31,7 +31,7 @@ from litellm.types.llms.openai import (
     ChatCompletionUserMessage,
     OpenAIMessageContentListBlock,
 )
-from litellm.types.utils import ModelResponse, Usage
+from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.utils import add_dummy_tool, has_tool_call_blocks
 
 from ..common_utils import BedrockError, BedrockModelInfo, get_bedrock_tool_name
@@ -602,6 +602,33 @@ class AmazonConverseConfig(BaseConfig):
                 thinking_blocks_list.append(_thinking_block)
         return thinking_blocks_list
 
+    def _transform_usage(self, usage: ConverseTokenUsageBlock) -> Usage:
+        input_tokens = usage["inputTokens"]
+        output_tokens = usage["outputTokens"]
+        total_tokens = usage["totalTokens"]
+        cache_creation_input_tokens: int = 0
+        cache_read_input_tokens: int = 0
+
+        if "cacheReadInputTokens" in usage:
+            cache_read_input_tokens = usage["cacheReadInputTokens"]
+            input_tokens += cache_read_input_tokens
+        if "cacheWriteInputTokens" in usage:
+            cache_creation_input_tokens = usage["cacheWriteInputTokens"]
+            input_tokens += cache_creation_input_tokens
+
+        prompt_tokens_details = PromptTokensDetailsWrapper(
+            cached_tokens=cache_read_input_tokens
+        )
+        openai_usage = Usage(
+            prompt_tokens=input_tokens,
+            completion_tokens=output_tokens,
+            total_tokens=total_tokens,
+            prompt_tokens_details=prompt_tokens_details,
+            cache_creation_input_tokens=cache_creation_input_tokens,
+            cache_read_input_tokens=cache_read_input_tokens,
+        )
+        return openai_usage
+
     def _transform_response(
         self,
         model: str,
@@ -730,9 +757,7 @@ class AmazonConverseConfig(BaseConfig):
             chat_completion_message["tool_calls"] = tools
 
         ## CALCULATING USAGE - bedrock returns usage in the headers
-        input_tokens = completion_response["usage"]["inputTokens"]
-        output_tokens = completion_response["usage"]["outputTokens"]
-        total_tokens = completion_response["usage"]["totalTokens"]
+        usage = self._transform_usage(completion_response["usage"])
 
         model_response.choices = [
             litellm.Choices(
@@ -743,11 +768,7 @@ class AmazonConverseConfig(BaseConfig):
         ]
         model_response.created = int(time.time())
         model_response.model = model
-        usage = Usage(
-            prompt_tokens=input_tokens,
-            completion_tokens=output_tokens,
-            total_tokens=total_tokens,
-        )
+
         setattr(model_response, "usage", usage)
 
         # Add "trace" from Bedrock guardrails - if user has opted in to returning it

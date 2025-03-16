@@ -109,6 +109,10 @@ class ConverseTokenUsageBlock(TypedDict):
     inputTokens: int
     outputTokens: int
     totalTokens: int
+    cacheReadInputTokenCount: int
+    cacheReadInputTokens: int
+    cacheWriteInputTokenCount: int
+    cacheWriteInputTokens: int
 
 
 class ConverseResponseBlock(TypedDict):
@@ -400,7 +404,9 @@ class AmazonNovaCanvasTextToImageParams(TypedDict, total=False):
     conditionImage: str
 
 
-class AmazonNovaCanvasTextToImageRequest(AmazonNovaCanvasRequestBase, TypedDict, total=False):
+class AmazonNovaCanvasTextToImageRequest(
+    AmazonNovaCanvasRequestBase, TypedDict, total=False
+):
     """
     Request for Amazon Nova Canvas Text to Image API
 

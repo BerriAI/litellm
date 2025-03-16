@@ -45,6 +45,7 @@ class BaseEmbeddingConfig(BaseConfig, ABC):
         api_base: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         """

@@ -66,6 +66,7 @@ from litellm.litellm_core_utils.core_helpers import (
     map_finish_reason,
     process_response_headers,
 )
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.default_encoding import encoding
 from litellm.litellm_core_utils.exception_mapping_utils import (
     _get_response_headers,
@@ -141,6 +142,7 @@ from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
     CostPerToken,
+    CredentialItem,
     CustomHuggingfaceTokenizer,
     Delta,
     Embedding,
@@ -209,6 +211,7 @@ from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
 )
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
+from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 
 from ._logging import _is_debugging_on, verbose_logger
 from .caching.caching import (
@@ -453,6 +456,18 @@ def get_applied_guardrails(kwargs: Dict[str, Any]) -> List[str]:
                     applied_guardrails.append(callback.guardrail_name)
 
     return applied_guardrails
+
+
+def load_credentials_from_list(kwargs: dict):
+    """
+    Updates kwargs with the credentials if credential_name in kwarg
+    """
+    credential_name = kwargs.get("litellm_credential_name")
+    if credential_name and litellm.credential_list:
+        credential_accessor = CredentialAccessor.get_credential_values(credential_name)
+        for key, value in credential_accessor.items():
+            if key not in kwargs:
+                kwargs[key] = value
 
 
 def get_dynamic_callbacks(
@@ -715,6 +730,11 @@ def function_setup(  # noqa: PLR0915
             call_type == CallTypes.aspeech.value or call_type == CallTypes.speech.value
         ):
             messages = kwargs.get("input", "speech")
+        elif (
+            call_type == CallTypes.aresponses.value
+            or call_type == CallTypes.responses.value
+        ):
+            messages = args[0] if len(args) > 0 else kwargs["input"]
         else:
             messages = "default-message-value"
         stream = True if "stream" in kwargs and kwargs["stream"] is True else False
@@ -983,6 +1003,8 @@ def client(original_function):  # noqa: PLR0915
                 logging_obj, kwargs = function_setup(
                     original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
+            ## LOAD CREDENTIALS
+            load_credentials_from_list(kwargs)
             kwargs["litellm_logging_obj"] = logging_obj
             _llm_caching_handler: LLMCachingHandler = LLMCachingHandler(
                 original_function=original_function,
@@ -1239,6 +1261,8 @@ def client(original_function):  # noqa: PLR0915
                     original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
             kwargs["litellm_logging_obj"] = logging_obj
+            ## LOAD CREDENTIALS
+            load_credentials_from_list(kwargs)
             logging_obj._llm_caching_handler = _llm_caching_handler
             # [OPTIONAL] CHECK BUDGET
             if litellm.max_budget:
@@ -5149,7 +5173,7 @@ def prompt_token_calculator(model, messages):
         from anthropic import AI_PROMPT, HUMAN_PROMPT, Anthropic
 
         anthropic_obj = Anthropic()
-        num_tokens = anthropic_obj.count_tokens(text)
+        num_tokens = anthropic_obj.count_tokens(text)  # type: ignore
     else:
         num_tokens = len(encoding.encode(text))
     return num_tokens
@@ -6128,6 +6152,8 @@ class ProviderConfigManager:
             return litellm.CohereChatConfig()
         elif litellm.LlmProviders.COHERE == provider:
             return litellm.CohereConfig()
+        elif litellm.LlmProviders.SNOWFLAKE == provider:
+            return litellm.SnowflakeConfig()
         elif litellm.LlmProviders.CLARIFAI == provider:
             return litellm.ClarifaiConfig()
         elif litellm.LlmProviders.ANTHROPIC == provider:
@@ -6321,6 +6347,15 @@ class ProviderConfigManager:
             return litellm.FireworksAIAudioTranscriptionConfig()
         elif litellm.LlmProviders.DEEPGRAM == provider:
             return litellm.DeepgramAudioTranscriptionConfig()
+        return None
+
+    @staticmethod
+    def get_provider_responses_api_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseResponsesAPIConfig]:
+        if litellm.LlmProviders.OPENAI == provider:
+            return litellm.OpenAIResponsesAPIConfig()
         return None
 
     @staticmethod
