@@ -768,7 +768,9 @@ class CustomStreamWrapper:
                 is_empty = False
         return is_empty
 
-    def is_model_response_empty(self, model_response: ModelResponseStream) -> bool:
+    def is_model_response_empty(
+        self, model_response: Union[ModelResponseStream, ChatCompletionChunk]
+    ) -> bool:
         choices = model_response.choices
         if len(choices) == 0:
             return True
@@ -814,7 +816,9 @@ class CustomStreamWrapper:
         ):
             return True
         elif response_obj.get("original_chunk", None) is not None:
-            if isinstance(response_obj["original_chunk"], ModelResponseStream):
+            if isinstance(
+                response_obj["original_chunk"], ModelResponseStream
+            ) or isinstance(response_obj["original_chunk"], ChatCompletionChunk):
                 result = not self.is_model_response_empty(
                     response_obj["original_chunk"]
                 )
