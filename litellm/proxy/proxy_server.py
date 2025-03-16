@@ -457,7 +457,7 @@ async def proxy_startup_event(app: FastAPI):
 
     ## CHECK PREMIUM USER
     verbose_proxy_logger.debug(
-        "litellm/proxy/proxy_server.py::startup() - CHECKING PREMIUM USER - {}".format(
+        "litellm.proxy.proxy_server.py::startup() - CHECKING PREMIUM USER - {}".format(
             premium_user
         )
     )
