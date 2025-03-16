@@ -8,7 +8,7 @@ You can add LLM provider credentials on the UI. Once you add credentials you can
 
 ## Add a credential + model
 
-### 1. Navigate to llm credentials page
+### 1. Navigate to LLM Credentials page
 
 Go to Models -> LLM Credentials -> Add Credential
 
@@ -16,7 +16,7 @@ Go to Models -> LLM Credentials -> Add Credential
 
 ### 2. Add credentials
 
-Select your LLM provider, enter your API Key and click Save
+Select your LLM provider, enter your API Key and click "Add Credential"
 
 **Note: Credentials are based on the provider, if you select Vertex AI then you will see `Vertex Project`, `Vertex Location` and `Vertex Credentials` fields**
 
@@ -50,6 +50,6 @@ Go to Add Model -> Existing Credentials -> Select your credential in the dropdow
 
 
 How are credentials stored?
-- Credentials in the DB are encrypted/decrypted using `LITELLM_SALT_KEY` if set. If not then they are encrypted using `LITELLM_MASTER_KEY` These keys should be kept secret and not shared with others.
+Credentials in the DB are encrypted/decrypted using `LITELLM_SALT_KEY`, if set. If not, then they are encrypted using `LITELLM_MASTER_KEY`. These keys should be kept secret and not shared with others.
 
 
