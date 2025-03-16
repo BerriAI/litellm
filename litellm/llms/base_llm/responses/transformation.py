@@ -106,7 +106,7 @@ class BaseResponsesAPIConfig(ABC):
     @abstractmethod
     def transform_responses_api_retrieve_request(
         self,
-        id: str,
+        response_id: str,
         response_api_retrieve_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -116,7 +116,7 @@ class BaseResponsesAPIConfig(ABC):
     @abstractmethod
     def transform_responses_api_delete_request(
         self,
-        id: str,
+        response_id: str,
         response_api_delete_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -143,7 +143,6 @@ class BaseResponsesAPIConfig(ABC):
     @abstractmethod
     def transform_delete_api_response(
         self,
-        model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> ResponsesAPIDeleteResponse:
