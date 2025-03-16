@@ -8,6 +8,7 @@ import secrets
 import signal
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import uuid
@@ -447,16 +448,20 @@ async def proxy_shutdown_event():
     cleanup_router_config_variables()
 
 
+def register_signal_handlers():
+    if threading.current_thread() is threading.main_thread():
+        # Register signal handlers
+        signal.signal(signal.SIGTERM, handle_shutdown)
+        signal.signal(signal.SIGINT, handle_shutdown)
+
+
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI):
     """Handles startup and shutdown events for the proxy server"""
     global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check
     import json
 
-    # Register signal handlers
-    signal.signal(signal.SIGTERM, handle_shutdown)
-    signal.signal(signal.SIGINT, handle_shutdown)
-
+    register_signal_handlers()
     # Set shutdown timeout from general_settings
     global shutdown_timeout
     if general_settings.get("graceful_shutdown_timeout"):
