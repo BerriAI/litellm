@@ -762,9 +762,20 @@ class CustomStreamWrapper:
         is_empty = True
         json_delta = delta.model_dump()
         for k, v in json_delta.items():
+            if k == "role":
+                continue
             if v:
                 is_empty = False
         return is_empty
+
+    def is_model_response_empty(self, model_response: ModelResponseStream) -> bool:
+        choices = model_response.choices
+        if len(choices) == 0:
+            return True
+        for choice in choices:
+            if not self.is_delta_empty(choice.delta):
+                return False
+        return True
 
     def is_chunk_non_empty(
         self,
@@ -800,9 +811,16 @@ class CustomStreamWrapper:
                 "provider_specific_fields" in response_obj
                 and response_obj["provider_specific_fields"] is not None
             )
-            or (response_obj.get("original_chunk", None) is not None)
         ):
             return True
+        elif response_obj.get("original_chunk", None) is not None:
+            if isinstance(response_obj["original_chunk"], ModelResponseStream):
+                result = not self.is_model_response_empty(
+                    response_obj["original_chunk"]
+                )
+                return result
+            else:
+                return True  # assume openai/azure chunk
         else:
             return False
 
@@ -812,10 +830,6 @@ class CustomStreamWrapper:
         model_response: ModelResponseStream,
         response_obj: Dict[str, Any],
     ):
-
-        print_verbose(
-            f"completion_obj: {completion_obj}, model_response.choices[0]: {model_response.choices[0]}, response_obj: {response_obj}"
-        )
         is_chunk_non_empty = self.is_chunk_non_empty(
             completion_obj, model_response, response_obj
         )
@@ -898,13 +912,12 @@ class CustomStreamWrapper:
             else:
                 return
         elif self.received_finish_reason is not None:
-            if self.sent_last_chunk is True:
+            if self.sent_finish_reason is True:
                 # Bedrock returns the guardrail trace in the last chunk - we want to return this here
                 if self.custom_llm_provider == "bedrock" and "trace" in model_response:
                     return model_response
 
-                # Default - return StopIteration
-                raise StopIteration
+                return model_response
             # flush any remaining holding chunk
             if len(self.holding_chunk) > 0:
                 if model_response.choices[0].delta.content is None:
@@ -943,7 +956,10 @@ class CustomStreamWrapper:
             and model_response.choices[0].delta.audio is not None
         ):
             return model_response
-        return
+        else:
+            if hasattr(model_response, "usage"):
+                self.chunks.append(model_response)
+            return
 
     def _optional_combine_thinking_block_in_choices(
         self, model_response: ModelResponseStream
@@ -1591,6 +1607,7 @@ class CustomStreamWrapper:
             """
             Case 2: Finish reason received, but not sent yet.
             """
+
             processed_chunk = self.finish_reason_handler()
             if self.stream_options is None:  # add usage as hidden param
                 usage = calculate_total_usage(chunks=self.chunks)
@@ -1638,7 +1655,6 @@ class CustomStreamWrapper:
                     verbose_logger.debug(
                         f"PROCESSED CHUNK POST CHUNK CREATOR: {response}"
                     )
-
                     if response is None:
                         continue
                     ## LOGGING
@@ -1655,6 +1671,7 @@ class CustomStreamWrapper:
                         input=self.response_uptil_now, model=self.model
                     )
                     # HANDLE STREAM OPTIONS
+
                     self.chunks.append(response)
                     if hasattr(
                         response, "usage"

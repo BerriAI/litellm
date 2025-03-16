@@ -3095,6 +3095,11 @@ async def test_azure_astreaming_and_function_calling():
 
 
 def test_completion_claude_3_function_call_with_streaming():
+    """
+    Claude initial chunk is empty
+
+    OpenAI returns tool call in first chunk
+    """
     litellm.set_verbose = True
     litellm._turn_on_debug()
     tools = [

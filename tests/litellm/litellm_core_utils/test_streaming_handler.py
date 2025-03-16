@@ -626,3 +626,109 @@ def test_streaming_handler_with_stop_chunk(
         **args, model_response=ModelResponseStream()
     )
     assert returned_chunk.choices[0].finish_reason is None
+
+
+def test_streaming_handler_empty_delta_chunk_with_usage(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    args = {
+        "completion_obj": {"content": ""},
+        "model_response": ModelResponseStream(
+            id="chatcmpl-4d42f6b9-d3e5-4289-9e00-4d24f3b35568",
+            created=1742102368,
+            model="bedrock/claude-3-5-sonnet-20240620-v1:0",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        provider_specific_fields=None,
+                        content="",
+                        role="assistant",
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields={},
+            stream_options={"include_usage": True},
+            usage=Usage(
+                completion_tokens=392,
+                prompt_tokens=1799,
+                total_tokens=2191,
+                completion_tokens_details=None,
+                prompt_tokens_details=PromptTokensDetailsWrapper(
+                    audio_tokens=None,
+                    cached_tokens=1796,
+                    text_tokens=None,
+                    image_tokens=None,
+                ),
+            ),
+        ),
+        "response_obj": {
+            "text": "",
+            "is_finished": False,
+            "finish_reason": None,
+            "logprobs": None,
+            "original_chunk": ModelResponseStream(
+                id="chatcmpl-87291500-d8c5-428e-b187-36fe5a4c97ab",
+                created=1742056047,
+                model=None,
+                object="chat.completion.chunk",
+                system_fingerprint=None,
+                choices=[
+                    StreamingChoices(
+                        finish_reason=None,
+                        index=0,
+                        delta=Delta(
+                            provider_specific_fields=None,
+                            content="",
+                            role="assistant",
+                            function_call=None,
+                            tool_calls=None,
+                            audio=None,
+                        ),
+                        logprobs=None,
+                    )
+                ],
+                provider_specific_fields={},
+                usage=Usage(
+                    completion_tokens=392,
+                    prompt_tokens=1799,
+                    total_tokens=2191,
+                    completion_tokens_details=None,
+                    prompt_tokens_details=PromptTokensDetailsWrapper(
+                        audio_tokens=None,
+                        cached_tokens=1796,
+                        text_tokens=None,
+                        image_tokens=None,
+                    ),
+                ),
+            ),
+            "usage": Usage(
+                completion_tokens=392,
+                prompt_tokens=1799,
+                total_tokens=2191,
+                completion_tokens_details=None,
+                prompt_tokens_details=PromptTokensDetailsWrapper(
+                    audio_tokens=None,
+                    cached_tokens=1796,
+                    text_tokens=None,
+                    image_tokens=None,
+                ),
+            ),
+        },
+    }
+    returned_chunk = initialized_custom_stream_wrapper.return_processed_chunk_logic(
+        **args
+    )
+    assert returned_chunk is None
+    assert len(initialized_custom_stream_wrapper.chunks) == 1
+    assert (
+        initialized_custom_stream_wrapper.chunks[0].usage
+        == args["model_response"].usage
+    )

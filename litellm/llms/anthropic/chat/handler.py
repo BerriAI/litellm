@@ -701,6 +701,7 @@ class ModelResponseIterator:
                                 thinking_blocks if thinking_blocks else None
                             ),
                             reasoning_content=reasoning_content,
+                            role="assistant",
                         ),
                         finish_reason=finish_reason,
                     )
