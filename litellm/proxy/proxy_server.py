@@ -23,6 +23,7 @@ from typing import (
     get_origin,
     get_type_hints,
 )
+
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -255,6 +256,7 @@ from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
     _cache_user_row,
+    _disable_web_crawlers,
     _get_docs_url,
     _get_projected_spend_over_limit,
     _get_redoc_url,
@@ -329,6 +331,7 @@ from fastapi.responses import (
     FileResponse,
     JSONResponse,
     ORJSONResponse,
+    PlainTextResponse,
     RedirectResponse,
     StreamingResponse,
 )
@@ -3047,7 +3050,11 @@ async def async_data_generator(
 ):
     verbose_proxy_logger.debug("inside generator")
     try:
-        async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(user_api_key_dict=user_api_key_dict, response=response, request_data=request_data):
+        async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+            request_data=request_data,
+        ):
             verbose_proxy_logger.debug(
                 "async_data_generator: received streaming chunk - {}".format(chunk)
             )
@@ -8093,6 +8100,20 @@ async def get_litellm_model_cost_map():
 @router.get("/", dependencies=[Depends(user_api_key_auth)])
 async def home(request: Request):
     return "LiteLLM: RUNNING"
+
+
+@app.get("/robots.txt", response_class=PlainTextResponse)
+async def robots():
+    """
+    Return a robots.txt file to control web crawler access.
+    If `DISABLE_CRAWLERS` is set to "true", block all crawlers.
+    Otherwise, allow all crawlers by default.
+    """
+    disable_crawlers = _disable_web_crawlers()
+    if disable_crawlers:
+        return "User-agent: *\nDisallow: /"
+    else:
+        return "User-agent: *\nAllow: /"
 
 
 @router.get("/routes", dependencies=[Depends(user_api_key_auth)])
