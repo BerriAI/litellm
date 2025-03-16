@@ -79,6 +79,7 @@ LITELLM_CHAT_PROVIDERS = [
     "hosted_vllm",
     "lm_studio",
     "galadriel",
+    "bitdeerai",
 ]
 
 
@@ -313,6 +314,7 @@ together_ai_models: List = [
     "WizardLM/WizardLM-70B-V1.0",
 ]  # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
 
+bitdeerai_models: List = []
 
 baseten_models: List = [
     "qvv0xeq",

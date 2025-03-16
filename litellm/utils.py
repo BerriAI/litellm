@@ -2619,6 +2619,21 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         )
         final_params = {**optional_params, **kwargs}
         return final_params
+    elif custom_llm_provider == "bitdeerai":
+        supported_params = get_supported_openai_params(
+            model=model,
+            custom_llm_provider="bitdeerai",
+            request_type="embeddings",
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.BitdeerAIEmbeddingConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params={},
+            model=model,
+             drop_params=drop_params if drop_params is not None else False,
+        )
+        final_params = {**optional_params, **kwargs}
+        return final_params
     elif custom_llm_provider == "voyage":
         supported_params = get_supported_openai_params(
             model=model,
@@ -2900,6 +2915,7 @@ def get_optional_params(  # noqa: PLR0915
             and custom_llm_provider != "bedrock"
             and custom_llm_provider != "ollama_chat"
             and custom_llm_provider != "openrouter"
+            and custom_llm_provider != "bitdeerai"
             and custom_llm_provider not in litellm.openai_compatible_providers
         ):
             if custom_llm_provider == "ollama":
@@ -3132,6 +3148,17 @@ def get_optional_params(  # noqa: PLR0915
     elif custom_llm_provider == "together_ai":
 
         optional_params = litellm.TogetherAIConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
+    elif custom_llm_provider == "bitdeerai":
+        optional_params = litellm.BitdeerAIChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -3978,6 +4005,13 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
             or litellm.togetherai_api_key
             or get_secret("TOGETHERAI_API_KEY")
             or get_secret("TOGETHER_AI_TOKEN")
+        )
+    elif llm_provider == "bitdeerai":
+        api_key = (
+            api_key
+            or litellm.bitdeerai_api_key
+            or get_secret("BITDEERAI_API_KEY")
+            or get_secret("BITDEERAI_TOKEN")
         )
     return api_key
 
@@ -4966,6 +5000,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("VOYAGE_API_KEY")
+        elif custom_llm_provider == "bitdeerai":
+            if "BITDEERAI_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:  
+                missing_keys.append("BITDEERAI_API_KEY")
         elif custom_llm_provider == "fireworks_ai":
             if (
                 "FIREWORKS_AI_API_KEY" in os.environ
@@ -5067,6 +5106,12 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("NLP_CLOUD_API_KEY")
+        ## bitdeerai
+        elif model in litellm.bitdeerai_models:
+            if "BITDEERAI_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("BITDEERAI_API_KEY")
 
     if api_key is not None:
         new_missing_keys = []
@@ -6191,6 +6236,8 @@ class ProviderConfigManager:
             return litellm.TritonConfig()
         elif litellm.LlmProviders.PETALS == provider:
             return litellm.PetalsConfig()
+        elif litellm.LlmProviders.BITDEERAI == provider:
+            return litellm.BitdeerAIChatConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
