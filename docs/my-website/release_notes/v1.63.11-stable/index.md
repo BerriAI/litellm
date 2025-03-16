@@ -34,6 +34,15 @@ This release will be live on 03/16/2025
 
 <!-- <Image img={require('../../img/release_notes/v16311_release.jpg')} /> -->
 
+## Docker Run LiteLLM Proxy
+
+```
+docker run
+-e STORE_MODEL_IN_DB=True
+-p 4000:4000
+ghcr.io/berriai/litellm:main-v1.63.11-stable
+```
+
 ## Demo Instance
 
 Here's a Demo Instance to test changes:
