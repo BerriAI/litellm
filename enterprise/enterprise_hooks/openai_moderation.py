@@ -31,7 +31,7 @@ class _ENTERPRISE_OpenAI_Moderation(CustomLogger):
 
     #### CALL HOOKS - proxy only ####
 
-    async def async_moderation_hook(  ### 👈 KEY CHANGE ###
+    async def async_moderation_hook(
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
@@ -41,6 +41,7 @@ class _ENTERPRISE_OpenAI_Moderation(CustomLogger):
             "image_generation",
             "moderation",
             "audio_transcription",
+            "responses",
         ],
     ):
         text = ""

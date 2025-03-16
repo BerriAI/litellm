@@ -329,3 +329,71 @@ async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
         setattr(
             litellm.proxy.proxy_server, "proxy_logging_obj", original_proxy_logging_obj
         )
+
+@pytest.mark.asyncio
+async def test_pass_through_endpoint_bing(client, monkeypatch):
+    import litellm
+
+    captured_requests = []
+
+    async def mock_bing_request(*args, **kwargs):
+
+        captured_requests.append((args, kwargs))
+        mock_response = httpx.Response(
+            200,
+            json={
+                "_type": "SearchResponse",
+                "queryContext": {"originalQuery": "bob barker"},
+                "webPages": {
+                    "webSearchUrl": "https://www.bing.com/search?q=bob+barker",
+                    "totalEstimatedMatches": 12000000,
+                    "value": [],
+                },
+            },
+        )
+        mock_response.request = Mock(spec=httpx.Request)
+        return mock_response
+
+    monkeypatch.setattr("httpx.AsyncClient.request", mock_bing_request)
+
+    # Define a pass-through endpoint
+    pass_through_endpoints = [
+        {
+            "path": "/bing/search",
+            "target": "https://api.bing.microsoft.com/v7.0/search?setLang=en-US&mkt=en-US",
+            "headers": {"Ocp-Apim-Subscription-Key": "XX"},
+            "forward_headers": True,
+            # Additional settings
+            "merge_query_params": True,
+            "auth": True,
+        },
+        {
+            "path": "/bing/search-no-merge-params",
+            "target": "https://api.bing.microsoft.com/v7.0/search?setLang=en-US&mkt=en-US",
+            "headers": {"Ocp-Apim-Subscription-Key": "XX"},
+            "forward_headers": True,
+        },
+    ]
+
+    # Initialize the pass-through endpoint
+    await initialize_pass_through_endpoints(pass_through_endpoints)
+    general_settings: Optional[dict] = (
+        getattr(litellm.proxy.proxy_server, "general_settings", {}) or {}
+    )
+    general_settings.update({"pass_through_endpoints": pass_through_endpoints})
+    setattr(litellm.proxy.proxy_server, "general_settings", general_settings)
+
+    # Make 2 requests thru the pass-through endpoint
+    client.get("/bing/search?q=bob+barker")
+    client.get("/bing/search-no-merge-params?q=bob+barker")
+
+    first_transformed_url = captured_requests[0][1]["url"]
+    second_transformed_url = captured_requests[1][1]["url"]
+
+    # Assert the response
+    assert (
+        first_transformed_url
+        == "https://api.bing.microsoft.com/v7.0/search?q=bob+barker&setLang=en-US&mkt=en-US"
+        and second_transformed_url
+        == "https://api.bing.microsoft.com/v7.0/search?setLang=en-US&mkt=en-US"
+    )
