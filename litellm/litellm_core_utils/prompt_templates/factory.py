@@ -33,7 +33,7 @@ from litellm.types.llms.openai import (
 from litellm.types.llms.vertex_ai import FunctionCall as VertexFunctionCall
 from litellm.types.llms.vertex_ai import FunctionResponse as VertexFunctionResponse
 from litellm.types.llms.vertex_ai import PartType as VertexPartType
-from litellm.types.utils import GenericImageParsingChunk
+from litellm.types.utils import GenericMediaParsingChunk
 
 from .common_utils import convert_content_list_to_str, is_non_content_values_set
 from .image_handling import convert_url_to_base64
@@ -696,61 +696,61 @@ def construct_tool_use_system_prompt(
     return tool_use_system_prompt
 
 
-def convert_generic_image_chunk_to_openai_image_obj(
-    image_chunk: GenericImageParsingChunk,
+def convert_generic_media_chunk_to_openai_media_obj(
+    media_chunk: GenericMediaParsingChunk,
 ) -> str:
     """
-    Convert a generic image chunk to an OpenAI image object.
+    Convert a generic media chunk to an OpenAI media object.
 
     Input:
-    GenericImageParsingChunk(
+    GenericMediaParsingChunk(
         type="base64",
-        media_type="image/jpeg",
+        media_type="{media_type}",  # e.g. "image/jpeg"
         data="...",
     )
 
     Return:
-    "data:image/jpeg;base64,{base64_image}"
+    "data:{media_type};base64,{base64_image}"
     """
-    media_type = image_chunk["media_type"]
-    return "data:{};{},{}".format(media_type, image_chunk["type"], image_chunk["data"])
+    media_type = media_chunk["media_type"]
+    return "data:{};{},{}".format(media_type, media_chunk["type"], media_chunk["data"])
 
 
-def convert_to_anthropic_image_obj(
-    openai_image_url: str, format: Optional[str]
-) -> GenericImageParsingChunk:
+def convert_to_anthropic_media_obj(
+    openai_media_url: str, format: Optional[str]
+) -> GenericMediaParsingChunk:
     """
     Input:
-    "image_url": "data:image/jpeg;base64,{base64_image}",
+    "openai_media_url": "data:{media_type};base64,{base64_data}",
 
     Return:
     "source": {
       "type": "base64",
-      "media_type": "image/jpeg",
-      "data": {base64_image},
+      "media_type": "{media_type}",
+      "data": {base64_data},
     }
     """
     try:
-        if openai_image_url.startswith("http"):
-            openai_image_url = convert_url_to_base64(url=openai_image_url)
+        if openai_media_url.startswith("http"):
+            openai_media_url = convert_url_to_base64(url=openai_media_url)
         # Extract the media type and base64 data
-        media_type, base64_data = openai_image_url.split("data:")[1].split(";base64,")
+        media_type, base64_data = openai_media_url.split("data:")[1].split(";base64,")
 
         if format:
             media_type = format
         else:
             media_type = media_type.replace("\\/", "/")
 
-        return GenericImageParsingChunk(
+        return GenericMediaParsingChunk(
             type="base64",
             media_type=media_type,
             data=base64_data,
         )
     except Exception as e:
-        if "Error: Unable to fetch image from URL" in str(e):
+        if "Error: Unable to fetch media from URL" in str(e):
             raise e
         raise Exception(
-            """Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{base64_image}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp']."""
+            """Media url not in expected format. Example Expected input - "openai_media_url": "data:{media_type};base64,{base64_image}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp']."""
         )
 
 
@@ -860,7 +860,7 @@ def anthropic_messages_pt_xml(messages: list):
                         user_content.append(
                             {
                                 "type": "image",
-                                "source": convert_to_anthropic_image_obj(
+                                "source": convert_to_anthropic_media_obj(
                                     m["image_url"]["url"], format=format
                                 ),
                             }
@@ -1193,12 +1193,12 @@ def convert_to_anthropic_tool_result(
                 )
             elif content["type"] == "image_url":
                 if isinstance(content["image_url"], str):
-                    image_chunk = convert_to_anthropic_image_obj(
+                    image_chunk = convert_to_anthropic_media_obj(
                         content["image_url"], format=None
                     )
                 else:
                     format = content["image_url"].get("format")
-                    image_chunk = convert_to_anthropic_image_obj(
+                    image_chunk = convert_to_anthropic_media_obj(
                         content["image_url"]["url"], format=format
                     )
                 anthropic_content_list.append(
@@ -1354,7 +1354,7 @@ def add_cache_control_to_content(
 
 
 def _anthropic_content_element_factory(
-    image_chunk: GenericImageParsingChunk,
+    image_chunk: GenericMediaParsingChunk,
 ) -> Union[AnthropicMessagesImageParam, AnthropicMessagesDocumentParam]:
     if image_chunk["media_type"] == "application/pdf":
         _anthropic_content_element: Union[
@@ -1430,13 +1430,13 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             m = cast(ChatCompletionImageObject, m)
                             format: Optional[str] = None
                             if isinstance(m["image_url"], str):
-                                image_chunk = convert_to_anthropic_image_obj(
-                                    openai_image_url=m["image_url"], format=None
+                                image_chunk = convert_to_anthropic_media_obj(
+                                    openai_media_url=m["image_url"], format=None
                                 )
                             else:
                                 format = m["image_url"].get("format")
-                                image_chunk = convert_to_anthropic_image_obj(
-                                    openai_image_url=m["image_url"]["url"],
+                                image_chunk = convert_to_anthropic_media_obj(
+                                    openai_media_url=m["image_url"]["url"],
                                     format=format,
                                 )
 

@@ -13,7 +13,7 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    convert_to_anthropic_image_obj,
+    convert_to_anthropic_media_obj,
     convert_to_gemini_tool_call_invoke,
     convert_to_gemini_tool_call_result,
     response_schema_prompt,
@@ -31,6 +31,7 @@ from litellm.types.llms.openai import (
     ChatCompletionFileObject,
     ChatCompletionImageObject,
     ChatCompletionTextObject,
+    ChatCompletionVideoObject,
 )
 from litellm.types.llms.vertex_ai import *
 from litellm.types.llms.vertex_ai import (
@@ -57,16 +58,16 @@ else:
     LiteLLMLoggingObj = Any
 
 
-def _process_gemini_image(image_url: str, format: Optional[str] = None) -> PartType:
+def _process_gemini_media(media_url: str, format: Optional[str] = None) -> PartType:
     """
-    Given an image URL, return the appropriate PartType for Gemini
+    Given an media URL, return the appropriate PartType for Gemini
     """
 
     try:
         # GCS URIs
-        if "gs://" in image_url:
+        if "gs://" in media_url:
             # Figure out file type
-            extension_with_dot = os.path.splitext(image_url)[-1]  # Ex: ".png"
+            extension_with_dot = os.path.splitext(media_url)[-1]  # Ex: ".png"
             extension = extension_with_dot[1:]  # Ex: "png"
 
             if not format:
@@ -79,48 +80,50 @@ def _process_gemini_image(image_url: str, format: Optional[str] = None) -> PartT
                 mime_type = get_file_mime_type_for_file_type(file_type)
             else:
                 mime_type = format
-            file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
+            file_data = FileDataType(mime_type=mime_type, file_uri=media_url)
 
             return PartType(file_data=file_data)
         elif (
-            "https://" in image_url
-            and (image_type := format or _get_image_mime_type_from_url(image_url))
+            "https://" in media_url
+            and (media_type := format or _get_media_mime_type_from_url(media_url))
             is not None
         ):
-            file_data = FileDataType(file_uri=image_url, mime_type=image_type)
+            file_data = FileDataType(file_uri=media_url, mime_type=media_type)
             return PartType(file_data=file_data)
-        elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
+        elif "http://" in media_url or "https://" in media_url or "base64" in media_url:
             # https links for unsupported mime types and base64 images
-            image = convert_to_anthropic_image_obj(image_url, format=format)
-            _blob = BlobType(data=image["data"], mime_type=image["media_type"])
+            media = convert_to_anthropic_media_obj(media_url, format=format)
+            _blob = BlobType(data=media["data"], mime_type=media["media_type"])
             return PartType(inline_data=_blob)
-        raise Exception("Invalid image received - {}".format(image_url))
+        raise Exception("Invalid media received - {}".format(media_url))
     except Exception as e:
         raise e
 
 
-def _get_image_mime_type_from_url(url: str) -> Optional[str]:
+def _get_media_mime_type_from_url(url: str) -> Optional[str]:
     """
-    Get mime type for common image URLs
-    See gemini mime types: https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/image-understanding#image-requirements
+    Get mime type for common media URLs
+    See gemini mime types:
+     - https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/image-understanding#image-requirements
+     - https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/video-understanding#video-requirements
 
     Supported by Gemini:
      application/pdf
-    audio/mpeg
-    audio/mp3
-    audio/wav
-    image/png
-    image/jpeg
-    image/webp
-    text/plain
-    video/mov
-    video/mpeg
-    video/mp4
-    video/mpg
-    video/avi
-    video/wmv
-    video/mpegps
-    video/flv
+     audio/mpeg
+     audio/mp3
+     audio/wav
+     image/png
+     image/jpeg
+     image/webp
+     text/plain
+     video/mov
+     video/mpeg
+     video/mp4
+     video/mpg
+     video/avi
+     video/wmv
+     video/mpegps
+     video/flv
     """
     url = url.lower()
 
@@ -201,8 +204,21 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 format = img_element["image_url"].get("format")
                             else:
                                 image_url = img_element["image_url"]
-                            _part = _process_gemini_image(
-                                image_url=image_url, format=format
+                            _part = _process_gemini_media(
+                                media_url=image_url, format=format
+                            )
+                            _parts.append(_part)
+                        elif element["type"] == "video_url":
+                            element = cast(ChatCompletionVideoObject, element)
+                            video_element = element
+                            format: Optional[str] = None
+                            if isinstance(video_element["video_url"], dict):
+                                video_url = video_element["video_url"]["url"]
+                                format = img_element["video_url"].get("format")
+                            else:
+                                video_url = video_element["video_url"]
+                            _part = _process_gemini_media(
+                                media_url=video_url, format=format
                             )
                             _parts.append(_part)
                         elif element["type"] == "input_audio":

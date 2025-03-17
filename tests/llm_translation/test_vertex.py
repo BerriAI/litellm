@@ -22,7 +22,7 @@ import pytest
 import litellm
 from litellm import get_optional_params
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
-from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_image
+from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
 from litellm.types.llms.vertex_ai import PartType, BlobType
 import httpx
 
@@ -1135,48 +1135,48 @@ def test_logprobs():
         assert resp.choices[0].logprobs is not None
 
 
-def test_process_gemini_image():
-    """Test the _process_gemini_image function for different image sources"""
+def test_process_gemini_media():
+    """Test the _process_gemini_media function for different media sources"""
     from litellm.llms.vertex_ai.gemini.transformation import (
-        _process_gemini_image,
+        _process_gemini_media,
     )
     from litellm.types.llms.vertex_ai import PartType, FileDataType, BlobType
 
     # Test GCS URI
-    gcs_result = _process_gemini_image("gs://bucket/image.png")
+    gcs_result = _process_gemini_media("gs://bucket/image.png")
     assert gcs_result["file_data"] == FileDataType(
         mime_type="image/png", file_uri="gs://bucket/image.png"
     )
 
     # Test gs url with format specified
-    gcs_result = _process_gemini_image("gs://bucket/image", format="image/jpeg")
+    gcs_result = _process_gemini_media("gs://bucket/image", format="image/jpeg")
     assert gcs_result["file_data"] == FileDataType(
         mime_type="image/jpeg", file_uri="gs://bucket/image"
     )
 
     # Test HTTPS JPG URL
-    https_result = _process_gemini_image("https://example.com/image.jpg")
+    https_result = _process_gemini_media("https://example.com/image.jpg")
     print("https_result JPG", https_result)
     assert https_result["file_data"] == FileDataType(
         mime_type="image/jpeg", file_uri="https://example.com/image.jpg"
     )
 
     # Test HTTPS PNG URL
-    https_result = _process_gemini_image("https://example.com/image.png")
+    https_result = _process_gemini_media("https://example.com/image.png")
     print("https_result PNG", https_result)
     assert https_result["file_data"] == FileDataType(
         mime_type="image/png", file_uri="https://example.com/image.png"
     )
 
     # Test HTTPS VIDEO URL
-    https_result = _process_gemini_image("https://cloud-samples-data/video/animals.mp4")
+    https_result = _process_gemini_media("https://cloud-samples-data/video/animals.mp4")
     print("https_result PNG", https_result)
     assert https_result["file_data"] == FileDataType(
         mime_type="video/mp4", file_uri="https://cloud-samples-data/video/animals.mp4"
     )
 
     # Test HTTPS PDF URL
-    https_result = _process_gemini_image("https://cloud-samples-data/pdf/animals.pdf")
+    https_result = _process_gemini_media("https://cloud-samples-data/pdf/animals.pdf")
     print("https_result PDF", https_result)
     assert https_result["file_data"] == FileDataType(
         mime_type="application/pdf",
@@ -1185,7 +1185,7 @@ def test_process_gemini_image():
 
     # Test base64 image
     base64_image = "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
-    base64_result = _process_gemini_image(base64_image)
+    base64_result = _process_gemini_media(base64_image)
     print("base64_result", base64_result)
     assert base64_result["inline_data"]["mime_type"] == "image/jpeg"
     assert base64_result["inline_data"]["data"] == "/9j/4AAQSkZJRg..."
@@ -1194,37 +1194,37 @@ def test_process_gemini_image():
 def test_get_image_mime_type_from_url():
     """Test the _get_image_mime_type_from_url function for different image URLs"""
     from litellm.llms.vertex_ai.gemini.transformation import (
-        _get_image_mime_type_from_url,
+        _get_media_mime_type_from_url,
     )
 
     # Test JPEG images
     assert (
-        _get_image_mime_type_from_url("https://example.com/image.jpg") == "image/jpeg"
+        _get_media_mime_type_from_url("https://example.com/image.jpg") == "image/jpeg"
     )
     assert (
-        _get_image_mime_type_from_url("https://example.com/image.jpeg") == "image/jpeg"
+        _get_media_mime_type_from_url("https://example.com/image.jpeg") == "image/jpeg"
     )
     assert (
-        _get_image_mime_type_from_url("https://example.com/IMAGE.JPG") == "image/jpeg"
+        _get_media_mime_type_from_url("https://example.com/IMAGE.JPG") == "image/jpeg"
     )
 
     # Test PNG images
-    assert _get_image_mime_type_from_url("https://example.com/image.png") == "image/png"
-    assert _get_image_mime_type_from_url("https://example.com/IMAGE.PNG") == "image/png"
+    assert _get_media_mime_type_from_url("https://example.com/image.png") == "image/png"
+    assert _get_media_mime_type_from_url("https://example.com/IMAGE.PNG") == "image/png"
 
     # Test WebP images
     assert (
-        _get_image_mime_type_from_url("https://example.com/image.webp") == "image/webp"
+        _get_media_mime_type_from_url("https://example.com/image.webp") == "image/webp"
     )
     assert (
-        _get_image_mime_type_from_url("https://example.com/IMAGE.WEBP") == "image/webp"
+        _get_media_mime_type_from_url("https://example.com/IMAGE.WEBP") == "image/webp"
     )
 
     # Test unsupported formats
-    assert _get_image_mime_type_from_url("https://example.com/image.gif") is None
-    assert _get_image_mime_type_from_url("https://example.com/image.bmp") is None
-    assert _get_image_mime_type_from_url("https://example.com/image") is None
-    assert _get_image_mime_type_from_url("invalid_url") is None
+    assert _get_media_mime_type_from_url("https://example.com/image.gif") is None
+    assert _get_media_mime_type_from_url("https://example.com/image.bmp") is None
+    assert _get_media_mime_type_from_url("https://example.com/image") is None
+    assert _get_media_mime_type_from_url("invalid_url") is None
 
 
 @pytest.mark.parametrize(
@@ -1268,7 +1268,7 @@ from unittest.mock import Mock, patch
 from typing import Dict, Any
 
 # Import your actual module here
-# from your_module import _process_gemini_image, PartType, FileDataType, BlobType
+# from your_module import _process_gemini_media, PartType, FileDataType, BlobType
 
 
 # Add these fixtures below existing fixtures
@@ -1313,15 +1313,15 @@ def mock_blob():
         "http://subdomain.domain.com/path/to/image.png",
     ],
 )
-def test_process_gemini_image_http_url(
+def test_process_gemini_media_http_url(
     http_url: str, mock_convert_url_to_base64: Mock, mock_blob: Mock
 ) -> None:
     """
-    Test that _process_gemini_image correctly handles HTTP URLs.
+    Test that _process_gemini_media correctly handles HTTP URLs.
 
     Args:
         http_url: Test HTTP URL
-        mock_convert_to_anthropic: Mocked convert_to_anthropic_image_obj function
+        mock_convert_url_to_base64: Mocked convert_to_anthropic_image_obj function
         mock_blob: Mocked BlobType instance
 
     Vertex AI supports image urls. Ensure no network requests are made.
@@ -1329,7 +1329,7 @@ def test_process_gemini_image_http_url(
     expected_image_data = "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
     mock_convert_url_to_base64.return_value = expected_image_data
     # Act
-    result = _process_gemini_image(http_url)
+    result = _process_gemini_media(http_url)
     # assert result["file_data"]["file_uri"] == http_url
 
 
