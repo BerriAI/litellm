@@ -213,7 +213,7 @@ class SagemakerLLM(BaseAWSLLM):
                 sync_response = sync_handler.post(
                     url=prepared_request.url,
                     headers=prepared_request.headers,  # type: ignore
-                    json=data,
+                    data=prepared_request.body,
                     stream=stream,
                 )
 
