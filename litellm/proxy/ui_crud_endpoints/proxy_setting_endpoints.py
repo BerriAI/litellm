@@ -112,7 +112,7 @@ async def delete_allowed_ip(ip_address: IPAddress):
 
 
 @router.get(
-    "/sso_settings",
+    "/get/internal_user_settings",
     tags=["SSO Settings"],
     dependencies=[Depends(user_api_key_auth)],
 )
@@ -124,27 +124,15 @@ async def get_sso_settings():
     from pydantic import TypeAdapter
 
     # Create the settings object first
-    sso_settings = UISSOSettings(
-        max_internal_user_budget=litellm.max_internal_user_budget,
-        internal_user_budget_duration=litellm.internal_user_budget_duration,
-        default_internal_user_params=DefaultInternalUserParams(
-            **(
-                litellm.default_internal_user_params
-                if isinstance(litellm.default_internal_user_params, dict)
-                else {}
-            )
-        ),
-        upperbound_key_generate_params=UpperboundKeyGenerateParams(
-            **(
-                litellm.upperbound_key_generate_params
-                if isinstance(litellm.upperbound_key_generate_params, dict)
-                else {}
-            )
-        ),
+    sso_settings = DefaultInternalUserParams(
+        **(
+            litellm.default_internal_user_params
+            if isinstance(litellm.default_internal_user_params, dict)
+            else {}
+        )
     )
-
     # Get the schema for UISSOSettings
-    schema = TypeAdapter(UISSOSettings).json_schema(by_alias=True)
+    schema = TypeAdapter(DefaultInternalUserParams).json_schema(by_alias=True)
 
     # Convert to dict for response
     settings_dict = sso_settings.model_dump()
