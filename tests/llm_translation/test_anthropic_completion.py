@@ -992,8 +992,8 @@ def test_anthropic_thinking_output(model):
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic/claude-3-7-sonnet-20250219",
-        # "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        # "anthropic/claude-3-7-sonnet-20250219",
+        "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
         # "bedrock/invoke/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
     ],
 )
@@ -1011,8 +1011,11 @@ def test_anthropic_thinking_output_stream(model):
 
         reasoning_content_exists = False
         signature_block_exists = False
+        tool_call_exists = False
         for chunk in resp:
             print(f"chunk 2: {chunk}")
+            if chunk.choices[0].delta.tool_calls:
+                tool_call_exists = True
             if (
                 hasattr(chunk.choices[0].delta, "thinking_blocks")
                 and chunk.choices[0].delta.thinking_blocks is not None
@@ -1025,6 +1028,7 @@ def test_anthropic_thinking_output_stream(model):
                 print(chunk.choices[0].delta.thinking_blocks[0])
                 if chunk.choices[0].delta.thinking_blocks[0].get("signature"):
                     signature_block_exists = True
+        assert not tool_call_exists
         assert reasoning_content_exists
         assert signature_block_exists
     except litellm.Timeout:
