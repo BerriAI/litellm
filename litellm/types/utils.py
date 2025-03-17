@@ -1763,6 +1763,10 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     # Humanloop dynamic params
     humanloop_api_key: Optional[str]
 
+    # Arize AI dynamic params
+    arize_space_key: Optional[str]
+    arize_api_key: Optional[str]
+
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
 
