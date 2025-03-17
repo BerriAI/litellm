@@ -26,7 +26,7 @@ from respx import MockRouter
 import litellm
 from litellm import Choices, Message, ModelResponse, TextCompletionResponse, TextChoices
 
-from litellm.litellm_core_utils.litellm_logging import (
+from litellm.litellm_core_utils.logging_utils import (
     _assemble_complete_response_from_streaming_chunks,
 )
 

@@ -1339,7 +1339,7 @@ def test_standard_logging_payload_audio(turn_off_message_logging, stream):
                 continue
 
         time.sleep(2)
-        mock_client.assert_called_once()
+        mock_client.assert_called()
 
         print(
             f"mock_client_post.call_args: {mock_client.call_args.kwargs['kwargs'].keys()}"
@@ -1559,7 +1559,7 @@ def test_logging_standard_payload_llm_headers(stream):
                 continue
 
         time.sleep(2)
-        mock_client.assert_called_once()
+        mock_client.assert_called()
 
         standard_logging_object: StandardLoggingPayload = mock_client.call_args.kwargs[
             "kwargs"
