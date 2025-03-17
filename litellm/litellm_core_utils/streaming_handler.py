@@ -898,6 +898,8 @@ class CustomStreamWrapper:
                     return model_response
 
                 # Default - return StopIteration
+                if hasattr(model_response, "usage"):
+                    self.chunks.append(model_response)
                 raise StopIteration
             # flush any remaining holding chunk
             if len(self.holding_chunk) > 0:
@@ -1553,10 +1555,11 @@ class CustomStreamWrapper:
                     if response is None:
                         continue
                     ## LOGGING
-                    threading.Thread(
-                        target=self.run_success_logging_and_cache_storage,
-                        args=(response, cache_hit),
-                    ).start()  # log response
+                    executor.submit(
+                        self.run_success_logging_and_cache_storage,
+                        response,
+                        cache_hit,
+                    )  # log response
                     choice = response.choices[0]
                     if isinstance(choice, StreamingChoices):
                         self.response_uptil_now += choice.delta.get("content", "") or ""
@@ -1600,13 +1603,21 @@ class CustomStreamWrapper:
                         "usage",
                         getattr(complete_streaming_response, "usage"),
                     )
-
-                ## LOGGING
-                threading.Thread(
-                    target=self.logging_obj.success_handler,
-                    args=(response, None, None, cache_hit),
-                ).start()  # log response
-
+                    executor.submit(
+                        self.logging_obj.success_handler,
+                        complete_streaming_response,
+                        None,
+                        None,
+                        cache_hit,
+                    )
+                else:
+                    executor.submit(
+                        self.logging_obj.success_handler,
+                        response,
+                        None,
+                        None,
+                        cache_hit,
+                    )
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
                     return response
@@ -1618,10 +1629,11 @@ class CustomStreamWrapper:
                     usage = calculate_total_usage(chunks=self.chunks)
                     processed_chunk._hidden_params["usage"] = usage
                 ## LOGGING
-                threading.Thread(
-                    target=self.run_success_logging_and_cache_storage,
-                    args=(processed_chunk, cache_hit),
-                ).start()  # log response
+                executor.submit(
+                    self.run_success_logging_and_cache_storage,
+                    processed_chunk,
+                    cache_hit,
+                )  # log response
                 return processed_chunk
         except Exception as e:
             traceback_exception = traceback.format_exc()
