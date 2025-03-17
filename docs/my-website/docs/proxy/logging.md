@@ -268,6 +268,16 @@ print(response)
 LiteLLM.Info: "no-log request, skipping logging"
 ```
 
+## Callback Types
+
+LiteLLM supports three ways to set callbacks in your config.yaml. You only need to choose one option based on your logging needs:
+
+| Callback Setting | Description | Example |
+|-----------------|-------------|---------|
+| `callbacks` | Logs both success and failure events | `callbacks: ["langfuse"]` |
+| `success_callback` | Logs only successful LLM calls | `success_callback: ["langfuse"]` |
+| `failure_callback` | Logs only failed LLM calls | `failure_callback: ["langfuse"]` |
+
 
 ## What gets logged?
 
@@ -1048,7 +1058,9 @@ Log LLM Logs to [Google Cloud Storage Buckets](https://cloud.google.com/storage?
 | Description | Log LLM Input/Output to cloud storage buckets |
 | Load Test Benchmarks | [Benchmarks](https://docs.litellm.ai/docs/benchmarks) |
 | Google Docs on Cloud Storage | [Google Cloud Storage](https://cloud.google.com/storage?hl=en) |
-
+| Success Logging | `success_callback: ["gcs_bucket"]` |
+| Failure Logging | `failure_callback: ["gcs_bucket"]` |
+| Success + Failure logging | `callbacks: ["gcs_bucket"]` |
 
 
 #### Usage
