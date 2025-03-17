@@ -38,7 +38,6 @@ import OnboardingModal from "./onboarding_link";
 import { InvitationLink } from "./onboarding_link";
 import SSOModals from "./SSOModals";
 import { ssoProviderConfigs } from './SSOModals';
-import SSOSettings from "./SSOSettings";
 
 interface AdminPanelProps {
   searchParams: any;
@@ -622,12 +621,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
             <b>{nonSssoUrl}</b>{" "}
           </a>
         </Callout>
-        {/* Add SSO Settings Component */}
-        {premiumUser && accessToken && (
-          <div className="mt-8">
-            <SSOSettings accessToken={accessToken} />
-          </div>
-        )}
       </Grid>
     </div>
   );

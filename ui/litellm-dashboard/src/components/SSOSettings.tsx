@@ -58,7 +58,7 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken }) => {
   if (!settings) {
     return (
       <Card>
-        <Title>SSO Settings</Title>
+        <Title>Personal Key Creation</Title>
         <Text>No settings available or you don't have permission to view them.</Text>
       </Card>
     );
