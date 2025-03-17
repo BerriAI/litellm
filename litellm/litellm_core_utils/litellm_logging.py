@@ -110,7 +110,6 @@ from .exception_mapping_utils import _get_response_headers
 from .initialize_dynamic_callback_params import (
     initialize_standard_callback_dynamic_params as _initialize_standard_callback_dynamic_params,
 )
-from .logging_utils import _assemble_complete_response_from_streaming_chunks
 from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
 try:
