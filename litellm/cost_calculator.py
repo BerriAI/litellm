@@ -44,7 +44,12 @@ from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_ro
 from litellm.llms.vertex_ai.image_generation.cost_calculator import (
     cost_calculator as vertex_ai_image_cost_calculator,
 )
-from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.responses.utils import ResponseAPILoggingUtils
+from litellm.types.llms.openai import (
+    HttpxBinaryResponseContent,
+    ResponseAPIUsage,
+    ResponsesAPIResponse,
+)
 from litellm.types.rerank import RerankBilledUnits, RerankResponse
 from litellm.types.utils import (
     CallTypesLiteral,
@@ -464,6 +469,13 @@ def _get_usage_object(
     return usage_obj
 
 
+def _is_known_usage_objects(usage_obj):
+    """Returns True if the usage obj is a known Usage type"""
+    return isinstance(usage_obj, litellm.Usage) or isinstance(
+        usage_obj, ResponseAPIUsage
+    )
+
+
 def _infer_call_type(
     call_type: Optional[CallTypesLiteral], completion_response: Any
 ) -> Optional[CallTypesLiteral]:
@@ -573,9 +585,7 @@ def completion_cost(  # noqa: PLR0915
             base_model=base_model,
         )
 
-        verbose_logger.debug(
-            f"completion_response _select_model_name_for_cost_calc: {model}"
-        )
+        verbose_logger.info(f"selected model name for cost calculation: {model}")
 
         if completion_response is not None and (
             isinstance(completion_response, BaseModel)
@@ -587,8 +597,8 @@ def completion_cost(  # noqa: PLR0915
                 )
             else:
                 usage_obj = getattr(completion_response, "usage", {})
-            if isinstance(usage_obj, BaseModel) and not isinstance(
-                usage_obj, litellm.Usage
+            if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
+                usage_obj=usage_obj
             ):
                 setattr(
                     completion_response,
@@ -601,6 +611,14 @@ def completion_cost(  # noqa: PLR0915
                 _usage = usage_obj.model_dump()
             else:
                 _usage = usage_obj
+
+            if ResponseAPILoggingUtils._is_response_api_usage(_usage):
+                _usage = (
+                    ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                        _usage
+                    ).model_dump()
+                )
+
             # get input/output tokens from completion_response
             prompt_tokens = _usage.get("prompt_tokens", 0)
             completion_tokens = _usage.get("completion_tokens", 0)
@@ -799,6 +817,7 @@ def response_cost_calculator(
         TextCompletionResponse,
         HttpxBinaryResponseContent,
         RerankResponse,
+        ResponsesAPIResponse,
     ],
     model: str,
     custom_llm_provider: Optional[str],

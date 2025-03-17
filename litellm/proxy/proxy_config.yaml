@@ -1,10 +1,6 @@
 model_list:
-  - model_name: thinking-us.anthropic.claude-3-7-sonnet-20250219-v1:0
+  - model_name: gpt-4o
     litellm_params:
-      model: bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0
-      thinking: {"type": "enabled", "budget_tokens": 1024}
-      max_tokens: 1080
-      merge_reasoning_content_in_choices: true
-
+      model: gpt-4o
 
 

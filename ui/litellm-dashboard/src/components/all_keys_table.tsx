@@ -32,6 +32,7 @@ interface AllKeysTableProps {
   userRole: string | null;
   organizations: Organization[] | null;
   setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>;
+  refresh?: () => void;
 }
 
 // Define columns similar to our logs table
@@ -98,6 +99,7 @@ export function AllKeysTable({
   userRole,
   organizations,
   setCurrentOrg,
+  refresh,
 }: AllKeysTableProps) {
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
   const [userList, setUserList] = useState<UserResponse[]>([]);
@@ -130,6 +132,22 @@ export function AllKeysTable({
       fetchUserList();
     }
   }, [accessToken, keys]);
+
+  // Add a useEffect to call refresh when a key is created
+  useEffect(() => {
+    if (refresh) {
+      const handleStorageChange = () => {
+        refresh();
+      };
+      
+      // Listen for storage events that might indicate a key was created
+      window.addEventListener('storage', handleStorageChange);
+      
+      return () => {
+        window.removeEventListener('storage', handleStorageChange);
+      };
+    }
+  }, [refresh]);
 
   const columns: ColumnDef<KeyResponse>[] = [
     {

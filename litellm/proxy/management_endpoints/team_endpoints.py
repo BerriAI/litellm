@@ -40,6 +40,7 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
     SpecialManagementEndpointEnums,
+    SpecialModelNames,
     TeamAddMemberResponse,
     TeamInfoResponseObject,
     TeamListResponseObject,
@@ -70,6 +71,7 @@ from litellm.proxy.utils import (
     _premium_user_check,
     handle_exception_on_proxy,
 )
+from litellm.router import Router
 
 router = APIRouter()
 
@@ -1238,6 +1240,23 @@ def validate_membership(
         )
 
 
+def _unfurl_all_proxy_models(
+    team_info: LiteLLM_TeamTable, llm_router: Router
+) -> LiteLLM_TeamTable:
+    if (
+        SpecialModelNames.all_proxy_models.value in team_info.models
+        and llm_router is not None
+    ):
+        team_models: set[str] = set()  # make set to avoid duplicates
+        for model in team_info.models:
+            if model != SpecialModelNames.all_proxy_models.value:
+                team_models.add(model)
+        for model in llm_router.get_model_names():
+            team_models.add(model)
+        team_info.models = list(team_models)
+    return team_info
+
+
 @router.get(
     "/team/info", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
@@ -1333,6 +1352,9 @@ async def team_info(
         else:
             _team_info = LiteLLM_TeamTable()
 
+        # ## UNFURL 'all-proxy-models' into the team_info.models list ##
+        # if llm_router is not None:
+        #     _team_info = _unfurl_all_proxy_models(_team_info, llm_router)
         response_object = TeamInfoResponseObject(
             team_id=team_id,
             team_info=_team_info,
