@@ -2950,15 +2950,39 @@ async def test_bedrock_stream_thinking_content_openwebui():
     ), "There should be non-empty content after thinking tags"
 
 
-def test_bedrock_streaming():
-    resp = completion(
-        model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-        messages=[{"role": "user", "content": "Hello who is this?"}],
-        stream=True,
-        max_tokens=1080,
-        stream_options={"include_usage": True},
-    )
+def test_bedrock_application_inference_profile():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 
-    for chunk in resp:
-        if hasattr(chunk, "usage"):
-            print(f"received chunk usage: {chunk.usage}")
+    client = HTTPHandler()
+    client2 = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post, patch.object(
+        client2, "post"
+    ) as mock_post2:
+        try:
+            resp = completion(
+                model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                model_id="arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        try:
+            resp = completion(
+                model="bedrock/converse/arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                client=client2,
+            )
+        except Exception as e:
+            print(e)
+
+        mock_post.assert_called_once()
+        mock_post2.assert_called_once()
+        print(mock_post.call_args.kwargs)
+        json_data = mock_post.call_args.kwargs["data"]
+        assert mock_post.call_args.kwargs["url"].startswith(
+            "https://bedrock-runtime.eu-central-1.amazonaws.com/"
+        )
+        assert mock_post2.call_args.kwargs["url"] == mock_post.call_args.kwargs["url"]
