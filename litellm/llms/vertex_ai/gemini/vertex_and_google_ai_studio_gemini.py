@@ -846,7 +846,7 @@ async def make_call(
             message=VertexGeminiConfig().translate_exception_str(exception_string),
             headers=e.response.headers,
         )
-    if response.status_code != 200:
+    if response.status_code != 200 and response.status_code != 201:
         raise VertexAIError(
             status_code=response.status_code,
             message=response.text,
@@ -884,7 +884,7 @@ def make_sync_call(
 
     response = client.post(api_base, headers=headers, data=data, stream=True)
 
-    if response.status_code != 200:
+    if response.status_code != 200 and response.status_code != 201:
         raise VertexAIError(
             status_code=response.status_code,
             message=str(response.read()),

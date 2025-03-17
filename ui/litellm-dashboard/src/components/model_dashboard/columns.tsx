@@ -189,6 +189,22 @@ export const columns = (
     },
   },
   {
+    header: "Credentials",
+    accessorKey: "litellm_credential_name",
+    cell: ({ row }) => {
+      const model = row.original;
+      return model.litellm_params && model.litellm_params.litellm_credential_name ? (
+        <div className="overflow-hidden">
+          <Tooltip title={model.litellm_params.litellm_credential_name}>
+            {model.litellm_params.litellm_credential_name.slice(0, 7)}...
+          </Tooltip>
+        </div>
+      ) : (
+        <span className="text-gray-400">-</span>
+      );
+    },
+  },
+  {
     header: "Status",
     accessorKey: "model_info.db_model",
     cell: ({ row }) => {
