@@ -6,6 +6,9 @@ Calls done in OpenAI/openai.py as Novita AI is openai-compatible.
 Docs: https://novita.ai/docs/guides/llm-api
 """
 
+from typing import List, Optional
+
+from ....types.llms.openai import AllMessageValues
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
