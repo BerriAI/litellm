@@ -2653,32 +2653,6 @@ class TeamKeyGenerationSettings(LiteLLMPydanticObjectBase):
     )
 
 
-class PersonalKeyGenerationSettings(LiteLLMPydanticObjectBase):
-    """
-    Settings for personal key generation (maps to 'Default Team' on UI)
-    """
-
-    allowed_user_roles: Optional[List[str]] = Field(
-        default=[LitellmUserRoles.PROXY_ADMIN],
-        description="User roles that are allowed to generate personal keys (for the 'Default Team')",
-    )
-
-
-class KeyGenerationSettings(LiteLLMPydanticObjectBase):
-    """
-    Settings that restrict who can generate keys
-    """
-
-    team_key_generation: Optional[TeamKeyGenerationSettings] = Field(
-        default=None,
-        description="Settings that control which team members can generate keys for their team",
-    )
-    personal_key_generation: Optional[PersonalKeyGenerationSettings] = Field(
-        default=None,
-        description="Settings that control which users can generate personal keys",
-    )
-
-
 class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
     """
     Default parameters to apply when a new user signs in via SSO
@@ -2705,15 +2679,4 @@ class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
     )
     models: Optional[List[str]] = Field(
         default=None, description="Default list of models that new users can access"
-    )
-
-
-class UISSOSettings(LiteLLMPydanticObjectBase):
-    """
-    Configuration for SSO integration with the LiteLLM proxy UI
-    """
-
-    default_internal_user_params: Optional[DefaultInternalUserParams] = Field(
-        default=None,
-        description="Default parameters applied to new users signing in via SSO",
     )

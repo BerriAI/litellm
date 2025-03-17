@@ -3974,12 +3974,12 @@ export const uiSpendLogDetailsCall = async (
   }
 };
 
-export const getSSOSettingsCall = async (accessToken: string) => {
+export const getInternalUserSettings = async (accessToken: string) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl 
-      ? `${proxyBaseUrl}/sso_settings`
-      : `/sso_settings`;
+      ? `${proxyBaseUrl}/get/internal_user_settings`
+      : `/get/internal_user_settings`;
 
     console.log("Fetching SSO settings from:", url);
     
