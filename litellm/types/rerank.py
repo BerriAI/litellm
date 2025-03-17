@@ -6,7 +6,7 @@ https://docs.cohere.com/reference/rerank
 
 from typing import List, Optional, Union
 
-from pydantic import BaseModel, PrivateAttr
+from pydantic import BaseModel, PrivateAttr, Field
 from typing_extensions import Required, TypedDict
 
 
@@ -14,7 +14,7 @@ class RerankRequest(BaseModel):
     model: str
     query: str
     top_n: Optional[int] = None
-    documents: List[Union[str, dict]]
+    documents: List[Union[str, dict]] = Field(..., serialization_alias="texts")
     rank_fields: Optional[List[str]] = None
     return_documents: Optional[bool] = None
     max_chunks_per_doc: Optional[int] = None

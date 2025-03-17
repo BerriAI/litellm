@@ -43,8 +43,8 @@ def test_rerank_infer_region_from_model_arn(monkeypatch):
             model=args["model"],
             query=args["query"],
             documents=args["documents"],
-            client=client,
-        )
+            client=client, # No optional params passed here
+        ) # Client not being patched, its actually trying to call boto3.
         mock_post.assert_called_once()
         print(f"mock_post.call_args: {mock_post.call_args.kwargs}")
         assert "us-west-2" in mock_post.call_args.kwargs["url"]

@@ -10,6 +10,7 @@ from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.bedrock.rerank.handler import BedrockRerankHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.together_ai.rerank.handler import TogetherAIRerank
+from litellm.llms.huggingface.rerank.handler import HuggingfaceRerank
 from litellm.rerank_api.rerank_utils import get_optional_rerank_params
 from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.rerank import OptionalRerankParams, RerankResponse
@@ -20,6 +21,7 @@ from litellm.utils import ProviderConfigManager, client, exception_type
 # Initialize any necessary instances or variables here
 together_rerank = TogetherAIRerank()
 bedrock_rerank = BedrockRerankHandler()
+hf_rerank = HuggingfaceRerank()
 base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
 
@@ -115,7 +117,6 @@ def rerank(  # noqa: PLR0915
                 api_key=optional_params.api_key,
             )
         )
-
         rerank_provider_config: BaseRerankConfig = (
             ProviderConfigManager.get_provider_rerank_config(
                 model=model,
@@ -320,6 +321,42 @@ def rerank(  # noqa: PLR0915
                 api_base=api_base,
                 logging_obj=litellm_logging_obj,
                 client=client,
+            )
+        ## ADDING HUGGINGFACE CODE
+        elif _custom_llm_provider == "huggingface":
+            api_base = (
+                dynamic_api_base
+                or optional_params.api_base
+                or litellm.api_base
+                or get_secret("HUGGINGFACE_API_BASE")  # type: ignore
+            )
+            
+            if api_base is None:
+                raise ValueError(
+                    "HuggingFace API Base is required, please set 'HUGGINGFACE_API_BASE' in your environment"
+                )
+            
+            api_key = (
+                dynamic_api_key
+                or optional_params.api_key
+                or litellm.togetherai_api_key
+                or get_secret("HUGGINGFACE_API_KEY")  # type: ignore
+                or litellm.api_key
+            )
+
+            if api_key is None:
+                raise ValueError(
+                    "HuggingFace Local API key is required, please set 'HUGGINGFACE_API_KEY' in your environment"
+                )
+            
+            response = hf_rerank.rerank(
+                model=model,
+                query=query,
+                documents=documents,
+                top_n=top_n,
+                rank_fields=rank_fields,
+                api_base=api_base,
+                api_key=api_key,
             )
         else:
             raise ValueError(f"Unsupported provider: {_custom_llm_provider}")
