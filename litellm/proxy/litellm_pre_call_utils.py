@@ -447,6 +447,34 @@ class LiteLLMProxyRequestSetup:
 
         return tags
 
+    @staticmethod
+    def process_requester_metadata(data: dict, _metadata_variable_name: str) -> None:
+        """
+        Process requester metadata from the request data.
+        
+        Handles cases where metadata is a string (common in multipart form data) by attempting
+        to parse it as JSON, or storing it as is if parsing fails.
+        
+        Args:
+            data: The request data dictionary
+            _metadata_variable_name: The name of the metadata field in the data
+        """
+        # We want to log the "metadata" from the client side request
+        if "metadata" in data and data["metadata"] is not None:
+            # Check if metadata is a string (common in multipart form data) and try to parse it
+            if isinstance(data["metadata"], str):
+                try:
+                    parsed_metadata = json.loads(data["metadata"])
+                    data[_metadata_variable_name]["requester_metadata"] = parsed_metadata
+                except json.JSONDecodeError:
+                    # If parsing fails, store the string as is
+                    data[_metadata_variable_name]["requester_metadata"] = data["metadata"]
+            else:
+                # Handle normal dictionary metadata
+                data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(
+                    data["metadata"]
+                )
+
 
 async def add_litellm_data_to_request(  # noqa: PLR0915
     data: dict,
@@ -533,20 +561,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         data[_metadata_variable_name] = {}
 
     # We want to log the "metadata" from the client side request. Avoid circular reference by not directly assigning metadata to itself.
-    if "metadata" in data and data["metadata"] is not None:
-        # Check if metadata is a string (common in multipart form data) and try to parse it
-        if isinstance(data["metadata"], str):
-            try:
-                parsed_metadata = json.loads(data["metadata"])
-                data[_metadata_variable_name]["requester_metadata"] = parsed_metadata
-            except json.JSONDecodeError:
-                # If parsing fails, store the string as is
-                data[_metadata_variable_name]["requester_metadata"] = data["metadata"]
-        else:
-            # Handle normal dictionary metadata
-            data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(
-                data["metadata"]
-            )
+    LiteLLMProxyRequestSetup.process_requester_metadata(data, _metadata_variable_name)
 
     user_api_key_logged_metadata = (
         LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
