@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Any, Callable, List, Mapping, Optional, Union
 
 import httpx
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
-from httpx._types import VerifyTypes
 
 import litellm
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
