@@ -2611,6 +2611,74 @@ class TransformRequestBody(BaseModel):
     request_body: dict
 
 
+class UpperboundKeyGenerateParams(LiteLLMPydanticObjectBase):
+    """
+    Upperbound limits for /key/generate requests when self-serve flow is enabled
+    """
+
+    max_budget: Optional[float] = Field(
+        default=None,
+        description="Maximum budget (in USD) that can be set for any generated key",
+    )
+    budget_duration: Optional[str] = Field(
+        default=None,
+        description="Maximum budget duration that can be set (e.g. '30d', '1mo')",
+    )
+    duration: Optional[str] = Field(
+        default=None,
+        description="Maximum key lifetime duration that can be set (e.g. '30d', '1mo')",
+    )
+    max_parallel_requests: Optional[int] = Field(
+        default=None,
+        description="Maximum parallel requests limit that can be set for any generated key",
+    )
+    tpm_limit: Optional[int] = Field(
+        default=None,
+        description="Maximum tokens per minute limit that can be set for any generated key",
+    )
+    rpm_limit: Optional[int] = Field(
+        default=None,
+        description="Maximum requests per minute limit that can be set for any generated key",
+    )
+
+
+class TeamKeyGenerationSettings(LiteLLMPydanticObjectBase):
+    """
+    Settings for team-based key generation
+    """
+
+    allowed_team_member_roles: Optional[List[Literal["admin", "user"]]] = Field(
+        default=["admin"],
+        description="Team member roles that are allowed to generate keys for their team",
+    )
+
+
+class PersonalKeyGenerationSettings(LiteLLMPydanticObjectBase):
+    """
+    Settings for personal key generation (maps to 'Default Team' on UI)
+    """
+
+    allowed_user_roles: Optional[List[str]] = Field(
+        default=[LitellmUserRoles.PROXY_ADMIN],
+        description="User roles that are allowed to generate personal keys (for the 'Default Team')",
+    )
+
+
+class KeyGenerationSettings(LiteLLMPydanticObjectBase):
+    """
+    Settings that restrict who can generate keys
+    """
+
+    team_key_generation: Optional[TeamKeyGenerationSettings] = Field(
+        default=None,
+        description="Settings that control which team members can generate keys for their team",
+    )
+    personal_key_generation: Optional[PersonalKeyGenerationSettings] = Field(
+        default=None,
+        description="Settings that control which users can generate personal keys",
+    )
+
+
 class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
     """
     Default parameters to apply when a new user signs in via SSO
@@ -2623,48 +2691,21 @@ class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
             LitellmUserRoles.PROXY_ADMIN,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
         ]
-    ] = LitellmUserRoles.INTERNAL_USER
-    max_budget: Optional[float] = None
-    budget_duration: Optional[str] = None
-    models: Optional[List[str]] = None
-
-
-class UpperboundKeyGenerateParams(LiteLLMPydanticObjectBase):
-    """
-    Upperbound limits for /key/generate requests when self-serve flow is enabled
-    """
-
-    max_budget: Optional[float] = None
-    budget_duration: Optional[str] = None
-    duration: Optional[str] = None
-    max_parallel_requests: Optional[int] = None
-    tpm_limit: Optional[int] = None
-    rpm_limit: Optional[int] = None
-
-
-class TeamKeyGenerationSettings(LiteLLMPydanticObjectBase):
-    """
-    Settings for team-based key generation
-    """
-
-    allowed_team_member_roles: Optional[List[Literal["admin", "user"]]] = ["admin"]
-
-
-class PersonalKeyGenerationSettings(LiteLLMPydanticObjectBase):
-    """
-    Settings for personal key generation (maps to 'Default Team' on UI)
-    """
-
-    allowed_user_roles: Optional[List[str]] = [LitellmUserRoles.PROXY_ADMIN]
-
-
-class KeyGenerationSettings(LiteLLMPydanticObjectBase):
-    """
-    Settings that restrict who can generate keys
-    """
-
-    team_key_generation: Optional[TeamKeyGenerationSettings] = None
-    personal_key_generation: Optional[PersonalKeyGenerationSettings] = None
+    ] = Field(
+        default=LitellmUserRoles.INTERNAL_USER,
+        description="Default role assigned to new users signing in via SSO",
+    )
+    max_budget: Optional[float] = Field(
+        default=None,
+        description="Default maximum budget (in USD) for new users signing in via SSO",
+    )
+    budget_duration: Optional[str] = Field(
+        default=None,
+        description="Default budget duration for new users (e.g. '30d', '1mo')",
+    )
+    models: Optional[List[str]] = Field(
+        default=None, description="Default list of models that new users can access"
+    )
 
 
 class UISSOSettings(LiteLLMPydanticObjectBase):
@@ -2672,8 +2713,22 @@ class UISSOSettings(LiteLLMPydanticObjectBase):
     Configuration for SSO integration with the LiteLLM proxy UI
     """
 
-    max_internal_user_budget: Optional[float] = None
-    internal_user_budget_duration: Optional[str] = None
-    default_internal_user_params: Optional[DefaultInternalUserParams] = None
-    upperbound_key_generate_params: Optional[UpperboundKeyGenerateParams] = None
-    key_generation_settings: Optional[KeyGenerationSettings] = None
+    max_internal_user_budget: Optional[float] = Field(
+        default=None,
+        description="Global maximum budget (in USD) for all internal users",
+    )
+    internal_user_budget_duration: Optional[str] = Field(
+        default=None,
+        description="Global budget duration for internal users (e.g. '30d', '1mo')",
+    )
+    default_internal_user_params: Optional[DefaultInternalUserParams] = Field(
+        default=None,
+        description="Default parameters applied to new users signing in via SSO",
+    )
+    upperbound_key_generate_params: Optional[UpperboundKeyGenerateParams] = Field(
+        default=None,
+        description="Maximum limits for key generation when self-serve flow is enabled",
+    )
+    key_generation_settings: Optional[KeyGenerationSettings] = Field(
+        default=None, description="Settings that control which users can generate keys"
+    )
