@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "litellm"
-version = "1.63.9"
+version = "1.63.11"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT"
@@ -51,9 +51,7 @@ azure-keyvault-secrets = {version = "^4.8.0", optional = true}
 google-cloud-kms = {version = "^2.21.3", optional = true}
 resend = {version = "^0.8.0", optional = true}
 pynacl = {version = "^1.5.0", optional = true}
-botocore = "^1.37.12"
-hypercorn = "^0.17.3"
-boto3 = "^1.37.12"
+websockets = {version = "^13.1.0", optional = true}
 
 [tool.poetry.extras]
 proxy = [
@@ -70,7 +68,8 @@ proxy = [
     "PyJWT",
     "python-multipart",
     "cryptography",
-    "pynacl"
+    "pynacl",
+    "websockets"
 ]
 
 extra_proxy = [
@@ -99,7 +98,7 @@ requires = ["poetry-core", "wheel"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "1.63.9"
+version = "1.63.11"
 version_files = [
     "pyproject.toml:^version"
 ]

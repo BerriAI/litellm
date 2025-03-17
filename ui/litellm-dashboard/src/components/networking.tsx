@@ -1254,6 +1254,37 @@ export const modelInfoCall = async (
   }
 };
 
+export const modelInfoV1Call = async (accessToken: String, modelId: String) => {
+  /**
+   * Get all models on proxy
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/v1/model/info` : `/v1/model/info`;
+    url += `?litellm_model_id=${modelId}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("modelInfoV1Call:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+
 export const modelHubCall = async (accessToken: String) => {
   /**
    * Get all models on proxy
@@ -1551,7 +1582,8 @@ export const modelAvailableCall = async (
   accessToken: String,
   userID: String,
   userRole: String,
-  return_wildcard_routes: boolean = false
+  return_wildcard_routes: boolean = false,
+  teamID: String | null = null
 ) => {
   /**
    * Get all the models user has access to
@@ -1559,8 +1591,15 @@ export const modelAvailableCall = async (
   console.log("in /models calls, globalLitellmHeaderName", globalLitellmHeaderName)
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/models` : `/models`;
+    const params = new URLSearchParams();
     if (return_wildcard_routes === true) {
-      url += `?return_wildcard_routes=True`;
+      params.append('return_wildcard_routes', 'True');
+    }
+    if (teamID) {
+      params.append('team_id', teamID.toString());
+    }
+    if (params.toString()) {
+      url += `?${params.toString()}`;
     }
 
     //message.info("Requesting model data");
@@ -2274,6 +2313,63 @@ export const keyInfoCall = async (accessToken: String, keys: String[]) => {
 };
 
 
+export const testConnectionRequest = async (
+  accessToken: string,
+  litellm_params: Record<string, any>,
+  mode: string,
+) => {
+  try {
+    console.log("Sending model connection test request:", JSON.stringify(litellm_params));
+    
+    // Construct the URL based on environment
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/health/test_connection` : `/health/test_connection`;
+        
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`
+      },
+      body: JSON.stringify(
+        {
+          litellm_params: litellm_params,
+          mode: mode,
+        }
+      )
+    });
+
+    // Check for non-JSON responses first
+    const contentType = response.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+      const text = await response.text();
+      console.error("Received non-JSON response:", text);
+      throw new Error(`Received non-JSON response (${response.status}: ${response.statusText}). Check network tab for details.`);
+    }
+
+    const data = await response.json();
+    
+    if (!response.ok || data.status === "error") {
+      // Return the error response instead of throwing an error
+      // This allows the caller to handle the error format properly
+      if (data.status === "error") {
+        return data; // Return the full error response
+      } else {
+        return {
+          status: "error",
+          message: data.error?.message || `Connection test failed: ${response.status} ${response.statusText}`
+        };
+      }
+    }
+
+    return data;
+  } catch (error) {
+    console.error("Model connection test error:", error);
+    // For network errors or other exceptions, still throw
+    throw error;
+  }
+};
+
+// ... existing code ...
 export const keyInfoV1Call = async (accessToken: string, key: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/key/info` : `/key/info`;
@@ -2652,6 +2748,42 @@ export const credentialListCall = async (
   }
 };
 
+export const credentialGetCall = async (accessToken: String, credentialName: String | null, modelId: String | null) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/credentials` : `/credentials`;
+
+    if (credentialName) {
+      url += `/by_name/${credentialName}`;
+    } else if (modelId) {
+      url += `/by_model/${modelId}`;
+    }
+
+    console.log("in credentialListCall");
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("/credentials API Response:", data);
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
 export const credentialDeleteCall = async (accessToken: String, credentialName: String) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/credentials/${credentialName}` : `/credentials/${credentialName}`;
@@ -2698,7 +2830,7 @@ export const credentialUpdateCall = async (
 
     const url = proxyBaseUrl ? `${proxyBaseUrl}/credentials/${credentialName}` : `/credentials/${credentialName}`;
     const response = await fetch(url, {
-      method: "PUT",
+      method: "PATCH",
       headers: {
         [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
