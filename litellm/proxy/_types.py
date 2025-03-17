@@ -2609,3 +2609,71 @@ class SpecialManagementEndpointEnums(enum.Enum):
 class TransformRequestBody(BaseModel):
     call_type: CallTypes
     request_body: dict
+
+
+class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
+    """
+    Default parameters to apply when a new user signs in via SSO
+    """
+
+    user_role: Optional[
+        Literal[
+            LitellmUserRoles.INTERNAL_USER,
+            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+            LitellmUserRoles.PROXY_ADMIN,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        ]
+    ] = LitellmUserRoles.INTERNAL_USER
+    max_budget: Optional[float] = None
+    budget_duration: Optional[str] = None
+    models: Optional[List[str]] = None
+
+
+class UpperboundKeyGenerateParams(LiteLLMPydanticObjectBase):
+    """
+    Upperbound limits for /key/generate requests when self-serve flow is enabled
+    """
+
+    max_budget: Optional[float] = None
+    budget_duration: Optional[str] = None
+    duration: Optional[str] = None
+    max_parallel_requests: Optional[int] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+
+
+class TeamKeyGenerationSettings(LiteLLMPydanticObjectBase):
+    """
+    Settings for team-based key generation
+    """
+
+    allowed_team_member_roles: Optional[List[Literal["admin", "user"]]] = ["admin"]
+
+
+class PersonalKeyGenerationSettings(LiteLLMPydanticObjectBase):
+    """
+    Settings for personal key generation (maps to 'Default Team' on UI)
+    """
+
+    allowed_user_roles: Optional[List[str]] = [LitellmUserRoles.PROXY_ADMIN]
+
+
+class KeyGenerationSettings(LiteLLMPydanticObjectBase):
+    """
+    Settings that restrict who can generate keys
+    """
+
+    team_key_generation: Optional[TeamKeyGenerationSettings] = None
+    personal_key_generation: Optional[PersonalKeyGenerationSettings] = None
+
+
+class UISSOSettings(LiteLLMPydanticObjectBase):
+    """
+    Configuration for SSO integration with the LiteLLM proxy UI
+    """
+
+    max_internal_user_budget: Optional[float] = None
+    internal_user_budget_duration: Optional[str] = None
+    default_internal_user_params: Optional[DefaultInternalUserParams] = None
+    upperbound_key_generate_params: Optional[UpperboundKeyGenerateParams] = None
+    key_generation_settings: Optional[KeyGenerationSettings] = None
