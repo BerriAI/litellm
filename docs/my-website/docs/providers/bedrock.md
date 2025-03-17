@@ -79,6 +79,7 @@ aws_session_name: Optional[str],
 aws_profile_name: Optional[str],
 aws_role_name: Optional[str],
 aws_web_identity_token: Optional[str],
+aws_bedrock_runtime_endpoint: Optional[str],
 ```
 
 ### 2. Start the proxy 
