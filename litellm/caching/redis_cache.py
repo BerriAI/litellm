@@ -54,6 +54,7 @@ class RedisCache(BaseCache):
         redis_flush_size: Optional[int] = 100,
         namespace: Optional[str] = None,
         startup_nodes: Optional[List] = None,  # for redis-cluster
+        socket_timeout: Optional[float] = 5.0,  # default 5 second timeout
         **kwargs,
     ):
 
@@ -70,6 +71,9 @@ class RedisCache(BaseCache):
             redis_kwargs["password"] = password
         if startup_nodes is not None:
             redis_kwargs["startup_nodes"] = startup_nodes
+        if socket_timeout is not None:
+            redis_kwargs["socket_timeout"] = socket_timeout
+
         ### HEALTH MONITORING OBJECT ###
         if kwargs.get("service_logger_obj", None) is not None and isinstance(
             kwargs["service_logger_obj"], ServiceLogging
@@ -556,6 +560,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
+
             asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
