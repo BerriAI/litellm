@@ -2713,22 +2713,7 @@ class UISSOSettings(LiteLLMPydanticObjectBase):
     Configuration for SSO integration with the LiteLLM proxy UI
     """
 
-    max_internal_user_budget: Optional[float] = Field(
-        default=None,
-        description="Global maximum budget (in USD) for all internal users",
-    )
-    internal_user_budget_duration: Optional[str] = Field(
-        default=None,
-        description="Global budget duration for internal users (e.g. '30d', '1mo')",
-    )
     default_internal_user_params: Optional[DefaultInternalUserParams] = Field(
         default=None,
         description="Default parameters applied to new users signing in via SSO",
-    )
-    upperbound_key_generate_params: Optional[UpperboundKeyGenerateParams] = Field(
-        default=None,
-        description="Maximum limits for key generation when self-serve flow is enabled",
-    )
-    key_generation_settings: Optional[KeyGenerationSettings] = Field(
-        default=None, description="Settings that control which users can generate keys"
     )
