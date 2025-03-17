@@ -14,6 +14,9 @@ Supported Providers:
 - Anthropic API (`anthropic/`)
 - Bedrock (Anthropic + Deepseek) (`bedrock/`)
 - Vertex AI (Anthropic) (`vertexai/`)
+- OpenRouter (`openrouter/`)
+
+LiteLLM will standardize the `reasoning_content` in the response and `thinking_blocks` in the assistant message.
 
 ```python
 "message": {
