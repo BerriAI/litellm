@@ -10,15 +10,23 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class NovitaConfig(OpenAIGPTConfig):
-
-    def map_openai_params(
+    def validate_environment(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        headers: dict,
         model: str,
-        drop_params: bool,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
-        mapped_openai_params = super().map_openai_params(
-            non_default_params, optional_params, model, drop_params
-        )
-        return mapped_openai_params
+        if api_key is None:
+            raise ValueError(
+                "Missing Novita AI API Key - A call is being made to novita but no key is set either in the environment variables or via params"
+            )
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "X-Novita-Source": "litellm",
+        }
+        return headers

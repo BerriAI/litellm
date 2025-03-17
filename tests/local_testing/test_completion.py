@@ -4659,22 +4659,22 @@ def test_humanloop_completion(monkeypatch):
     )
 
 def test_completion_novita_ai():
-    try:
-        litellm.set_verbose = True
-        messages = [
-            {"role": "system", "content": "You're a good bot"},
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-        ]
-        
-        from openai import OpenAI
-        openai_client = OpenAI(api_key="fake-key")
-        
-        with patch.object(
-            openai_client.chat.completions, "create", new=MagicMock()
-        ) as mock_call:
+    litellm.set_verbose = True
+    messages = [
+        {"role": "system", "content": "You're a good bot"},
+        {
+            "role": "user",
+            "content": "Hey",
+        },
+    ]
+    
+    from openai import OpenAI
+    openai_client = OpenAI(api_key="fake-key")
+    
+    with patch.object(
+        openai_client.chat.completions, "create", new=MagicMock()
+    ) as mock_call:
+        try:
             completion(
                 model="novita/meta-llama/llama-3.3-70b-instruct",
                 messages=messages,
@@ -4683,8 +4683,14 @@ def test_completion_novita_ai():
             )
             
             mock_call.assert_called_once()
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+            
+            # Verify model is passed correctly
+            assert mock_call.call_args.kwargs["model"] == "meta-llama/llama-3.3-70b-instruct"
+            # Verify messages are passed correctly
+            assert mock_call.call_args.kwargs["messages"] == messages
+            
+        except Exception as e:
+            pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.parametrize(

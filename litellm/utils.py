@@ -2927,7 +2927,6 @@ def get_optional_params(  # noqa: PLR0915
             and custom_llm_provider != "bedrock"
             and custom_llm_provider != "ollama_chat"
             and custom_llm_provider != "openrouter"
-            and custom_llm_provider != "novita"
             and custom_llm_provider not in litellm.openai_compatible_providers
         ):
             if custom_llm_provider == "ollama":
