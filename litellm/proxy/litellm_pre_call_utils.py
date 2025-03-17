@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import time
+import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from fastapi import Request
@@ -533,9 +534,19 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     # We want to log the "metadata" from the client side request. Avoid circular reference by not directly assigning metadata to itself.
     if "metadata" in data and data["metadata"] is not None:
-        data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(
-            data["metadata"]
-        )
+        # Check if metadata is a string (common in multipart form data) and try to parse it
+        if isinstance(data["metadata"], str):
+            try:
+                parsed_metadata = json.loads(data["metadata"])
+                data[_metadata_variable_name]["requester_metadata"] = parsed_metadata
+            except json.JSONDecodeError:
+                # If parsing fails, store the string as is
+                data[_metadata_variable_name]["requester_metadata"] = data["metadata"]
+        else:
+            # Handle normal dictionary metadata
+            data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(
+                data["metadata"]
+            )
 
     user_api_key_logged_metadata = (
         LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
