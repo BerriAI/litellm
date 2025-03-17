@@ -844,9 +844,6 @@ from .llms.gemini.chat.transformation import (
 from .llms.netmind.chat.transformation import (
     NetmindChatConfig
 )
-from .llms.netmind.embed.transformation import (
-    NetmindEmbeddingConfig
-)
 
 from .llms.vertex_ai.vertex_embeddings.transformation import (
     VertexAITextEmbeddingConfig,

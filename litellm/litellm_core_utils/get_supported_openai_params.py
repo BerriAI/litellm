@@ -109,10 +109,7 @@ def get_supported_openai_params(  # noqa: PLR0915
         if request_type == "embeddings":
             return litellm.JinaAIEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "netmind":
-        if request_type == "chat_completion":
-            return litellm.NetmindChatConfig().get_supported_openai_params(model=model)
-        elif request_type == "embeddings":
-            return litellm.NetmindEmbeddingConfig().get_supported_openai_params()
+        return litellm.NetmindChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "together_ai":
         return litellm.TogetherAIConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "databricks":
