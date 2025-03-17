@@ -898,7 +898,9 @@ class CustomStreamWrapper:
                     return model_response
 
                 # Default - return StopIteration
-                return model_response
+                if hasattr(model_response, "usage"):
+                    self.chunks.append(model_response)
+                raise StopIteration
             # flush any remaining holding chunk
             if len(self.holding_chunk) > 0:
                 if model_response.choices[0].delta.content is None:
@@ -937,7 +939,11 @@ class CustomStreamWrapper:
             and model_response.choices[0].delta.audio is not None
         ):
             return model_response
-        return
+
+        else:
+            if hasattr(model_response, "usage"):
+                self.chunks.append(model_response)
+            return
 
     def _optional_combine_thinking_block_in_choices(
         self, model_response: ModelResponseStream
@@ -1538,7 +1544,7 @@ class CustomStreamWrapper:
                 else:
                     chunk = next(self.completion_stream)
                 if chunk is not None and chunk != b"":
-                    verbose_logger.debug(
+                    print_verbose(
                         f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}; custom_llm_provider: {self.custom_llm_provider}"
                     )
                     response: Optional[ModelResponseStream] = self.chunk_creator(
@@ -1611,7 +1617,6 @@ class CustomStreamWrapper:
                         None,
                         cache_hit,
                     )
-
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
                     return response
