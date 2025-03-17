@@ -1555,10 +1555,11 @@ class CustomStreamWrapper:
                     if response is None:
                         continue
                     ## LOGGING
-                    threading.Thread(
-                        target=self.run_success_logging_and_cache_storage,
-                        args=(response, cache_hit),
-                    ).start()  # log response
+                    executor.submit(
+                        self.run_success_logging_and_cache_storage,
+                        response,
+                        cache_hit,
+                    )  # log response
                     choice = response.choices[0]
                     if isinstance(choice, StreamingChoices):
                         self.response_uptil_now += choice.delta.get("content", "") or ""
@@ -1628,10 +1629,11 @@ class CustomStreamWrapper:
                     usage = calculate_total_usage(chunks=self.chunks)
                     processed_chunk._hidden_params["usage"] = usage
                 ## LOGGING
-                threading.Thread(
-                    target=self.run_success_logging_and_cache_storage,
-                    args=(processed_chunk, cache_hit),
-                ).start()  # log response
+                executor.submit(
+                    self.run_success_logging_and_cache_storage,
+                    processed_chunk,
+                    cache_hit,
+                )  # log response
                 return processed_chunk
         except Exception as e:
             traceback_exception = traceback.format_exc()
