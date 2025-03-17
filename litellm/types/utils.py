@@ -1764,7 +1764,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     humanloop_api_key: Optional[str]
 
     # Arize AI dynamic params
-    arize_space_key: Optional[str]
+    arize_space_id: Optional[str]
     arize_api_key: Optional[str]
 
     # Logging settings
