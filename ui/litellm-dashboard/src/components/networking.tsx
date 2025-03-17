@@ -3970,6 +3970,38 @@ export const uiSpendLogDetailsCall = async (
     return data;
   } catch (error) {
     console.error("Failed to fetch log details:", error);
+  throw error;
+  }
+};
+
+export const getSSOSettingsCall = async (accessToken: string) => {
+  try {
+    // Construct base URL
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/sso_settings`
+      : `/sso_settings`;
+
+    console.log("Fetching SSO settings from:", url);
+    
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Fetched SSO settings:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch SSO settings:", error);
     throw error;
   }
 };
