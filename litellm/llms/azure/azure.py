@@ -331,6 +331,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                         client=client,
                         max_retries=max_retries,
                         azure_client_params=azure_client_params,
+                        litellm_params=litellm_params,
                     )
                 else:
                     return self.acompletion(
@@ -349,6 +350,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                         max_retries=max_retries,
                         convert_tool_call_to_json_mode=json_mode,
                         azure_client_params=azure_client_params,
+                        litellm_params=litellm_params,
                     )
             elif "stream" in optional_params and optional_params["stream"] is True:
                 return self.streaming(
@@ -460,15 +462,26 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         convert_tool_call_to_json_mode: Optional[bool] = None,
         client=None,  # this is the AsyncAzureOpenAI
         azure_client_params: dict = {},
+        litellm_params: Optional[dict] = {},
     ):
         response = None
         try:
             # setting Azure client
-            if client is None or dynamic_params:
-                azure_client = AsyncAzureOpenAI(**azure_client_params)
-            else:
-                azure_client = client
-
+            azure_client = self._get_azure_openai_client(
+                api_version=api_version,
+                api_base=api_base,
+                api_key=api_key,
+                azure_ad_token=azure_ad_token,
+                azure_ad_token_provider=azure_ad_token_provider,
+                model=model,
+                max_retries=max_retries,
+                timeout=timeout,
+                client=client,
+                client_type="async",
+                litellm_params=litellm_params,
+            )
+            if not isinstance(azure_client, AsyncAzureOpenAI):
+                raise ValueError("Azure client is not an instance of AsyncAzureOpenAI")
             ## LOGGING
             logging_obj.pre_call(
                 input=data["messages"],
@@ -622,6 +635,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         azure_ad_token_provider: Optional[Callable] = None,
         client=None,
         azure_client_params: dict = {},
+        litellm_params: Optional[dict] = {},
     ):
         try:
             if client is None or dynamic_params:
