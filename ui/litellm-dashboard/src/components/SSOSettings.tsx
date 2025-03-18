@@ -2,12 +2,14 @@ import React, { useState, useEffect } from "react";
 import { Card, Title, Text, Divider, Button, TextInput } from "@tremor/react";
 import { Typography, Spin, message, Switch, Select, Form } from "antd";
 import { getInternalUserSettings, updateInternalUserSettings } from "./networking";
+import BudgetDurationDropdown, { getBudgetDurationLabel } from "./common_components/budget_duration_dropdown";
 
 interface SSOSettingsProps {
   accessToken: string | null;
+  possibleUIRoles?: Record<string, Record<string, string>> | null;
 }
 
-const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken }) => {
+const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles }) => {
   const [loading, setLoading] = useState<boolean>(true);
   const [settings, setSettings] = useState<any>(null);
   const [isEditing, setIsEditing] = useState<boolean>(false);
@@ -64,7 +66,35 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken }) => {
   const renderEditableField = (key: string, property: any, value: any) => {
     const type = property.type;
     
-    if (type === "boolean") {
+    if (key === "user_role" && possibleUIRoles) {
+      return (
+        <Select
+          style={{ width: '100%' }}
+          value={editedValues[key] || ""}
+          onChange={(value) => handleTextInputChange(key, value)}
+          className="mt-2"
+        >
+          {Object.entries(possibleUIRoles)
+            .filter(([role]) => role.includes("internal_user"))
+            .map(([role, { ui_label, description }]) => (
+              <Option key={role} value={role}>
+                <div className="flex items-center">
+                  <span>{ui_label}</span>
+                  <span className="ml-2 text-xs text-gray-500">{description}</span>
+                </div>
+              </Option>
+            ))}
+        </Select>
+      );
+    } else if (key === "budget_duration") {
+      return (
+        <BudgetDurationDropdown
+          value={editedValues[key] || null}
+          onChange={(value) => handleTextInputChange(key, value)}
+          className="mt-2"
+        />
+      );
+    } else if (type === "boolean") {
       return (
         <div className="mt-2">
           <Switch 
@@ -112,8 +142,22 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken }) => {
     }
   };
 
-  const renderValue = (value: any): JSX.Element => {
+  const renderValue = (key: string, value: any): JSX.Element => {
     if (value === null || value === undefined) return <span className="text-gray-400">Not set</span>;
+    
+    if (key === "user_role" && possibleUIRoles && possibleUIRoles[value]) {
+      const { ui_label, description } = possibleUIRoles[value];
+      return (
+        <div>
+          <span className="font-medium">{ui_label}</span>
+          {description && <p className="text-xs text-gray-500 mt-1">{description}</p>}
+        </div>
+      );
+    }
+    
+    if (key === "budget_duration") {
+      return <span>{getBudgetDurationLabel(value)}</span>;
+    }
     
     if (typeof value === "boolean") {
       return <span>{value ? "Enabled" : "Disabled"}</span>;
@@ -186,7 +230,7 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken }) => {
             </div>
           ) : (
             <div className="mt-1 p-2 bg-gray-50 rounded">
-              {renderValue(value)}
+              {renderValue(key, value)}
             </div>
           )}
         </div>
