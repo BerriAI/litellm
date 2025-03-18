@@ -8,10 +8,11 @@ import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_t
 interface SSOSettingsProps {
   accessToken: string | null;
   possibleUIRoles?: Record<string, Record<string, string>> | null;
-  userID?: string;
+  userID: string;
+  userRole: string;
 }
 
-const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles }) => {
+const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles, userID, userRole }) => {
   const [loading, setLoading] = useState<boolean>(true);
   const [settings, setSettings] = useState<any>(null);
   const [isEditing, setIsEditing] = useState<boolean>(false);
@@ -36,7 +37,7 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles 
         // Fetch available models
         if (accessToken) {
           try {
-            const modelResponse = await modelAvailableCall(accessToken, null, null);
+            const modelResponse = await modelAvailableCall(accessToken, userID, userRole);
             if (modelResponse && modelResponse.data) {
               const modelNames = modelResponse.data.map((model: { id: string }) => model.id);
               setAvailableModels(modelNames);
