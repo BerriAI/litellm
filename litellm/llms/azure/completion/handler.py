@@ -2,7 +2,6 @@ from typing import Any, Callable, Optional
 
 from openai import AsyncAzureOpenAI, AzureOpenAI
 
-import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
 from litellm.utils import CustomStreamWrapper, ModelResponse, TextCompletionResponse
 
