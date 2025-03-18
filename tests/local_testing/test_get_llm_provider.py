@@ -218,9 +218,10 @@ def test_bedrock_invoke_anthropic():
     assert model == "invoke/anthropic.claude-3-5-sonnet-20240620-v1:0"
 
 
-def test_xai_api_base():
+@pytest.mark.parametrize("model", ["xai/grok-2-vision-latest", "grok-2-vision-latest"])
+def test_xai_api_base(model):
     args = {
-        "model": "xai/grok-2-vision-latest",
+        "model": model,
         "custom_llm_provider": "xai",
         "api_base": None,
         "api_key": "xai-my-specialkey",
