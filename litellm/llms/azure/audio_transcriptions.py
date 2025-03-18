@@ -4,7 +4,6 @@ from typing import Any, Optional
 from openai import AsyncAzureOpenAI, AzureOpenAI
 from pydantic import BaseModel
 
-import litellm
 from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_name
 from litellm.types.utils import FileTypes
 from litellm.utils import (
