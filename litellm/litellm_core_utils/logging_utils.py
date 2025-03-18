@@ -78,6 +78,9 @@ def _assemble_complete_response_from_streaming_chunks(
         Union[ModelResponse, TextCompletionResponse]
     ] = None
 
+    if isinstance(result, ModelResponse):
+        return result
+
     if result.choices[0].finish_reason is not None:  # if it's the last chunk
         streaming_chunks.append(result)
         try:
