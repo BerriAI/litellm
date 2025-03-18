@@ -652,7 +652,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         model: str,
         data: dict,
         model_response: EmbeddingResponse,
-        azure_client_params: dict,
         input: list,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
@@ -743,14 +742,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             data = {"model": model, "input": input, **optional_params}
             if max_retries is None:
                 max_retries = litellm.DEFAULT_MAX_RETRIES
-            azure_client_params = self.initialize_azure_sdk_client(
-                litellm_params=litellm_params or {},
-                api_key=api_key,
-                model_name=model,
-                api_version=api_version,
-                api_base=api_base,
-                is_async=False,
-            )
             ## LOGGING
             logging_obj.pre_call(
                 input=input,
@@ -769,7 +760,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     logging_obj=logging_obj,
                     api_key=api_key,
                     model_response=model_response,
-                    azure_client_params=azure_client_params,
                     timeout=timeout,
                     client=client,
                     litellm_params=litellm_params,
