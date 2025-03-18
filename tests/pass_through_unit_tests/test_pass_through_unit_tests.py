@@ -124,10 +124,16 @@ def test_init_kwargs_for_pass_through_endpoint_basic(
     # Check metadata
     expected_metadata = {
         "user_api_key": "test-key",
+        "user_api_key_hash": "test-key",
+        "user_api_key_alias": None,
+        "user_api_key_user_email": None,
         "user_api_key_user_id": "test-user",
         "user_api_key_team_id": "test-team",
+        "user_api_key_org_id": None,
+        "user_api_key_team_alias": None,
         "user_api_key_end_user_id": "test-user",
     }
+
     assert result["litellm_params"]["metadata"] == expected_metadata
 
 

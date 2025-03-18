@@ -3,8 +3,10 @@ from typing import Optional
 
 import litellm
 
+from .base_invoke_transformation import AmazonInvokeConfig
 
-class AmazonAnthropicConfig:
+
+class AmazonAnthropicConfig(AmazonInvokeConfig):
     """
     Reference: https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=claude
 
@@ -57,9 +59,7 @@ class AmazonAnthropicConfig:
             and v is not None
         }
 
-    def get_supported_openai_params(
-        self,
-    ):
+    def get_supported_openai_params(self, model: str):
         return [
             "max_tokens",
             "max_completion_tokens",
@@ -69,7 +69,13 @@ class AmazonAnthropicConfig:
             "stream",
         ]
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ):
         for param, value in non_default_params.items():
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_tokens_to_sample"] = value

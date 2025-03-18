@@ -2,6 +2,7 @@ import React from "react";
 import { Modal, Form, InputNumber, message } from "antd";
 import { TextInput } from "@tremor/react";
 import { Button as Button2 } from "antd";
+import { modelUpdateCall } from "../networking";
 
 interface EditModelModalProps {
   visible: boolean;
@@ -9,6 +10,61 @@ interface EditModelModalProps {
   model: any;
   onSubmit: (data: FormData) => void;
 }
+
+export const handleEditModelSubmit = async (formValues: Record<string, any>, accessToken: string | null, setEditModalVisible: (visible: boolean) => void, setSelectedModel: (model: any) => void) => {
+  // Call API to update team with teamId and values
+
+  console.log("handleEditSubmit:", formValues);
+  if (accessToken == null) {
+    return;
+  }
+
+  let newLiteLLMParams: Record<string, any> = {};
+  let model_info_model_id = null;
+
+  if (formValues.input_cost_per_token) {
+    // Convert from per 1M tokens to per token
+    formValues.input_cost_per_token = Number(formValues.input_cost_per_token) / 1_000_000;
+  }
+  if (formValues.output_cost_per_token) {
+    // Convert from per 1M tokens to per token
+    formValues.output_cost_per_token = Number(formValues.output_cost_per_token) / 1_000_000;
+  }
+
+
+  for (const [key, value] of Object.entries(formValues)) {
+    if (key !== "model_id") {
+      // Empty string means user wants to null the value
+      newLiteLLMParams[key] = value === "" ? null : value;
+    } else {
+      model_info_model_id = value === "" ? null : value;
+    }
+  }
+  
+  let payload: {
+    litellm_params: Record<string, any> | undefined;
+    model_info: { id: any } | undefined;
+  } = {
+    litellm_params: Object.keys(newLiteLLMParams).length > 0 ? newLiteLLMParams : undefined,
+    model_info: model_info_model_id !== undefined ? {
+      id: model_info_model_id,
+    } : undefined,
+  };
+
+  console.log("handleEditSubmit payload:", payload);
+
+  try {
+    let newModelValue = await modelUpdateCall(accessToken, payload);
+    message.success(
+      "Model updated successfully, restart server to see updates"
+    );
+
+    setEditModalVisible(false);
+    setSelectedModel(null);
+  } catch (error) {
+    console.log(`Error occurred`);
+  }
+};
 
 const EditModelModal: React.FC<EditModelModalProps> = ({
   visible,

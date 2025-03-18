@@ -263,3 +263,25 @@ def test_cost_calculator_basic():
 
     assert isinstance(cost, float)
     assert cost > 0
+
+
+def test_bedrock_image_gen_with_aws_region_name():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm import image_generation
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            image_generation(
+                model="bedrock/stability.stable-image-ultra-v1:1",
+                prompt="A beautiful sunset",
+                aws_region_name="us-west-2",
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+            raise e
+        mock_post.assert_called_once()
+        args, kwargs = mock_post.call_args
+        print(kwargs)

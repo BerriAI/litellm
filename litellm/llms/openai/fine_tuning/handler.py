@@ -27,6 +27,7 @@ class OpenAIFineTuningAPI:
         ] = None,
         _is_async: bool = False,
         api_version: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
     ) -> Optional[
         Union[
             OpenAI,

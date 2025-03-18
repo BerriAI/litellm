@@ -20,7 +20,12 @@ services:
         STORE_MODEL_IN_DB: "True" # allows adding models to proxy via UI
     env_file:
       - .env # Load local .env file
-  
+    healthcheck:  # Defines the health check configuration for the container
+      test: [ "CMD", "curl", "-f", "http://localhost:4000/health/liveliness || exit 1" ]  # Command to execute for health check
+      interval: 30s  # Perform health check every 30 seconds
+      timeout: 10s   # Health check command times out after 10 seconds
+      retries: 3     # Retry up to 3 times if health check fails
+      start_period: 40s  # Wait 40 seconds after container start before beginning health checks  
   prometheus:
     image: prom/prometheus
     volumes:
@@ -37,6 +42,8 @@ services:
 volumes:
   prometheus_data:
     driver: local
+  postgres_data:
+    name: litellm_postgres_data  # Named volume for Postgres data persistence
 
 
 # ...rest of your docker-compose config if any

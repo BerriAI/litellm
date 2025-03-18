@@ -7,7 +7,7 @@ https://docs.cohere.com/reference/rerank
 from typing import List, Optional, Union
 
 from pydantic import BaseModel, PrivateAttr
-from typing_extensions import TypedDict
+from typing_extensions import Required, TypedDict
 
 
 class RerankRequest(BaseModel):
@@ -18,6 +18,8 @@ class RerankRequest(BaseModel):
     rank_fields: Optional[List[str]] = None
     return_documents: Optional[bool] = None
     max_chunks_per_doc: Optional[int] = None
+    max_tokens_per_doc: Optional[int] = None
+
 
 
 class OptionalRerankParams(TypedDict, total=False):
@@ -27,6 +29,7 @@ class OptionalRerankParams(TypedDict, total=False):
     rank_fields: Optional[List[str]]
     return_documents: Optional[bool]
     max_chunks_per_doc: Optional[int]
+    max_tokens_per_doc: Optional[int]
 
 
 class RerankBilledUnits(TypedDict, total=False):
@@ -45,9 +48,14 @@ class RerankResponseMeta(TypedDict, total=False):
     tokens: Optional[RerankTokens]
 
 
-class RerankResponseResult(TypedDict):
-    index: int
-    relevance_score: float
+class RerankResponseDocument(TypedDict):
+    text: str
+
+
+class RerankResponseResult(TypedDict, total=False):
+    index: Required[int]
+    relevance_score: Required[float]
+    document: RerankResponseDocument
 
 
 class RerankResponse(BaseModel):

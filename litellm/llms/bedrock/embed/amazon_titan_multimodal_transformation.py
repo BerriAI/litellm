@@ -1,5 +1,5 @@
 """
-Transformation logic from OpenAI /v1/embeddings format to Bedrock Amazon Titan multimodal /invoke format. 
+Transformation logic from OpenAI /v1/embeddings format to Bedrock Amazon Titan multimodal /invoke format.
 
 Why separate file? Make it easy to see how transformation works
 

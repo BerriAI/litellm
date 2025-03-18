@@ -183,6 +183,9 @@ def create_fine_tuning_job(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
+                client=kwargs.get(
+                    "client", None
+                ),  # note, when we add this to `GenericLiteLLMParams` it impacts a lot of other tests + linting
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":
@@ -388,6 +391,7 @@ def cancel_fine_tuning_job(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
+                client=kwargs.get("client", None),
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":
@@ -550,6 +554,7 @@ def list_fine_tuning_jobs(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
+                client=kwargs.get("client", None),
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":
@@ -701,6 +706,7 @@ def retrieve_fine_tuning_job(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
+                client=kwargs.get("client", None),
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":

@@ -2798,7 +2798,7 @@ async def ui_get_spend_by_tags(
             spend_date,
             log_count,
             total_spend
-        FROM DailyTagSpend
+        FROM "DailyTagSpend"
         WHERE spend_date >= $1::date AND spend_date <= $2::date
         ORDER BY total_spend DESC;
         """
@@ -2814,7 +2814,7 @@ async def ui_get_spend_by_tags(
             individual_request_tag,
             SUM(log_count) AS log_count,
             SUM(total_spend) AS total_spend
-        FROM DailyTagSpend
+        FROM "DailyTagSpend"
         WHERE spend_date >= $1::date AND spend_date <= $2::date
           AND individual_request_tag = ANY($3::text[])
         GROUP BY individual_request_tag

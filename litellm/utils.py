@@ -66,6 +66,7 @@ from litellm.litellm_core_utils.core_helpers import (
     map_finish_reason,
     process_response_headers,
 )
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.default_encoding import encoding
 from litellm.litellm_core_utils.exception_mapping_utils import (
     _get_response_headers,
@@ -119,7 +120,10 @@ from litellm.router_utils.get_retry_from_policy import (
     reset_retry_policy,
 )
 from litellm.secret_managers.main import get_secret
-from litellm.types.llms.anthropic import ANTHROPIC_API_ONLY_HEADERS
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_API_ONLY_HEADERS,
+    AnthropicThinkingParam,
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
     AllPromptValues,
@@ -138,6 +142,7 @@ from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
     CostPerToken,
+    CredentialItem,
     CustomHuggingfaceTokenizer,
     Delta,
     Embedding,
@@ -153,6 +158,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     ProviderField,
     ProviderSpecificModelInfo,
+    RawRequestTypedDict,
     SelectTokenizerResponse,
     StreamingChoices,
     TextChoices,
@@ -188,6 +194,9 @@ from typing import (
 from openai import OpenAIError as OriginalError
 
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.llms.base_llm.anthropic_messages.transformation import (
+    BaseAnthropicMessagesConfig,
+)
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
@@ -202,6 +211,7 @@ from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
 )
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
+from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 
 from ._logging import _is_debugging_on, verbose_logger
 from .caching.caching import (
@@ -448,6 +458,27 @@ def get_applied_guardrails(kwargs: Dict[str, Any]) -> List[str]:
     return applied_guardrails
 
 
+def load_credentials_from_list(kwargs: dict):
+    """
+    Updates kwargs with the credentials if credential_name in kwarg
+    """
+    credential_name = kwargs.get("litellm_credential_name")
+    if credential_name and litellm.credential_list:
+        credential_accessor = CredentialAccessor.get_credential_values(credential_name)
+        for key, value in credential_accessor.items():
+            if key not in kwargs:
+                kwargs[key] = value
+
+
+def get_dynamic_callbacks(
+    dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]]
+) -> List:
+    returned_callbacks = litellm.callbacks.copy()
+    if dynamic_callbacks:
+        returned_callbacks.extend(dynamic_callbacks)  # type: ignore
+    return returned_callbacks
+
+
 def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
@@ -472,12 +503,18 @@ def function_setup(  # noqa: PLR0915
         ## LOGGING SETUP
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
-        if len(litellm.callbacks) > 0:
-            for callback in litellm.callbacks:
+        ## DYNAMIC CALLBACKS ##
+        dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = (
+            kwargs.pop("callbacks", None)
+        )
+        all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
+
+        if len(all_callbacks) > 0:
+            for callback in all_callbacks:
                 # check if callback is a string - e.g. "lago", "openmeter"
                 if isinstance(callback, str):
                     callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
-                        callback, internal_usage_cache=None, llm_router=None
+                        callback, internal_usage_cache=None, llm_router=None  # type: ignore
                     )
                     if callback is None or any(
                         isinstance(cb, type(callback))
@@ -618,7 +655,7 @@ def function_setup(  # noqa: PLR0915
                 details_to_log.pop("prompt", None)
             add_breadcrumb(
                 category="litellm.llm_call",
-                message=f"Positional Args: {args}, Keyword Args: {details_to_log}",
+                message=f"Keyword Args: {details_to_log}",
                 level="info",
             )
         if "logger_fn" in kwargs:
@@ -693,6 +730,11 @@ def function_setup(  # noqa: PLR0915
             call_type == CallTypes.aspeech.value or call_type == CallTypes.speech.value
         ):
             messages = kwargs.get("input", "speech")
+        elif (
+            call_type == CallTypes.aresponses.value
+            or call_type == CallTypes.responses.value
+        ):
+            messages = args[0] if len(args) > 0 else kwargs["input"]
         else:
             messages = "default-message-value"
         stream = True if "stream" in kwargs and kwargs["stream"] is True else False
@@ -726,8 +768,8 @@ def function_setup(  # noqa: PLR0915
         )
         return logging_obj, kwargs
     except Exception as e:
-        verbose_logger.error(
-            f"litellm.utils.py::function_setup() - [Non-Blocking] {traceback.format_exc()}; args - {args}; kwargs - {kwargs}"
+        verbose_logger.exception(
+            "litellm.utils.py::function_setup() - [Non-Blocking] Error in function_setup"
         )
         raise e
 
@@ -961,6 +1003,8 @@ def client(original_function):  # noqa: PLR0915
                 logging_obj, kwargs = function_setup(
                     original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
+            ## LOAD CREDENTIALS
+            load_credentials_from_list(kwargs)
             kwargs["litellm_logging_obj"] = logging_obj
             _llm_caching_handler: LLMCachingHandler = LLMCachingHandler(
                 original_function=original_function,
@@ -1030,6 +1074,7 @@ def client(original_function):  # noqa: PLR0915
                 )
 
                 if caching_handler_response.cached_result is not None:
+                    verbose_logger.debug("Cache hit!")
                     return caching_handler_response.cached_result
 
             # CHECK MAX TOKENS
@@ -1216,6 +1261,8 @@ def client(original_function):  # noqa: PLR0915
                     original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
             kwargs["litellm_logging_obj"] = logging_obj
+            ## LOAD CREDENTIALS
+            load_credentials_from_list(kwargs)
             logging_obj._llm_caching_handler = _llm_caching_handler
             # [OPTIONAL] CHECK BUDGET
             if litellm.max_budget:
@@ -1553,6 +1600,7 @@ def openai_token_counter(  # noqa: PLR0915
         bool
     ] = False,  # Flag passed from litellm.stream_chunk_builder, to indicate counting tokens for LLM Response. We need this because for LLM input we add +3 tokens per message - based on OpenAI's token counter
     use_default_image_token_count: Optional[bool] = False,
+    default_token_count: Optional[int] = None,
 ):
     """
     Return the number of tokens used by a list of messages.
@@ -1600,31 +1648,12 @@ def openai_token_counter(  # noqa: PLR0915
                     if key == "name":
                         num_tokens += tokens_per_name
                 elif isinstance(value, List):
-                    for c in value:
-                        if c["type"] == "text":
-                            text += c["text"]
-                            num_tokens += len(
-                                encoding.encode(c["text"], disallowed_special=())
-                            )
-                        elif c["type"] == "image_url":
-                            if isinstance(c["image_url"], dict):
-                                image_url_dict = c["image_url"]
-                                detail = image_url_dict.get("detail", "auto")
-                                url = image_url_dict.get("url")
-                                num_tokens += calculate_img_tokens(
-                                    data=url,
-                                    mode=detail,
-                                    use_default_image_token_count=use_default_image_token_count
-                                    or False,
-                                )
-                            elif isinstance(c["image_url"], str):
-                                image_url_str = c["image_url"]
-                                num_tokens += calculate_img_tokens(
-                                    data=image_url_str,
-                                    mode="auto",
-                                    use_default_image_token_count=use_default_image_token_count
-                                    or False,
-                                )
+                    text, num_tokens_from_list = _get_num_tokens_from_content_list(
+                        content_list=value,
+                        use_default_image_token_count=use_default_image_token_count,
+                        default_token_count=default_token_count,
+                    )
+                    num_tokens += num_tokens_from_list
     elif text is not None and count_response_tokens is True:
         # This is the case where we need to count tokens for a streamed response. We should NOT add +3 tokens per message in this branch
         num_tokens = len(encoding.encode(text, disallowed_special=()))
@@ -1759,6 +1788,52 @@ def _format_type(props, indent):
         return "any"
 
 
+def _get_num_tokens_from_content_list(
+    content_list: List[Dict[str, Any]],
+    use_default_image_token_count: Optional[bool] = False,
+    default_token_count: Optional[int] = None,
+) -> Tuple[str, int]:
+    """
+    Get the number of tokens from a list of content.
+
+    Returns:
+        Tuple[str, int]: A tuple containing the text and the number of tokens.
+    """
+    try:
+        num_tokens = 0
+        text = ""
+        for c in content_list:
+            if c["type"] == "text":
+                text += c["text"]
+                num_tokens += len(encoding.encode(c["text"], disallowed_special=()))
+            elif c["type"] == "image_url":
+                if isinstance(c["image_url"], dict):
+                    image_url_dict = c["image_url"]
+                    detail = image_url_dict.get("detail", "auto")
+                    url = image_url_dict.get("url")
+                    num_tokens += calculate_img_tokens(
+                        data=url,
+                        mode=detail,
+                        use_default_image_token_count=use_default_image_token_count
+                        or False,
+                    )
+                elif isinstance(c["image_url"], str):
+                    image_url_str = c["image_url"]
+                    num_tokens += calculate_img_tokens(
+                        data=image_url_str,
+                        mode="auto",
+                        use_default_image_token_count=use_default_image_token_count
+                        or False,
+                    )
+        return text, num_tokens
+    except Exception as e:
+        if default_token_count is not None:
+            return "", default_token_count
+        raise ValueError(
+            f"Error getting number of tokens from content list: {e}, default_token_count={default_token_count}"
+        )
+
+
 def token_counter(
     model="",
     custom_tokenizer: Optional[Union[dict, SelectTokenizerResponse]] = None,
@@ -1768,6 +1843,7 @@ def token_counter(
     tools: Optional[List[ChatCompletionToolParam]] = None,
     tool_choice: Optional[ChatCompletionNamedToolChoiceParam] = None,
     use_default_image_token_count: Optional[bool] = False,
+    default_token_count: Optional[int] = None,
 ) -> int:
     """
     Count the number of tokens in a given text using a specified model.
@@ -1777,6 +1853,7 @@ def token_counter(
     custom_tokenizer (Optional[dict]): A custom tokenizer created with the `create_pretrained_tokenizer` or `create_tokenizer` method. Must be a dictionary with a string value for `type` and Tokenizer for `tokenizer`. Default is None.
     text (str): The raw text string to be passed to the model. Default is None.
     messages (Optional[List[Dict[str, str]]]): Alternative to passing in text. A list of dictionaries representing messages with "role" and "content" keys. Default is None.
+    default_token_count (Optional[int]): The default number of tokens to return for a message block, if an error occurs. Default is None.
 
     Returns:
     int: The number of tokens in the text.
@@ -1794,28 +1871,11 @@ def token_counter(
                     if isinstance(content, str):
                         text += message["content"]
                     elif isinstance(content, List):
-                        for c in content:
-                            if c["type"] == "text":
-                                text += c["text"]
-                            elif c["type"] == "image_url":
-                                if isinstance(c["image_url"], dict):
-                                    image_url_dict = c["image_url"]
-                                    detail = image_url_dict.get("detail", "auto")
-                                    url = image_url_dict.get("url")
-                                    num_tokens += calculate_img_tokens(
-                                        data=url,
-                                        mode=detail,
-                                        use_default_image_token_count=use_default_image_token_count
-                                        or False,
-                                    )
-                                elif isinstance(c["image_url"], str):
-                                    image_url_str = c["image_url"]
-                                    num_tokens += calculate_img_tokens(
-                                        data=image_url_str,
-                                        mode="auto",
-                                        use_default_image_token_count=use_default_image_token_count
-                                        or False,
-                                    )
+                        text, num_tokens = _get_num_tokens_from_content_list(
+                            content_list=content,
+                            use_default_image_token_count=use_default_image_token_count,
+                            default_token_count=default_token_count,
+                        )
                 if message.get("tool_calls"):
                     is_tool_call = True
                     for tool_call in message["tool_calls"]:
@@ -1859,6 +1919,7 @@ def token_counter(
                     tool_choice=tool_choice,
                     use_default_image_token_count=use_default_image_token_count
                     or False,
+                    default_token_count=default_token_count,
                 )
             else:
                 print_verbose(
@@ -1874,6 +1935,7 @@ def token_counter(
                     tool_choice=tool_choice,
                     use_default_image_token_count=use_default_image_token_count
                     or False,
+                    default_token_count=default_token_count,
                 )
     else:
         num_tokens = len(encoding.encode(text, disallowed_special=()))  # type: ignore
@@ -1951,6 +2013,19 @@ def supports_response_schema(
         model=model,
         custom_llm_provider=custom_llm_provider,
         key="supports_response_schema",
+    )
+
+
+def supports_parallel_function_calling(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> bool:
+    """
+    Check if the given model supports parallel tool calls and return a boolean value.
+    """
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_parallel_function_calling",
     )
 
 
@@ -2101,30 +2176,6 @@ def supports_embedding_image_input(
         custom_llm_provider=custom_llm_provider,
         key="supports_embedding_image_input",
     )
-
-
-def supports_parallel_function_calling(model: str):
-    """
-    Check if the given model supports parallel function calling and return True if it does, False otherwise.
-
-    Parameters:
-        model (str): The model to check for support of parallel function calling.
-
-    Returns:
-        bool: True if the model supports parallel function calling, False otherwise.
-
-    Raises:
-        Exception: If the model is not found in the model_cost dictionary.
-    """
-    if model in litellm.model_cost:
-        model_info = litellm.model_cost[model]
-        if model_info.get("supports_parallel_function_calling", False) is True:
-            return True
-        return False
-    else:
-        raise Exception(
-            f"Model not supports parallel function calling. You passed model={model}."
-        )
 
 
 ####### HELPER FUNCTIONS ################
@@ -2400,7 +2451,11 @@ def get_optional_params_image_gen(
         config_class = (
             litellm.AmazonStability3Config
             if litellm.AmazonStability3Config._is_stability_3_model(model=model)
-            else litellm.AmazonStabilityConfig
+            else (
+                litellm.AmazonNovaCanvasConfig
+                if litellm.AmazonNovaCanvasConfig._is_nova_model(model=model)
+                else litellm.AmazonStabilityConfig
+            )
         )
         supported_params = config_class.get_supported_openai_params(model=model)
         _check_valid_arg(supported_params=supported_params)
@@ -2737,6 +2792,7 @@ def get_optional_params(  # noqa: PLR0915
     reasoning_effort=None,
     additional_drop_params=None,
     messages: Optional[List[AllMessageValues]] = None,
+    thinking: Optional[AnthropicThinkingParam] = None,
     **kwargs,
 ):
     # retrieve all parameters passed to the function
@@ -2821,9 +2877,11 @@ def get_optional_params(  # noqa: PLR0915
         "additional_drop_params": None,
         "messages": None,
         "reasoning_effort": None,
+        "thinking": None,
     }
 
     # filter out those parameters that were passed with non-default values
+
     non_default_params = {
         k: v
         for k, v in passed_params.items()
@@ -3166,51 +3224,56 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
-    elif custom_llm_provider == "vertex_ai" and model in litellm.vertex_llama3_models:
-        optional_params = litellm.VertexAILlama3Config().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=(
-                drop_params
-                if drop_params is not None and isinstance(drop_params, bool)
-                else False
-            ),
-        )
-    elif custom_llm_provider == "vertex_ai" and model in litellm.vertex_mistral_models:
-        if "codestral" in model:
-            optional_params = litellm.CodestralTextCompletionConfig().map_openai_params(
-                model=model,
+    elif custom_llm_provider == "vertex_ai":
+
+        if model in litellm.vertex_mistral_models:
+            if "codestral" in model:
+                optional_params = (
+                    litellm.CodestralTextCompletionConfig().map_openai_params(
+                        model=model,
+                        non_default_params=non_default_params,
+                        optional_params=optional_params,
+                        drop_params=(
+                            drop_params
+                            if drop_params is not None and isinstance(drop_params, bool)
+                            else False
+                        ),
+                    )
+                )
+            else:
+                optional_params = litellm.MistralConfig().map_openai_params(
+                    model=model,
+                    non_default_params=non_default_params,
+                    optional_params=optional_params,
+                    drop_params=(
+                        drop_params
+                        if drop_params is not None and isinstance(drop_params, bool)
+                        else False
+                    ),
+                )
+        elif model in litellm.vertex_ai_ai21_models:
+            optional_params = litellm.VertexAIAi21Config().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
+                model=model,
                 drop_params=(
                     drop_params
                     if drop_params is not None and isinstance(drop_params, bool)
                     else False
                 ),
             )
-        else:
-            optional_params = litellm.MistralConfig().map_openai_params(
-                model=model,
+        else:  # use generic openai-like param mapping
+            optional_params = litellm.VertexAILlama3Config().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
+                model=model,
                 drop_params=(
                     drop_params
                     if drop_params is not None and isinstance(drop_params, bool)
                     else False
                 ),
             )
-    elif custom_llm_provider == "vertex_ai" and model in litellm.vertex_ai_ai21_models:
-        optional_params = litellm.VertexAIAi21Config().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=(
-                drop_params
-                if drop_params is not None and isinstance(drop_params, bool)
-                else False
-            ),
-        )
+
     elif custom_llm_provider == "sagemaker":
         # temperature, top_p, n, stream, stop, max_tokens, n, presence_penalty default to None
         optional_params = litellm.SagemakerConfig().map_openai_params(
@@ -3225,6 +3288,7 @@ def get_optional_params(  # noqa: PLR0915
         )
     elif custom_llm_provider == "bedrock":
         bedrock_route = BedrockModelInfo.get_bedrock_route(model)
+        bedrock_base_model = BedrockModelInfo.get_base_model(model)
         if bedrock_route == "converse" or bedrock_route == "converse_like":
             optional_params = litellm.AmazonConverseConfig().map_openai_params(
                 model=model,
@@ -3238,8 +3302,9 @@ def get_optional_params(  # noqa: PLR0915
                 messages=messages,
             )
 
-        elif "anthropic" in model and bedrock_route == "invoke":
-            if model.startswith("anthropic.claude-3"):
+        elif "anthropic" in bedrock_base_model and bedrock_route == "invoke":
+            if bedrock_base_model.startswith("anthropic.claude-3"):
+
                 optional_params = (
                     litellm.AmazonAnthropicClaude3Config().map_openai_params(
                         non_default_params=non_default_params,
@@ -3252,10 +3317,17 @@ def get_optional_params(  # noqa: PLR0915
                         ),
                     )
                 )
+
             else:
                 optional_params = litellm.AmazonAnthropicConfig().map_openai_params(
                     non_default_params=non_default_params,
                     optional_params=optional_params,
+                    model=model,
+                    drop_params=(
+                        drop_params
+                        if drop_params is not None and isinstance(drop_params, bool)
+                        else False
+                    ),
                 )
         elif provider_config is not None:
             optional_params = provider_config.map_openai_params(
@@ -3878,8 +3950,10 @@ def _count_characters(text: str) -> int:
     return len(filtered_text)
 
 
-def get_response_string(response_obj: ModelResponse) -> str:
-    _choices: List[Union[Choices, StreamingChoices]] = response_obj.choices
+def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream]) -> str:
+    _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
+        response_obj.choices
+    )
 
     response_str = ""
     for choice in _choices:
@@ -4168,7 +4242,6 @@ def _get_max_position_embeddings(model_name: str) -> Optional[int]:
         return None
 
 
-@lru_cache_wrapper(maxsize=16)
 def _cached_get_model_info_helper(
     model: str, custom_llm_provider: Optional[str]
 ) -> ModelInfoBase:
@@ -4364,6 +4437,12 @@ def _get_model_info_helper(  # noqa: PLR0915
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
                 input_cost_per_audio_token=_model_info.get(
                     "input_cost_per_audio_token", None
+                ),
+                input_cost_per_token_batches=_model_info.get(
+                    "input_cost_per_token_batches"
+                ),
+                output_cost_per_token_batches=_model_info.get(
+                    "output_cost_per_token_batches"
                 ),
                 output_cost_per_token=_output_cost_per_token,
                 output_cost_per_audio_token=_model_info.get(
@@ -5054,7 +5133,7 @@ def prompt_token_calculator(model, messages):
         from anthropic import AI_PROMPT, HUMAN_PROMPT, Anthropic
 
         anthropic_obj = Anthropic()
-        num_tokens = anthropic_obj.count_tokens(text)
+        num_tokens = anthropic_obj.count_tokens(text)  # type: ignore
     else:
         num_tokens = len(encoding.encode(text))
     return num_tokens
@@ -5189,9 +5268,10 @@ def _calculate_retry_after(
 # custom prompt helper function
 def register_prompt_template(
     model: str,
-    roles: dict,
+    roles: dict = {},
     initial_prompt_value: str = "",
     final_prompt_value: str = "",
+    tokenizer_config: dict = {},
 ):
     """
     Register a prompt template to follow your custom format for a given model
@@ -5228,12 +5308,27 @@ def register_prompt_template(
     )
     ```
     """
-    model = get_llm_provider(model=model)[0]
-    litellm.custom_prompt_dict[model] = {
-        "roles": roles,
-        "initial_prompt_value": initial_prompt_value,
-        "final_prompt_value": final_prompt_value,
-    }
+    complete_model = model
+    potential_models = [complete_model]
+    try:
+        model = get_llm_provider(model=model)[0]
+        potential_models.append(model)
+    except Exception:
+        pass
+    if tokenizer_config:
+        for m in potential_models:
+            litellm.known_tokenizer_config[m] = {
+                "tokenizer": tokenizer_config,
+                "status": "success",
+            }
+    else:
+        for m in potential_models:
+            litellm.custom_prompt_dict[m] = {
+                "roles": roles,
+                "initial_prompt_value": initial_prompt_value,
+                "final_prompt_value": final_prompt_value,
+            }
+
     return litellm.custom_prompt_dict
 
 
@@ -5897,6 +5992,18 @@ def convert_to_dict(message: Union[BaseModel, dict]) -> dict:
         )
 
 
+def validate_and_fix_openai_messages(messages: List):
+    """
+    Ensures all messages are valid OpenAI chat completion messages.
+
+    Handles missing role for assistant messages.
+    """
+    for message in messages:
+        if not message.get("role"):
+            message["role"] = "assistant"
+    return validate_chat_completion_messages(messages=messages)
+
+
 def validate_chat_completion_messages(messages: List[AllMessageValues]):
     """
     Ensures all messages are valid OpenAI chat completion messages.
@@ -6005,6 +6112,8 @@ class ProviderConfigManager:
             return litellm.CohereChatConfig()
         elif litellm.LlmProviders.COHERE == provider:
             return litellm.CohereConfig()
+        elif litellm.LlmProviders.SNOWFLAKE == provider:
+            return litellm.SnowflakeConfig()
         elif litellm.LlmProviders.CLARIFAI == provider:
             return litellm.ClarifaiConfig()
         elif litellm.LlmProviders.ANTHROPIC == provider:
@@ -6116,12 +6225,19 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.BEDROCK == provider:
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
-                model
+                model=model
             )
+            base_model = BedrockModelInfo.get_base_model(model)
+
             if bedrock_route == "converse" or bedrock_route == "converse_like":
                 return litellm.AmazonConverseConfig()
             elif bedrock_invoke_provider == "amazon":  # amazon titan llms
                 return litellm.AmazonTitanConfig()
+            elif bedrock_invoke_provider == "anthropic":
+                if base_model.startswith("anthropic.claude-3"):
+                    return litellm.AmazonAnthropicClaude3Config()
+                else:
+                    return litellm.AmazonAnthropicConfig()
             elif (
                 bedrock_invoke_provider == "meta" or bedrock_invoke_provider == "llama"
             ):  # amazon / meta llms
@@ -6132,6 +6248,8 @@ class ProviderConfigManager:
                 return litellm.AmazonCohereConfig()
             elif bedrock_invoke_provider == "mistral":  # mistral models on bedrock
                 return litellm.AmazonMistralConfig()
+            elif bedrock_invoke_provider == "deepseek_r1":  # deepseek models on bedrock
+                return litellm.AmazonDeepSeekR1Config()
             else:
                 return litellm.AmazonInvokeConfig()
         return litellm.OpenAIGPTConfig()
@@ -6153,14 +6271,30 @@ class ProviderConfigManager:
     def get_provider_rerank_config(
         model: str,
         provider: LlmProviders,
+        api_base: Optional[str],
+        present_version_params: List[str],
     ) -> BaseRerankConfig:
         if litellm.LlmProviders.COHERE == provider:
-            return litellm.CohereRerankConfig()
+            if should_use_cohere_v1_client(api_base, present_version_params):
+                return litellm.CohereRerankConfig()
+            else:
+                return litellm.CohereRerankV2Config()
         elif litellm.LlmProviders.AZURE_AI == provider:
             return litellm.AzureAIRerankConfig()
         elif litellm.LlmProviders.INFINITY == provider:
             return litellm.InfinityRerankConfig()
+        elif litellm.LlmProviders.JINA_AI == provider:
+            return litellm.JinaAIRerankConfig()
         return litellm.CohereRerankConfig()
+
+    @staticmethod
+    def get_provider_anthropic_messages_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseAnthropicMessagesConfig]:
+        if litellm.LlmProviders.ANTHROPIC == provider:
+            return litellm.AnthropicMessagesConfig()
+        return None
 
     @staticmethod
     def get_provider_audio_transcription_config(
@@ -6171,6 +6305,15 @@ class ProviderConfigManager:
             return litellm.FireworksAIAudioTranscriptionConfig()
         elif litellm.LlmProviders.DEEPGRAM == provider:
             return litellm.DeepgramAudioTranscriptionConfig()
+        return None
+
+    @staticmethod
+    def get_provider_responses_api_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseResponsesAPIConfig]:
+        if litellm.LlmProviders.OPENAI == provider:
+            return litellm.OpenAIResponsesAPIConfig()
         return None
 
     @staticmethod
@@ -6236,6 +6379,19 @@ def get_end_user_id_for_cost_tracking(
     ):
         return None
     return end_user_id
+
+
+def should_use_cohere_v1_client(
+    api_base: Optional[str], present_version_params: List[str]
+):
+    if not api_base:
+        return False
+    uses_v1_params = ("max_chunks_per_doc" in present_version_params) and (
+        "max_tokens_per_doc" not in present_version_params
+    )
+    return api_base.endswith("/v1/rerank") or (
+        uses_v1_params and not api_base.endswith("/v2/rerank")
+    )
 
 
 def is_prompt_caching_valid_prompt(
@@ -6348,7 +6504,9 @@ def get_non_default_completion_params(kwargs: dict) -> dict:
 
 def add_openai_metadata(metadata: dict) -> dict:
     """
-    Add metadata to openai optional parameters, excluding hidden params
+    Add metadata to openai optional parameters, excluding hidden params.
+
+    OpenAI 'metadata' only supports string values.
 
     Args:
         params (dict): Dictionary of API parameters
@@ -6360,5 +6518,55 @@ def add_openai_metadata(metadata: dict) -> dict:
     if metadata is None:
         return None
     # Only include non-hidden parameters
-    visible_metadata = {k: v for k, v in metadata.items() if k != "hidden_params"}
+    visible_metadata = {
+        k: v
+        for k, v in metadata.items()
+        if k != "hidden_params" and isinstance(v, (str))
+    }
+
     return visible_metadata.copy()
+
+
+def return_raw_request(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict:
+    """
+    Return the json str of the request
+
+    This is currently in BETA, and tested for `/chat/completions` -> `litellm.completion` calls.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    litellm_logging_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        litellm_call_id="1234",
+        start_time=datetime.now(),
+        function_id="1234",
+        log_raw_request_response=True,
+    )
+
+    llm_api_endpoint = getattr(litellm, endpoint.value)
+
+    received_exception = ""
+
+    try:
+        llm_api_endpoint(
+            **kwargs,
+            litellm_logging_obj=litellm_logging_obj,
+            api_key="my-fake-api-key",  # 👈 ensure the request fails
+        )
+    except Exception as e:
+        received_exception = str(e)
+
+    raw_request_typed_dict = litellm_logging_obj.model_call_details.get(
+        "raw_request_typed_dict"
+    )
+    if raw_request_typed_dict:
+        return cast(RawRequestTypedDict, raw_request_typed_dict)
+    else:
+        return RawRequestTypedDict(
+            error=received_exception,
+        )

@@ -319,6 +319,23 @@ class BedrockModelInfo(BaseLLMModelInfo):
     all_global_regions = global_config.get_all_regions()
 
     @staticmethod
+    def extract_model_name_from_arn(model: str) -> str:
+        """
+        Extract the model name from an AWS Bedrock ARN.
+        Returns the string after the last '/' if 'arn' is in the input string.
+
+        Args:
+            arn (str): The ARN string to parse
+
+        Returns:
+            str: The extracted model name if 'arn' is in the string,
+                otherwise returns the original string
+        """
+        if "arn" in model.lower():
+            return model.split("/")[-1]
+        return model
+
+    @staticmethod
     def get_base_model(model: str) -> str:
         """
         Get the base model from the given model name.
@@ -334,6 +351,8 @@ class BedrockModelInfo(BaseLLMModelInfo):
 
         if model.startswith("invoke/"):
             model = model.split("/", 1)[1]
+
+        model = BedrockModelInfo.extract_model_name_from_arn(model)
 
         potential_region = model.split(".", 1)[0]
 

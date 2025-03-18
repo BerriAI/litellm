@@ -14,6 +14,8 @@ from typing import Optional
 import httpx
 import openai
 
+from litellm.types.utils import LiteLLMCommonStrings
+
 
 class AuthenticationError(openai.AuthenticationError):  # type: ignore
     def __init__(
@@ -116,6 +118,7 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
         litellm_debug_info: Optional[str] = None,
         max_retries: Optional[int] = None,
         num_retries: Optional[int] = None,
+        body: Optional[dict] = None,
     ):
         self.status_code = 400
         self.message = "litellm.BadRequestError: {}".format(message)
@@ -131,7 +134,7 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
         self.max_retries = max_retries
         self.num_retries = num_retries
         super().__init__(
-            self.message, response=response, body=None
+            self.message, response=response, body=body
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):
@@ -790,3 +793,16 @@ class MockException(openai.APIError):
         if request is None:
             request = httpx.Request(method="POST", url="https://api.openai.com/v1")
         super().__init__(self.message, request=request, body=None)  # type: ignore
+
+
+class LiteLLMUnknownProvider(BadRequestError):
+    def __init__(self, model: str, custom_llm_provider: Optional[str] = None):
+        self.message = LiteLLMCommonStrings.llm_provider_not_provided.value.format(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        super().__init__(
+            self.message, model=model, llm_provider=custom_llm_provider, response=None
+        )
+
+    def __str__(self):
+        return self.message

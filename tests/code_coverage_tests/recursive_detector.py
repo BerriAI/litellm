@@ -14,6 +14,7 @@ IGNORE_FUNCTIONS = [
     "strip_field",
     "_transform_prompt",
     "mask_dict",
+    "_serialize",  # we now set a max depth for this
 ]
 
 
