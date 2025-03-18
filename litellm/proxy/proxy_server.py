@@ -33,9 +33,12 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.integrations.opentelemetry import OpenTelemetry
+
     Span = _Span
 else:
     Span = Any
+    OpenTelemetry = Any
 
 
 def showwarning(message, category, filename, lineno, file=None, line=None):
@@ -777,7 +780,7 @@ disable_spend_logs = False
 jwt_handler = JWTHandler()
 prompt_injection_detection_obj: Optional[_OPTIONAL_PromptInjectionDetection] = None
 store_model_in_db: bool = False
-open_telemetry_logger: Optional[Any] = None
+open_telemetry_logger: Optional[OpenTelemetry] = None
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj = ProxyLogging(
     user_api_key_cache=user_api_key_cache, premium_user=premium_user

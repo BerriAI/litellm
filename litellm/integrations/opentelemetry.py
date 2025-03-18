@@ -485,12 +485,7 @@ class OpenTelemetry(CustomLogger):
         self, span: Span, kwargs, response_obj: Optional[Any]
     ):
         try:
-            if self.callback_name == "arize":
-                from litellm.integrations.arize.arize import ArizeLogger
-
-                ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
-                return
-            elif self.callback_name == "arize_phoenix":
+            if self.callback_name == "arize_phoenix":
                 from litellm.integrations.arize.arize_phoenix import ArizePhoenixLogger
 
                 ArizePhoenixLogger.set_arize_phoenix_attributes(
@@ -1006,3 +1001,18 @@ class OpenTelemetry(CustomLogger):
             )
             management_endpoint_span.set_status(Status(StatusCode.ERROR))
             management_endpoint_span.end(end_time=_end_time_ns)
+
+    def create_litellm_proxy_request_started_span(
+        self,
+        start_time: datetime,
+        headers: dict,
+    ) -> Optional[Span]:
+        """
+        Create a span for the received proxy server request.
+        """
+        return self.tracer.start_span(
+            name="Received Proxy Server Request",
+            start_time=self._to_ns(start_time),
+            context=self.get_traceparent_from_header(headers=headers),
+            kind=self.span_kind.SERVER,
+        )
