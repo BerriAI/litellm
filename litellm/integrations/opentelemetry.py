@@ -378,7 +378,9 @@ class OpenTelemetry(CustomLogger):
 
             provider = trace.get_tracer_provider()
             if isinstance(provider, TracerProvider):
-                span_processor = self._get_span_processor(dynamic_headers)
+                span_processor = self._get_span_processor(
+                    dynamic_headers=dynamic_headers
+                )
                 provider.add_span_processor(span_processor)
 
     def _handle_failure(self, kwargs, response_obj, start_time, end_time):
