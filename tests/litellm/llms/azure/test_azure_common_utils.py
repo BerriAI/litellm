@@ -68,6 +68,7 @@ def test_initialize_with_api_key(setup_mocks):
         api_base="https://test.openai.azure.com",
         model_name="gpt-4",
         api_version="2023-06-01",
+        is_async=False,
     )
 
     # Verify expected result
@@ -90,6 +91,7 @@ def test_initialize_with_tenant_credentials(setup_mocks):
         api_base="https://test.openai.azure.com",
         model_name="gpt-4",
         api_version=None,
+        is_async=False,
     )
 
     # Verify that get_azure_ad_token_from_entrata_id was called
@@ -117,6 +119,7 @@ def test_initialize_with_username_password(setup_mocks):
         api_base="https://test.openai.azure.com",
         model_name="gpt-4",
         api_version=None,
+        is_async=False,
     )
 
     # Verify that get_azure_ad_token_from_username_password was called
@@ -138,6 +141,7 @@ def test_initialize_with_oidc_token(setup_mocks):
         api_base="https://test.openai.azure.com",
         model_name="gpt-4",
         api_version=None,
+        is_async=False,
     )
 
     # Verify that get_azure_ad_token_from_oidc was called
@@ -158,6 +162,7 @@ def test_initialize_with_enable_token_refresh(setup_mocks):
         api_base="https://test.openai.azure.com",
         model_name="gpt-4",
         api_version=None,
+        is_async=False,
     )
 
     # Verify that get_azure_ad_token_provider was called
@@ -179,6 +184,7 @@ def test_initialize_with_token_refresh_error(setup_mocks):
         api_base="https://test.openai.azure.com",
         model_name="gpt-4",
         api_version=None,
+        is_async=False,
     )
 
     # Verify error was logged
@@ -196,6 +202,7 @@ def test_api_version_from_env_var(setup_mocks):
             api_base="https://test.openai.azure.com",
             model_name="gpt-4",
             api_version=None,
+            is_async=False,
         )
 
     # Verify expected result
@@ -210,6 +217,7 @@ def test_select_azure_base_url_called(setup_mocks):
         api_base="https://test.openai.azure.com",
         model_name="gpt-4",
         api_version="2023-06-01",
+        is_async=False,
     )
 
     # Verify that select_azure_base_url_or_endpoint was called
