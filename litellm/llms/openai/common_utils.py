@@ -102,22 +102,19 @@ class BaseOpenAILLM:
 
     @staticmethod
     def _get_async_http_client() -> Optional[httpx.AsyncClient]:
-        if litellm.ssl_verify:
-            return httpx.AsyncClient(
-                limits=httpx.Limits(
-                    max_connections=1000, max_keepalive_connections=100
-                ),
-                verify=litellm.ssl_verify,
-            )
-        return litellm.aclient_session
+        if litellm.aclient_session is not None:
+            return litellm.aclient_session
+
+        return httpx.AsyncClient(
+            limits=httpx.Limits(max_connections=1000, max_keepalive_connections=100),
+            verify=litellm.ssl_verify,
+        )
 
     @staticmethod
     def _get_sync_http_client() -> Optional[httpx.Client]:
-        if litellm.ssl_verify:
-            return httpx.Client(
-                limits=httpx.Limits(
-                    max_connections=1000, max_keepalive_connections=100
-                ),
-                verify=litellm.ssl_verify,
-            )
-        return litellm.client_session
+        if litellm.client_session is not None:
+            return litellm.client_session
+        return httpx.Client(
+            limits=httpx.Limits(max_connections=1000, max_keepalive_connections=100),
+            verify=litellm.ssl_verify,
+        )
