@@ -2611,48 +2611,6 @@ class TransformRequestBody(BaseModel):
     request_body: dict
 
 
-class UpperboundKeyGenerateParams(LiteLLMPydanticObjectBase):
-    """
-    Upperbound limits for /key/generate requests when self-serve flow is enabled
-    """
-
-    max_budget: Optional[float] = Field(
-        default=None,
-        description="Maximum budget (in USD) that can be set for any generated key",
-    )
-    budget_duration: Optional[str] = Field(
-        default=None,
-        description="Maximum budget duration that can be set (e.g. '30d', '1mo')",
-    )
-    duration: Optional[str] = Field(
-        default=None,
-        description="Maximum key lifetime duration that can be set (e.g. '30d', '1mo')",
-    )
-    max_parallel_requests: Optional[int] = Field(
-        default=None,
-        description="Maximum parallel requests limit that can be set for any generated key",
-    )
-    tpm_limit: Optional[int] = Field(
-        default=None,
-        description="Maximum tokens per minute limit that can be set for any generated key",
-    )
-    rpm_limit: Optional[int] = Field(
-        default=None,
-        description="Maximum requests per minute limit that can be set for any generated key",
-    )
-
-
-class TeamKeyGenerationSettings(LiteLLMPydanticObjectBase):
-    """
-    Settings for team-based key generation
-    """
-
-    allowed_team_member_roles: Optional[List[Literal["admin", "user"]]] = Field(
-        default=["admin"],
-        description="Team member roles that are allowed to generate keys for their team",
-    )
-
-
 class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
     """
     Default parameters to apply when a new user signs in via SSO
