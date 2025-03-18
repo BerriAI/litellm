@@ -1,0 +1,12 @@
+{
+  "openai": [
+    "omni-moderation-latest",
+    "omni-moderation-latest-intents",
+    "omni-moderation-2024-09-26"
+  ],
+  "azure": [
+    "azure/gpt-4o-mini-realtime-preview-2024-12-17",
+    "azure/eu/gpt-4o-mini-realtime-preview-2024-12-17",
+    "azure/us/gpt-4o-mini-realtime-preview-2024-12-17"
+  ]
+}
