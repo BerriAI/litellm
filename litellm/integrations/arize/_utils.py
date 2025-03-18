@@ -19,13 +19,16 @@ def set_attributes(span: Span, kwargs, response_obj):
     )
 
     try:
-        litellm_params = kwargs.get("litellm_params", {}) or {}
-
+        standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
+            "standard_logging_object"
+        )
+        
         #############################################
         ############ LLM CALL METADATA ##############
         #############################################
-        metadata = litellm_params.get("metadata", {}) or {}
-        span.set_attribute(SpanAttributes.METADATA, str(metadata))
+        
+        if standard_logging_payload and (metadata := standard_logging_payload["metadata"]):
+            span.set_attribute(SpanAttributes.METADATA, json.dumps(metadata))
 
         #############################################
         ########## LLM Request Attributes ###########
@@ -62,9 +65,6 @@ def set_attributes(span: Span, kwargs, response_obj):
                     msg.get("content", ""),
                 )
 
-        standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
-            "standard_logging_object"
-        )
         if standard_logging_payload and (model_params := standard_logging_payload["model_parameters"]):
             # The Generative AI Provider: Azure, OpenAI, etc.
             span.set_attribute(
