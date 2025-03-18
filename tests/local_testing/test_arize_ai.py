@@ -34,7 +34,7 @@ async def test_async_otel_callback():
 
 @pytest.fixture
 def mock_env_vars(monkeypatch):
-    monkeypatch.setenv("ARIZE_SPACE_ID", "test_space_id")
+    monkeypatch.setenv("ARIZE_SPACE_KEY", "test_space_key")
     monkeypatch.setenv("ARIZE_API_KEY", "test_api_key")
 
 
@@ -44,7 +44,7 @@ def test_get_arize_config(mock_env_vars):
     """
     config = ArizeLogger.get_arize_config()
     assert isinstance(config, ArizeConfig)
-    assert config.space_id == "test_space_id"
+    assert config.space_key == "test_space_key"
     assert config.api_key == "test_api_key"
     assert config.endpoint == "https://otlp.arize.com/v1"
     assert config.protocol == "otlp_grpc"
