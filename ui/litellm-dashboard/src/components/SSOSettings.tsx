@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { Card, Title, Text, Divider, Button, TextInput } from "@tremor/react";
 import { Typography, Spin, message, Switch, Select, Form } from "antd";
-import { getInternalUserSettings, updateInternalUserSettings } from "./networking";
+import { getInternalUserSettings, updateInternalUserSettings, modelAvailableCall } from "./networking";
 import BudgetDurationDropdown, { getBudgetDurationLabel } from "./common_components/budget_duration_dropdown";
+import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 
 interface SSOSettingsProps {
   accessToken: string | null;
@@ -15,6 +16,7 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles 
   const [isEditing, setIsEditing] = useState<boolean>(false);
   const [editedValues, setEditedValues] = useState<any>({});
   const [saving, setSaving] = useState<boolean>(false);
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
   const { Paragraph } = Typography;
   const { Option } = Select;
 
@@ -29,6 +31,19 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles 
         const data = await getInternalUserSettings(accessToken);
         setSettings(data);
         setEditedValues(data.values || {});
+        
+        // Fetch available models
+        if (accessToken) {
+          try {
+            const modelResponse = await modelAvailableCall(accessToken);
+            if (modelResponse && modelResponse.data) {
+              const modelNames = modelResponse.data.map((model: { id: string }) => model.id);
+              setAvailableModels(modelNames);
+            }
+          } catch (error) {
+            console.error("Error fetching available models:", error);
+          }
+        }
       } catch (error) {
         console.error("Error fetching SSO settings:", error);
         message.error("Failed to fetch SSO settings");
@@ -117,6 +132,22 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles 
           ))}
         </Select>
       );
+    } else if (key === "models") {
+      return (
+        <Select
+          mode="multiple"
+          style={{ width: '100%' }}
+          value={editedValues[key] || []}
+          onChange={(value) => handleTextInputChange(key, value)}
+          className="mt-2"
+        >
+          {availableModels.map((model: string) => (
+            <Option key={model} value={model}>
+              {getModelDisplayName(model)}
+            </Option>
+          ))}
+        </Select>
+      );
     } else if (type === "string" && property.enum) {
       return (
         <Select
@@ -161,6 +192,20 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles 
     
     if (typeof value === "boolean") {
       return <span>{value ? "Enabled" : "Disabled"}</span>;
+    }
+    
+    if (key === "models" && Array.isArray(value)) {
+      if (value.length === 0) return <span className="text-gray-400">None</span>;
+      
+      return (
+        <div className="flex flex-wrap gap-2 mt-1">
+          {value.map((model, index) => (
+            <span key={index} className="px-2 py-1 bg-blue-100 rounded text-xs">
+              {getModelDisplayName(model)}
+            </span>
+          ))}
+        </div>
+      );
     }
     
     if (typeof value === "object") {
