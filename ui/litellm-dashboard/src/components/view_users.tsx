@@ -290,7 +290,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "users" : "settings")}>
         <TabList className="mb-4">
           <Tab>Users</Tab>
-          <Tab>Personal Key Settings</Tab>
+          <Tab>Default User Settings</Tab>
         </TabList>
         
         <TabPanels>
@@ -348,7 +348,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           </TabPanel>
           
           <TabPanel>
-            <SSOSettings accessToken={accessToken} />
+            <SSOSettings accessToken={accessToken} possibleUIRoles={possibleUIRoles} />
           </TabPanel>
         </TabPanels>
       </TabGroup>
