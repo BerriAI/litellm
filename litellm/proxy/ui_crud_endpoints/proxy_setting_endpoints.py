@@ -1,5 +1,5 @@
 #### CRUD ENDPOINTS for UI Settings #####
-from typing import Any, Dict, List, Optional
+from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 
