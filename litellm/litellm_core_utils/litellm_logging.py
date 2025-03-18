@@ -2654,7 +2654,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             )
 
             os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = (
-                f"space_key={arize_config.space_key},api_key={arize_config.api_key}"
+                f"space_id={arize_config.space_id},api_key={arize_config.api_key}"
             )
             for callback in _in_memory_loggers:
                 if (
@@ -2899,8 +2899,8 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "arize":
             from litellm.integrations.opentelemetry import OpenTelemetry
 
-            if "ARIZE_SPACE_KEY" not in os.environ:
-                raise ValueError("ARIZE_SPACE_KEY not found in environment variables")
+            if "ARIZE_SPACE_ID" not in os.environ:
+                raise ValueError("ARIZE_SPACE_ID not found in environment variables")
             if "ARIZE_API_KEY" not in os.environ:
                 raise ValueError("ARIZE_API_KEY not found in environment variables")
             for callback in _in_memory_loggers:

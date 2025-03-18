@@ -12,7 +12,7 @@ else:
 
 
 def set_attributes(span: Span, kwargs, response_obj):
-    from openinference.semconv.trace import (
+    from litellm.integrations._types.open_inference import (
         MessageAttributes,
         OpenInferenceSpanKindValues,
         SpanAttributes,

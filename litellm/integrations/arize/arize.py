@@ -40,11 +40,11 @@ class ArizeLogger:
         Raises:
             ValueError: If required environment variables are not set.
         """
-        space_key = os.environ.get("ARIZE_SPACE_KEY")
+        space_id = os.environ.get("ARIZE_SPACE_ID")
         api_key = os.environ.get("ARIZE_API_KEY")
 
-        if not space_key:
-            raise ValueError("ARIZE_SPACE_KEY not found in environment variables")
+        if not space_id:
+            raise ValueError("ARIZE_SPACE_ID not found in environment variables")
         if not api_key:
             raise ValueError("ARIZE_API_KEY not found in environment variables")
 
@@ -65,7 +65,7 @@ class ArizeLogger:
             endpoint = "https://otlp.arize.com/v1"
 
         return ArizeConfig(
-            space_key=space_key,
+            space_id=space_id,
             api_key=api_key,
             protocol=protocol,
             endpoint=endpoint,
