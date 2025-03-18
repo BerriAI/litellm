@@ -469,8 +469,6 @@ class LowestLatencyLoggingHandler(CustomLogger):
             total: float = 0.0
             if (
                 request_kwargs is not None
-                and len(item_latency) > 0
-                and isinstance(item_latency[0], timedelta)
                 and request_kwargs.get("stream", None) is not None
                 and request_kwargs["stream"] is True
                 and len(item_ttft_latency) > 0
@@ -478,6 +476,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 for _call_latency in item_ttft_latency:
                     if isinstance(_call_latency, float):
                         total += _call_latency
+                total = total / len(item_ttft_latency) if total > 0 else float('inf')
             elif len(item_latency) > 0 and isinstance(item_latency[0], timedelta):
                 for _call_latency in item_latency:
                     total += _call_latency.total_seconds()
@@ -485,7 +484,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 for _call_latency in item_latency:
                     if isinstance(_call_latency, float):
                         total += _call_latency
-            item_latency = total / len(item_latency)
+            item_latency = total / len(item_latency) if total > 0 else float('inf')
 
             # -------------- #
             # Debugging Logic
