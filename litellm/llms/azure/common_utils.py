@@ -9,7 +9,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.openai.openai import OpenAIChatCompletion
+from litellm.llms.openai.common_utils import BaseOpenAILLM
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
@@ -245,7 +245,7 @@ def select_azure_base_url_or_endpoint(azure_client_params: dict):
     return azure_client_params
 
 
-class BaseAzureLLM(OpenAIChatCompletion):
+class BaseAzureLLM(BaseOpenAILLM):
     def get_azure_openai_client(
         self,
         api_key: Optional[str],

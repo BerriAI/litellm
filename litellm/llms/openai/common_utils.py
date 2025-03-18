@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Union
 import httpx
 import openai
 
+import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 
@@ -92,3 +93,31 @@ def drop_params_from_unprocessable_entity_error(
     new_data = {k: v for k, v in data.items() if k not in invalid_params}
 
     return new_data
+
+
+class BaseOpenAILLM:
+    """
+    Base class for OpenAI LLMs for getting their httpx clients and SSL verification settings
+    """
+
+    @staticmethod
+    def _get_async_http_client() -> Optional[httpx.AsyncClient]:
+        if litellm.ssl_verify:
+            return httpx.AsyncClient(
+                limits=httpx.Limits(
+                    max_connections=1000, max_keepalive_connections=100
+                ),
+                verify=litellm.ssl_verify,
+            )
+        return litellm.aclient_session
+
+    @staticmethod
+    def _get_sync_http_client() -> Optional[httpx.Client]:
+        if litellm.ssl_verify:
+            return httpx.Client(
+                limits=httpx.Limits(
+                    max_connections=1000, max_keepalive_connections=100
+                ),
+                verify=litellm.ssl_verify,
+            )
+        return litellm.client_session

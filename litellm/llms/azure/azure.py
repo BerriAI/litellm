@@ -234,6 +234,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 api_base=api_base,
                 model_name=model,
                 api_version=api_version,
+                is_async=False,
             )
             ### CHECK IF CLOUDFLARE AI GATEWAY ###
             ### if so - set the model as part of the base url
@@ -749,6 +750,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 model_name=model,
                 api_version=api_version,
                 api_base=api_base,
+                is_async=False,
             )
             ## LOGGING
             logging_obj.pre_call(
@@ -1152,6 +1154,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 model_name=model or "",
                 api_version=api_version,
                 api_base=api_base,
+                is_async=False,
             )
             if aimg_generation is True:
                 return self.aimage_generation(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_key=api_key, client=client, azure_client_params=azure_client_params, timeout=timeout, headers=headers)  # type: ignore

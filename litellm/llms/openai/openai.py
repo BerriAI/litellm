@@ -50,7 +50,11 @@ from litellm.utils import (
 from ...types.llms.openai import *
 from ..base import BaseLLM
 from .chat.o_series_transformation import OpenAIOSeriesConfig
-from .common_utils import OpenAIError, drop_params_from_unprocessable_entity_error
+from .common_utils import (
+    BaseOpenAILLM,
+    OpenAIError,
+    drop_params_from_unprocessable_entity_error,
+)
 
 openaiOSeriesConfig = OpenAIOSeriesConfig()
 
@@ -317,7 +321,7 @@ class OpenAIChatCompletionResponseIterator(BaseModelResponseIterator):
             raise e
 
 
-class OpenAIChatCompletion(BaseLLM):
+class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
     def __init__(self) -> None:
         super().__init__()
@@ -400,28 +404,6 @@ class OpenAIChatCompletion(BaseLLM):
                 max_retries=max_retries,
             )
             return client
-
-    @staticmethod
-    def _get_async_http_client() -> Optional[httpx.AsyncClient]:
-        if litellm.ssl_verify:
-            return httpx.AsyncClient(
-                limits=httpx.Limits(
-                    max_connections=1000, max_keepalive_connections=100
-                ),
-                verify=litellm.ssl_verify,
-            )
-        return litellm.aclient_session
-
-    @staticmethod
-    def _get_sync_http_client() -> Optional[httpx.Client]:
-        if litellm.ssl_verify:
-            return httpx.Client(
-                limits=httpx.Limits(
-                    max_connections=1000, max_keepalive_connections=100
-                ),
-                verify=litellm.ssl_verify,
-            )
-        return litellm.client_session
 
     @track_llm_api_timing()
     async def make_openai_chat_completion_request(
