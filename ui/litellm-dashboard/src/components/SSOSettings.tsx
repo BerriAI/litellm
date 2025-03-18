@@ -245,7 +245,7 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles 
   if (!settings) {
     return (
       <Card>
-        <Text>No settings available or you don't have permission to view them.</Text>
+        <Text>No settings available or you do not have permission to view them.</Text>
       </Card>
     );
   }
