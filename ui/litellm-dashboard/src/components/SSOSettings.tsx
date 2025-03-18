@@ -8,6 +8,7 @@ import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_t
 interface SSOSettingsProps {
   accessToken: string | null;
   possibleUIRoles?: Record<string, Record<string, string>> | null;
+  userID?: string;
 }
 
 const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles }) => {
@@ -72,7 +73,7 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles 
   };
 
   const handleTextInputChange = (key: string, value: any) => {
-    setEditedValues(prev => ({
+    setEditedValues((prev: Record<string, any>) => ({
       ...prev,
       [key]: value
     }));
