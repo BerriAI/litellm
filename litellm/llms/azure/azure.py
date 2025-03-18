@@ -141,7 +141,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
         return headers
 
-    def _get_sync_azure_client(
+    def _get_azure_openai_client(
         self,
         api_version: Optional[str],
         api_base: Optional[str],
@@ -1240,7 +1240,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 litellm_params=litellm_params,
             )  # type: ignore
 
-        azure_client: AzureOpenAI = self._get_sync_azure_client(
+        azure_client: AzureOpenAI = self._get_azure_openai_client(
             api_base=api_base,
             api_version=api_version,
             api_key=api_key,
@@ -1279,7 +1279,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         litellm_params: Optional[dict] = None,
     ) -> HttpxBinaryResponseContent:
 
-        azure_client: AsyncAzureOpenAI = self._get_sync_azure_client(
+        azure_client: AsyncAzureOpenAI = self._get_azure_openai_client(
             api_base=api_base,
             api_version=api_version,
             api_key=api_key,
