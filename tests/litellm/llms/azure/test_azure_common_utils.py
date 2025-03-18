@@ -308,12 +308,10 @@ async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
     # Get appropriate input for this call type
     input_kwarg = test_inputs.get(call_type.value, {})
 
-    patch_target = "litellm.main.azure_chat_completions.initialize_azure_sdk_client"
-    if call_type == CallTypes.atranscription:
-        patch_target = (
-            "litellm.main.azure_audio_transcriptions.initialize_azure_sdk_client"
-        )
-    elif call_type == CallTypes.arerank:
+    patch_target = (
+        "litellm.llms.azure.common_utils.BaseAzureLLM.initialize_azure_sdk_client"
+    )
+    if call_type == CallTypes.arerank:
         patch_target = (
             "litellm.rerank_api.main.azure_rerank.initialize_azure_sdk_client"
         )
