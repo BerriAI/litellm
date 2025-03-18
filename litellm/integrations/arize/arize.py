@@ -51,11 +51,6 @@ class ArizeLogger(OpenTelemetry):
         space_key = os.environ.get("ARIZE_SPACE_KEY")
         api_key = os.environ.get("ARIZE_API_KEY")
 
-        if not space_key:
-            raise ValueError("ARIZE_SPACE_KEY not found in environment variables")
-        if not api_key:
-            raise ValueError("ARIZE_API_KEY not found in environment variables")
-
         grpc_endpoint = os.environ.get("ARIZE_ENDPOINT")
         http_endpoint = os.environ.get("ARIZE_HTTP_ENDPOINT")
 
