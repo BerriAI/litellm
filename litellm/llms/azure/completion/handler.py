@@ -95,6 +95,7 @@ class AzureTextCompletion(BaseAzureLLM):
                         azure_ad_token=azure_ad_token,
                         timeout=timeout,
                         client=client,
+                        litellm_params=litellm_params,
                     )
                 else:
                     return self.acompletion(
@@ -109,6 +110,7 @@ class AzureTextCompletion(BaseAzureLLM):
                         client=client,
                         logging_obj=logging_obj,
                         max_retries=max_retries,
+                        litellm_params=litellm_params,
                     )
             elif "stream" in optional_params and optional_params["stream"] is True:
                 return self.streaming(
