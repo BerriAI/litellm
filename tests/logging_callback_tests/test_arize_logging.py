@@ -19,6 +19,8 @@ def test_arize_callback():
     os.environ["ARIZE_API_KEY"] = "test_api_key"
     os.environ["ARIZE_ENDPOINT"] = "https://otlp.arize.com/v1"
 
+    # Set the batch span processor to quickly flush after a span has been added
+    # This is to ensure that the span is exported before the test ends
     os.environ["OTEL_BSP_MAX_QUEUE_SIZE"] = "1"  
     os.environ["OTEL_BSP_MAX_EXPORT_BATCH_SIZE"] = "1"   
     os.environ["OTEL_BSP_SCHEDULE_DELAY_MILLIS"] = "1" 
@@ -36,5 +38,5 @@ def test_arize_callback():
             mock_response="hello there!",
         )
 
-        time.sleep(1)
+        time.sleep(1) # Wait for the batch span processor to flush
         assert patched_export.called
