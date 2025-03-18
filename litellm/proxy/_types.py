@@ -124,6 +124,14 @@ class LitellmUserRoles(str, enum.Enum):
         }
         return ui_labels.get(self.value, "")
 
+    @property
+    def is_internal_user_role(self) -> bool:
+        """returns true if this role is an `internal_user` or `internal_user_viewer` role"""
+        return self.value in [
+            self.INTERNAL_USER.value,
+            self.INTERNAL_USER_VIEW_ONLY.value,
+        ]
+
 
 class LitellmTableNames(str, enum.Enum):
     """
