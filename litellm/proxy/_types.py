@@ -2621,7 +2621,7 @@ class TransformRequestBody(BaseModel):
 
 class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
     """
-    Default parameters to apply when a new user signs in via SSO or is create view /user/new API endpoint
+    Default parameters to apply when a new user signs in via SSO or is created on the /user/new API endpoint
     """
 
     user_role: Optional[
