@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 
 from litellm import Choices
 import pytest
@@ -27,6 +28,26 @@ async def test_async_otel_callback():
         mock_response="hello",
         temperature=0.1,
         user="OTEL_USER",
+    )
+
+    await asyncio.sleep(2)
+
+
+@pytest.mark.asyncio()
+async def test_async_dynamic_arize_config():
+    litellm.set_verbose = True
+
+    verbose_proxy_logger.setLevel(logging.DEBUG)
+    verbose_logger.setLevel(logging.DEBUG)
+    litellm.success_callback = ["arize"]
+
+    await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi test from arize dynamic config"}],
+        temperature=0.1,
+        user="OTEL_USER",
+        arize_api_key=os.getenv("ARIZE_SPACE_2_API_KEY"),
+        arize_space_key=os.getenv("ARIZE_SPACE_2_KEY"),
     )
 
     await asyncio.sleep(2)
