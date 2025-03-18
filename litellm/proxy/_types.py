@@ -128,8 +128,8 @@ class LitellmUserRoles(str, enum.Enum):
     def is_internal_user_role(self) -> bool:
         """returns true if this role is an `internal_user` or `internal_user_viewer` role"""
         return self.value in [
-            self.INTERNAL_USER.value,
-            self.INTERNAL_USER_VIEW_ONLY.value,
+            self.INTERNAL_USER,
+            self.INTERNAL_USER_VIEW_ONLY,
         ]
 
 
