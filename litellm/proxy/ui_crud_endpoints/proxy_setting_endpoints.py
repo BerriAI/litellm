@@ -123,14 +123,17 @@ async def get_sso_settings():
     """
     from pydantic import TypeAdapter
 
-    # Create the settings object first
-    sso_settings = DefaultInternalUserParams(
-        **(
-            litellm.default_internal_user_params
-            if isinstance(litellm.default_internal_user_params, dict)
-            else {}
-        )
+    from litellm.proxy.proxy_server import proxy_config
+
+    # Load existing config
+    config = await proxy_config.get_config()
+    litellm_settings = config.get("litellm_settings", {}) or {}
+    default_internal_user_params = (
+        litellm_settings.get("default_internal_user_params", {}) or {}
     )
+
+    # Create the settings object first
+    sso_settings = DefaultInternalUserParams(**(default_internal_user_params))
     # Get the schema for UISSOSettings
     schema = TypeAdapter(DefaultInternalUserParams).json_schema(by_alias=True)
 
