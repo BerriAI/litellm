@@ -3879,3 +3879,149 @@ async def test_get_paginated_teams(prisma_client):
     except Exception as e:
         print(f"Error occurred: {e}")
         pytest.fail(f"Test failed with exception: {e}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entity_type", ["key", "user", "team"])
+async def test_reset_budget_job(prisma_client, entity_type):
+    """
+    Test that the ResetBudgetJob correctly resets budgets for keys, users, and teams.
+
+    For each entity type:
+    1. Create a new entity with max_budget=100, spend=99, budget_duration=5s
+    2. Call the reset_budget function
+    3. Verify the entity's spend is reset to 0 and budget_reset_at is updated
+    """
+    from datetime import datetime, timedelta
+    import time
+
+    from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
+    from litellm.proxy.utils import ProxyLogging
+
+    # Setup
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+    reset_budget_job = ResetBudgetJob(
+        proxy_logging_obj=proxy_logging_obj, prisma_client=prisma_client
+    )
+
+    # Create entity based on type
+    entity_id = None
+    if entity_type == "key":
+        # Create a key with specific budget settings
+        key = await generate_key_fn(
+            data=GenerateKeyRequest(
+                max_budget=100,
+                budget_duration="5s",
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="1234",
+            ),
+        )
+        entity_id = key.token_id
+        print("generated key=", key)
+
+        # Update the key to set spend and reset_at to now
+        updated = await prisma_client.db.litellm_verificationtoken.update_many(
+            where={"token": key.token_id},
+            data={
+                "spend": 99.0,
+            },
+        )
+        print("Updated key=", updated)
+
+    elif entity_type == "user":
+        # Create a user with specific budget settings
+        user = await new_user(
+            data=NewUserRequest(
+                max_budget=100,
+                budget_duration="5s",
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="1234",
+            ),
+        )
+        entity_id = user.user_id
+
+        # Update the user to set spend and reset_at to now
+        await prisma_client.db.litellm_usertable.update_many(
+            where={"user_id": user.user_id},
+            data={
+                "spend": 99.0,
+            },
+        )
+
+    elif entity_type == "team":
+        # Create a team with specific budget settings
+        team_id = f"test-team-{uuid.uuid4()}"
+        team = await new_team(
+            NewTeamRequest(
+                team_id=team_id,
+                max_budget=100,
+                budget_duration="5s",
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="1234",
+            ),
+            http_request=Request(scope={"type": "http"}),
+        )
+        entity_id = team_id
+
+        # Update the team to set spend and reset_at to now
+        current_time = datetime.utcnow()
+        await prisma_client.db.litellm_teamtable.update(
+            where={"team_id": team_id},
+            data={
+                "spend": 99.0,
+            },
+        )
+
+    # Verify entity was created and updated with spend
+    if entity_type == "key":
+        entity_before = await prisma_client.db.litellm_verificationtoken.find_unique(
+            where={"token": entity_id}
+        )
+    elif entity_type == "user":
+        entity_before = await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": entity_id}
+        )
+    elif entity_type == "team":
+        entity_before = await prisma_client.db.litellm_teamtable.find_unique(
+            where={"team_id": entity_id}
+        )
+
+    assert entity_before is not None
+    assert entity_before.spend == 99.0
+
+    # Wait for 5 seconds to pass
+    print("sleeping for 5 seconds")
+    time.sleep(5)
+
+    # Call the reset_budget function
+    await reset_budget_job.reset_budget()
+
+    # Verify the entity's spend is reset and budget_reset_at is updated
+    if entity_type == "key":
+        entity_after = await prisma_client.db.litellm_verificationtoken.find_unique(
+            where={"token": entity_id}
+        )
+    elif entity_type == "user":
+        entity_after = await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": entity_id}
+        )
+    elif entity_type == "team":
+        entity_after = await prisma_client.db.litellm_teamtable.find_unique(
+            where={"team_id": entity_id}
+        )
+
+    assert entity_after is not None
+    assert entity_after.spend == 0.0

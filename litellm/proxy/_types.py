@@ -124,6 +124,14 @@ class LitellmUserRoles(str, enum.Enum):
         }
         return ui_labels.get(self.value, "")
 
+    @property
+    def is_internal_user_role(self) -> bool:
+        """returns true if this role is an `internal_user` or `internal_user_viewer` role"""
+        return self.value in [
+            self.INTERNAL_USER,
+            self.INTERNAL_USER_VIEW_ONLY,
+        ]
+
 
 class LitellmTableNames(str, enum.Enum):
     """
@@ -2609,3 +2617,32 @@ class SpecialManagementEndpointEnums(enum.Enum):
 class TransformRequestBody(BaseModel):
     call_type: CallTypes
     request_body: dict
+
+
+class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
+    """
+    Default parameters to apply when a new user signs in via SSO or is created on the /user/new API endpoint
+    """
+
+    user_role: Optional[
+        Literal[
+            LitellmUserRoles.INTERNAL_USER,
+            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+            LitellmUserRoles.PROXY_ADMIN,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        ]
+    ] = Field(
+        default=LitellmUserRoles.INTERNAL_USER,
+        description="Default role assigned to new users created",
+    )
+    max_budget: Optional[float] = Field(
+        default=None,
+        description="Default maximum budget (in USD) for new users created",
+    )
+    budget_duration: Optional[str] = Field(
+        default=None,
+        description="Default budget duration for new users (e.g. 'daily', 'weekly', 'monthly')",
+    )
+    models: Optional[List[str]] = Field(
+        default=None, description="Default list of models that new users can access"
+    )

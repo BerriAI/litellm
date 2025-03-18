@@ -110,7 +110,6 @@ from .exception_mapping_utils import _get_response_headers
 from .initialize_dynamic_callback_params import (
     initialize_standard_callback_dynamic_params as _initialize_standard_callback_dynamic_params,
 )
-from .logging_utils import _assemble_complete_response_from_streaming_chunks
 from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
 try:
@@ -2351,18 +2350,6 @@ class Logging(LiteLLMLoggingBaseClass):
             return result
         elif isinstance(result, ResponseCompletedEvent):
             return result.response
-        elif isinstance(result, ModelResponseStream):
-            complete_streaming_response: Optional[
-                Union[ModelResponse, TextCompletionResponse]
-            ] = _assemble_complete_response_from_streaming_chunks(
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-                request_kwargs=self.model_call_details,
-                streaming_chunks=streaming_chunks,
-                is_async=is_async,
-            )
-            return complete_streaming_response
         return None
 
     def _handle_anthropic_messages_response_logging(self, result: Any) -> ModelResponse:

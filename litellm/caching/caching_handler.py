@@ -790,6 +790,7 @@ class LLMCachingHandler:
         - Else append the chunk to self.async_streaming_chunks
 
         """
+
         complete_streaming_response: Optional[
             Union[ModelResponse, TextCompletionResponse]
         ] = _assemble_complete_response_from_streaming_chunks(
@@ -800,7 +801,6 @@ class LLMCachingHandler:
             streaming_chunks=self.async_streaming_chunks,
             is_async=True,
         )
-
         # if a complete_streaming_response is assembled, add it to the cache
         if complete_streaming_response is not None:
             await self.async_set_cache(
