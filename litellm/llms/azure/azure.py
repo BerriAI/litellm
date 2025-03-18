@@ -228,14 +228,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 max_retries = DEFAULT_MAX_RETRIES
             json_mode: Optional[bool] = optional_params.pop("json_mode", False)
 
-            azure_client_params = self.initialize_azure_sdk_client(
-                litellm_params=litellm_params or {},
-                api_key=api_key,
-                api_base=api_base,
-                model_name=model,
-                api_version=api_version,
-                is_async=False,
-            )
             ### CHECK IF CLOUDFLARE AI GATEWAY ###
             ### if so - set the model as part of the base url
             if "gateway.ai.cloudflare.com" in api_base:
@@ -277,7 +269,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                         timeout=timeout,
                         client=client,
                         max_retries=max_retries,
-                        azure_client_params=azure_client_params,
                         litellm_params=litellm_params,
                     )
                 else:
@@ -296,7 +287,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                         logging_obj=logging_obj,
                         max_retries=max_retries,
                         convert_tool_call_to_json_mode=json_mode,
-                        azure_client_params=azure_client_params,
                         litellm_params=litellm_params,
                     )
             elif "stream" in optional_params and optional_params["stream"] is True:
@@ -403,7 +393,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         azure_ad_token_provider: Optional[Callable] = None,
         convert_tool_call_to_json_mode: Optional[bool] = None,
         client=None,  # this is the AsyncAzureOpenAI
-        azure_client_params: dict = {},
         litellm_params: Optional[dict] = {},
     ):
         response = None
@@ -583,7 +572,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         azure_ad_token: Optional[str] = None,
         azure_ad_token_provider: Optional[Callable] = None,
         client=None,
-        azure_client_params: dict = {},
         litellm_params: Optional[dict] = {},
     ):
         try:
