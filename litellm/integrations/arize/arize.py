@@ -101,3 +101,11 @@ class ArizeLogger(OpenTelemetry):
     ):
         """Arize is used mainly for LLM I/O tracing, sending router+caching metrics adds bloat to arize logs"""
         pass
+
+    def create_litellm_proxy_request_started_span(
+        self,
+        start_time: datetime,
+        headers: dict,
+    ):
+        """Arize is used mainly for LLM I/O tracing, sending Proxy Server Request adds bloat to arize logs"""
+        pass
