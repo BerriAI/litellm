@@ -370,14 +370,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             )
 
         if open_telemetry_logger is not None:
-
-            parent_otel_span = open_telemetry_logger.tracer.start_span(
-                name="Received Proxy Server Request",
-                start_time=_to_ns(start_time),
-                context=open_telemetry_logger.get_traceparent_from_header(
-                    headers=request.headers
-                ),
-                kind=open_telemetry_logger.span_kind.SERVER,
+            parent_otel_span = (
+                open_telemetry_logger.create_litellm_proxy_request_started_span(
+                    start_time=start_time,
+                    headers=dict(request.headers),
+                )
             )
 
         ### USER-DEFINED AUTH FUNCTION ###
