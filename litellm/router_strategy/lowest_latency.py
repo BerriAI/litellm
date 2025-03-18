@@ -124,7 +124,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     len(request_count_dict[id].get("latency", []))
                     < self.routing_args.max_latency_list_size
                 ):
-                    request_count_dict[id].setdefault("latency", []).append(final_value)
+                    latency_value = final_value.total_seconds() if isinstance(final_value, timedelta) else final_value
+                    request_count_dict[id].setdefault("latency", []).append(latency_value)
+
                 else:
                     request_count_dict[id]["latency"] = request_count_dict[id][
                         "latency"
@@ -332,7 +334,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     len(request_count_dict[id].get("latency", []))
                     < self.routing_args.max_latency_list_size
                 ):
-                    request_count_dict[id].setdefault("latency", []).append(final_value)
+                    latency_value = final_value.total_seconds() if isinstance(final_value, timedelta) else final_value
+                    request_count_dict[id].setdefault("latency", []).append(latency_value)
+
                 else:
                     request_count_dict[id]["latency"] = request_count_dict[id][
                         "latency"
@@ -465,6 +469,8 @@ class LowestLatencyLoggingHandler(CustomLogger):
             total: float = 0.0
             if (
                 request_kwargs is not None
+                and len(item_latency) > 0
+                and isinstance(item_latency[0], timedelta)
                 and request_kwargs.get("stream", None) is not None
                 and request_kwargs["stream"] is True
                 and len(item_ttft_latency) > 0
@@ -472,6 +478,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 for _call_latency in item_ttft_latency:
                     if isinstance(_call_latency, float):
                         total += _call_latency
+            elif len(item_latency) > 0 and isinstance(item_latency[0], timedelta):
+                for _call_latency in item_latency:
+                    total += _call_latency.total_seconds()
             else:
                 for _call_latency in item_latency:
                     if isinstance(_call_latency, float):
