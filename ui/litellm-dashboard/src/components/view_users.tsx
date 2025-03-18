@@ -348,7 +348,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           </TabPanel>
           
           <TabPanel>
-            <SSOSettings accessToken={accessToken} possibleUIRoles={possibleUIRoles} />
+            <SSOSettings accessToken={accessToken} possibleUIRoles={possibleUIRoles} userID={userID}/>
           </TabPanel>
         </TabPanels>
       </TabGroup>
