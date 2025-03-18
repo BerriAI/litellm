@@ -29,6 +29,7 @@ from litellm.batches.batch_utils import _handle_completed_batch
 from litellm.caching.caching import DualCache, InMemoryCache
 from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.cost_calculator import _select_model_name_for_cost_calc
+from litellm.integrations.arize.arize import ArizeLogger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.mlflow import MlflowLogger
@@ -2658,11 +2659,11 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             )
             for callback in _in_memory_loggers:
                 if (
-                    isinstance(callback, OpenTelemetry)
+                    isinstance(callback, ArizeLogger)
                     and callback.callback_name == "arize"
                 ):
                     return callback  # type: ignore
-            _otel_logger = OpenTelemetry(config=otel_config, callback_name="arize")
+            _otel_logger = ArizeLogger(config=otel_config, callback_name="arize")
             _in_memory_loggers.append(_otel_logger)
             return _otel_logger  # type: ignore
         elif logging_integration == "arize_phoenix":
@@ -2897,15 +2898,13 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
                 if isinstance(callback, OpenTelemetry):
                     return callback
         elif logging_integration == "arize":
-            from litellm.integrations.opentelemetry import OpenTelemetry
-
             if "ARIZE_SPACE_KEY" not in os.environ:
                 raise ValueError("ARIZE_SPACE_KEY not found in environment variables")
             if "ARIZE_API_KEY" not in os.environ:
                 raise ValueError("ARIZE_API_KEY not found in environment variables")
             for callback in _in_memory_loggers:
                 if (
-                    isinstance(callback, OpenTelemetry)
+                    isinstance(callback, ArizeLogger)
                     and callback.callback_name == "arize"
                 ):
                     return callback
