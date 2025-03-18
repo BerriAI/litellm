@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from typing import Any, Callable, Dict, List, Literal, Optional, Union
+from typing import Any, Callable, Coroutine, Dict, List, Optional, Union
 
 import httpx  # type: ignore
 from openai import APITimeoutError, AsyncAzureOpenAI, AzureOpenAI
@@ -655,16 +655,16 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         azure_client_params: dict,
         input: list,
         logging_obj: LiteLLMLoggingObj,
+        api_base: str,
         api_key: Optional[str] = None,
+        api_version: Optional[str] = None,
         client: Optional[AsyncAzureOpenAI] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         max_retries: Optional[int] = None,
-        api_version: Optional[str] = None,
-        api_base: Optional[str] = None,
         azure_ad_token: Optional[str] = None,
         azure_ad_token_provider: Optional[Callable] = None,
         litellm_params: Optional[dict] = {},
-    ):
+    ) -> EmbeddingResponse:
         response = None
         try:
 
@@ -693,13 +693,19 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 additional_args={"complete_input_dict": data},
                 original_response=stringified_response,
             )
-            return convert_to_model_response_object(
+            embedding_response = convert_to_model_response_object(
                 response_object=stringified_response,
                 model_response_object=model_response,
                 hidden_params={"headers": headers},
                 _response_headers=process_azure_headers(headers),
                 response_type="embedding",
             )
+            if not isinstance(embedding_response, EmbeddingResponse):
+                raise AzureOpenAIError(
+                    status_code=500,
+                    message="embedding_response is not an instance of EmbeddingResponse",
+                )
+            return embedding_response
         except Exception as e:
             ## LOGGING
             logging_obj.post_call(
@@ -728,7 +734,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         aembedding=None,
         headers: Optional[dict] = None,
         litellm_params: Optional[dict] = None,
-    ) -> EmbeddingResponse:
+    ) -> Union[EmbeddingResponse, Coroutine[Any, Any, EmbeddingResponse]]:
         if headers:
             optional_params["extra_headers"] = headers
         if self._client_session is None:
@@ -737,13 +743,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             data = {"model": model, "input": input, **optional_params}
             if max_retries is None:
                 max_retries = litellm.DEFAULT_MAX_RETRIES
-            if not isinstance(max_retries, int):
-                raise AzureOpenAIError(
-                    status_code=422, message="max retries must be an int"
-                )
-
-            # init AzureOpenAI Client
-
             azure_client_params = self.initialize_azure_sdk_client(
                 litellm_params=litellm_params or {},
                 api_key=api_key,
@@ -763,7 +762,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             )
 
             if aembedding is True:
-                return self.aembedding(  # type: ignore
+                return self.aembedding(
                     data=data,
                     input=input,
                     model=model,
@@ -774,6 +773,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     timeout=timeout,
                     client=client,
                     litellm_params=litellm_params,
+                    api_base=api_base,
                 )
             azure_client = self.get_azure_openai_client(
                 api_version=api_version,
