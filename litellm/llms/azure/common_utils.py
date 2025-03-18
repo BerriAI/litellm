@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Callable, Optional, Union
+from typing import Any, Callable, Dict, Optional, Union
 
 import httpx
 from openai import AsyncAzureOpenAI, AzureOpenAI
@@ -385,7 +385,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 api_base += "/"
             api_base += f"{model}"
 
-            azure_client_params = {
+            azure_client_params: Dict[str, Any] = {
                 "api_version": api_version,
                 "base_url": f"{api_base}",
                 "http_client": litellm.client_session,
@@ -399,11 +399,11 @@ class BaseAzureLLM(BaseOpenAILLM):
                     azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
 
                 azure_client_params["azure_ad_token"] = azure_ad_token
-            elif azure_ad_token_provider is not None:
+            if azure_ad_token_provider is not None:
                 azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
 
             if acompletion is True:
-                client = AsyncAzureOpenAI(**azure_client_params)
+                client = AsyncAzureOpenAI(**azure_client_params)  # type: ignore
             else:
-                client = AzureOpenAI(**azure_client_params)
+                client = AzureOpenAI(**azure_client_params)  # type: ignore
         return client
