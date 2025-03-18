@@ -8,7 +8,7 @@ else:
     Protocol = Any
     
 class ArizeConfig(BaseModel):
-    space_id: str
+    space_key: str
     api_key: str 
     protocol: Protocol
     endpoint: str
