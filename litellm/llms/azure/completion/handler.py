@@ -58,15 +58,6 @@ class AzureTextCompletion(BaseAzureLLM):
                 messages=messages, model=model, custom_llm_provider="azure_text"
             )
 
-            azure_client_params = self.initialize_azure_sdk_client(
-                litellm_params=litellm_params or {},
-                api_key=api_key,
-                model_name=model,
-                api_version=api_version,
-                api_base=api_base,
-                is_async=False,
-            )
-
             ### CHECK IF CLOUDFLARE AI GATEWAY ###
             ### if so - set the model as part of the base url
             if "gateway.ai.cloudflare.com" in api_base:
@@ -104,7 +95,6 @@ class AzureTextCompletion(BaseAzureLLM):
                         azure_ad_token=azure_ad_token,
                         timeout=timeout,
                         client=client,
-                        azure_client_params=azure_client_params,
                     )
                 else:
                     return self.acompletion(
@@ -119,7 +109,6 @@ class AzureTextCompletion(BaseAzureLLM):
                         client=client,
                         logging_obj=logging_obj,
                         max_retries=max_retries,
-                        azure_client_params=azure_client_params,
                     )
             elif "stream" in optional_params and optional_params["stream"] is True:
                 return self.streaming(
@@ -132,7 +121,6 @@ class AzureTextCompletion(BaseAzureLLM):
                     azure_ad_token=azure_ad_token,
                     timeout=timeout,
                     client=client,
-                    azure_client_params=azure_client_params,
                 )
             else:
                 ## LOGGING
@@ -217,7 +205,6 @@ class AzureTextCompletion(BaseAzureLLM):
         max_retries: int,
         azure_ad_token: Optional[str] = None,
         client=None,  # this is the AsyncAzureOpenAI
-        azure_client_params: dict = {},
         litellm_params: dict = {},
     ):
         response = None
@@ -281,7 +268,6 @@ class AzureTextCompletion(BaseAzureLLM):
         timeout: Any,
         azure_ad_token: Optional[str] = None,
         client=None,
-        azure_client_params: dict = {},
         litellm_params: dict = {},
     ):
         max_retries = data.pop("max_retries", 2)
@@ -339,7 +325,6 @@ class AzureTextCompletion(BaseAzureLLM):
         timeout: Any,
         azure_ad_token: Optional[str] = None,
         client=None,
-        azure_client_params: dict = {},
         litellm_params: dict = {},
     ):
         try:
