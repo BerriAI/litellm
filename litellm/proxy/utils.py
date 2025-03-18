@@ -32,7 +32,13 @@ from fastapi import HTTPException, status
 import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
-from litellm import EmbeddingResponse, ImageResponse, ModelResponse, Router, ModelResponseStream
+from litellm import (
+    EmbeddingResponse,
+    ImageResponse,
+    ModelResponse,
+    ModelResponseStream,
+    Router,
+)
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
@@ -963,7 +969,9 @@ class ProxyLogging:
 
     async def async_post_call_streaming_hook(
         self,
-        response: Union[ModelResponse, EmbeddingResponse, ImageResponse],
+        response: Union[
+            ModelResponse, EmbeddingResponse, ImageResponse, ModelResponseStream
+        ],
         user_api_key_dict: UserAPIKeyAuth,
     ):
         """
@@ -1009,18 +1017,23 @@ class ProxyLogging:
         for callback in litellm.callbacks:
             _callback: Optional[CustomLogger] = None
             if isinstance(callback, str):
-                _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(callback)
+                _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                    callback
+                )
             else:
                 _callback = callback  # type: ignore
             if _callback is not None and isinstance(_callback, CustomLogger):
-                if not isinstance(_callback, CustomGuardrail) or _callback.should_run_guardrail(
-                        data=request_data, event_type=GuardrailEventHooks.post_call
+                if not isinstance(
+                    _callback, CustomGuardrail
+                ) or _callback.should_run_guardrail(
+                    data=request_data, event_type=GuardrailEventHooks.post_call
                 ):
                     response = _callback.async_post_call_streaming_iterator_hook(
-                        user_api_key_dict=user_api_key_dict, response=response, request_data=request_data
+                        user_api_key_dict=user_api_key_dict,
+                        response=response,
+                        request_data=request_data,
                     )
         return response
-
 
     async def post_call_streaming_hook(
         self,
@@ -2468,6 +2481,18 @@ class ProxyUpdateSpend:
             _raise_failed_update_spend_exception(
                 e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
             )
+
+    @staticmethod
+    def disable_spend_updates() -> bool:
+        """
+        returns True if should not update spend in db
+        Skips writing spend logs and updates to key, team, user spend to DB
+        """
+        from litellm.proxy.proxy_server import general_settings
+
+        if general_settings.get("disable_spend_updates") is True:
+            return True
+        return False
 
 
 async def update_spend(  # noqa: PLR0915
