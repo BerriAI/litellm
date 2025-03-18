@@ -2151,7 +2151,7 @@ def test_logging_turn_off_message_logging_streaming():
     mock_obj = Cache(type="local")
     litellm.cache = mock_obj
 
-    with patch.object(mock_obj, "add_cache", new=MagicMock()) as mock_client:
+    with patch.object(mock_obj, "add_cache") as mock_client:
         print(f"mock_obj.add_cache: {mock_obj.add_cache}")
 
         resp = litellm.completion(
@@ -2167,7 +2167,7 @@ def test_logging_turn_off_message_logging_streaming():
         time.sleep(1)
 
         mock_client.assert_called_once()
-
+        print(f"mock_client.call_args: {mock_client.call_args}")
         assert mock_client.call_args.args[0].choices[0].message.content == "hello"
 
 
