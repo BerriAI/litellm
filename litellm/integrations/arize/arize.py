@@ -3,31 +3,39 @@ arize AI is OTEL compatible
 
 this file has Arize ai specific helper functions
 """
-import os
 
-from typing import TYPE_CHECKING, Any
+import os
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Optional, Union
+
+from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
+from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.types.integrations.arize import ArizeConfig
+from litellm.types.services import ServiceLoggerPayload
 
 if TYPE_CHECKING:
-    from litellm.types.integrations.arize import Protocol as _Protocol
     from opentelemetry.trace import Span as _Span
+
+    from litellm.types.integrations.arize import Protocol as _Protocol
 
     Protocol = _Protocol
     Span = _Span
 else:
     Protocol = Any
     Span = Any
-    
 
 
-class ArizeLogger:
+class ArizeLogger(OpenTelemetry):
+
+    def set_attributes(self, span: Span, kwargs, response_obj: Optional[Any]):
+        ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
+        return
 
     @staticmethod
     def set_arize_attributes(span: Span, kwargs, response_obj):
         _utils.set_attributes(span, kwargs, response_obj)
         return
-    
 
     @staticmethod
     def get_arize_config() -> ArizeConfig:
@@ -55,13 +63,13 @@ class ArizeLogger:
         protocol: Protocol = "otlp_grpc"
 
         if grpc_endpoint:
-            protocol="otlp_grpc"
-            endpoint=grpc_endpoint
+            protocol = "otlp_grpc"
+            endpoint = grpc_endpoint
         elif http_endpoint:
-            protocol="otlp_http"
-            endpoint=http_endpoint
+            protocol = "otlp_http"
+            endpoint = http_endpoint
         else:
-            protocol="otlp_grpc"
+            protocol = "otlp_grpc"
             endpoint = "https://otlp.arize.com/v1"
 
         return ArizeConfig(
@@ -71,4 +79,25 @@ class ArizeLogger:
             endpoint=endpoint,
         )
 
+    async def async_service_success_hook(
+        self,
+        payload: ServiceLoggerPayload,
+        parent_otel_span: Optional[Span] = None,
+        start_time: Optional[Union[datetime, float]] = None,
+        end_time: Optional[Union[datetime, float]] = None,
+        event_metadata: Optional[dict] = None,
+    ):
+        """Arize is used mainly for LLM I/O tracing, sending router+caching metrics adds bloat to arize logs"""
+        pass
 
+    async def async_service_failure_hook(
+        self,
+        payload: ServiceLoggerPayload,
+        error: Optional[str] = "",
+        parent_otel_span: Optional[Span] = None,
+        start_time: Optional[Union[datetime, float]] = None,
+        end_time: Optional[Union[float, datetime]] = None,
+        event_metadata: Optional[dict] = None,
+    ):
+        """Arize is used mainly for LLM I/O tracing, sending router+caching metrics adds bloat to arize logs"""
+        pass
