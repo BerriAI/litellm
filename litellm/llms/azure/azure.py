@@ -766,6 +766,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 return self.aembedding(  # type: ignore
                     data=data,
                     input=input,
+                    model=model,
                     logging_obj=logging_obj,
                     api_key=api_key,
                     model_response=model_response,
