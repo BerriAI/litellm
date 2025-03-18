@@ -86,7 +86,7 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
         )
 
     is_internal_user = False
-    if data.user_role and data.user_role._is_internal_user_role:
+    if data.user_role and data.user_role.is_internal_user_role:
         is_internal_user = True
         if litellm.default_internal_user_params:
             for key, value in litellm.default_internal_user_params.items():
