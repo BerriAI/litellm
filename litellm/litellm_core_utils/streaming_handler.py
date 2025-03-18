@@ -1472,6 +1472,24 @@ class CustomStreamWrapper:
         """
         self.logging_loop = loop
 
+    def cache_streaming_response(self, processed_chunk, cache_hit: bool):
+        """
+        Caches the streaming response
+        """
+        if not cache_hit and self.logging_obj._llm_caching_handler is not None:
+            self.logging_obj._llm_caching_handler._sync_add_streaming_response_to_cache(
+                processed_chunk
+            )
+
+    async def async_cache_streaming_response(self, processed_chunk, cache_hit: bool):
+        """
+        Caches the streaming response
+        """
+        if not cache_hit and self.logging_obj._llm_caching_handler is not None:
+            await self.logging_obj._llm_caching_handler._add_streaming_response_to_cache(
+                processed_chunk
+            )
+
     def run_success_logging_and_cache_storage(self, processed_chunk, cache_hit: bool):
         """
         Runs success logging in a thread and adds the response to the cache
@@ -1502,12 +1520,6 @@ class CustomStreamWrapper:
             )
         ## SYNC LOGGING
         self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
-
-        ## Sync store in cache
-        if self.logging_obj._llm_caching_handler is not None:
-            self.logging_obj._llm_caching_handler._sync_add_streaming_response_to_cache(
-                processed_chunk
-            )
 
     def finish_reason_handler(self):
         model_response = self.model_response_creator()
@@ -1603,9 +1615,15 @@ class CustomStreamWrapper:
                         "usage",
                         getattr(complete_streaming_response, "usage"),
                     )
+                    self.cache_streaming_response(
+                        processed_chunk=complete_streaming_response.model_copy(
+                            deep=True
+                        ),
+                        cache_hit=cache_hit,
+                    )
                     executor.submit(
                         self.logging_obj.success_handler,
-                        complete_streaming_response,
+                        complete_streaming_response.model_copy(deep=True),
                         None,
                         None,
                         cache_hit,
@@ -1702,13 +1720,6 @@ class CustomStreamWrapper:
                     if processed_chunk is None:
                         continue
 
-                    if self.logging_obj._llm_caching_handler is not None:
-                        asyncio.create_task(
-                            self.logging_obj._llm_caching_handler._add_streaming_response_to_cache(
-                                processed_chunk=cast(ModelResponse, processed_chunk),
-                            )
-                        )
-
                     choice = processed_chunk.choices[0]
                     if isinstance(choice, StreamingChoices):
                         self.response_uptil_now += choice.delta.get("content", "") or ""
@@ -1778,6 +1789,14 @@ class CustomStreamWrapper:
                         response,
                         "usage",
                         getattr(complete_streaming_response, "usage"),
+                    )
+                    asyncio.create_task(
+                        self.async_cache_streaming_response(
+                            processed_chunk=complete_streaming_response.model_copy(
+                                deep=True
+                            ),
+                            cache_hit=cache_hit,
+                        )
                     )
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
