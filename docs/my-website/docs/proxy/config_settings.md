@@ -302,7 +302,7 @@ router_settings:
 | AISPEND_API_KEY | API Key for AI Spend
 | ALLOWED_EMAIL_DOMAINS | List of email domains allowed for access
 | ARIZE_API_KEY | API key for Arize platform integration
-| ARIZE_SPACE_ID | Space key for Arize platform
+| ARIZE_SPACE_KEY | Space key for Arize platform
 | ARGILLA_BATCH_SIZE | Batch size for Argilla logging
 | ARGILLA_API_KEY | API key for Argilla platform
 | ARGILLA_SAMPLING_RATE | Sampling rate for Argilla logging
