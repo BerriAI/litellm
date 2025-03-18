@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Literal, Any
+from typing import TYPE_CHECKING, Literal, Any, Optional
 
 from pydantic import BaseModel
 
@@ -8,7 +8,7 @@ else:
     Protocol = Any
     
 class ArizeConfig(BaseModel):
-    space_key: str
-    api_key: str
+    space_id: str
+    api_key: str 
     protocol: Protocol
     endpoint: str

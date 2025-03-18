@@ -11,12 +11,12 @@ https://github.com/BerriAI/litellm
 
 :::
 
-
-
 ## Pre-Requisites
+
 Make an account on [Arize AI](https://app.arize.com/auth/login)
 
 ## Quick Start
+
 Use just 2 lines of code, to instantly log your responses **across all providers** with arize
 
 You can also use the instrumentor option instead of the callback, which you can find [here](https://docs.arize.com/arize/llm-tracing/tracing-integrations-auto/litellm).
@@ -24,11 +24,12 @@ You can also use the instrumentor option instead of the callback, which you can 
 ```python
 litellm.callbacks = ["arize"]
 ```
+
 ```python
 import litellm
 import os
 
-os.environ["ARIZE_SPACE_KEY"] = ""
+os.environ["ARIZE_SPACE_ID"] = ""
 os.environ["ARIZE_API_KEY"] = ""
 
 # LLM API Keys
@@ -36,7 +37,7 @@ os.environ['OPENAI_API_KEY']=""
 
 # set arize as a callback, litellm will send the data to arize
 litellm.callbacks = ["arize"]
- 
+
 # openai call
 response = litellm.completion(
   model="gpt-3.5-turbo",
@@ -47,7 +48,6 @@ response = litellm.completion(
 ```
 
 ### Using with LiteLLM Proxy
-
 
 ```yaml
 model_list:
@@ -61,10 +61,10 @@ litellm_settings:
   callbacks: ["arize"]
 
 environment_variables:
-    ARIZE_SPACE_KEY: "d0*****"
-    ARIZE_API_KEY: "141a****"
-    ARIZE_ENDPOINT: "https://otlp.arize.com/v1" # OPTIONAL - your custom arize GRPC api endpoint
-    ARIZE_HTTP_ENDPOINT: "https://otlp.arize.com/v1" # OPTIONAL - your custom arize HTTP api endpoint. Set either this or ARIZE_ENDPOINT
+  ARIZE_SPACE_ID: "d0*****"
+  ARIZE_API_KEY: "141a****"
+  ARIZE_ENDPOINT: "https://otlp.arize.com/v1" # OPTIONAL - your custom arize GRPC api endpoint
+  ARIZE_HTTP_ENDPOINT: "https://otlp.arize.com/v1" # OPTIONAL - your custom arize HTTP api endpoint. Set either this or ARIZE_ENDPOINT
 ```
 
 ## Support & Talk to Founders
