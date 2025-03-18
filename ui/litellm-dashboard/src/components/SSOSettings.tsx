@@ -43,10 +43,9 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken }) => {
     
     setSaving(true);
     try {
-      await updateInternalUserSettings(accessToken, editedValues);
-      setSettings({...settings, values: editedValues});
+      const updatedSettings = await updateInternalUserSettings(accessToken, editedValues);
+      setSettings({...settings, values: updatedSettings.settings});
       setIsEditing(false);
-      message.success("Settings updated successfully");
     } catch (error) {
       console.error("Error updating SSO settings:", error);
       message.error("Failed to update settings");
