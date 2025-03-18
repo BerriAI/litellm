@@ -40,6 +40,7 @@ import { Tooltip } from 'antd';
 import Createuser from "./create_user_button";
 import debounce from 'lodash/debounce';
 import { rolesWithWriteAccess } from '../utils/roles';
+import BudgetDurationDropdown from "./common_components/budget_duration_dropdown";
 
 
 
@@ -572,11 +573,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   name="budget_duration"
                   help={`Team Reset Budget: ${team?.budget_duration !== null && team?.budget_duration !== undefined ? team?.budget_duration : "None"}`}
                 >
-                  <Select defaultValue={null} placeholder="n/a">
-                    <Select.Option value="24h">daily</Select.Option>
-                    <Select.Option value="7d">weekly</Select.Option>
-                    <Select.Option value="30d">monthly</Select.Option>
-                  </Select>
+                  <BudgetDurationDropdown onChange={(value) => form.setFieldValue('budget_duration', value)} />
                 </Form.Item>
                 <Form.Item
                   className="mt-4"
