@@ -244,7 +244,6 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles 
   if (!settings) {
     return (
       <Card>
-        <Title>SSO Settings</Title>
         <Text>No settings available or you don't have permission to view them.</Text>
       </Card>
     );
@@ -286,7 +285,6 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles 
   return (
     <Card>
       <div className="flex justify-between items-center mb-4">
-        <Title>SSO Settings</Title>
         {!loading && settings && (
           isEditing ? (
             <div className="flex gap-2">
