@@ -370,7 +370,7 @@ class OpenAIChatCompletion(BaseLLM):
                 _new_client: Union[OpenAI, AsyncOpenAI] = AsyncOpenAI(
                     api_key=api_key,
                     base_url=api_base,
-                    http_client=litellm.aclient_session,
+                    http_client=OpenAIChatCompletion._get_async_http_client(),
                     timeout=timeout,
                     max_retries=max_retries,
                     organization=organization,
@@ -379,7 +379,7 @@ class OpenAIChatCompletion(BaseLLM):
                 _new_client = OpenAI(
                     api_key=api_key,
                     base_url=api_base,
-                    http_client=litellm.client_session,
+                    http_client=OpenAIChatCompletion._get_sync_http_client(),
                     timeout=timeout,
                     max_retries=max_retries,
                     organization=organization,
@@ -400,6 +400,28 @@ class OpenAIChatCompletion(BaseLLM):
                 max_retries=max_retries,
             )
             return client
+
+    @staticmethod
+    def _get_async_http_client() -> Optional[httpx.AsyncClient]:
+        if litellm.ssl_verify:
+            return httpx.AsyncClient(
+                limits=httpx.Limits(
+                    max_connections=1000, max_keepalive_connections=100
+                ),
+                verify=litellm.ssl_verify,
+            )
+        return litellm.aclient_session
+
+    @staticmethod
+    def _get_sync_http_client() -> Optional[httpx.Client]:
+        if litellm.ssl_verify:
+            return httpx.Client(
+                limits=httpx.Limits(
+                    max_connections=1000, max_keepalive_connections=100
+                ),
+                verify=litellm.ssl_verify,
+            )
+        return litellm.client_session
 
     @track_llm_api_timing()
     async def make_openai_chat_completion_request(
