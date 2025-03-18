@@ -53,6 +53,29 @@ def test_supports_system_message():
     assert isinstance(response, litellm.ModelResponse)
 
 
+def test_supports_system_message_multipart():
+    """
+    Check if litellm.completion(...,supports_system_message=False) works with multipart user message 
+    """
+    messages = [
+        ChatCompletionSystemMessageParam(role="system", content="Listen here!"),
+        ChatCompletionUserMessageParam(role="user", content=[{"type": "text", "text": "Hello there!"}]),
+    ]
+
+    new_messages = map_system_message_pt(messages=messages)
+
+    assert len(new_messages) == 1
+    assert new_messages[0]["role"] == "user"
+
+    ## confirm you can make a openai call with this param
+
+    response = litellm.completion(
+        model="gpt-3.5-turbo", messages=new_messages, supports_system_message=False
+    )
+
+    assert isinstance(response, litellm.ModelResponse)
+
+
 @pytest.mark.parametrize(
     "stop_sequence, expected_count", [("\n", 0), (["\n"], 0), (["finish_reason"], 1)]
 )
