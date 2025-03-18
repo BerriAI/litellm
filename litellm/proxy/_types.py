@@ -2621,7 +2621,7 @@ class TransformRequestBody(BaseModel):
 
 class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
     """
-    Default parameters to apply when a new user signs in via SSO
+    Default parameters to apply when a new user signs in via SSO or is create view /user/new API endpoint
     """
 
     user_role: Optional[
@@ -2633,15 +2633,15 @@ class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
         ]
     ] = Field(
         default=LitellmUserRoles.INTERNAL_USER,
-        description="Default role assigned to new users signing in via SSO",
+        description="Default role assigned to new users created",
     )
     max_budget: Optional[float] = Field(
         default=None,
-        description="Default maximum budget (in USD) for new users signing in via SSO",
+        description="Default maximum budget (in USD) for new users created",
     )
     budget_duration: Optional[str] = Field(
         default=None,
-        description="Default budget duration for new users (e.g. '30d', '1mo')",
+        description="Default budget duration for new users (e.g. 'daily', 'weekly', 'monthly')",
     )
     models: Optional[List[str]] = Field(
         default=None, description="Default list of models that new users can access"
