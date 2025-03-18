@@ -35,7 +35,7 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles 
         // Fetch available models
         if (accessToken) {
           try {
-            const modelResponse = await modelAvailableCall(accessToken);
+            const modelResponse = await modelAvailableCall(accessToken, null, null);
             if (modelResponse && modelResponse.data) {
               const modelNames = modelResponse.data.map((model: { id: string }) => model.id);
               setAvailableModels(modelNames);
@@ -284,12 +284,12 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles 
 
   return (
     <Card>
-      <div className="flex justify-between items-center mb-4">
+      <div className="flex justify-end items-center mb-4">
         {!loading && settings && (
           isEditing ? (
             <div className="flex gap-2">
               <Button 
-                color="gray" 
+                variant="secondary"
                 onClick={() => {
                   setIsEditing(false);
                   setEditedValues(settings.values || {});
@@ -299,7 +299,6 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles 
                 Cancel
               </Button>
               <Button 
-                color="blue" 
                 onClick={handleSaveSettings}
                 loading={saving}
               >
@@ -308,7 +307,6 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles 
             </div>
           ) : (
             <Button 
-              variant="light"
               onClick={() => setIsEditing(true)}
             >
               Edit Settings
