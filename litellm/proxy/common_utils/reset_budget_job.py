@@ -319,7 +319,7 @@ class ResetBudgetJob:
         item: Union[LiteLLM_TeamTable, LiteLLM_UserTable, LiteLLM_VerificationToken],
         current_time: datetime,
         item_type: str,
-    ) -> Union[LiteLLM_TeamTable, LiteLLM_UserTable, LiteLLM_VerificationToken]:
+    ):
         """
         Common logic for resetting budget for a team, user, or key
         """
@@ -339,19 +339,19 @@ class ResetBudgetJob:
     async def _reset_budget_for_team(
         team: LiteLLM_TeamTable, current_time: datetime
     ) -> Optional[LiteLLM_TeamTable]:
-        result = await ResetBudgetJob._reset_budget_common(team, current_time, "team")
-        return result if isinstance(result, LiteLLM_TeamTable) else None
+        await ResetBudgetJob._reset_budget_common(team, current_time, "team")
+        return team
 
     @staticmethod
     async def _reset_budget_for_user(
         user: LiteLLM_UserTable, current_time: datetime
     ) -> Optional[LiteLLM_UserTable]:
-        result = await ResetBudgetJob._reset_budget_common(user, current_time, "user")
-        return result if isinstance(result, LiteLLM_UserTable) else None
+        await ResetBudgetJob._reset_budget_common(user, current_time, "user")
+        return user
 
     @staticmethod
     async def _reset_budget_for_key(
         key: LiteLLM_VerificationToken, current_time: datetime
     ) -> Optional[LiteLLM_VerificationToken]:
-        result = await ResetBudgetJob._reset_budget_common(key, current_time, "key")
-        return result if isinstance(result, LiteLLM_VerificationToken) else None
+        await ResetBudgetJob._reset_budget_common(key, current_time, "key")
+        return key
