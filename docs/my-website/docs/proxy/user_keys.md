@@ -61,7 +61,7 @@ Set `extra_body={"metadata": { }}` to `metadata` you want to pass
 ```python
 import openai
 client = openai.OpenAI(
-    api_key="anything",
+    api_key="sk-1234",
     base_url="http://0.0.0.0:4000"
 )
 
@@ -94,7 +94,7 @@ Set `extra_body={"metadata": { }}` to `metadata` you want to pass
 ```python
 import openai
 client = openai.AzureOpenAI(
-    api_key="anything",
+    api_key="sk-1234",
     base_url="http://0.0.0.0:4000"
 )
 
@@ -705,7 +705,7 @@ Set `base_url` to the LiteLLM Proxy server
 ```python
 import openai
 client = openai.OpenAI(
-    api_key="anything",
+    api_key="sk-1234",
     base_url="http://0.0.0.0:4000"
 )
 
@@ -830,7 +830,7 @@ import guidance
 
 # set api_base to your proxy
 # set api_key to anything
-gpt4 = guidance.llms.OpenAI("gpt-4", api_base="http://0.0.0.0:4000", api_key="anything")
+gpt4 = guidance.llms.OpenAI("gpt-4", api_base="http://0.0.0.0:4000", api_key="sk-1234")
 
 experts = guidance('''
 {{#system~}}

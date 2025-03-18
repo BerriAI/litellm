@@ -142,7 +142,7 @@ Add alerting metadata to proxy calls for debugging.
 ```python
 import openai
 client = openai.OpenAI(
-    api_key="anything",
+    api_key="sk-1234",
     base_url="http://0.0.0.0:4000"
 )
 

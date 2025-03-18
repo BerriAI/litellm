@@ -36,7 +36,9 @@ Check this in code, [here](../completion/input.md#translated-openai-params)
 "extra_headers",
 "parallel_tool_calls",
 "response_format",
-"user"
+"user",
+"thinking",
+"reasoning_effort"
 ```
 
 :::info
@@ -189,7 +191,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ```python
 import openai
 client = openai.OpenAI(
-    api_key="anything",
+    api_key="sk-1234",
     base_url="http://0.0.0.0:4000"
 )
 
@@ -350,7 +352,7 @@ Assuming you have a model=`anthropic/claude-3-5-sonnet-20240620` on the [litellm
 ```python 
 import openai
 client = openai.AsyncOpenAI(
-    api_key="anything",            # litellm proxy api key
+    api_key="sk-1234",            # litellm proxy api key
     base_url="http://0.0.0.0:4000" # litellm proxy base url
 )
 
@@ -438,7 +440,7 @@ Assuming you have a model=`anthropic/claude-3-5-sonnet-20240620` on the [litellm
 ```python 
 import openai
 client = openai.AsyncOpenAI(
-    api_key="anything",            # litellm proxy api key
+    api_key="sk-1234",            # litellm proxy api key
     base_url="http://0.0.0.0:4000" # litellm proxy base url
 )
 
@@ -547,7 +549,7 @@ Assuming you have a model=`anthropic/claude-3-5-sonnet-20240620` on the [litellm
 ```python 
 import openai
 client = openai.AsyncOpenAI(
-    api_key="anything",            # litellm proxy api key
+    api_key="sk-1234",            # litellm proxy api key
     base_url="http://0.0.0.0:4000" # litellm proxy base url
 )
 
@@ -827,12 +829,51 @@ print(f"\nResponse: {resp}")
 ```python
 from litellm import completion
 
+# Using Anthropic native 'thinking' parameter
 resp = completion(
     model="anthropic/claude-3-7-sonnet-20250219",
     messages=[{"role": "user", "content": "What is the capital of France?"}],
     thinking={"type": "enabled", "budget_tokens": 1024},
 )
 
+# Alternatively, using OpenAI-style 'reasoning_effort' parameter (translated to 'thinking')
+resp = completion(
+    model="anthropic/claude-3-7-sonnet-20250219",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    reasoning_effort="medium", # Options: "low", "medium", "high"
+)
+```
+
+</TabItem>
+
+<TabItem value="openai" label="OpenAI v1.0.0+">
+
+```python
+import openai
+
+# Setup client with LiteLLM proxy
+client = openai.OpenAI(
+    api_key="sk-1234", # your litellm proxy key
+    base_url="http://0.0.0.0:4000" # your litellm proxy url
+)
+
+# Using OpenAI-style 'reasoning_effort' parameter with Claude
+response = client.chat.completions.create(
+    model="anthropic/claude-3-7-sonnet-20250219",
+    messages=[
+        {"role": "user", "content": "Explain the theory of relativity and show your reasoning process"}
+    ],
+    reasoning_effort="high",  # Options: "low", "medium", "high"
+)
+
+# Access reasoning content in the response
+if hasattr(response.choices[0].message, "reasoning_content"):
+    print("Reasoning process:")
+    print(response.choices[0].message.reasoning_content)
+
+# Print final response
+print("\nFinal response:")
+print(response.choices[0].message.content)
 ```
 
 </TabItem>
@@ -842,10 +883,11 @@ resp = completion(
 1. Setup config.yaml
 
 ```yaml
-- model_name: claude-3-7-sonnet-20250219
-  litellm_params:
-    model: anthropic/claude-3-7-sonnet-20250219
-    api_key: os.environ/ANTHROPIC_API_KEY
+model_list:
+    - model_name: claude-3-7-sonnet-20250219
+    litellm_params:
+        model: anthropic/claude-3-7-sonnet-20250219
+        api_key: os.environ/ANTHROPIC_API_KEY
 ```
 
 2. Start proxy
@@ -857,6 +899,7 @@ litellm --config /path/to/config.yaml
 3. Test it! 
 
 ```bash
+# Using Anthropic native 'thinking' parameter
 curl http://0.0.0.0:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
@@ -866,10 +909,32 @@ curl http://0.0.0.0:4000/v1/chat/completions \
     "thinking": {"type": "enabled", "budget_tokens": 1024}
   }'
 ```
+```bash
+# Using OpenAI-style 'reasoning_effort' parameter (translated to 'thinking')
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "claude-3-7-sonnet-20250219",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "reasoning_effort": "medium"
+  }'
+```
 
 </TabItem>
 </Tabs>
 
+### OpenAI-style `reasoning_effort` Mapping
+
+When using the OpenAI-style `reasoning_effort` parameter with Claude models, LiteLLM automatically translates it to Anthropic's `thinking` parameter. The mapping is as follows:
+
+| `reasoning_effort` | Equivalent `thinking` parameter | Max tokens adjusted to |
+|-------------------|----------------------------------|------------------------|
+| "low"             | `{"type": "enabled", "budget_tokens": 8000}` | 12000 |
+| "medium"          | `{"type": "enabled", "budget_tokens": 16000}` | 24000 |
+| "high"            | `{"type": "enabled", "budget_tokens": 24000}` | 36000 |
+
+Note: This parameter is only supported on Claude 3.7 Sonnet models.
 
 **Expected Response**
 

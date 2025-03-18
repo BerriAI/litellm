@@ -262,7 +262,7 @@ Unmapped params, will be assumed to be provider-specific params, and will be pas
 ```bash
 import openai
 client = openai.OpenAI(
-    api_key="anything",
+    api_key="sk-1234",
     base_url="http://0.0.0.0:4000"
 )
 

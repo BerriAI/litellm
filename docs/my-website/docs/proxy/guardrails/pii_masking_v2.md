@@ -152,7 +152,7 @@ curl http://localhost:4000/chat/completions \
 
 import openai
 client = openai.OpenAI(
-    api_key="anything",
+    api_key="sk-1234",
     base_url="http://0.0.0.0:4000"
 )
 

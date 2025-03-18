@@ -112,7 +112,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ```python
 import openai
 client = openai.OpenAI(
-    api_key="anything",
+    api_key="sk-1234",
     base_url="http://0.0.0.0:4000"
 )
 
@@ -200,7 +200,7 @@ model_list:
 
 import openai
 client = openai.OpenAI(
-    api_key="anything",
+    api_key="sk-1234",
     base_url="http://0.0.0.0:4000"
 )
 
@@ -262,7 +262,7 @@ model_list:
 
 import openai
 client = openai.OpenAI(
-    api_key="anything",
+    api_key="sk-1234",
     base_url="http://0.0.0.0:4000"
 )
 
@@ -701,7 +701,7 @@ response = completion(
 
 import openai
 client = openai.OpenAI(
-    api_key="anything",
+    api_key="sk-1234",
     base_url="http://0.0.0.0:4000"
 )
 
@@ -757,7 +757,7 @@ litellm --config /path/to/config.yaml
 
 import openai
 client = openai.OpenAI(
-    api_key="anything",
+    api_key="sk-1234",
     base_url="http://0.0.0.0:4000"
 )
 
@@ -956,7 +956,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ```python
 import openai
 client = openai.OpenAI(
-    api_key="anything",
+    api_key="sk-1234",
     base_url="http://0.0.0.0:4000"
 )
 

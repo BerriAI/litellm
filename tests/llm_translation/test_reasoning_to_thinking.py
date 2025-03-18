@@ -13,14 +13,15 @@ class TestReasoningToThinking:
     """Tests for translating OpenAI reasoning_effort to Anthropic thinking parameter"""
 
     @pytest.mark.parametrize(
-        "reasoning_effort, expected_thinking_type",
+        "reasoning_effort, expected_thinking_type, expected_max_tokens",
         [
-            ("low", "enabled"),
-            ("medium", "enabled"),
-            ("high", "enabled"),
+            ("low", "enabled", 12000),
+            ("medium", "enabled", 24000),
+            ("high", "enabled", 36000),
+            ("research_effort", "enabled", 24000),
         ],
     )
-    def test_anthropic_reasoning_effort_parameter(self, reasoning_effort, expected_thinking_type):
+    def test_anthropic_reasoning_effort_parameter(self, reasoning_effort, expected_thinking_type, expected_max_tokens):
         """Test that reasoning_effort is correctly mapped to thinking parameter in Anthropic requests"""
         # Create an instance of AnthropicConfig
         config = AnthropicConfig()
@@ -45,15 +46,17 @@ class TestReasoningToThinking:
         assert result["thinking"]["type"] == expected_thinking_type
         
         # Verify max_tokens was adjusted based on the token budget
-        if reasoning_effort == "low":
-            assert result["max_tokens"] == 12000  # 8000 * 1.5
-        elif reasoning_effort == "medium":
-            assert result["max_tokens"] == 24000  # 16000 * 1.5
-        elif reasoning_effort == "high":
-            assert result["max_tokens"] == 36000  # 24000 * 1.5
+        assert result["max_tokens"] == expected_max_tokens
     
+    @pytest.mark.parametrize(
+        "reasoning_level, expected_budget, expected_max_tokens",
+        [
+            ("medium", 16000, 24000),
+            ("research_effort", 16000, 24000)
+        ]
+    )
     @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
-    def test_reasoning_effort_e2e(self, mock_post):
+    def test_reasoning_effort_e2e(self, mock_post, reasoning_level, expected_budget, expected_max_tokens):
         """Test end-to-end flow using reasoning_effort with Claude 3.7 Sonnet"""
         # Configure mock response
         mock_response = MagicMock()
@@ -74,8 +77,8 @@ class TestReasoningToThinking:
         try:
             response = litellm.completion(
                 model="claude-3-7-sonnet",
-                messages=[{"role": "user", "content": "Testing reasoning effort to thinking mapping"}],
-                reasoning_effort="medium",
+                messages=[{"role": "user", "content": f"Testing {reasoning_level} to thinking mapping"}],
+                reasoning_effort=reasoning_level,
                 api_key="fake-key"  # Use a fake key for testing
             )
             
@@ -86,11 +89,11 @@ class TestReasoningToThinking:
             # Check that thinking parameter was set in the request
             assert "thinking" in request_body
             assert request_body["thinking"]["type"] == "enabled"
-            assert request_body["thinking"]["budget_tokens"] == 16000
+            assert request_body["thinking"]["budget_tokens"] == expected_budget
             
             # Check that max_tokens was adjusted based on the token budget
             assert "max_tokens" in request_body
-            assert request_body["max_tokens"] == 24000  # 16000 * 1.5
+            assert request_body["max_tokens"] == expected_max_tokens
             
         except Exception as e:
             pytest.fail(f"Test failed with exception: {e}")

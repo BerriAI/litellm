@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 client = openai.OpenAI(
-    api_key="anything",
+    api_key="sk-1234",
     base_url="http://0.0.0.0:8000",
     http_client=httpx.Client(verify=False),
 )

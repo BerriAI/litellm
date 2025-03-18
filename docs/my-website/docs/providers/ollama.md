@@ -282,7 +282,7 @@ from pydantic import BaseModel
 from openai import OpenAI
 
 client = OpenAI(
-    api_key="anything", # 👈 PROXY KEY (can be anything, if master_key not set)
+    api_key="sk-1234", # 👈 PROXY KEY (can be anything, if master_key not set)
     base_url="http://0.0.0.0:4000" # 👈 PROXY BASE URL
 )
 
