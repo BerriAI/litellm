@@ -1016,7 +1016,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/local_testing/test_basic_python_version.py
+            python -m pytest -vv -s tests/local_testing/test_basic_python_version.py
 
   installing_litellm_on_python_3_13:
     docker:
@@ -1043,7 +1043,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/local_testing/test_basic_python_version.py
+            python -m pytest -vv -s tests/local_testing/test_basic_python_version.py
   helm_chart_testing:
     machine:
       image: ubuntu-2204:2023.10.1  # Use machine executor instead of docker
