@@ -462,7 +462,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 id = m.get("model_info", {}).get(
                     "id"
                 )  # a deployment should always have an 'id'. this is set in router.py
-                deployment_name = m.get("model_name")
+                deployment_name = m.get("litellm_params", {}).get("model")
                 tpm_key = "{}:{}:tpm:{}".format(id, deployment_name, current_minute)
                 rpm_key = "{}:{}:rpm:{}".format(id, deployment_name, current_minute)
 
@@ -581,8 +581,9 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 id = m.get("model_info", {}).get(
                     "id"
                 )  # a deployment should always have an 'id'. this is set in router.py
-                tpm_key = "{}:tpm:{}".format(id, current_minute)
-                rpm_key = "{}:rpm:{}".format(id, current_minute)
+                deployment_name = m.get("litellm_params", {}).get("model")
+                tpm_key = "{}:{}:tpm:{}".format(id, deployment_name, current_minute)
+                rpm_key = "{}:{}:rpm:{}".format(id, deployment_name, current_minute)
 
                 tpm_keys.append(tpm_key)
                 rpm_keys.append(rpm_key)
