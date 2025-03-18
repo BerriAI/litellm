@@ -485,16 +485,20 @@ async def test_streaming_with_usage_and_logging(sync_mode: bool):
             time.sleep(1)
             mock_log_success_event.assert_called_once()
             # mock_log_stream_event.assert_called()
+            assert (
+                mock_log_success_event.call_args.kwargs["response_obj"].usage
+                == final_usage_block
+            )
         else:
             await asyncio.sleep(1)
             mock_async_log_success_event.assert_called_once()
             # mock_async_log_stream_event.assert_called()
+            assert (
+                mock_async_log_success_event.call_args.kwargs["response_obj"].usage
+                == final_usage_block
+            )
 
         print(mock_log_success_event.call_args.kwargs.keys())
-
-        mock_log_success_event.call_args.kwargs[
-            "response_obj"
-        ].usage == final_usage_block
 
 
 def test_streaming_handler_with_stop_chunk(
