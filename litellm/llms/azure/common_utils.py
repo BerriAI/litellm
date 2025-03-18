@@ -247,20 +247,21 @@ def select_azure_base_url_or_endpoint(azure_client_params: dict):
 class BaseAzureLLM:
     def get_azure_openai_client(
         self,
-        litellm_params: dict,
         api_key: Optional[str],
         api_base: Optional[str],
         api_version: Optional[str] = None,
         client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None,
+        litellm_params: Optional[dict] = None,
         _is_async: bool = False,
+        model: Optional[str] = None,
     ) -> Optional[Union[AzureOpenAI, AsyncAzureOpenAI]]:
         openai_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None
         if client is None:
             azure_client_params = self.initialize_azure_sdk_client(
-                litellm_params=litellm_params,
+                litellm_params=litellm_params or {},
                 api_key=api_key,
                 api_base=api_base,
-                model_name="",
+                model_name=model,
                 api_version=api_version,
             )
             if _is_async is True:
@@ -269,6 +270,11 @@ class BaseAzureLLM:
                 openai_client = AzureOpenAI(**azure_client_params)  # type: ignore
         else:
             openai_client = client
+            if api_version is not None and isinstance(
+                openai_client._custom_query, dict
+            ):
+                # set api_version to version passed by user
+                openai_client._custom_query.setdefault("api-version", api_version)
 
         return openai_client
 
@@ -277,7 +283,7 @@ class BaseAzureLLM:
         litellm_params: dict,
         api_key: Optional[str],
         api_base: Optional[str],
-        model_name: str,
+        model_name: Optional[str],
         api_version: Optional[str],
     ) -> dict:
 
