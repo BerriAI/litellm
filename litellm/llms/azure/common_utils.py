@@ -9,6 +9,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.openai.openai import OpenAIChatCompletion
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
@@ -244,7 +245,7 @@ def select_azure_base_url_or_endpoint(azure_client_params: dict):
     return azure_client_params
 
 
-class BaseAzureLLM:
+class BaseAzureLLM(OpenAIChatCompletion):
     def get_azure_openai_client(
         self,
         api_key: Optional[str],
@@ -263,6 +264,7 @@ class BaseAzureLLM:
                 api_base=api_base,
                 model_name=model,
                 api_version=api_version,
+                is_async=_is_async,
             )
             if _is_async is True:
                 openai_client = AsyncAzureOpenAI(**azure_client_params)
@@ -285,6 +287,7 @@ class BaseAzureLLM:
         api_base: Optional[str],
         model_name: Optional[str],
         api_version: Optional[str],
+        is_async: bool,
     ) -> dict:
 
         azure_ad_token_provider: Optional[Callable[[], str]] = None
@@ -340,8 +343,13 @@ class BaseAzureLLM:
             "api_version": api_version,
             "azure_ad_token": azure_ad_token,
             "azure_ad_token_provider": azure_ad_token_provider,
-            "http_client": litellm.client_session,
         }
+        # init http client + SSL Verification settings
+        if is_async is True:
+            azure_client_params["http_client"] = self._get_async_http_client
+        else:
+            azure_client_params["http_client"] = self._get_sync_http_client
+
         if max_retries is not None:
             azure_client_params["max_retries"] = max_retries
         if timeout is not None:
