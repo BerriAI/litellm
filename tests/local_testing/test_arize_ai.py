@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 
 from litellm import Choices
@@ -75,8 +76,7 @@ def test_arize_set_attributes():
         "content": "simple arize test",
         "model": "gpt-4o",
         "messages": [{"role": "user", "content": "basic arize test"}],
-        "litellm_params": {"metadata": {"key": "value"}},
-        "standard_logging_object": {"model_parameters": {"user": "test_user"}}
+        "standard_logging_object": {"model_parameters": {"user": "test_user"}, "metadata": {"key": "value", "key2": None}},
     }
     response_obj = ModelResponse(usage={"total_tokens": 100, "completion_tokens": 60, "prompt_tokens": 40}, 
                                  choices=[Choices(message={"role": "assistant", "content": "response content"})])
@@ -84,7 +84,7 @@ def test_arize_set_attributes():
     ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
 
     assert span.set_attribute.call_count == 14
-    span.set_attribute.assert_any_call(SpanAttributes.METADATA, str({"key": "value"}))
+    span.set_attribute.assert_any_call(SpanAttributes.METADATA, json.dumps({"key": "value", "key2": None}))
     span.set_attribute.assert_any_call(SpanAttributes.LLM_MODEL_NAME, "gpt-4o")
     span.set_attribute.assert_any_call(SpanAttributes.OPENINFERENCE_SPAN_KIND, "LLM")
     span.set_attribute.assert_any_call(SpanAttributes.INPUT_VALUE, "basic arize test")
