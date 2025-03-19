@@ -2264,14 +2264,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if self._should_run_sync_callbacks_for_async_calls() is False:
             return
 
-        executor.submit(
-            self.success_handler,
-            result,
-            start_time,
-            end_time,
-            # NB: Since we already run this in a TPE, the handler itself can run sync
-            synchronous=True,
-        )
+        self.success_handler(result, start_time, end_time)
 
     def _should_run_sync_callbacks_for_async_calls(self) -> bool:
         """

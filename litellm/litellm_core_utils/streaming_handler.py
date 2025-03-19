@@ -1810,15 +1810,10 @@ class CustomStreamWrapper:
                 )
                 if litellm.sync_logging:
                     await self.logging_obj.async_success_handler(**logging_params)
-                    self.logging_obj.success_handler(**logging_params, synchronous=True)
                 else:
                     asyncio.create_task(self.logging_obj.async_success_handler(**logging_params))
-                    executor.submit(
-                        self.logging_obj.success_handler,
-                        **logging_params,
-                        # NB: We already run this in a TPE so the handler itself should run sync
-                        synchronous=True,
-                    )
+
+                self.logging_obj.success_handler(**logging_params)
 
                 raise StopAsyncIteration  # Re-raise StopIteration
             else:

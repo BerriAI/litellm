@@ -140,8 +140,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             )
         )
 
-        executor.submit(
-            self.logging_obj.success_handler,
+        self.logging_obj.success_handler(
             result=self.completed_response,
             cache_hit=None,
             start_time=self.start_time,
