@@ -20,10 +20,12 @@ import litellm
 
 
 @pytest.mark.asyncio
-async def test_initialize_scheduled_jobs_credentials():
+async def test_initialize_scheduled_jobs_credentials(monkeypatch):
     """
     Test that get_credentials is only called when store_model_in_db is True
     """
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
 
