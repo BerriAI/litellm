@@ -198,12 +198,6 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 result = await self._increment_value_in_current_window(
                     key=rpm_key, value=1, ttl=self.routing_args.ttl
                 )
-                # result = await self.router_cache.async_increment_cache(
-                #     key=rpm_key,
-                #     value=1,
-                #     ttl=self.routing_args.ttl,
-                #     parent_otel_span=parent_otel_span,
-                # )
                 if result is not None and result > deployment_rpm:
                     raise litellm.RateLimitError(
                         message="Deployment over defined rpm limit={}. current usage={}".format(
