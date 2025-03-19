@@ -79,7 +79,7 @@ class RedisSemanticCache(BaseCache):
         # Convert similarity threshold [0,1] to distance threshold [0,2]
         # For cosine distance: 0 = most similar, 2 = least similar
         # While similarity: 1 = most similar, 0 = least similar
-        self.distance_threshold = 2 * (1 - similarity_threshold)
+        self.distance_threshold = 1 - similarity_threshold
         self.embedding_model = embedding_model
 
         # Set up Redis connection
@@ -107,7 +107,7 @@ class RedisSemanticCache(BaseCache):
             redis_url=redis_url,
             vectorizer=cache_vectorizer,
             distance_threshold=self.distance_threshold,
-            overwrite=False
+            overwrite=False,
         )
 
     def _get_ttl(self, **kwargs) -> Optional[int]:
@@ -120,7 +120,7 @@ class RedisSemanticCache(BaseCache):
         Returns:
             Optional[int]: The TTL value in seconds, or None if no TTL should be applied
         """
-        ttl = self.ttl if "ttl" not in kwargs else kwargs["ttl"]
+        ttl = kwargs.get("ttl")
         if ttl is not None:
             ttl = int(ttl)
         return ttl
@@ -225,7 +225,6 @@ class RedisSemanticCache(BaseCache):
                 return None
                 
             prompt = "".join(message.get("content", "") for message in messages if message.get("content"))
-
             # Check the cache for semantically similar prompts
             results = self.llmcache.check(prompt=prompt)
 
@@ -240,7 +239,7 @@ class RedisSemanticCache(BaseCache):
             # Convert vector distance back to similarity score
             # For cosine distance: 0 = most similar, 2 = least similar
             # While similarity: 1 = most similar, 0 = least similar
-            similarity = 1 - (vector_distance / 2)
+            similarity = 1 - vector_distance
             
             cached_prompt = cache_hit["prompt"]
             cached_response = cache_hit["response"]
@@ -390,7 +389,7 @@ class RedisSemanticCache(BaseCache):
             # Convert vector distance back to similarity
             # For cosine distance: 0 = most similar, 2 = least similar
             # While similarity: 1 = most similar, 0 = least similar
-            similarity = 1 - (vector_distance / 2)
+            similarity = 1 - vector_distance
 
             cached_prompt = cache_hit["prompt"]
             cached_response = cache_hit["response"]
