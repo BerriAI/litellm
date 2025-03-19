@@ -176,4 +176,4 @@ class TestGitHubCopilotAuthenticator:
             assert result == mock_token
             authenticator._get_device_code.assert_called_once()
             authenticator._poll_for_access_token.assert_called_once_with("mock-device-code")
-            mock_print.assert_called_once() 
+            mock_print.assert_called_once()
