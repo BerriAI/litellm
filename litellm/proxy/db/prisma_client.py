@@ -5,7 +5,6 @@ This file contains the PrismaWrapper class, which is used to wrap the Prisma cli
 import asyncio
 import os
 import random
-import shutil
 import subprocess
 import time
 import urllib
