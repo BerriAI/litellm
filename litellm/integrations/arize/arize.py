@@ -8,7 +8,6 @@ import os
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional, Union
 
-from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.types.integrations.arize import ArizeConfig
