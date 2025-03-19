@@ -28,20 +28,37 @@ def test_arize_callback():
     os.environ["OTEL_BSP_SCHEDULE_DELAY_MILLIS"] = "1"
     os.environ["OTEL_BSP_EXPORT_TIMEOUT_MILLIS"] = "5"
 
-    with patch.object(
-        opentelemetry.exporter.otlp.proto.grpc.trace_exporter.OTLPSpanExporter,
-        "export",
-        new=Mock(),
-    ) as patched_export:
-        completion(
-            model="openai/test-model",
-            messages=[{"role": "user", "content": "arize test content"}],
-            stream=False,
-            mock_response="hello there!",
-        )
+    try:
+        with patch.object(
+            opentelemetry.exporter.otlp.proto.grpc.trace_exporter.OTLPSpanExporter,
+            "export",
+            new=Mock(),
+        ) as patched_export:
+            completion(
+                model="openai/test-model",
+                messages=[{"role": "user", "content": "arize test content"}],
+                stream=False,
+                mock_response="hello there!",
+            )
 
-        time.sleep(1)  # Wait for the batch span processor to flush
-        assert patched_export.called
+            time.sleep(1)  # Wait for the batch span processor to flush
+            assert patched_export.called
+    finally:
+        # Clean up environment variables
+        for key in [
+            "ARIZE_SPACE_KEY",
+            "ARIZE_API_KEY",
+            "ARIZE_ENDPOINT",
+            "OTEL_BSP_MAX_QUEUE_SIZE",
+            "OTEL_BSP_MAX_EXPORT_BATCH_SIZE",
+            "OTEL_BSP_SCHEDULE_DELAY_MILLIS",
+            "OTEL_BSP_EXPORT_TIMEOUT_MILLIS",
+        ]:
+            if key in os.environ:
+                del os.environ[key]
+
+        # Reset callbacks
+        litellm.callbacks = []
 
 
 def test_arize_set_attributes():
