@@ -257,7 +257,17 @@ class BaseAzureLLM(BaseOpenAILLM):
         model: Optional[str] = None,
     ) -> Optional[Union[AzureOpenAI, AsyncAzureOpenAI]]:
         openai_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None
+        client_initialization_params: dict = locals()
         if client is None:
+            cached_client = self.get_cached_openai_client(
+                client_initialization_params=client_initialization_params,
+                client_type="azure",
+            )
+            if cached_client and isinstance(
+                cached_client, (AzureOpenAI, AsyncAzureOpenAI)
+            ):
+                return cached_client
+
             azure_client_params = self.initialize_azure_sdk_client(
                 litellm_params=litellm_params or {},
                 api_key=api_key,
@@ -278,6 +288,12 @@ class BaseAzureLLM(BaseOpenAILLM):
                 # set api_version to version passed by user
                 openai_client._custom_query.setdefault("api-version", api_version)
 
+        # save client in-memory cache
+        self.set_cached_openai_client(
+            openai_client=openai_client,
+            client_initialization_params=client_initialization_params,
+            client_type="azure",
+        )
         return openai_client
 
     def initialize_azure_sdk_client(
