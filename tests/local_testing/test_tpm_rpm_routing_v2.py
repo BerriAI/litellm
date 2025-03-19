@@ -736,7 +736,9 @@ async def test_tpm_rpm_routing_model_name_checks():
         router.lowesttpm_logger_v2,
         "async_pre_call_check",
         side_effect=side_effect_pre_call_check,
-    ) as mock_object:
+    ) as mock_object, patch.object(
+        router.lowesttpm_logger_v2, "async_log_success_event"
+    ) as mock_logging_event:
         response = await router.acompletion(
             model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey!"}]
         )
@@ -746,4 +748,20 @@ async def test_tpm_rpm_routing_model_name_checks():
         assert (
             mock_object.call_args[0][0]["litellm_params"]["model"]
             == deployment["litellm_params"]["model"]
+        )
+
+        await asyncio.sleep(1)
+
+        mock_logging_event.assert_called()
+
+        print(f"mock_logging_event: {mock_logging_event.call_args.kwargs}")
+        standard_logging_payload: StandardLoggingPayload = (
+            mock_logging_event.call_args.kwargs.get("kwargs", {}).get(
+                "standard_logging_object"
+            )
+        )
+
+        assert (
+            standard_logging_payload["hidden_params"]["litellm_model_name"]
+            == "azure/chatgpt-v-2"
         )
