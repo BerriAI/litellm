@@ -274,7 +274,10 @@ def get_secret(  # noqa: PLR0915
                     )
 
                     if isinstance(client, AWSSecretsManagerV2):
-                        secret = client.sync_read_secret(secret_name=secret_name)
+                        secret = client.sync_read_secret(
+                            secret_name=secret_name,
+                            primary_secret_name=key_management_settings.primary_secret_name,
+                        )
                         print_verbose(f"get_secret_value_response: {secret}")
                 elif key_manager == KeyManagementSystem.GOOGLE_SECRET_MANAGER.value:
                     try:

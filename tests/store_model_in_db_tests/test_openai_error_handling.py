@@ -77,17 +77,6 @@ def test_images_bad_model():
     print(f"Images error: {excinfo.value}")
 
 
-def test_moderations_bad_model():
-    key = generate_key_sync()
-    client = OpenAI(api_key=key, base_url="http://0.0.0.0:4000")
-
-    with pytest.raises(BadRequestError) as excinfo:
-        client.moderations.create(
-            model="non-existent-model", input="I want to harm someone."
-        )
-    print(f"Moderations error: {excinfo.value}")
-
-
 @pytest.mark.asyncio
 async def test_async_chat_completion_bad_model():
     key = generate_key_sync()
@@ -126,3 +115,94 @@ def test_missing_model_parameter_curl(curl_command):
     print("error in response", json.dumps(response, indent=4))
 
     assert "litellm.BadRequestError" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_bad_model_with_spend_logs():
+    """
+    Tests that Error Logs are created for failed requests
+    """
+    import json
+
+    key = generate_key_sync()
+
+    # Use httpx to make the request and capture headers
+    url = "http://0.0.0.0:4000/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    payload = {
+        "model": "non-existent-model",
+        "messages": [{"role": "user", "content": "Hello!"}],
+    }
+
+    with httpx.Client() as client:
+        response = client.post(url, headers=headers, json=payload)
+
+        # Extract the litellm call ID from headers
+        litellm_call_id = response.headers.get("x-litellm-call-id")
+        print(f"Status code: {response.status_code}")
+        print(f"Headers: {dict(response.headers)}")
+        print(f"LiteLLM Call ID: {litellm_call_id}")
+
+        # Parse the JSON response body
+        try:
+            response_body = response.json()
+            print(f"Error response: {json.dumps(response_body, indent=4)}")
+        except json.JSONDecodeError:
+            print(f"Could not parse response body as JSON: {response.text}")
+
+    assert (
+        litellm_call_id is not None
+    ), "Failed to get LiteLLM Call ID from response headers"
+    print("waiting for flushing error log to db....")
+    await asyncio.sleep(15)
+
+    # Now query the spend logs
+    url = "http://0.0.0.0:4000/spend/logs?request_id=" + litellm_call_id
+    headers = {"Authorization": f"Bearer sk-1234", "Content-Type": "application/json"}
+
+    with httpx.Client() as client:
+        response = client.get(
+            url,
+            headers=headers,
+        )
+
+        assert (
+            response.status_code == 200
+        ), f"Failed to get spend logs: {response.status_code}"
+
+        spend_logs = response.json()
+
+        # Print the spend logs payload
+        print(f"Spend logs response: {json.dumps(spend_logs, indent=4)}")
+
+        # Verify we have logs for the failed request
+        assert len(spend_logs) > 0, "No spend logs found"
+
+        # Check if the error is recorded in the logs
+        log_entry = spend_logs[0]  # Should be the specific log for our litellm_call_id
+
+        # Verify the structure of the log entry
+        assert log_entry["request_id"] == litellm_call_id
+        assert log_entry["model"] == "non-existent-model"
+        assert log_entry["model_group"] == "non-existent-model"
+        assert log_entry["spend"] == 0.0
+        assert log_entry["total_tokens"] == 0
+        assert log_entry["prompt_tokens"] == 0
+        assert log_entry["completion_tokens"] == 0
+
+        # Verify metadata fields
+        assert log_entry["metadata"]["status"] == "failure"
+        assert "user_api_key" in log_entry["metadata"]
+        assert "error_information" in log_entry["metadata"]
+
+        # Verify error information
+        error_info = log_entry["metadata"]["error_information"]
+        assert "traceback" in error_info
+        assert error_info["error_code"] == "400"
+        assert error_info["error_class"] == "BadRequestError"
+        assert "litellm.BadRequestError" in error_info["error_message"]
+        assert "non-existent-model" in error_info["error_message"]
+
+        # Verify request details
+        assert log_entry["cache_hit"] == "False"
+        assert log_entry["response"] == {}

@@ -65,10 +65,13 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             # ------------
             # Setup values
             # ------------
+
             dt = get_utc_datetime()
             current_minute = dt.strftime("%H-%M")
             model_id = deployment.get("model_info", {}).get("id")
-            rpm_key = f"{model_id}:rpm:{current_minute}"
+            deployment_name = deployment.get("litellm_params", {}).get("model")
+            rpm_key = f"{model_id}:{deployment_name}:rpm:{current_minute}"
+
             local_result = self.router_cache.get_cache(
                 key=rpm_key, local_only=True
             )  # check local result first
@@ -151,7 +154,9 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             dt = get_utc_datetime()
             current_minute = dt.strftime("%H-%M")
             model_id = deployment.get("model_info", {}).get("id")
-            rpm_key = f"{model_id}:rpm:{current_minute}"
+            deployment_name = deployment.get("litellm_params", {}).get("model")
+
+            rpm_key = f"{model_id}:{deployment_name}:rpm:{current_minute}"
             local_result = await self.router_cache.async_get_cache(
                 key=rpm_key, local_only=True
             )  # check local result first
@@ -228,8 +233,9 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             if standard_logging_object is None:
                 raise ValueError("standard_logging_object not passed in.")
             model_group = standard_logging_object.get("model_group")
+            model = standard_logging_object["hidden_params"].get("litellm_model_name")
             id = standard_logging_object.get("model_id")
-            if model_group is None or id is None:
+            if model_group is None or id is None or model is None:
                 return
             elif isinstance(id, int):
                 id = str(id)
@@ -244,7 +250,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 "%H-%M"
             )  # use the same timezone regardless of system clock
 
-            tpm_key = f"{id}:tpm:{current_minute}"
+            tpm_key = f"{id}:{model}:tpm:{current_minute}"
             # ------------
             # Update usage
             # ------------
@@ -276,6 +282,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             if standard_logging_object is None:
                 raise ValueError("standard_logging_object not passed in.")
             model_group = standard_logging_object.get("model_group")
+            model = standard_logging_object["hidden_params"]["litellm_model_name"]
             id = standard_logging_object.get("model_id")
             if model_group is None or id is None:
                 return
@@ -290,7 +297,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 "%H-%M"
             )  # use the same timezone regardless of system clock
 
-            tpm_key = f"{id}:tpm:{current_minute}"
+            tpm_key = f"{id}:{model}:tpm:{current_minute}"
             # ------------
             # Update usage
             # ------------
@@ -458,8 +465,9 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 id = m.get("model_info", {}).get(
                     "id"
                 )  # a deployment should always have an 'id'. this is set in router.py
-                tpm_key = "{}:tpm:{}".format(id, current_minute)
-                rpm_key = "{}:rpm:{}".format(id, current_minute)
+                deployment_name = m.get("litellm_params", {}).get("model")
+                tpm_key = "{}:{}:tpm:{}".format(id, deployment_name, current_minute)
+                rpm_key = "{}:{}:rpm:{}".format(id, deployment_name, current_minute)
 
                 tpm_keys.append(tpm_key)
                 rpm_keys.append(rpm_key)
@@ -576,8 +584,9 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 id = m.get("model_info", {}).get(
                     "id"
                 )  # a deployment should always have an 'id'. this is set in router.py
-                tpm_key = "{}:tpm:{}".format(id, current_minute)
-                rpm_key = "{}:rpm:{}".format(id, current_minute)
+                deployment_name = m.get("litellm_params", {}).get("model")
+                tpm_key = "{}:{}:tpm:{}".format(id, deployment_name, current_minute)
+                rpm_key = "{}:{}:rpm:{}".format(id, deployment_name, current_minute)
 
                 tpm_keys.append(tpm_key)
                 rpm_keys.append(rpm_key)

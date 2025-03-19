@@ -1,6 +1,6 @@
+import ssl
 from enum import Enum
-
-import litellm
+from typing import Union
 
 
 class httpxSpecialProvider(str, Enum):
@@ -19,3 +19,6 @@ class httpxSpecialProvider(str, Enum):
     SecretManager = "secret_manager"
     PassThroughEndpoint = "pass_through_endpoint"
     PromptFactory = "prompt_factory"
+
+
+VerifyTypes = Union[str, bool, ssl.SSLContext]

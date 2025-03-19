@@ -42,7 +42,26 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
             if not body:
                 parsed_body = {}
             else:
-                parsed_body = orjson.loads(body)
+                try:
+                    parsed_body = orjson.loads(body)
+                except orjson.JSONDecodeError:
+                    # Fall back to the standard json module which is more forgiving
+                    # First decode bytes to string if needed
+                    body_str = body.decode("utf-8") if isinstance(body, bytes) else body
+
+                    # Replace invalid surrogate pairs
+                    import re
+
+                    # This regex finds incomplete surrogate pairs
+                    body_str = re.sub(
+                        r"[\uD800-\uDBFF](?![\uDC00-\uDFFF])", "", body_str
+                    )
+                    # This regex finds low surrogates without high surrogates
+                    body_str = re.sub(
+                        r"(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]", "", body_str
+                    )
+
+                    parsed_body = json.loads(body_str)
 
         # Cache the parsed result
         _safe_set_request_parsed_body(request=request, parsed_body=parsed_body)

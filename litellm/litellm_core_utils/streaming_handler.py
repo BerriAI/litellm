@@ -15,6 +15,7 @@ from litellm import verbose_logger
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.types.llms.openai import ChatCompletionChunk
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import Delta
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import (
@@ -70,6 +71,17 @@ class CustomStreamWrapper:
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
         self.sent_last_chunk = False
+
+        litellm_params: GenericLiteLLMParams = GenericLiteLLMParams(
+            **self.logging_obj.model_call_details.get("litellm_params", {})
+        )
+        self.merge_reasoning_content_in_choices: bool = (
+            litellm_params.merge_reasoning_content_in_choices or False
+        )
+        self.sent_first_thinking_block = False
+        self.sent_last_thinking_block = False
+        self.thinking_content = ""
+
         self.system_fingerprint: Optional[str] = None
         self.received_finish_reason: Optional[str] = None
         self.intermittent_finish_reason: Optional[str] = (
@@ -87,12 +99,7 @@ class CustomStreamWrapper:
         self.holding_chunk = ""
         self.complete_response = ""
         self.response_uptil_now = ""
-        _model_info = (
-            self.logging_obj.model_call_details.get("litellm_params", {}).get(
-                "model_info", {}
-            )
-            or {}
-        )
+        _model_info: Dict = litellm_params.model_info or {}
 
         _api_base = get_api_base(
             model=model or "",
@@ -630,7 +637,10 @@ class CustomStreamWrapper:
                 if isinstance(chunk, bytes):
                     chunk = chunk.decode("utf-8")
                 if "text_output" in chunk:
-                    response = chunk.replace("data: ", "").strip()
+                    response = (
+                        CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
+                    )
+                    response = response.strip()
                     parsed_response = json.loads(response)
                 else:
                     return {
@@ -755,16 +765,12 @@ class CustomStreamWrapper:
                 setattr(model_response, k, v)
         return model_response
 
-    def return_processed_chunk_logic(  # noqa
+    def is_chunk_non_empty(
         self,
         completion_obj: Dict[str, Any],
         model_response: ModelResponseStream,
         response_obj: Dict[str, Any],
-    ):
-
-        print_verbose(
-            f"completion_obj: {completion_obj}, model_response.choices[0]: {model_response.choices[0]}, response_obj: {response_obj}"
-        )
+    ) -> bool:
         if (
             "content" in completion_obj
             and (
@@ -780,6 +786,10 @@ class CustomStreamWrapper:
                 "function_call" in completion_obj
                 and completion_obj["function_call"] is not None
             )
+            or (
+                "reasoning_content" in model_response.choices[0].delta
+                and model_response.choices[0].delta.reasoning_content is not None
+            )
             or (model_response.choices[0].delta.provider_specific_fields is not None)
             or (
                 "provider_specific_fields" in model_response
@@ -789,8 +799,27 @@ class CustomStreamWrapper:
                 "provider_specific_fields" in response_obj
                 and response_obj["provider_specific_fields"] is not None
             )
-        ):  # cannot set content of an OpenAI Object to be an empty string
+        ):
+            return True
+        else:
+            return False
 
+    def return_processed_chunk_logic(  # noqa
+        self,
+        completion_obj: Dict[str, Any],
+        model_response: ModelResponseStream,
+        response_obj: Dict[str, Any],
+    ):
+
+        print_verbose(
+            f"completion_obj: {completion_obj}, model_response.choices[0]: {model_response.choices[0]}, response_obj: {response_obj}"
+        )
+        is_chunk_non_empty = self.is_chunk_non_empty(
+            completion_obj, model_response, response_obj
+        )
+        if (
+            is_chunk_non_empty
+        ):  # cannot set content of an OpenAI Object to be an empty string
             self.safety_checker()
             hold, model_response_str = self.check_special_tokens(
                 chunk=completion_obj["content"],
@@ -806,7 +835,7 @@ class CustomStreamWrapper:
                         for choice in original_chunk.choices:
                             try:
                                 if isinstance(choice, BaseModel):
-                                    choice_json = choice.model_dump()
+                                    choice_json = choice.model_dump()  # type: ignore
                                     choice_json.pop(
                                         "finish_reason", None
                                     )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
@@ -854,6 +883,10 @@ class CustomStreamWrapper:
                     _index: Optional[int] = completion_obj.get("index")
                     if _index is not None:
                         model_response.choices[0].index = _index
+
+                self._optional_combine_thinking_block_in_choices(
+                    model_response=model_response
+                )
                 print_verbose(f"returning model_response: {model_response}")
                 return model_response
             else:
@@ -865,6 +898,8 @@ class CustomStreamWrapper:
                     return model_response
 
                 # Default - return StopIteration
+                if hasattr(model_response, "usage"):
+                    self.chunks.append(model_response)
                 raise StopIteration
             # flush any remaining holding chunk
             if len(self.holding_chunk) > 0:
@@ -909,6 +944,48 @@ class CustomStreamWrapper:
             if hasattr(model_response, "usage"):
                 self.chunks.append(model_response)
             return
+
+    def _optional_combine_thinking_block_in_choices(
+        self, model_response: ModelResponseStream
+    ) -> None:
+        """
+        UI's Like OpenWebUI expect to get 1 chunk with <think>...</think> tags in the chunk content
+
+        In place updates the model_response object with reasoning_content in content with <think>...</think> tags
+
+        Enabled when `merge_reasoning_content_in_choices=True` passed in request params
+
+
+        """
+        if self.merge_reasoning_content_in_choices is True:
+            reasoning_content = getattr(
+                model_response.choices[0].delta, "reasoning_content", None
+            )
+            if reasoning_content:
+                if self.sent_first_thinking_block is False:
+                    model_response.choices[0].delta.content += (
+                        "<think>" + reasoning_content
+                    )
+                    self.sent_first_thinking_block = True
+                elif (
+                    self.sent_first_thinking_block is True
+                    and hasattr(model_response.choices[0].delta, "reasoning_content")
+                    and model_response.choices[0].delta.reasoning_content
+                ):
+                    model_response.choices[0].delta.content = reasoning_content
+            elif (
+                self.sent_first_thinking_block is True
+                and not self.sent_last_thinking_block
+                and model_response.choices[0].delta.content
+            ):
+                model_response.choices[0].delta.content = (
+                    "</think>" + model_response.choices[0].delta.content
+                )
+                self.sent_last_thinking_block = True
+
+            if hasattr(model_response.choices[0].delta, "reasoning_content"):
+                del model_response.choices[0].delta.reasoning_content
+        return
 
     def chunk_creator(self, chunk: Any):  # type: ignore  # noqa: PLR0915
         model_response = self.model_response_creator()
@@ -1395,6 +1472,24 @@ class CustomStreamWrapper:
         """
         self.logging_loop = loop
 
+    def cache_streaming_response(self, processed_chunk, cache_hit: bool):
+        """
+        Caches the streaming response
+        """
+        if not cache_hit and self.logging_obj._llm_caching_handler is not None:
+            self.logging_obj._llm_caching_handler._sync_add_streaming_response_to_cache(
+                processed_chunk
+            )
+
+    async def async_cache_streaming_response(self, processed_chunk, cache_hit: bool):
+        """
+        Caches the streaming response
+        """
+        if not cache_hit and self.logging_obj._llm_caching_handler is not None:
+            await self.logging_obj._llm_caching_handler._add_streaming_response_to_cache(
+                processed_chunk
+            )
+
     def run_success_logging_and_cache_storage(self, processed_chunk, cache_hit: bool):
         """
         Runs success logging in a thread and adds the response to the cache
@@ -1439,7 +1534,7 @@ class CustomStreamWrapper:
         if litellm.sync_logging:
             _run()
         else:
-            threading.Thread(target=_run).start()
+            executor.submit((target=_run).start()
 
     def finish_reason_handler(self):
         model_response = self.model_response_creator()
@@ -1488,6 +1583,7 @@ class CustomStreamWrapper:
                         continue
                     ## LOGGING
                     self.run_success_logging_and_cache_storage(response, cache_hit)
+
                     choice = response.choices[0]
                     if isinstance(choice, StreamingChoices):
                         self.response_uptil_now += choice.delta.get("content", "") or ""
@@ -1531,9 +1627,33 @@ class CustomStreamWrapper:
                         "usage",
                         getattr(complete_streaming_response, "usage"),
                     )
-
-                ## LOGGING
-                self.logging_obj.success_handler(response, None, None, cache_hit)
+                    self.cache_streaming_response(
+                        processed_chunk=complete_streaming_response.model_copy(
+                            deep=True
+                        ),
+                        cache_hit=cache_hit,
+                    )
+                    logging_result = complete_streaming_response.model_copy(deep=True)
+                    executor.submit(
+                        self.logging_obj.success_handler,
+                        complete_streaming_response.model_copy(deep=True),
+                        None,
+                        None,
+                        cache_hit,
+                    )
+                else:
+                    logging_result = response
+                            
+                if litellm.sync_logging:
+                    self.logging_obj.success_handler(logging_result, None, None, cache_hit)
+                else:
+                    executor.submit(
+                        self.logging_obj.success_handler,
+                        logging_result,
+                        None,
+                        None,
+                        cache_hit,
+                    )
 
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
@@ -1615,13 +1735,6 @@ class CustomStreamWrapper:
                     if processed_chunk is None:
                         continue
 
-                    if self.logging_obj._llm_caching_handler is not None:
-                        asyncio.create_task(
-                            self.logging_obj._llm_caching_handler._add_streaming_response_to_cache(
-                                processed_chunk=cast(ModelResponse, processed_chunk),
-                            )
-                        )
-
                     choice = processed_chunk.choices[0]
                     if isinstance(choice, StreamingChoices):
                         self.response_uptil_now += choice.delta.get("content", "") or ""
@@ -1692,6 +1805,14 @@ class CustomStreamWrapper:
                         "usage",
                         getattr(complete_streaming_response, "usage"),
                     )
+                    asyncio.create_task(
+                        self.async_cache_streaming_response(
+                            processed_chunk=complete_streaming_response.model_copy(
+                                deep=True
+                            ),
+                            cache_hit=cache_hit,
+                        )
+                    )
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
                     return response
@@ -1757,6 +1878,42 @@ class CustomStreamWrapper:
                 completion_kwargs={},
                 extra_kwargs={},
             )
+
+    @staticmethod
+    def _strip_sse_data_from_chunk(chunk: Optional[str]) -> Optional[str]:
+        """
+        Strips the 'data: ' prefix from Server-Sent Events (SSE) chunks.
+
+        Some providers like sagemaker send it as `data:`, need to handle both
+
+        SSE messages are prefixed with 'data: ' which is part of the protocol,
+        not the actual content from the LLM. This method removes that prefix
+        and returns the actual content.
+
+        Args:
+            chunk: The SSE chunk that may contain the 'data: ' prefix (string or bytes)
+
+        Returns:
+            The chunk with the 'data: ' prefix removed, or the original chunk
+            if no prefix was found. Returns None if input is None.
+
+        See OpenAI Python Ref for this: https://github.com/openai/openai-python/blob/041bf5a8ec54da19aad0169671793c2078bd6173/openai/api_requestor.py#L100
+        """
+        if chunk is None:
+            return None
+
+        if isinstance(chunk, str):
+            # OpenAI sends `data: `
+            if chunk.startswith("data: "):
+                # Strip the prefix and any leading whitespace that might follow it
+                _length_of_sse_data_prefix = len("data: ")
+                return chunk[_length_of_sse_data_prefix:]
+            elif chunk.startswith("data:"):
+                # Sagemaker sends `data:`, no trailing whitespace
+                _length_of_sse_data_prefix = len("data:")
+                return chunk[_length_of_sse_data_prefix:]
+
+        return chunk
 
 
 def calculate_total_usage(chunks: List[ModelResponse]) -> Usage:

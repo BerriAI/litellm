@@ -51,6 +51,7 @@ class BaseLLMException(Exception):
         headers: Optional[Union[dict, httpx.Headers]] = None,
         request: Optional[httpx.Request] = None,
         response: Optional[httpx.Response] = None,
+        body: Optional[dict] = None,
     ):
         self.status_code = status_code
         self.message: str = message
@@ -67,6 +68,7 @@ class BaseLLMException(Exception):
             self.response = httpx.Response(
                 status_code=status_code, request=self.request
             )
+        self.body = body
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
@@ -110,6 +112,19 @@ class BaseConfig(ABC):
         Returns True if the model/provider should fake stream
         """
         return False
+
+    def _add_tools_to_optional_params(self, optional_params: dict, tools: List) -> dict:
+        """
+        Helper util to add tools to optional_params.
+        """
+        if "tools" not in optional_params:
+            optional_params["tools"] = tools
+        else:
+            optional_params["tools"] = [
+                *optional_params["tools"],
+                *tools,
+            ]
+        return optional_params
 
     def translate_developer_role_to_system_role(
         self,
@@ -158,6 +173,7 @@ class BaseConfig(ABC):
         optional_params: dict,
         value: dict,
         is_response_format_supported: bool,
+        enforce_tool_choice: bool = True,
     ) -> dict:
         """
         Follow similar approach to anthropic - translate to a single tool call.
@@ -195,9 +211,11 @@ class BaseConfig(ABC):
 
             optional_params.setdefault("tools", [])
             optional_params["tools"].append(_tool)
-            optional_params["tool_choice"] = _tool_choice
+            if enforce_tool_choice:
+                optional_params["tool_choice"] = _tool_choice
+
             optional_params["json_mode"] = True
-        else:
+        elif is_response_format_supported:
             optional_params["response_format"] = value
         return optional_params
 
@@ -252,6 +270,7 @@ class BaseConfig(ABC):
         api_base: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         """
@@ -317,6 +336,7 @@ class BaseConfig(ABC):
         data: dict,
         messages: list,
         client: Optional[AsyncHTTPHandler] = None,
+        json_mode: Optional[bool] = None,
     ) -> CustomStreamWrapper:
         raise NotImplementedError
 
@@ -330,6 +350,7 @@ class BaseConfig(ABC):
         data: dict,
         messages: list,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        json_mode: Optional[bool] = None,
     ) -> CustomStreamWrapper:
         raise NotImplementedError
 

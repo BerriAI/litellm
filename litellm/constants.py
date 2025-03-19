@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Literal
 
 ROUTER_MAX_FALLBACKS = 5
 DEFAULT_BATCH_SIZE = 512
@@ -18,6 +18,7 @@ SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD = 1000  # Minimum number of requests
 REPEATED_STREAMING_CHUNK_LIMIT = 100  # catch if model starts looping the same chunk while streaming. Uses high default to prevent false positives.
 #### Networking settings ####
 request_timeout: float = 6000  # time in seconds
+STREAM_SSE_DONE_STRING: str = "[DONE]"
 
 LITELLM_CHAT_PROVIDERS = [
     "openai",
@@ -320,6 +321,17 @@ baseten_models: List = [
     "31dxrj3",
 ]  # FALCON 7B  # WizardLM  # Mosaic ML
 
+BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
+    "cohere",
+    "anthropic",
+    "mistral",
+    "amazon",
+    "meta",
+    "llama",
+    "ai21",
+    "nova",
+    "deepseek_r1",
+]
 
 open_ai_embedding_models: List = ["text-embedding-ada-002"]
 cohere_embedding_models: List = [

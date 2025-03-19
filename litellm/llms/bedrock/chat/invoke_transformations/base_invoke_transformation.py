@@ -76,6 +76,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         api_base: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         """
@@ -129,7 +130,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
 
         ## CREDENTIALS ##
         # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
-        extra_headers = optional_params.get("extra_headers", None)
         aws_secret_access_key = optional_params.get("aws_secret_access_key", None)
         aws_access_key_id = optional_params.get("aws_access_key_id", None)
         aws_session_token = optional_params.get("aws_session_token", None)
@@ -155,9 +155,10 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         )
 
         sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
-        headers = {"Content-Type": "application/json"}
-        if extra_headers is not None:
-            headers = {"Content-Type": "application/json", **extra_headers}
+        if headers is not None:
+            headers = {"Content-Type": "application/json", **headers}
+        else:
+            headers = {"Content-Type": "application/json"}
 
         request = AWSRequest(
             method="POST",
@@ -166,12 +167,13 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             headers=headers,
         )
         sigv4.add_auth(request)
-        if (
-            extra_headers is not None and "Authorization" in extra_headers
-        ):  # prevent sigv4 from overwriting the auth header
-            request.headers["Authorization"] = extra_headers["Authorization"]
 
-        return dict(request.headers)
+        request_headers_dict = dict(request.headers)
+        if (
+            headers is not None and "Authorization" in headers
+        ):  # prevent sigv4 from overwriting the auth header
+            request_headers_dict["Authorization"] = headers["Authorization"]
+        return request_headers_dict
 
     def transform_request(
         self,
@@ -443,7 +445,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        return {}
+        return headers
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
@@ -461,6 +463,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         data: dict,
         messages: list,
         client: Optional[AsyncHTTPHandler] = None,
+        json_mode: Optional[bool] = None,
     ) -> CustomStreamWrapper:
         streaming_response = CustomStreamWrapper(
             completion_stream=None,
@@ -475,6 +478,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 logging_obj=logging_obj,
                 fake_stream=True if "ai21" in api_base else False,
                 bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
+                json_mode=json_mode,
             ),
             model=model,
             custom_llm_provider="bedrock",
@@ -493,6 +497,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         data: dict,
         messages: list,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        json_mode: Optional[bool] = None,
     ) -> CustomStreamWrapper:
         if client is None or isinstance(client, AsyncHTTPHandler):
             client = _get_httpx_client(params={})
@@ -509,6 +514,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 logging_obj=logging_obj,
                 fake_stream=True if "ai21" in api_base else False,
                 bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
+                json_mode=json_mode,
             ),
             model=model,
             custom_llm_provider="bedrock",
@@ -534,7 +540,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         """
         Helper function to get the bedrock provider from the model
 
-        handles 3 scenarions:
+        handles 4 scenarios:
         1. model=invoke/anthropic.claude-3-5-sonnet-20240620-v1:0 -> Returns `anthropic`
         2. model=anthropic.claude-3-5-sonnet-20240620-v1:0 -> Returns `anthropic`
         3. model=llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n -> Returns `llama`
@@ -555,6 +561,10 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         # check if provider == "nova"
         if "nova" in model:
             return "nova"
+
+        for provider in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
+            if provider in model:
+                return provider
         return None
 
     @staticmethod

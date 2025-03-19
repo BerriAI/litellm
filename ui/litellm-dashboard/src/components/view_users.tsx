@@ -49,6 +49,7 @@ import { columns } from "./view_users/columns";
 import { UserDataTable } from "./view_users/table";
 import { UserInfo } from "./view_users/types";
 import BulkCreateUsers from "./bulk_create_users_button";
+import SSOSettings from "./SSOSettings";
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -106,6 +107,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   >({});
   const defaultPageSize = 25;
   const [searchTerm, setSearchTerm] = useState("");
+  const [activeTab, setActiveTab] = useState("users");
 
   // check if window is not undefined
   if (typeof window !== "undefined") {
@@ -285,102 +287,71 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         </div>
       </div>
       
-      <div className="bg-white rounded-lg shadow">
-        <div className="border-b px-6 py-4">
-          <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="relative w-64">
-                <input
-                  type="text"
-                  placeholder="Search users..."
-                  className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                />
-                <svg
-                  className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                  />
-                </svg>
+      <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "users" : "settings")}>
+        <TabList className="mb-4">
+          <Tab>Users</Tab>
+          <Tab>Default User Settings</Tab>
+        </TabList>
+        
+        <TabPanels>
+          <TabPanel>
+            <div className="bg-white rounded-lg shadow">
+              <div className="border-b px-6 py-4">
+                <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
+                  <div className="flex items-center space-x-4">
+                    <span className="text-sm text-gray-700">
+                      Showing{" "}
+                      {userListResponse && userListResponse.users && userListResponse.users.length > 0
+                        ? (userListResponse.page - 1) * userListResponse.page_size + 1
+                        : 0}{" "}
+                      -{" "}
+                      {userListResponse && userListResponse.users
+                        ? Math.min(
+                            userListResponse.page * userListResponse.page_size,
+                            userListResponse.total
+                          )
+                        : 0}{" "}
+                      of {userListResponse ? userListResponse.total : 0} results
+                    </span>
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                        disabled={!userListResponse || currentPage <= 1}
+                        className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Previous
+                      </button>
+                      <span className="text-sm text-gray-700">
+                        Page {userListResponse ? userListResponse.page : "-"} of{" "}
+                        {userListResponse ? userListResponse.total_pages : "-"}
+                      </span>
+                      <button
+                        onClick={() => setCurrentPage((p) => p + 1)}
+                        disabled={
+                          !userListResponse ||
+                          currentPage >= userListResponse.total_pages
+                        }
+                        className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                </div>
               </div>
-              
-              <button
-                onClick={refreshUserData}
-                className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
-                title="Refresh data"
-              >
-                <svg
-                  className="w-4 h-4"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                  />
-                </svg>
-                <span>Refresh</span>
-              </button>
+              <UserDataTable
+                data={userData || []}
+                columns={tableColumns}
+                isLoading={!userData}
+              />
             </div>
-
-            <div className="flex items-center space-x-4">
-              <span className="text-sm text-gray-700">
-                Showing{" "}
-                {userListResponse && userListResponse.users && userListResponse.users.length > 0
-                  ? (userListResponse.page - 1) * userListResponse.page_size + 1
-                  : 0}{" "}
-                -{" "}
-                {userListResponse && userListResponse.users
-                  ? Math.min(
-                      userListResponse.page * userListResponse.page_size,
-                      userListResponse.total
-                    )
-                  : 0}{" "}
-                of {userListResponse ? userListResponse.total : 0} results
-              </span>
-              <div className="flex items-center space-x-2">
-                <button
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  disabled={!userListResponse || currentPage <= 1}
-                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Previous
-                </button>
-                <span className="text-sm text-gray-700">
-                  Page {userListResponse ? userListResponse.page : "-"} of{" "}
-                  {userListResponse ? userListResponse.total_pages : "-"}
-                </span>
-                <button
-                  onClick={() => setCurrentPage((p) => p + 1)}
-                  disabled={
-                    !userListResponse ||
-                    currentPage >= userListResponse.total_pages
-                  }
-                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-        <UserDataTable
-          data={userData || []}
-          columns={tableColumns}
-          isLoading={!userData}
-        />
-      </div>
+          </TabPanel>
+          
+          <TabPanel>
+            <SSOSettings accessToken={accessToken} possibleUIRoles={possibleUIRoles} userID={userID} userRole={userRole}/>
+          </TabPanel>
+        </TabPanels>
+      </TabGroup>
 
       {/* Existing Modals */}
       <EditUserModal

@@ -51,7 +51,7 @@ from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.service_account_checks import service_account_checks
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
-from litellm.proxy.utils import PrismaClient, ProxyLogging, _to_ns
+from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.types.services import ServiceTypes
 
 user_api_key_service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
@@ -76,6 +76,11 @@ google_ai_studio_api_key_header = APIKeyHeader(
     name=SpecialHeaders.google_ai_studio_authorization.value,
     auto_error=False,
     description="If google ai studio client used.",
+)
+azure_apim_header = APIKeyHeader(
+    name=SpecialHeaders.azure_apim_authorization.value,
+    auto_error=False,
+    description="The default name of the subscription key header of Azure",
 )
 
 
@@ -301,6 +306,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
     azure_api_key_header: str,
     anthropic_api_key_header: Optional[str],
     google_ai_studio_api_key_header: Optional[str],
+    azure_apim_header: Optional[str],
     request_data: dict,
 ) -> UserAPIKeyAuth:
 
@@ -344,6 +350,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             api_key = anthropic_api_key_header
         elif isinstance(google_ai_studio_api_key_header, str):
             api_key = google_ai_studio_api_key_header
+        elif isinstance(azure_apim_header, str):
+            api_key = azure_apim_header
         elif pass_through_endpoints is not None:
             for endpoint in pass_through_endpoints:
                 if endpoint.get("path", "") == route:
@@ -362,14 +370,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             )
 
         if open_telemetry_logger is not None:
-
-            parent_otel_span = open_telemetry_logger.tracer.start_span(
-                name="Received Proxy Server Request",
-                start_time=_to_ns(start_time),
-                context=open_telemetry_logger.get_traceparent_from_header(
-                    headers=request.headers
-                ),
-                kind=open_telemetry_logger.span_kind.SERVER,
+            parent_otel_span = (
+                open_telemetry_logger.create_litellm_proxy_request_started_span(
+                    start_time=start_time,
+                    headers=dict(request.headers),
+                )
             )
 
         ### USER-DEFINED AUTH FUNCTION ###
@@ -786,6 +791,13 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 )
                 valid_token = None
 
+        if valid_token is None:
+            raise Exception(
+                "Invalid proxy server token passed. Received API Key (hashed)={}. Unable to find token in cache or `LiteLLM_VerificationTokenTable`".format(
+                    api_key
+                )
+            )
+
         user_obj: Optional[LiteLLM_UserTable] = None
         valid_token_dict: dict = {}
         if valid_token is not None:
@@ -1158,6 +1170,7 @@ async def user_api_key_auth(
     google_ai_studio_api_key_header: Optional[str] = fastapi.Security(
         google_ai_studio_api_key_header
     ),
+    azure_apim_header: Optional[str] = fastapi.Security(azure_apim_header),
 ) -> UserAPIKeyAuth:
     """
     Parent function to authenticate user api key / jwt token.
@@ -1171,6 +1184,7 @@ async def user_api_key_auth(
         azure_api_key_header=azure_api_key_header,
         anthropic_api_key_header=anthropic_api_key_header,
         google_ai_studio_api_key_header=google_ai_studio_api_key_header,
+        azure_apim_header=azure_apim_header,
         request_data=request_data,
     )
 

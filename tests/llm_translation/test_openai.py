@@ -360,3 +360,34 @@ def test_o1_parallel_tool_calls(model):
         parallel_tool_calls=True,
         drop_params=True,
     )
+
+
+def test_openai_chat_completion_streaming_handler_reasoning_content():
+    from litellm.llms.openai.chat.gpt_transformation import (
+        OpenAIChatCompletionStreamingHandler,
+    )
+    from unittest.mock import MagicMock
+
+    streaming_handler = OpenAIChatCompletionStreamingHandler(
+        streaming_response=MagicMock(),
+        sync_stream=True,
+    )
+    response = streaming_handler.chunk_parser(
+        chunk={
+            "id": "e89b6501-8ac2-464c-9550-7cd3daf94350",
+            "object": "chat.completion.chunk",
+            "created": 1741037890,
+            "model": "deepseek-reasoner",
+            "system_fingerprint": "fp_5417b77867_prod0225",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": None, "reasoning_content": "."},
+                    "logprobs": None,
+                    "finish_reason": None,
+                }
+            ],
+        }
+    )
+
+    assert response.choices[0].delta.reasoning_content == "."

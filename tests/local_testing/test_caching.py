@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import os
+import json
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -2146,29 +2147,62 @@ async def test_redis_proxy_batch_redis_get_cache():
     assert "cache_key" in response._hidden_params
 
 
-def test_logging_turn_off_message_logging_streaming():
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_logging_turn_off_message_logging_streaming(sync_mode):
     litellm.turn_off_message_logging = True
     mock_obj = Cache(type="local")
     litellm.cache = mock_obj
 
-    with patch.object(mock_obj, "add_cache", new=MagicMock()) as mock_client:
+    with patch.object(mock_obj, "add_cache") as mock_client, patch.object(
+        mock_obj, "async_add_cache"
+    ) as mock_async_client:
         print(f"mock_obj.add_cache: {mock_obj.add_cache}")
 
-        resp = litellm.completion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "hi"}],
-            mock_response="hello",
-            stream=True,
-        )
+        if sync_mode is True:
+            resp = litellm.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "hi"}],
+                mock_response="hello",
+                stream=True,
+            )
 
-        for chunk in resp:
-            continue
+            for chunk in resp:
+                continue
 
-        time.sleep(1)
+            time.sleep(1)
+            mock_client.assert_called_once()
+            print(f"mock_client.call_args: {mock_client.call_args}")
+            assert mock_client.call_args.args[0].choices[0].message.content == "hello"
+        else:
+            resp = await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "hi"}],
+                mock_response="hello",
+                stream=True,
+            )
 
-        mock_client.assert_called_once()
+            async for chunk in resp:
+                continue
 
-        assert mock_client.call_args.args[0].choices[0].message.content == "hello"
+            await asyncio.sleep(1)
+
+            mock_async_client.assert_called_once()
+            print(f"mock_async_client.call_args: {mock_async_client.call_args.args[0]}")
+            print(
+                f"mock_async_client.call_args: {json.loads(mock_async_client.call_args.args[0])}"
+            )
+            json_mock = json.loads(mock_async_client.call_args.args[0])
+            try:
+                assert json_mock["choices"][0]["message"]["content"] == "hello"
+            except Exception as e:
+                print(
+                    f"mock_async_client.call_args.args[0]: {mock_async_client.call_args.args[0]}"
+                )
+                print(
+                    f"mock_async_client.call_args.args[0]['choices']: {mock_async_client.call_args.args[0]['choices']}"
+                )
+                raise e
 
 
 def test_basic_caching_import():
@@ -2561,3 +2595,30 @@ def test_redis_caching_multiple_namespaces():
 
     # request 4 without a namespace should not be cached under the same key as request 3
     assert response_4.id != response_3.id
+
+
+def test_caching_with_reasoning_content():
+    """
+    Test that reasoning content is cached
+    """
+
+    import uuid
+
+    messages = [{"role": "user", "content": f"what is litellm? {uuid.uuid4()}"}]
+    litellm.cache = Cache()
+
+    response_1 = completion(
+        model="anthropic/claude-3-7-sonnet-latest",
+        messages=messages,
+        thinking={"type": "enabled", "budget_tokens": 1024},
+    )
+
+    response_2 = completion(
+        model="anthropic/claude-3-7-sonnet-latest",
+        messages=messages,
+        thinking={"type": "enabled", "budget_tokens": 1024},
+    )
+
+    print(f"response 2: {response_2.model_dump_json(indent=4)}")
+    assert response_2._hidden_params["cache_hit"] == True
+    assert response_2.choices[0].message.reasoning_content is not None

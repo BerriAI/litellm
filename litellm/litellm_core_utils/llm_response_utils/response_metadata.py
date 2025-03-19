@@ -44,6 +44,7 @@ class ResponseMetadata:
             "additional_headers": process_response_headers(
                 self._get_value_from_hidden_params("additional_headers") or {}
             ),
+            "litellm_model_name": model,
         }
         self._update_hidden_params(new_params)
 
