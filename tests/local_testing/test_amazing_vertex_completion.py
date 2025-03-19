@@ -2174,9 +2174,6 @@ async def test_vertexai_multimodal_embedding_base64image_in_input():
         print("Response:", response)
 
 
-@pytest.mark.skip(
-    reason="new test - works locally running into vertex version issues on ci/cd"
-)
 def test_vertexai_embedding_embedding_latest():
     try:
         load_vertex_ai_credentials()
