@@ -120,15 +120,15 @@ async def test_sync_in_memory_spend_with_redis(base_strategy, mock_dual_cache):
 
 def test_cache_keys_management(base_strategy):
     # Test adding and getting cache keys
-    base_strategy.add_to_cache_keys("key1")
-    base_strategy.add_to_cache_keys("key2")
-    base_strategy.add_to_cache_keys("key1")  # Duplicate should be ignored
+    base_strategy.add_to_in_memory_keys_to_update("key1")
+    base_strategy.add_to_in_memory_keys_to_update("key2")
+    base_strategy.add_to_in_memory_keys_to_update("key1")  # Duplicate should be ignored
 
-    cache_keys = base_strategy.get_cache_keys()
+    cache_keys = base_strategy.get_in_memory_keys_to_update()
     assert len(cache_keys) == 2
     assert "key1" in cache_keys
     assert "key2" in cache_keys
 
     # Test resetting cache keys
-    base_strategy.reset_cache_keys()
-    assert len(base_strategy.get_cache_keys()) == 0
+    base_strategy.reset_in_memory_keys_to_update()
+    assert len(base_strategy.get_in_memory_keys_to_update()) == 0

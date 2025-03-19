@@ -61,7 +61,7 @@ class BaseRoutingStrategy(ABC):
             ttl=ttl,
         )
         self.redis_increment_operation_queue.append(increment_op)
-        self.add_to_cache_keys(key=key)
+        self.add_to_in_memory_keys_to_update(key=key)
         return result
 
     async def periodic_sync_in_memory_spend_with_redis(
@@ -116,13 +116,13 @@ class BaseRoutingStrategy(ABC):
             )
             self.redis_increment_operation_queue = []
 
-    def add_to_cache_keys(self, key: str):
+    def add_to_in_memory_keys_to_update(self, key: str):
         self.in_memory_keys_to_update.add(key)
 
-    def get_cache_keys(self) -> Set[str]:
+    def get_in_memory_keys_to_update(self) -> Set[str]:
         return self.in_memory_keys_to_update
 
-    def reset_cache_keys(self):
+    def reset_in_memory_keys_to_update(self):
         self.in_memory_keys_to_update = set()
 
     async def _sync_in_memory_spend_with_redis(self):
@@ -147,7 +147,7 @@ class BaseRoutingStrategy(ABC):
             await self._push_in_memory_increments_to_redis()
 
             # 2. Fetch all current provider spend from Redis to update in-memory cache
-            cache_keys = self.get_cache_keys()
+            cache_keys = self.get_in_memory_keys_to_update()
 
             cache_keys_list = list(cache_keys)
 
@@ -167,7 +167,7 @@ class BaseRoutingStrategy(ABC):
                             f"Updated in-memory cache for {key}: {value}"
                         )
 
-            self.reset_cache_keys()
+            self.reset_in_memory_keys_to_update()
         except Exception as e:
             verbose_router_logger.exception(
                 f"Error syncing in-memory cache with Redis: {str(e)}"
