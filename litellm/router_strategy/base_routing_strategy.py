@@ -3,8 +3,8 @@ Base class across routing strategies to abstract commmon functions like batch in
 """
 
 import asyncio
-from abc import ABC, abstractmethod
-from typing import List, Optional, Union
+from abc import ABC
+from typing import List, Optional, Set, Union
 
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
@@ -28,6 +28,10 @@ class BaseRoutingStrategy(ABC):
                 )
             )
 
+        self.in_memory_keys_to_update: set[str] = (
+            set()
+        )  # Set with max size of 1000 keys
+
     async def _increment_value_in_current_window(
         self, key: str, value: Union[int, float], ttl: int
     ):
@@ -50,7 +54,7 @@ class BaseRoutingStrategy(ABC):
             ttl=ttl,
         )
         self.redis_increment_operation_queue.append(increment_op)
-
+        self.add_to_cache_keys(key=key)
         return result
 
     async def periodic_sync_in_memory_spend_with_redis(
@@ -104,9 +108,14 @@ class BaseRoutingStrategy(ABC):
                 f"Error syncing in-memory cache with Redis: {str(e)}"
             )
 
-    @abstractmethod
-    def get_cache_keys(self) -> List:
-        pass
+    def add_to_cache_keys(self, key: str):
+        self.in_memory_keys_to_update.add(key)
+
+    def get_cache_keys(self) -> Set[str]:
+        return self.in_memory_keys_to_update
+
+    def reset_cache_keys(self):
+        self.in_memory_keys_to_update = set()
 
     async def _sync_in_memory_spend_with_redis(self):
         """
@@ -132,9 +141,11 @@ class BaseRoutingStrategy(ABC):
             # 2. Fetch all current provider spend from Redis to update in-memory cache
             cache_keys = self.get_cache_keys()
 
+            cache_keys_list = list(cache_keys)
+
             # Batch fetch current spend values from Redis
             redis_values = await self.dual_cache.redis_cache.async_batch_get_cache(
-                key_list=cache_keys
+                key_list=cache_keys_list
             )
 
             # Update in-memory cache with Redis values
@@ -148,6 +159,7 @@ class BaseRoutingStrategy(ABC):
                             f"Updated in-memory cache for {key}: {value}"
                         )
 
+            self.reset_cache_keys()
         except Exception as e:
             verbose_router_logger.error(
                 f"Error syncing in-memory cache with Redis: {str(e)}"
