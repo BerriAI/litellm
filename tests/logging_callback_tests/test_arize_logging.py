@@ -11,6 +11,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system-path
 from litellm.integrations._types.open_inference import SpanAttributes
 from litellm.integrations.arize.arize import ArizeConfig, ArizeLogger
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.main import completion
 import litellm
 from litellm.types.utils import Choices, StandardCallbackDynamicParams
@@ -70,7 +71,7 @@ def test_arize_set_attributes():
     span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_PROMPT, 40)
 
 
-class TestArizeLogger(ArizeLogger):
+class TestArizeLogger(CustomLogger):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.standard_callback_dynamic_params: Optional[
