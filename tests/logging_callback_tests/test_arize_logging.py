@@ -3,16 +3,20 @@ import sys
 import time
 from unittest.mock import Mock, patch
 import json
-from litellm.main import completion
 import opentelemetry.exporter.otlp.proto.grpc.trace_exporter
+from typing import Optional
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system-path
 from litellm.integrations._types.open_inference import SpanAttributes
 from litellm.integrations.arize.arize import ArizeConfig, ArizeLogger
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.main import completion
 import litellm
-from litellm.types.utils import Choices
+from litellm.types.utils import Choices, StandardCallbackDynamicParams
+import pytest
+import asyncio
 
 
 def test_arize_set_attributes():
@@ -65,3 +69,43 @@ def test_arize_set_attributes():
     span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_TOTAL, 100)
     span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, 60)
     span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_PROMPT, 40)
+
+
+class TestArizeLogger(CustomLogger):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.standard_callback_dynamic_params: Optional[
+            StandardCallbackDynamicParams
+        ] = None
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        print("logged kwargs", json.dumps(kwargs, indent=4, default=str))
+        self.standard_callback_dynamic_params = kwargs.get(
+            "standard_callback_dynamic_params"
+        )
+
+
+@pytest.mark.asyncio
+async def test_arize_dynamic_params():
+    """verify arize ai dynamic params are recieved by a callback"""
+    test_arize_logger = TestArizeLogger()
+    litellm.callbacks = [test_arize_logger]
+    await litellm.acompletion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "basic arize test"}],
+        mock_response="test",
+        arize_api_key="test_api_key_dynamic",
+        arize_space_key="test_space_key_dynamic",
+    )
+
+    await asyncio.sleep(2)
+
+    assert test_arize_logger.standard_callback_dynamic_params is not None
+    assert (
+        test_arize_logger.standard_callback_dynamic_params.get("arize_api_key")
+        == "test_api_key_dynamic"
+    )
+    assert (
+        test_arize_logger.standard_callback_dynamic_params.get("arize_space_key")
+        == "test_space_key_dynamic"
+    )
