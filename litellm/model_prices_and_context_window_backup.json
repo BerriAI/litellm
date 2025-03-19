@@ -9461,5 +9461,88 @@
         "output_cost_per_token": 0.000000018,
         "litellm_provider": "jina_ai",
         "mode": "rerank"
+    },
+    "github_copilot/gpt-4o": {
+        "max_tokens": 128000,
+        "max_input_tokens": 64000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "github_copilot",
+        "mode": "chat",
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_system_messages": true
+    },
+    "github_copilot/o1": {
+        "max_tokens": 200000,
+        "max_input_tokens": 20000,
+        "max_output_tokens": 20000,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "github_copilot",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true
+    },
+    "github_copilot/o3-mini": {
+        "max_tokens": 200000,
+        "max_input_tokens": 64000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "github_copilot",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true
+    },
+    "github_copilot/claude-3.5-sonnet": {
+        "max_tokens": 90000,
+        "max_input_tokens": 90000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "github_copilot",
+        "mode": "chat",
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_system_messages": true
+    },
+    "github_copilot/claude-3.7-sonnet": {
+        "max_tokens": 200000,
+        "max_input_tokens": 90000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "github_copilot",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_system_messages": true
+    },
+    "github_copilot/claude-3.7-sonnet-thought": {
+        "max_tokens": 200000,
+        "max_input_tokens": 90000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "github_copilot",
+        "mode": "chat",
+        "supports_system_messages": true
+    },
+    "github_copilot/gemini-2.0-flash-001": {
+        "max_tokens": 1000000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "github_copilot",
+        "mode": "chat",
+        "supports_vision": true,
+        "supports_system_messages": true
     }
 }
