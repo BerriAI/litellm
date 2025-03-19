@@ -4,3 +4,5 @@ model_list:
       model: gpt-4o
 
 
+litellm_settings:
+  callbacks: ["custom_prompt_management.x42_prompt_management"]
