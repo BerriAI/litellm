@@ -34,9 +34,9 @@ You can use our cloud product where we setup a dedicated instance for you.
 
 Professional Support can assist with LLM/Provider integrations, deployment, upgrade management, and LLM Provider troubleshooting.  We can’t solve your own infrastructure-related issues but we will guide you to fix them.
 
-- 1 hour for Sev0 issues
-- 6 hours for Sev1
-- 24h for Sev2-Sev3 between 7am – 7pm PT (Monday through Saturday)
+- 1 hour for Sev0 issues - 100% production traffic is failing
+- 6 hours for Sev1 - <100% production traffic is failing
+- 24h for Sev2-Sev3 between 7am – 7pm PT (Monday through Saturday) - setup issues e.g. Redis working on our end, but not on your infrastructure.
 - 72h SLA for patching vulnerabilities in the software. 
 
 **We can offer custom SLAs** based on your needs and the severity of the issue

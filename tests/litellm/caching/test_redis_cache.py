@@ -20,7 +20,8 @@ from litellm.caching.redis_cache import RedisCache
 
 @pytest.mark.parametrize("namespace", [None, "test"])
 @pytest.mark.asyncio
-async def test_redis_cache_async_increment(namespace):
+async def test_redis_cache_async_increment(namespace, monkeypatch):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
     redis_cache = RedisCache(namespace=namespace)
     # Create an AsyncMock for the Redis client
     mock_redis_instance = AsyncMock()
@@ -46,7 +47,8 @@ async def test_redis_cache_async_increment(namespace):
 
 
 @pytest.mark.asyncio
-async def test_redis_client_init_with_socket_timeout():
+async def test_redis_client_init_with_socket_timeout(monkeypatch):
+    monkeypatch.setenv("REDIS_HOST", "my-fake-host")
     redis_cache = RedisCache(socket_timeout=1.0)
     assert redis_cache.redis_kwargs["socket_timeout"] == 1.0
     client = redis_cache.init_async_client()
