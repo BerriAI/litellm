@@ -1379,3 +1379,12 @@ def test_azure_modalities_param():
     )
     assert optional_params["modalities"] == ["text", "audio"]
     assert optional_params["audio"] == {"type": "audio_input", "input": "test.wav"}
+
+
+def test_litellm_proxy_thinking_param():
+    optional_params = get_optional_params(
+        model="gpt-4o",
+        custom_llm_provider="litellm_proxy",
+        thinking={"type": "enabled", "budget_tokens": 1024},
+    )
+    assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 1024}

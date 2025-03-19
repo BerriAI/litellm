@@ -30,6 +30,12 @@ def get_supported_openai_params(  # noqa: PLR0915
         except BadRequestError:
             return None
 
+    provider_config = litellm.ProviderConfigManager.get_provider_chat_config(
+        model=model, provider=LlmProviders(custom_llm_provider)
+    )
+    if provider_config and request_type == "chat_completion":
+        return provider_config.get_supported_openai_params(model=model)
+
     if custom_llm_provider == "bedrock":
         return litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "ollama":
@@ -210,7 +216,8 @@ def get_supported_openai_params(  # noqa: PLR0915
             provider_config = litellm.ProviderConfigManager.get_provider_chat_config(
                 model=model, provider=LlmProviders.CUSTOM
             )
-            return provider_config.get_supported_openai_params(model=model)
+            if provider_config:
+                return provider_config.get_supported_openai_params(model=model)
         elif request_type == "embeddings":
             return None
         elif request_type == "transcription":
