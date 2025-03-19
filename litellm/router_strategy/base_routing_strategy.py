@@ -107,6 +107,7 @@ class BaseRoutingStrategy(ABC):
             verbose_router_logger.error(
                 f"Error syncing in-memory cache with Redis: {str(e)}"
             )
+            self.redis_increment_operation_queue = []
 
     def add_to_cache_keys(self, key: str):
         self.in_memory_keys_to_update.add(key)
@@ -161,6 +162,6 @@ class BaseRoutingStrategy(ABC):
 
             self.reset_cache_keys()
         except Exception as e:
-            verbose_router_logger.error(
+            verbose_router_logger.exception(
                 f"Error syncing in-memory cache with Redis: {str(e)}"
             )
