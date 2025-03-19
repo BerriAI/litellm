@@ -151,13 +151,23 @@ class BaseOpenAILLM:
             f"is_async={client_initialization_params.get('is_async')}",
         ]
 
-        for param in BaseOpenAILLM.get_openai_client_initialization_param_fields(
-            client_type=client_type
-        ):
+        LITELLM_CLIENT_SPECIFIC_PARAMS = [
+            "timeout",
+            "max_retries",
+            "organization",
+            "api_base",
+        ]
+        openai_client_fields = (
+            BaseOpenAILLM.get_openai_client_initialization_param_fields(
+                client_type=client_type
+            )
+            + LITELLM_CLIENT_SPECIFIC_PARAMS
+        )
+
+        for param in openai_client_fields:
             key_parts.append(f"{param}={client_initialization_params.get(param)}")
 
         _cache_key = ",".join(key_parts)
-
         return _cache_key
 
     @staticmethod

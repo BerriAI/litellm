@@ -346,7 +346,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         max_retries: Optional[int] = DEFAULT_MAX_RETRIES,
         organization: Optional[str] = None,
         client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
-    ):
+    ) -> Optional[Union[OpenAI, AsyncOpenAI]]:
         client_initialization_params: Dict = locals()
         if client is None:
             if not isinstance(max_retries, int):
@@ -360,8 +360,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 client_initialization_params=client_initialization_params,
                 client_type="openai",
             )
+
             if cached_client:
-                return cached_client
+                if isinstance(cached_client, OpenAI) or isinstance(
+                    cached_client, AsyncOpenAI
+                ):
+                    return cached_client
             if is_async:
                 _new_client: Union[OpenAI, AsyncOpenAI] = AsyncOpenAI(
                     api_key=api_key,
