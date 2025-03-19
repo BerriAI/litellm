@@ -1625,13 +1625,16 @@ class StandardLoggingAdditionalHeaders(TypedDict, total=False):
 
 
 class StandardLoggingHiddenParams(TypedDict):
-    model_id: Optional[str]
+    model_id: Optional[
+        str
+    ]  # id of the model in the router, separates multiple models with the same name but different credentials
     cache_key: Optional[str]
     api_base: Optional[str]
     response_cost: Optional[str]
     litellm_overhead_time_ms: Optional[float]
     additional_headers: Optional[StandardLoggingAdditionalHeaders]
     batch_models: Optional[List[str]]
+    litellm_model_name: Optional[str]  # the model name sent to the provider by litellm
 
 
 class StandardLoggingModelInformation(TypedDict):
