@@ -472,10 +472,12 @@ def __init__(
     password: Optional[str] = None,
     namespace: Optional[str] = None,
     default_in_redis_ttl: Optional[float] = None,
-    similarity_threshold: Optional[float] = None,
-    redis_semantic_cache_use_async=False,
-    redis_semantic_cache_embedding_model="text-embedding-ada-002",
     redis_flush_size=None,
+
+    # redis semantic cache params
+    similarity_threshold: Optional[float] = None,
+    redis_semantic_cache_embedding_model: str = "text-embedding-ada-002",
+    redis_semantic_cache_index_name: Optional[str] = None,
 
     # s3 Bucket, boto3 configuration
     s3_bucket_name: Optional[str] = None,
