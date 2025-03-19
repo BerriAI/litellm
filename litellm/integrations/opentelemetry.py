@@ -884,15 +884,20 @@ class OpenTelemetry(CustomLogger):
             return BatchSpanProcessor(ConsoleSpanExporter())
 
     @staticmethod
-    def _get_headers_dictionary(headers: Optional[Union[str, dict]]) -> dict:
+    def _get_headers_dictionary(headers: Optional[Union[str, dict]]) -> Dict[str, str]:
         """
         Convert a string or dictionary of headers into a dictionary of headers.
         """
-        _split_otel_headers = {}
+        _split_otel_headers: Dict[str, str] = {}
         if headers:
             if isinstance(headers, str):
-                _split_otel_headers = headers.split("=")
-                _split_otel_headers = {_split_otel_headers[0]: _split_otel_headers[1]}
+                # when passed HEADERS="x-honeycomb-team=B85YgLm96******"
+                # Split only on first '=' occurrence
+                parts = headers.split("=", 1)
+                if len(parts) == 2:
+                    _split_otel_headers = {parts[0]: parts[1]}
+                else:
+                    _split_otel_headers = {}
             elif isinstance(headers, dict):
                 _split_otel_headers = headers
         return _split_otel_headers

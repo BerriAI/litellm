@@ -2663,9 +2663,9 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                     and callback.callback_name == "arize"
                 ):
                     return callback  # type: ignore
-            _otel_logger = ArizeLogger(config=otel_config, callback_name="arize")
-            _in_memory_loggers.append(_otel_logger)
-            return _otel_logger  # type: ignore
+            _arize_otel_logger = ArizeLogger(config=otel_config, callback_name="arize")
+            _in_memory_loggers.append(_arize_otel_logger)
+            return _arize_otel_logger  # type: ignore
         elif logging_integration == "arize_phoenix":
             from litellm.integrations.opentelemetry import (
                 OpenTelemetry,
