@@ -282,7 +282,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             if standard_logging_object is None:
                 raise ValueError("standard_logging_object not passed in.")
             model_group = standard_logging_object.get("model_group")
-            model = standard_logging_object.get("model")
+            model = standard_logging_object["hidden_params"]["litellm_model_name"]
             id = standard_logging_object.get("model_id")
             if model_group is None or id is None:
                 return
