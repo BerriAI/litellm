@@ -51,7 +51,7 @@ from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.service_account_checks import service_account_checks
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
-from litellm.proxy.utils import PrismaClient, ProxyLogging, _to_ns
+from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.types.services import ServiceTypes
 
 user_api_key_service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
