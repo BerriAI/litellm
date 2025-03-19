@@ -29,6 +29,7 @@ from litellm.batches.batch_utils import _handle_completed_batch
 from litellm.caching.caching import DualCache, InMemoryCache
 from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.cost_calculator import _select_model_name_for_cost_calc
+from litellm.integrations.arize.arize import ArizeLogger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.mlflow import MlflowLogger
@@ -76,7 +77,6 @@ from litellm.types.utils import (
 from litellm.utils import _get_base_model_from_metadata, executor, print_verbose
 
 from ..integrations.argilla import ArgillaLogger
-from ..integrations.arize.arize import ArizeLogger
 from ..integrations.arize.arize_phoenix import ArizePhoenixLogger
 from ..integrations.athina import AthinaLogger
 from ..integrations.azure_storage.azure_storage import AzureBlobStorageLogger
@@ -2658,13 +2658,13 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             )
             for callback in _in_memory_loggers:
                 if (
-                    isinstance(callback, OpenTelemetry)
+                    isinstance(callback, ArizeLogger)
                     and callback.callback_name == "arize"
                 ):
                     return callback  # type: ignore
-            _otel_logger = OpenTelemetry(config=otel_config, callback_name="arize")
-            _in_memory_loggers.append(_otel_logger)
-            return _otel_logger  # type: ignore
+            _arize_otel_logger = ArizeLogger(config=otel_config, callback_name="arize")
+            _in_memory_loggers.append(_arize_otel_logger)
+            return _arize_otel_logger  # type: ignore
         elif logging_integration == "arize_phoenix":
             from litellm.integrations.opentelemetry import (
                 OpenTelemetry,
@@ -2897,15 +2897,13 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
                 if isinstance(callback, OpenTelemetry):
                     return callback
         elif logging_integration == "arize":
-            from litellm.integrations.opentelemetry import OpenTelemetry
-
             if "ARIZE_SPACE_KEY" not in os.environ:
                 raise ValueError("ARIZE_SPACE_KEY not found in environment variables")
             if "ARIZE_API_KEY" not in os.environ:
                 raise ValueError("ARIZE_API_KEY not found in environment variables")
             for callback in _in_memory_loggers:
                 if (
-                    isinstance(callback, OpenTelemetry)
+                    isinstance(callback, ArizeLogger)
                     and callback.callback_name == "arize"
                 ):
                     return callback
@@ -3258,6 +3256,7 @@ class StandardLoggingPayloadSetup:
             additional_headers=None,
             litellm_overhead_time_ms=None,
             batch_models=None,
+            litellm_model_name=None,
         )
         if hidden_params is not None:
             for key in StandardLoggingHiddenParams.__annotations__.keys():
@@ -3372,6 +3371,7 @@ def get_standard_logging_object_payload(
                         response_cost=None,
                         litellm_overhead_time_ms=None,
                         batch_models=None,
+                        litellm_model_name=None,
                     )
                 )
 
@@ -3657,6 +3657,7 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         additional_headers=None,
         litellm_overhead_time_ms=None,
         batch_models=None,
+        litellm_model_name=None,
     )
 
     # Convert numeric values to appropriate types

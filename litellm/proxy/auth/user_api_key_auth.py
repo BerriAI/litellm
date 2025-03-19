@@ -51,7 +51,7 @@ from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.service_account_checks import service_account_checks
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
-from litellm.proxy.utils import PrismaClient, ProxyLogging, _to_ns
+from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.types.services import ServiceTypes
 
 user_api_key_service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
@@ -370,14 +370,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             )
 
         if open_telemetry_logger is not None:
-
-            parent_otel_span = open_telemetry_logger.tracer.start_span(
-                name="Received Proxy Server Request",
-                start_time=_to_ns(start_time),
-                context=open_telemetry_logger.get_traceparent_from_header(
-                    headers=request.headers
-                ),
-                kind=open_telemetry_logger.span_kind.SERVER,
+            parent_otel_span = (
+                open_telemetry_logger.create_litellm_proxy_request_started_span(
+                    start_time=start_time,
+                    headers=dict(request.headers),
+                )
             )
 
         ### USER-DEFINED AUTH FUNCTION ###
