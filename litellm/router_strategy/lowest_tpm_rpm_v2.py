@@ -15,6 +15,8 @@ from litellm.types.router import RouterErrors
 from litellm.types.utils import LiteLLMPydanticObjectBase, StandardLoggingPayload
 from litellm.utils import get_utc_datetime, print_verbose
 
+from .base_routing_strategy import BaseRoutingStrategy
+
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
@@ -27,7 +29,7 @@ class RoutingArgs(LiteLLMPydanticObjectBase):
     ttl: int = 1 * 60  # 1min (RPM/TPM expire key)
 
 
-class LowestTPMLoggingHandler_v2(CustomLogger):
+class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
     """
     Updated version of TPM/RPM Logging.
 
@@ -51,6 +53,12 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
         self.router_cache = router_cache
         self.model_list = model_list
         self.routing_args = RoutingArgs(**routing_args)
+        BaseRoutingStrategy.__init__(
+            self,
+            dual_cache=router_cache,
+            should_batch_redis_writes=True,
+            default_sync_interval=0.1,
+        )
 
     def pre_call_check(self, deployment: Dict) -> Optional[Dict]:
         """
@@ -104,6 +112,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 )
             else:
                 # if local result below limit, check redis ## prevent unnecessary redis checks
+
                 result = self.router_cache.increment_cache(
                     key=rpm_key, value=1, ttl=self.routing_args.ttl
                 )
@@ -186,12 +195,15 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 )
             else:
                 # if local result below limit, check redis ## prevent unnecessary redis checks
-                result = await self.router_cache.async_increment_cache(
-                    key=rpm_key,
-                    value=1,
-                    ttl=self.routing_args.ttl,
-                    parent_otel_span=parent_otel_span,
+                result = await self._increment_value_in_current_window(
+                    key=rpm_key, value=1, ttl=self.routing_args.ttl
                 )
+                # result = await self.router_cache.async_increment_cache(
+                #     key=rpm_key,
+                #     value=1,
+                #     ttl=self.routing_args.ttl,
+                #     parent_otel_span=parent_otel_span,
+                # )
                 if result is not None and result > deployment_rpm:
                     raise litellm.RateLimitError(
                         message="Deployment over defined rpm limit={}. current usage={}".format(
