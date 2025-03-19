@@ -65,10 +65,13 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             # ------------
             # Setup values
             # ------------
+
             dt = get_utc_datetime()
             current_minute = dt.strftime("%H-%M")
             model_id = deployment.get("model_info", {}).get("id")
-            rpm_key = f"{model_id}:rpm:{current_minute}"
+            deployment_name = deployment.get("litellm_params", {}).get("model")
+            rpm_key = f"{model_id}:{deployment_name}:rpm:{current_minute}"
+
             local_result = self.router_cache.get_cache(
                 key=rpm_key, local_only=True
             )  # check local result first
@@ -230,9 +233,9 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             if standard_logging_object is None:
                 raise ValueError("standard_logging_object not passed in.")
             model_group = standard_logging_object.get("model_group")
-            model = standard_logging_object.get("model")
+            model = standard_logging_object["hidden_params"].get("litellm_model_name")
             id = standard_logging_object.get("model_id")
-            if model_group is None or id is None:
+            if model_group is None or id is None or model is None:
                 return
             elif isinstance(id, int):
                 id = str(id)
