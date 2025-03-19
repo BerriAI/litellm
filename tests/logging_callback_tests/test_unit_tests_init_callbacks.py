@@ -6,6 +6,7 @@ import threading
 from unittest.mock import AsyncMock
 
 from litellm.litellm_core_utils.dd_tracing import contextmanager
+from litellm.utils import executor
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -346,27 +347,6 @@ def test_success_handler_sync_async(sync_logging):
 
     litellm.sync_logging = sync_logging
 
-
-    @contextmanager
-    def patch_thread():
-        """
-        A context manager to collect threads started for logging handlers.
-        This is done by monkey-patching the start() method of threading.Thread.
-        Note that failure handlers are executed synchronously, so we don't need to patch them.
-        """
-        original = threading.Thread.start
-        logging_threads = []
-
-        def _patched_start(self, *args, **kwargs):
-            logging_threads.append(self)
-            return original(self, *args, **kwargs)
-
-        threading.Thread.start = _patched_start
-        try:
-            yield logging_threads
-        finally:
-            threading.Thread.start = original
-
     result = ModelResponse(
         id="chatcmpl-5418737b-ab14-420b-b9c5-b278b6681b70",
         created=1732306261,
@@ -387,26 +367,29 @@ def test_success_handler_sync_async(sync_logging):
     )
 
 
-    with patch.object(cl, "log_success_event") as mock_log_success_event:
+    with (
+        patch.object(cl, "log_success_event") as mock_log_success_event,
+        patch.object(
+            executor, "submit",
+            side_effect=lambda *args: args[0](*args[1:])
+        ) as mock_executor,
+    ):
         litellm.success_callback = [cl]
 
-        with patch_thread() as logging_threads:
-            litellm_logging.success_handler(
-                result=result,
-                start_time=datetime.now(),
-                end_time=datetime.now(),
-                cache_hit=False,
-            )
+        litellm_logging.success_handler(
+            result=result,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            cache_hit=False,
+        )
 
         if sync_logging:
+            mock_executor.assert_not_called()
             mock_log_success_event.assert_called_once()
             assert "standard_logging_object" in mock_log_success_event.call_args.kwargs["kwargs"]
-            assert logging_threads == []
         else:
-            mock_log_success_event.assert_not_called()
-            assert len(logging_threads) == 1
 
             # Wait for the thread to finish
-            logging_threads[0].join()
+            mock_executor.assert_called_once()
             mock_log_success_event.assert_called_once()
             assert "standard_logging_object" in mock_log_success_event.call_args.kwargs["kwargs"]

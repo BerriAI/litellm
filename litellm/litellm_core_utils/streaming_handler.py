@@ -1534,7 +1534,7 @@ class CustomStreamWrapper:
         if litellm.sync_logging:
             _run()
         else:
-            executor.submit((target=_run).start()
+            executor.submit(_run)
 
     def finish_reason_handler(self):
         model_response = self.model_response_creator()
@@ -1634,26 +1634,10 @@ class CustomStreamWrapper:
                         cache_hit=cache_hit,
                     )
                     logging_result = complete_streaming_response.model_copy(deep=True)
-                    executor.submit(
-                        self.logging_obj.success_handler,
-                        complete_streaming_response.model_copy(deep=True),
-                        None,
-                        None,
-                        cache_hit,
-                    )
                 else:
                     logging_result = response
-                            
-                if litellm.sync_logging:
-                    self.logging_obj.success_handler(logging_result, None, None, cache_hit)
-                else:
-                    executor.submit(
-                        self.logging_obj.success_handler,
-                        logging_result,
-                        None,
-                        None,
-                        cache_hit,
-                    )
+
+                self.logging_obj.success_handler(logging_result, None, None, cache_hit)
 
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True

@@ -1103,11 +1103,15 @@ class Logging(LiteLLMLoggingBaseClass):
         if synchronous:
             self._success_handler(result, start_time, end_time, cache_hit, **kwargs)
         else:
-            threading.Thread(
-                target=self._success_handler,
-                args=(result, start_time, end_time, cache_hit),
-                kwargs=kwargs,
-            ).start()
+            executor.submit(
+                self._success_handler,
+                result,
+                start_time,
+                end_time,
+                cache_hit,
+                **kwargs,
+            )
+
 
     def _success_handler(  # noqa: PLR0915
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
