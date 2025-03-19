@@ -714,3 +714,36 @@ def test_return_potential_deployments():
     )
 
     assert len(potential_deployments) == 1
+
+
+@pytest.mark.asyncio
+async def test_tpm_rpm_routing_model_name_checks():
+    deployment = {
+        "model_name": "gpt-3.5-turbo",
+        "litellm_params": {
+            "model": "azure/chatgpt-v-2",
+            "api_key": os.getenv("AZURE_API_KEY"),
+            "api_base": os.getenv("AZURE_API_BASE"),
+            "mock_response": "Hey, how's it going?",
+        },
+    }
+    router = Router(model_list=[deployment], routing_strategy="usage-based-routing-v2")
+
+    async def side_effect_pre_call_check(*args, **kwargs):
+        return args[0]
+
+    with patch.object(
+        router.lowesttpm_logger_v2,
+        "async_pre_call_check",
+        side_effect=side_effect_pre_call_check,
+    ) as mock_object:
+        response = await router.acompletion(
+            model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey!"}]
+        )
+
+        mock_object.assert_called()
+        print(f"mock_object.call_args: {mock_object.call_args[0][0]}")
+        assert (
+            mock_object.call_args[0][0]["litellm_params"]["model"]
+            == deployment["litellm_params"]["model"]
+        )
