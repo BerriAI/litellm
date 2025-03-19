@@ -4,7 +4,7 @@ import litellm
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
-from litellm.proxy.utils import get_instance_fn
+from litellm.proxy.types_utils.utils import get_instance_fn
 
 blue_color_code = "\033[94m"
 reset_color_code = "\033[0m"

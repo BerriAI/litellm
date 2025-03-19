@@ -28,7 +28,7 @@ from litellm.types.utils import (
 )
 import pytest
 from unittest.mock import MagicMock, patch, call
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy._types import UserAPIKeyAuth
 
@@ -302,7 +302,7 @@ async def test_increment_remaining_budget_metrics(prometheus_logger):
 
         # Test remaining budget metrics
         prometheus_logger.litellm_remaining_team_budget_metric.labels.assert_called_once_with(
-            "team1", "team_alias1"
+            team="team1", team_alias="team_alias1"
         )
         prometheus_logger.litellm_remaining_team_budget_metric.labels().set.assert_called_once_with(
             40  # 100 - (50 + 10)
@@ -317,7 +317,7 @@ async def test_increment_remaining_budget_metrics(prometheus_logger):
 
         # Test max budget metrics
         prometheus_logger.litellm_team_max_budget_metric.labels.assert_called_once_with(
-            "team1", "team_alias1"
+            team="team1", team_alias="team_alias1"
         )
         prometheus_logger.litellm_team_max_budget_metric.labels().set.assert_called_once_with(
             100
@@ -332,7 +332,7 @@ async def test_increment_remaining_budget_metrics(prometheus_logger):
 
         # Test remaining hours metrics
         prometheus_logger.litellm_team_budget_remaining_hours_metric.labels.assert_called_once_with(
-            "team1", "team_alias1"
+            team="team1", team_alias="team_alias1"
         )
         # The remaining hours should be approximately 10 (with some small difference due to test execution time)
         remaining_hours_call = prometheus_logger.litellm_team_budget_remaining_hours_metric.labels().set.call_args[
@@ -434,6 +434,100 @@ def test_set_latency_metrics(prometheus_logger):
     prometheus_logger.litellm_request_total_latency_metric.labels().observe.assert_called_once_with(
         2.0
     )
+
+
+def test_set_latency_metrics_missing_timestamps(prometheus_logger):
+    """
+    Test that _set_latency_metrics handles missing timestamp values gracefully
+    """
+    # Mock all metrics used in the method
+    prometheus_logger.litellm_llm_api_time_to_first_token_metric = MagicMock()
+    prometheus_logger.litellm_llm_api_latency_metric = MagicMock()
+    prometheus_logger.litellm_request_total_latency_metric = MagicMock()
+
+    standard_logging_payload = create_standard_logging_payload()
+    enum_values = UserAPIKeyLabelValues(
+        litellm_model_name=standard_logging_payload["model"],
+        api_provider=standard_logging_payload["custom_llm_provider"],
+        hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
+        api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
+        team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+        team_alias=standard_logging_payload["metadata"]["user_api_key_team_alias"],
+    )
+
+    # Test case where completion_start_time is None
+    kwargs = {
+        "end_time": datetime.now(),
+        "start_time": datetime.now() - timedelta(seconds=2),
+        "api_call_start_time": datetime.now() - timedelta(seconds=1.5),
+        "completion_start_time": None,  # Missing completion start time
+        "stream": True,
+    }
+
+    # This should not raise an exception
+    prometheus_logger._set_latency_metrics(
+        kwargs=kwargs,
+        model="gpt-3.5-turbo",
+        user_api_key="key1",
+        user_api_key_alias="alias1",
+        user_api_team="team1",
+        user_api_team_alias="team_alias1",
+        enum_values=enum_values,
+    )
+
+    # Verify time to first token metric was not called due to missing completion_start_time
+    prometheus_logger.litellm_llm_api_time_to_first_token_metric.labels.assert_not_called()
+
+    # Other metrics should still be called
+    prometheus_logger.litellm_llm_api_latency_metric.labels.assert_called_once()
+    prometheus_logger.litellm_request_total_latency_metric.labels.assert_called_once()
+
+
+def test_set_latency_metrics_missing_api_call_start(prometheus_logger):
+    """
+    Test that _set_latency_metrics handles missing api_call_start_time gracefully
+    """
+    # Mock all metrics used in the method
+    prometheus_logger.litellm_llm_api_time_to_first_token_metric = MagicMock()
+    prometheus_logger.litellm_llm_api_latency_metric = MagicMock()
+    prometheus_logger.litellm_request_total_latency_metric = MagicMock()
+
+    standard_logging_payload = create_standard_logging_payload()
+    enum_values = UserAPIKeyLabelValues(
+        litellm_model_name=standard_logging_payload["model"],
+        api_provider=standard_logging_payload["custom_llm_provider"],
+        hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
+        api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
+        team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+        team_alias=standard_logging_payload["metadata"]["user_api_key_team_alias"],
+    )
+
+    # Test case where api_call_start_time is None
+    kwargs = {
+        "end_time": datetime.now(),
+        "start_time": datetime.now() - timedelta(seconds=2),
+        "api_call_start_time": None,  # Missing API call start time
+        "completion_start_time": datetime.now() - timedelta(seconds=1),
+        "stream": True,
+    }
+
+    # This should not raise an exception
+    prometheus_logger._set_latency_metrics(
+        kwargs=kwargs,
+        model="gpt-3.5-turbo",
+        user_api_key="key1",
+        user_api_key_alias="alias1",
+        user_api_team="team1",
+        user_api_team_alias="team_alias1",
+        enum_values=enum_values,
+    )
+
+    # Verify API latency metrics were not called due to missing api_call_start_time
+    prometheus_logger.litellm_llm_api_time_to_first_token_metric.labels.assert_not_called()
+    prometheus_logger.litellm_llm_api_latency_metric.labels.assert_not_called()
+
+    # Total request latency should still be called
+    prometheus_logger.litellm_request_total_latency_metric.labels.assert_called_once()
 
 
 def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
@@ -1065,9 +1159,9 @@ async def test_initialize_remaining_budget_metrics(prometheus_logger):
 
         # Verify the labels were called with correct team information
         label_calls = [
-            call.labels("team1", "alias1"),
-            call.labels("team2", "alias2"),
-            call.labels("team3", ""),
+            call.labels(team="team1", team_alias="alias1"),
+            call.labels(team="team2", team_alias="alias2"),
+            call.labels(team="team3", team_alias=""),
         ]
         prometheus_logger.litellm_team_budget_remaining_hours_metric.assert_has_calls(
             label_calls, any_order=True
@@ -1240,3 +1334,169 @@ async def test_initialize_api_key_budget_metrics(prometheus_logger):
         prometheus_logger.litellm_api_key_max_budget_metric.assert_has_calls(
             expected_max_budget_calls, any_order=True
         )
+
+
+def test_set_team_budget_metrics_multiple_teams(prometheus_logger):
+    """
+    Test that _set_team_budget_metrics correctly handles multiple teams with different budgets and reset times
+    """
+    # Create test teams with different budgets and reset times
+    teams = [
+        MagicMock(
+            team_id="team1",
+            team_alias="alias1",
+            spend=50.0,
+            max_budget=100.0,
+            budget_reset_at=datetime(2024, 12, 31, tzinfo=timezone.utc),
+        ),
+        MagicMock(
+            team_id="team2",
+            team_alias="alias2",
+            spend=75.0,
+            max_budget=150.0,
+            budget_reset_at=datetime(2024, 6, 30, tzinfo=timezone.utc),
+        ),
+        MagicMock(
+            team_id="team3",
+            team_alias="alias3",
+            spend=25.0,
+            max_budget=200.0,
+            budget_reset_at=datetime(2024, 3, 31, tzinfo=timezone.utc),
+        ),
+    ]
+
+    # Mock the metrics
+    prometheus_logger.litellm_remaining_team_budget_metric = MagicMock()
+    prometheus_logger.litellm_team_max_budget_metric = MagicMock()
+    prometheus_logger.litellm_team_budget_remaining_hours_metric = MagicMock()
+
+    # Set metrics for each team
+    for team in teams:
+        prometheus_logger._set_team_budget_metrics(team)
+
+    # Verify remaining budget metric calls
+    expected_remaining_budget_calls = [
+        call.labels(team="team1", team_alias="alias1").set(50.0),  # 100 - 50
+        call.labels(team="team2", team_alias="alias2").set(75.0),  # 150 - 75
+        call.labels(team="team3", team_alias="alias3").set(175.0),  # 200 - 25
+    ]
+    prometheus_logger.litellm_remaining_team_budget_metric.assert_has_calls(
+        expected_remaining_budget_calls, any_order=True
+    )
+
+    # Verify max budget metric calls
+    expected_max_budget_calls = [
+        call.labels("team1", "alias1").set(100.0),
+        call.labels("team2", "alias2").set(150.0),
+        call.labels("team3", "alias3").set(200.0),
+    ]
+    prometheus_logger.litellm_team_max_budget_metric.assert_has_calls(
+        expected_max_budget_calls, any_order=True
+    )
+
+    # Verify budget reset metric calls
+    # Note: The exact hours will depend on the current time, so we'll just verify the structure
+    assert (
+        prometheus_logger.litellm_team_budget_remaining_hours_metric.labels.call_count
+        == 3
+    )
+    assert (
+        prometheus_logger.litellm_team_budget_remaining_hours_metric.labels().set.call_count
+        == 3
+    )
+
+
+def test_set_team_budget_metrics_null_values(prometheus_logger):
+    """
+    Test that _set_team_budget_metrics correctly handles null/None values
+    """
+    # Create test team with null values
+    team = MagicMock(
+        team_id="team_null",
+        team_alias=None,  # Test null alias
+        spend=None,  # Test null spend
+        max_budget=None,  # Test null max_budget
+        budget_reset_at=None,  # Test null reset time
+    )
+
+    # Mock the metrics
+    prometheus_logger.litellm_remaining_team_budget_metric = MagicMock()
+    prometheus_logger.litellm_team_max_budget_metric = MagicMock()
+    prometheus_logger.litellm_team_budget_remaining_hours_metric = MagicMock()
+
+    # Set metrics for the team
+    prometheus_logger._set_team_budget_metrics(team)
+
+    # Verify remaining budget metric is set to infinity when max_budget is None
+    prometheus_logger.litellm_remaining_team_budget_metric.labels.assert_called_once_with(
+        team="team_null", team_alias=""
+    )
+    prometheus_logger.litellm_remaining_team_budget_metric.labels().set.assert_called_once_with(
+        float("inf")
+    )
+
+    # Verify max budget metric is not set when max_budget is None
+    prometheus_logger.litellm_team_max_budget_metric.assert_not_called()
+
+    # Verify reset metric is not set when budget_reset_at is None
+    prometheus_logger.litellm_team_budget_remaining_hours_metric.assert_not_called()
+
+
+def test_set_team_budget_metrics_with_custom_labels(prometheus_logger, monkeypatch):
+    """
+    Test that _set_team_budget_metrics correctly handles custom prometheus labels
+    """
+    # Set custom prometheus labels
+    custom_labels = ["metadata.organization", "metadata.environment"]
+    monkeypatch.setattr("litellm.custom_prometheus_metadata_labels", custom_labels)
+
+    # Create test team with custom metadata
+    team = MagicMock(
+        team_id="team1",
+        team_alias="alias1",
+        spend=50.0,
+        max_budget=100.0,
+        budget_reset_at=datetime(2024, 12, 31, tzinfo=timezone.utc),
+    )
+
+    # Mock the metrics
+    prometheus_logger.litellm_remaining_team_budget_metric = MagicMock()
+    prometheus_logger.litellm_team_max_budget_metric = MagicMock()
+    prometheus_logger.litellm_team_budget_remaining_hours_metric = MagicMock()
+
+    # Set metrics for the team
+    prometheus_logger._set_team_budget_metrics(team)
+
+    # Verify remaining budget metric includes custom labels
+    prometheus_logger.litellm_remaining_team_budget_metric.labels.assert_called_once_with(
+        team="team1",
+        team_alias="alias1",
+        metadata_organization=None,
+        metadata_environment=None,
+    )
+    prometheus_logger.litellm_remaining_team_budget_metric.labels().set.assert_called_once_with(
+        50.0
+    )  # 100 - 50
+
+    # Verify max budget metric includes custom labels
+    prometheus_logger.litellm_team_max_budget_metric.labels.assert_called_once_with(
+        team="team1",
+        team_alias="alias1",
+        metadata_organization=None,
+        metadata_environment=None,
+    )
+    prometheus_logger.litellm_team_max_budget_metric.labels().set.assert_called_once_with(
+        100.0
+    )
+
+    # Verify budget reset metric includes custom labels
+    budget_reset_calls = (
+        prometheus_logger.litellm_team_budget_remaining_hours_metric.labels.call_args_list
+    )
+    assert len(budget_reset_calls) == 1
+    assert budget_reset_calls[0][1] == {
+        "team": "team1",
+        "team_alias": "alias1",
+        "metadata_organization": None,
+        "metadata_environment": None,
+    }

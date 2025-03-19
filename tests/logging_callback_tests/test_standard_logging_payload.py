@@ -413,6 +413,7 @@ def test_get_error_information():
     assert result["error_code"] == "429"
     assert result["error_class"] == "RateLimitError"
     assert result["llm_provider"] == "openai"
+    assert result["error_message"] == "litellm.RateLimitError: Test error"
 
 
 def test_get_response_time():

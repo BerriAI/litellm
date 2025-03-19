@@ -556,8 +556,9 @@ async def test_user_email_metrics():
     """
     async with aiohttp.ClientSession() as session:
         # Create a user with user_email
+        user_email = f"test-{uuid.uuid4()}@example.com"
         user_data = {
-            "user_email": "test@example.com",
+            "user_email": user_email,
         }
         user_info = await create_test_user(session, user_data)
         key = user_info["key"]
@@ -577,5 +578,5 @@ async def test_user_email_metrics():
         metrics_after_first = await get_prometheus_metrics(session)
         print("metrics_after_first request", metrics_after_first)
         assert (
-            "test@example.com" in metrics_after_first
+            user_email in metrics_after_first
         ), "user_email should be tracked correctly"

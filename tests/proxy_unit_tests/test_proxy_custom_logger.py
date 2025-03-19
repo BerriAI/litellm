@@ -51,7 +51,7 @@ print("Testing proxy custom logger")
 def test_embedding(client):
     try:
         litellm.set_verbose = False
-        from litellm.proxy.utils import get_instance_fn
+        from litellm.proxy.types_utils.utils import get_instance_fn
 
         my_custom_logger = get_instance_fn(
             value="custom_callbacks.my_custom_logger", config_file_path=python_file_path
@@ -122,7 +122,7 @@ def test_chat_completion(client):
     try:
         # Your test data
         litellm.set_verbose = False
-        from litellm.proxy.utils import get_instance_fn
+        from litellm.proxy.types_utils.utils import get_instance_fn
 
         my_custom_logger = get_instance_fn(
             value="custom_callbacks.my_custom_logger", config_file_path=python_file_path
@@ -217,7 +217,7 @@ def test_chat_completion_stream(client):
     try:
         # Your test data
         litellm.set_verbose = False
-        from litellm.proxy.utils import get_instance_fn
+        from litellm.proxy.types_utils.utils import get_instance_fn
 
         my_custom_logger = get_instance_fn(
             value="custom_callbacks.my_custom_logger", config_file_path=python_file_path

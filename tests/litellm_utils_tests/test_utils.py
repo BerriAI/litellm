@@ -18,9 +18,7 @@ import pytest
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, headers
-from litellm.proxy.utils import (
-    duration_in_seconds,
-)
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.duration_parser import (
     get_last_day_of_month,
     _extract_from_regex,
@@ -721,6 +719,14 @@ def test_duration_in_seconds():
     assert value - expected_duration < 2
 
 
+def test_duration_in_seconds_basic():
+    assert duration_in_seconds(duration="3s") == 3
+    assert duration_in_seconds(duration="3m") == 180
+    assert duration_in_seconds(duration="3h") == 10800
+    assert duration_in_seconds(duration="3d") == 259200
+    assert duration_in_seconds(duration="3w") == 1814400
+
+
 def test_get_llm_provider_ft_models():
     """
     All ft prefixed models should map to OpenAI
@@ -1159,6 +1165,9 @@ def test_models_by_provider():
     """
     Make sure all providers from model map are in the valid providers list
     """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
     from litellm import models_by_provider
 
     providers = set()
@@ -1960,3 +1969,69 @@ def test_get_applied_guardrails(test_case):
 
     # Assert
     assert sorted(result) == sorted(test_case["expected"])
+
+
+@pytest.mark.parametrize(
+    "endpoint, params, expected_bool",
+    [
+        ("localhost:4000/v1/rerank", ["max_chunks_per_doc"], True),
+        ("localhost:4000/v2/rerank", ["max_chunks_per_doc"], False),
+        ("localhost:4000", ["max_chunks_per_doc"], True),
+        ("localhost:4000/v1/rerank", ["max_tokens_per_doc"], True),
+        ("localhost:4000/v2/rerank", ["max_tokens_per_doc"], False),
+        ("localhost:4000", ["max_tokens_per_doc"], False),
+        (
+            "localhost:4000/v1/rerank",
+            ["max_chunks_per_doc", "max_tokens_per_doc"],
+            True,
+        ),
+        (
+            "localhost:4000/v2/rerank",
+            ["max_chunks_per_doc", "max_tokens_per_doc"],
+            False,
+        ),
+        ("localhost:4000", ["max_chunks_per_doc", "max_tokens_per_doc"], False),
+    ],
+)
+def test_should_use_cohere_v1_client(endpoint, params, expected_bool):
+    assert litellm.utils.should_use_cohere_v1_client(endpoint, params) == expected_bool
+
+
+def test_add_openai_metadata():
+    from litellm.utils import add_openai_metadata
+
+    metadata = {
+        "user_api_key_end_user_id": "123",
+        "hidden_params": {"api_key": "123"},
+        "litellm_parent_otel_span": MagicMock(),
+        "none-val": None,
+        "int-val": 1,
+        "dict-val": {"a": 1, "b": 2},
+    }
+
+    result = add_openai_metadata(metadata)
+
+    assert result == {
+        "user_api_key_end_user_id": "123",
+    }
+
+
+def test_message_object():
+    from litellm.types.utils import Message
+
+    message = Message(content="Hello, world!", role="user")
+    assert message.content == "Hello, world!"
+    assert message.role == "user"
+    assert not hasattr(message, "audio")
+    assert not hasattr(message, "thinking_blocks")
+    assert not hasattr(message, "reasoning_content")
+
+
+def test_delta_object():
+    from litellm.types.utils import Delta
+
+    delta = Delta(content="Hello, world!", role="user")
+    assert delta.content == "Hello, world!"
+    assert delta.role == "user"
+    assert not hasattr(delta, "thinking_blocks")
+    assert not hasattr(delta, "reasoning_content")

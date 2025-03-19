@@ -84,7 +84,9 @@ class CodestralTextCompletionConfig(OpenAITextCompletionConfig):
         finish_reason = None
         logprobs = None
 
-        chunk_data = chunk_data.replace("data:", "")
+        chunk_data = (
+            litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk_data) or ""
+        )
         chunk_data = chunk_data.strip()
         if len(chunk_data) == 0 or chunk_data == "[DONE]":
             return {
