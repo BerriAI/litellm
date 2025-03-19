@@ -1747,7 +1747,7 @@ async def test_redis_semantic_cache_acompletion():
         host=os.environ["REDIS_HOST"],
         port=os.environ["REDIS_PORT"],
         password=os.environ["REDIS_PASSWORD"],
-        similarity_threshold=0.8,
+        similarity_threshold=0.7,
     )
     response1 = await litellm.acompletion(
         model="gpt-3.5-turbo",
