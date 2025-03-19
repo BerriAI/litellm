@@ -33,7 +33,6 @@ from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
-from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -348,6 +347,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         organization: Optional[str] = None,
         client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
     ):
+        client_initialization_params: Dict = locals()
         if client is None:
             if not isinstance(max_retries, int):
                 raise OpenAIError(
@@ -356,20 +356,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         max_retries
                     ),
                 )
-            # Creating a new OpenAI Client
-            # check in memory cache before creating a new one
-            # Convert the API key to bytes
-            hashed_api_key = None
-            if api_key is not None:
-                hash_object = hashlib.sha256(api_key.encode())
-                # Hexadecimal representation of the hash
-                hashed_api_key = hash_object.hexdigest()
-
-            _cache_key = f"hashed_api_key={hashed_api_key},api_base={api_base},timeout={timeout},max_retries={max_retries},organization={organization},is_async={is_async}"
-
-            _cached_client = litellm.in_memory_llm_clients_cache.get_cache(_cache_key)
-            if _cached_client:
-                return _cached_client
+            cached_client = self.get_cached_openai_client(
+                client_initialization_params=client_initialization_params,
+                client_type="openai",
+            )
+            if cached_client:
+                return cached_client
             if is_async:
                 _new_client: Union[OpenAI, AsyncOpenAI] = AsyncOpenAI(
                     api_key=api_key,
@@ -390,10 +382,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 )
 
             ## SAVE CACHE KEY
-            litellm.in_memory_llm_clients_cache.set_cache(
-                key=_cache_key,
-                value=_new_client,
-                ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+            self.set_cached_openai_client(
+                openai_client=_new_client,
+                client_initialization_params=client_initialization_params,
+                client_type="openai",
             )
             return _new_client
 
