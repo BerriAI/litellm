@@ -22,11 +22,18 @@ class BaseRoutingStrategy(ABC):
         self.dual_cache = dual_cache
         self.redis_increment_operation_queue: List[RedisPipelineIncrementOperation] = []
         if should_batch_redis_writes:
-            asyncio.create_task(
-                self.periodic_sync_in_memory_spend_with_redis(
-                    default_sync_interval=default_sync_interval
-                )
+            import threading
+
+            thread = threading.Thread(
+                target=asyncio.run,
+                args=(
+                    self.periodic_sync_in_memory_spend_with_redis(
+                        default_sync_interval=default_sync_interval
+                    ),
+                ),
+                daemon=True,
             )
+            thread.start()
 
         self.in_memory_keys_to_update: set[str] = (
             set()
