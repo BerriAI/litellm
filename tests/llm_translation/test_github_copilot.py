@@ -117,7 +117,6 @@ def test_completion_github_copilot_mock_response(mock_completion, mock_get_llm_p
     # Verify the get_llm_provider call was made with the expected params
     mock_get_llm_provider.assert_called_once()
     args, kwargs = mock_get_llm_provider.call_args
-    print(kwargs.get("model"))
     assert kwargs.get("model") is "github_copilot/gpt-4"
     assert kwargs.get("custom_llm_provider") is None
     assert kwargs.get("api_key") is None
