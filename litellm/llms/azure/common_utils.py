@@ -263,10 +263,11 @@ class BaseAzureLLM(BaseOpenAILLM):
                 client_initialization_params=client_initialization_params,
                 client_type="azure",
             )
-            if cached_client and isinstance(
-                cached_client, (AzureOpenAI, AsyncAzureOpenAI)
-            ):
-                return cached_client
+            if cached_client:
+                if isinstance(cached_client, AzureOpenAI) or isinstance(
+                    cached_client, AsyncAzureOpenAI
+                ):
+                    return cached_client
 
             azure_client_params = self.initialize_azure_sdk_client(
                 litellm_params=litellm_params or {},
