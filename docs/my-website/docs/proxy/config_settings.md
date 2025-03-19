@@ -503,7 +503,7 @@ router_settings:
 | SSL_VERIFY | Flag to enable or disable SSL certificate verification
 | SUPABASE_KEY | API key for Supabase service
 | SUPABASE_URL | Base URL for Supabase instance
-| STORE_MODEL_IN_DB | If true, enables storing model + credential information in the DB. |
+| STORE_MODEL_IN_DB | If true, enables storing model + credential information in the DB. 
 | TEST_EMAIL_ADDRESS | Email address used for testing purposes
 | UI_LOGO_PATH | Path to the logo image used in the UI
 | UI_PASSWORD | Password for accessing the UI
@@ -515,4 +515,3 @@ router_settings:
 | UPSTREAM_LANGFUSE_SECRET_KEY | Secret key for upstream Langfuse authentication
 | USE_AWS_KMS | Flag to enable AWS Key Management Service for encryption
 | WEBHOOK_URL | URL for receiving webhooks from external services
-
