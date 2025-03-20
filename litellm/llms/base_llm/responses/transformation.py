@@ -7,7 +7,6 @@ import httpx
 from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
-    ResponsesAPIRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStreamingResponse,
 )
