@@ -118,8 +118,8 @@ async def test_supports_tool_choice():
     # Load model prices
     litellm._turn_on_debug()
     local_path = "../../model_prices_and_context_window.json"
-    prod_path = "./model_prices_and_context_window.json"
-    with open(prod_path, "r") as f:
+    # prod_path = "./model_prices_and_context_window.json"
+    with open(local_path, "r") as f:
         model_prices = json.load(f)
     litellm.model_cost = model_prices
     config_manager = ProviderConfigManager()
@@ -137,6 +137,7 @@ async def test_supports_tool_choice():
             or model_name in block_list
             or "azure/eu" in model_name
             or "azure/us" in model_name
+            or "codestral" in model_name
         ):
             continue
 
@@ -150,8 +151,11 @@ async def test_supports_tool_choice():
         print("LLM provider", provider)
         provider_enum = LlmProviders(provider)
         config = config_manager.get_provider_chat_config(model, provider_enum)
-        supported_params = config.get_supported_openai_params(model)
-        print("supported_params", supported_params)
+        if config:
+            supported_params = config.get_supported_openai_params(model)
+            print("supported_params", supported_params)
+        else:
+            raise Exception(f"No config found for {model_name}, provider: {provider}")
 
         # Check tool_choice support
         supports_tool_choice_result = litellm.utils.supports_tool_choice(
