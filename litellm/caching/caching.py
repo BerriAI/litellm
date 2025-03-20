@@ -93,6 +93,8 @@ class Cache:
         redis_flush_size: Optional[int] = None,
         redis_startup_nodes: Optional[List] = None,
         disk_cache_dir=None,
+        disk_cache_size_limit: Optional[float] = None,
+        disk_cache_cull_limit: Optional[int] = None,
         qdrant_api_base: Optional[str] = None,
         qdrant_api_key: Optional[str] = None,
         qdrant_collection_name: Optional[str] = None,
@@ -123,6 +125,8 @@ class Cache:
 
             # Disk Cache Args
             disk_cache_dir (str, optional): The directory for the disk cache. Defaults to None.
+            disk_cache_size_limit (int, optional): Default one gigabyte. The maximum on-disk size of the cache.
+            disk_cache_cull_limit (int, optional): Default ten. The maximum number of keys to cull when adding a new item. Set to zero to disable automatic culling. Some systems may disable automatic culling in exchange for a cron-like job that regularly calls cull in a separate process.
 
             # S3 Cache Args
             s3_bucket_name (str, optional): The bucket name for the s3 cache. Defaults to None.
@@ -201,7 +205,11 @@ class Cache:
                 **kwargs,
             )
         elif type == LiteLLMCacheType.DISK:
-            self.cache = DiskCache(disk_cache_dir=disk_cache_dir)
+            self.cache = DiskCache(
+                disk_cache_dir=disk_cache_dir,
+                disk_cache_size_limit=disk_cache_size_limit,
+                disk_cache_cull_limit=disk_cache_cull_limit
+            )
         if "cache" not in litellm.input_callback:
             litellm.input_callback.append("cache")
         if "cache" not in litellm.success_callback:
