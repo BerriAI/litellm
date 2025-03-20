@@ -178,13 +178,16 @@ class AzureTextCompletion(BaseAzureLLM):
                     azure_client = AzureOpenAI(**azure_client_params)
                 else:
                     azure_client = client
-                    if api_version is not None and isinstance(
-                        azure_client._custom_query, dict
-                    ):
-                        # set api_version to version passed by user
-                        azure_client._custom_query.setdefault(
-                            "api-version", api_version
-                        )
+                    # Make sure to check litellm_params for api_version first (highest priority)
+                    client_api_version = None
+                    if litellm_params and "api_version" in litellm_params:
+                        client_api_version = litellm_params.get("api_version")
+                    elif api_version is not None:
+                        client_api_version = api_version
+                    
+                    if client_api_version is not None and isinstance(azure_client._custom_query, dict):
+                        # Always update with highest priority version
+                        azure_client._custom_query["api-version"] = client_api_version
 
                 raw_response = azure_client.completions.with_raw_response.create(
                     **data, timeout=timeout
@@ -243,11 +246,16 @@ class AzureTextCompletion(BaseAzureLLM):
                 azure_client = AsyncAzureOpenAI(**azure_client_params)
             else:
                 azure_client = client
-                if api_version is not None and isinstance(
-                    azure_client._custom_query, dict
-                ):
-                    # set api_version to version passed by user
-                    azure_client._custom_query.setdefault("api-version", api_version)
+                # Make sure to check litellm_params for api_version first (highest priority)
+                client_api_version = None
+                if litellm_params and "api_version" in litellm_params:
+                    client_api_version = litellm_params.get("api_version")
+                elif api_version is not None:
+                    client_api_version = api_version
+                
+                if client_api_version is not None and isinstance(azure_client._custom_query, dict):
+                    # Always update with highest priority version
+                    azure_client._custom_query["api-version"] = client_api_version
             ## LOGGING
             logging_obj.pre_call(
                 input=data["prompt"],
@@ -302,9 +310,16 @@ class AzureTextCompletion(BaseAzureLLM):
             azure_client = AzureOpenAI(**azure_client_params)
         else:
             azure_client = client
-            if api_version is not None and isinstance(azure_client._custom_query, dict):
-                # set api_version to version passed by user
-                azure_client._custom_query.setdefault("api-version", api_version)
+            # Make sure to check litellm_params for api_version first (highest priority)
+            client_api_version = None
+            if litellm_params and "api_version" in litellm_params:
+                client_api_version = litellm_params.get("api_version")
+            elif api_version is not None:
+                client_api_version = api_version
+            
+            if client_api_version is not None and isinstance(azure_client._custom_query, dict):
+                # Always update with highest priority version
+                azure_client._custom_query["api-version"] = client_api_version
         ## LOGGING
         logging_obj.pre_call(
             input=data["prompt"],
@@ -347,11 +362,16 @@ class AzureTextCompletion(BaseAzureLLM):
                 azure_client = AsyncAzureOpenAI(**azure_client_params)
             else:
                 azure_client = client
-                if api_version is not None and isinstance(
-                    azure_client._custom_query, dict
-                ):
-                    # set api_version to version passed by user
-                    azure_client._custom_query.setdefault("api-version", api_version)
+                # Make sure to check litellm_params for api_version first (highest priority)
+                client_api_version = None
+                if litellm_params and "api_version" in litellm_params:
+                    client_api_version = litellm_params.get("api_version")
+                elif api_version is not None:
+                    client_api_version = api_version
+                
+                if client_api_version is not None and isinstance(azure_client._custom_query, dict):
+                    # Always update with highest priority version
+                    azure_client._custom_query["api-version"] = client_api_version
             ## LOGGING
             logging_obj.pre_call(
                 input=data["prompt"],

@@ -317,9 +317,16 @@ class BaseAzureLLM:
             except ValueError:
                 verbose_logger.debug("Azure AD Token Provider could not be used.")
         if api_version is None:
-            api_version = os.getenv(
-                "AZURE_API_VERSION", litellm.AZURE_DEFAULT_API_VERSION
-            )
+            api_version = litellm_params.get("api_version")
+            if api_version is not None:
+                verbose_logger.debug(f"Using API version from config: {api_version}")
+            else:
+                api_version = os.getenv("AZURE_API_VERSION")
+                if api_version is not None:
+                    verbose_logger.debug(f"Using API version from env/default: {api_version}")
+                else:
+                    api_version = litellm.AZURE_DEFAULT_API_VERSION
+                    verbose_logger.debug(f"Using API version from default: {api_version}")
 
         _api_key = api_key
         if _api_key is not None and isinstance(_api_key, str):
