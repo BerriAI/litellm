@@ -465,10 +465,10 @@ class LiteLLMProxyRequestSetup:
             if isinstance(data["metadata"], str):
                 try:
                     parsed_metadata = json.loads(data["metadata"])
-                    data[_metadata_variable_name]["requester_metadata"] = parsed_metadata
+                    data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(parsed_metadata)
                 except json.JSONDecodeError:
                     # If parsing fails, store the string as is
-                    data[_metadata_variable_name]["requester_metadata"] = data["metadata"]
+                    data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(data["metadata"])
             else:
                 # Handle normal dictionary metadata
                 data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(
