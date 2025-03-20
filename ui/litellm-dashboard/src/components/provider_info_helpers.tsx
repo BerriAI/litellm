@@ -56,32 +56,33 @@ export const provider_map: Record<string, string> = {
     FireworksAI: "fireworks_ai"
 };
 
-export const providerLogoMap: Record<string, string> = {
-    [Providers.OpenAI]: "https://artificialanalysis.ai/img/logos/openai_small.svg",
-    [Providers.OpenAI_Text]: "https://artificialanalysis.ai/img/logos/openai_small.svg",
-    [Providers.OpenAI_Text_Compatible]: "https://artificialanalysis.ai/img/logos/openai_small.svg",
-    [Providers.OpenAI_Compatible]: "https://artificialanalysis.ai/img/logos/openai_small.svg",
-    [Providers.Azure]: "https://upload.wikimedia.org/wikipedia/commons/a/a8/Microsoft_Azure_Logo.svg",
-    [Providers.Azure_AI_Studio]: "https://upload.wikimedia.org/wikipedia/commons/a/a8/Microsoft_Azure_Logo.svg",
-    [Providers.Anthropic]: "https://artificialanalysis.ai/img/logos/anthropic_small.svg",
-    [Providers.Google_AI_Studio]: "https://artificialanalysis.ai/img/logos/google_small.svg",
-    [Providers.Bedrock]: "https://artificialanalysis.ai/img/logos/aws_small.png",
-    [Providers.Groq]: "https://artificialanalysis.ai/img/logos/groq_small.png",
-    [Providers.MistralAI]: "https://artificialanalysis.ai/img/logos/mistral_small.png",
-    [Providers.Cohere]: "https://artificialanalysis.ai/img/logos/cohere_small.png",
-    [Providers.Vertex_AI]: "https://artificialanalysis.ai/img/logos/google_small.svg",
-    [Providers.Databricks]: "https://artificialanalysis.ai/img/logos/databricks_small.png",
-    [Providers.Ollama]: "https://artificialanalysis.ai/img/logos/ollama_small.svg",
-    [Providers.xAI]: "https://artificialanalysis.ai/img/logos/xai_small.svg",
-    [Providers.Deepseek]: "https://artificialanalysis.ai/img/logos/deepseek_small.jpg",
-    [Providers.AssemblyAI]: "https://artificialanalysis.ai/img/logos/assemblyai_small.png",
-    [Providers.Cerebras]: "https://artificialanalysis.ai/img/logos/cerebras_small.png",
-    [Providers.Sambanova]: "https://artificialanalysis.ai/img/logos/sambanova_small.webp",
-    [Providers.Perplexity]: "https://artificialanalysis.ai/img/logos/perplexity_small.png",
-    [Providers.TogetherAI]: "https://artificialanalysis.ai/img/logos/togetherai_small.svg",
-    [Providers.Openrouter]: "https://t0.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://openrouter.ai/chat&size=256",
-    [Providers.FireworksAI]: "https://artificialanalysis.ai/img/logos/fireworks_small_revised.png"
+const asset_logos_folder = '/ui/assets/logos/';
 
+export const providerLogoMap: Record<string, string> = {
+    [Providers.Anthropic]: `${asset_logos_folder}anthropic.svg`,
+    [Providers.AssemblyAI]: `${asset_logos_folder}assemblyai_small.png`,
+    [Providers.Azure]: `${asset_logos_folder}microsoft_azure.svg`,
+    [Providers.Azure_AI_Studio]: `${asset_logos_folder}microsoft_azure.svg`,
+    [Providers.Bedrock]: `${asset_logos_folder}bedrock.svg`,
+    [Providers.Cerebras]: `${asset_logos_folder}cerebras.svg`,
+    [Providers.Cohere]: `${asset_logos_folder}cohere.svg`,
+    [Providers.Databricks]: `${asset_logos_folder}databricks.svg`,
+    [Providers.Deepseek]: `${asset_logos_folder}deepseek.svg`,
+    [Providers.FireworksAI]: `${asset_logos_folder}fireworks.svg`,
+    [Providers.Groq]: `${asset_logos_folder}groq.svg`,
+    [Providers.Google_AI_Studio]: `${asset_logos_folder}google.svg`,
+    [Providers.MistralAI]: `${asset_logos_folder}mistral.svg`,
+    [Providers.Ollama]: `${asset_logos_folder}ollama.svg`,
+    [Providers.OpenAI]: `${asset_logos_folder}openai_small.svg`,
+    [Providers.OpenAI_Text]: `${asset_logos_folder}openai_small.svg`,
+    [Providers.OpenAI_Text_Compatible]: `${asset_logos_folder}openai_small.svg`,
+    [Providers.OpenAI_Compatible]: `${asset_logos_folder}openai_small.svg`,
+    [Providers.Openrouter]: `${asset_logos_folder}openrouter.svg`,
+    [Providers.Perplexity]: `${asset_logos_folder}perplexity-ai.svg`,
+    [Providers.Sambanova]: `${asset_logos_folder}sambanova.svg`,
+    [Providers.TogetherAI]: `${asset_logos_folder}togetherai.svg`,
+    [Providers.Vertex_AI]: `${asset_logos_folder}google.svg`,
+    [Providers.xAI]: `${asset_logos_folder}xai.svg`
 };
 
 export const getProviderLogoAndName = (providerValue: string): { logo: string, displayName: string } => {
