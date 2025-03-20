@@ -13,6 +13,7 @@ Log Proxy input, output, and exceptions using:
 - MLflow
 - Custom Callbacks
 - Langsmith
+- Dash0
 - DataDog
 - DynamoDB
 - etc.
@@ -1349,6 +1350,50 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 [**The standard logging object is logged on Azure Data Lake Storage**](../proxy/logging_spec)
 
 
+## Dash0
+
+[Dash0](https://www.dash0.com/) is an Open Telemetry Native observability product for tracing as well as metrics and logs.
+
+**Step 1:** Set callbacks and env vars
+
+Add the following to your env, using the appropriate endpoint of your region and your auth token.
+
+```shell
+OTEL_EXPORTER="otlp_http"
+OTEL_ENDPOINT="https://ingress.eu-west-1.aws.dash0.com/v1/traces"
+OTEL_HEADERS="Authorization: Bearer <your-auth-token>"
+```
+
+Add `otel` as a callback on your `litellm_config.yaml`
+
+```shell
+litellm_settings:
+  callbacks: ["otel"]
+```
+
+**Step 2**: Start the proxy, make a test request
+
+Start proxy
+
+```shell
+litellm --config config.yaml --detailed_debug
+```
+
+Test Request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+```
 
 ## DataDog
 
