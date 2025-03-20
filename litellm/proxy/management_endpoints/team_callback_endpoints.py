@@ -8,7 +8,7 @@ import json
 import traceback
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status, Query
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
@@ -364,6 +364,165 @@ async def get_team_callbacks(
             "litellm.proxy.proxy_server.get_team_callbacks(): Exception occurred - {}".format(
                 str(e)
             )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Internal Server Error({str(e)})"),
+                type=ProxyErrorTypes.internal_server_error.value,
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Internal Server Error, " + str(e),
+            type=ProxyErrorTypes.internal_server_error.value,
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@router.delete(
+    "/team/{team_id:path}/callback/{callback_name}",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def delete_team_callback(
+    http_request: Request,
+    team_id: str,
+    callback_name: str,
+    callback_type: Optional[str] = Query(
+        "success_and_failure",
+        description="The type of callback to remove. Options: success, failure, success_and_failure"
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
+):
+    """
+    Remove a success/failure callback from a team
+    
+    Parameters:
+    - team_id (str, required): The unique identifier for the team
+    - callback_name (str, required): The name of the callback to remove
+    - callback_type (str, optional): The type of callback to remove. Options: "success", "failure", "success_and_failure" (default)
+    
+    Example curl:
+    ```
+    curl -X DELETE 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback/langfuse?callback_type=success_and_failure' \
+        -H 'Authorization: Bearer sk-1234'
+    ```
+    
+    This will remove the langfuse callback from both success and failure callbacks for the team with id dbe2f686-a686-4896-864a-4c3924458709
+    """
+    try:
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+        # Check if team exists
+        _existing_team = await prisma_client.get_data(
+            team_id=team_id, table_name="team", query_type="find_unique"
+        )
+        if _existing_team is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"Team id = {team_id} does not exist."},
+            )
+
+        # Get team callback settings from metadata
+        team_metadata = _existing_team.metadata
+        team_callback_settings = team_metadata.get("callback_settings", {})
+        team_callback_settings_obj = TeamCallbackMetadata(**team_callback_settings)
+
+        # Track changes for the response
+        changes_made = {
+            "success_callback_removed": False,
+            "failure_callback_removed": False,
+            "vars_removed": []
+        }
+
+        # Remove callback based on callback_type
+        if callback_type in ["success", "success_and_failure"]:
+            if team_callback_settings_obj.success_callback is not None and callback_name in team_callback_settings_obj.success_callback:
+                team_callback_settings_obj.success_callback.remove(callback_name)
+                changes_made["success_callback_removed"] = True
+            
+        if callback_type in ["failure", "success_and_failure"]:
+            if team_callback_settings_obj.failure_callback is not None and callback_name in team_callback_settings_obj.failure_callback:
+                team_callback_settings_obj.failure_callback.remove(callback_name)
+                changes_made["failure_callback_removed"] = True
+
+        # If no changes were made, the callback doesn't exist
+        if not any([changes_made["success_callback_removed"], changes_made["failure_callback_removed"]]):
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"Callback '{callback_name}' with type '{callback_type}' not found for team_id = {team_id}"}
+            )
+
+        # Also clean up associated callback variables
+        if team_callback_settings_obj.callback_vars is not None:
+            # Define the variable prefixes for each callback
+            callback_var_prefixes = {
+                "langfuse": ["langfuse_public_key", "langfuse_secret", "langfuse_secret_key", "langfuse_host"],
+                "gcs": ["gcs_bucket_name", "gcs_path_service_account"],
+                "langsmith": ["langsmith_api_key", "langsmith_project", "langsmith_base_url"],
+                "humanloop": ["humanloop_api_key"],
+                "arize": ["arize_api_key", "arize_space_key"],
+            }
+            
+            # Get the variable keys for this callback type
+            var_keys_to_remove = callback_var_prefixes.get(callback_name, [])
+            
+            # Check if this callback is still used in either success or failure lists
+            still_in_use = False
+            if callback_name in (team_callback_settings_obj.success_callback or []):
+                still_in_use = True
+            if callback_name in (team_callback_settings_obj.failure_callback or []):
+                still_in_use = True
+                
+            # Only remove vars if the callback is completely removed
+            if not still_in_use:
+                for var_key in var_keys_to_remove:
+                    if var_key in team_callback_settings_obj.callback_vars:
+                        changes_made["vars_removed"].append(var_key)
+                        team_callback_settings_obj.callback_vars.pop(var_key)
+
+        # Update team in database
+        team_metadata["callback_settings"] = team_callback_settings_obj.model_dump()
+        team_metadata_json = json.dumps(team_metadata)
+        
+        updated_team = await prisma_client.db.litellm_teamtable.update(
+            where={"team_id": team_id}, data={"metadata": team_metadata_json}  # type: ignore
+        )
+
+        if updated_team is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"Team id = {team_id} does not exist. Error updating team callback"},
+            )
+
+        return {
+            "status": "success",
+            "message": f"Callback '{callback_name}' removed for team {team_id}",
+            "data": {
+                "team_id": updated_team.team_id,
+                "callback_name": callback_name,
+                "callback_type": callback_type,
+                "changes": changes_made,
+                "current_success_callbacks": team_callback_settings_obj.success_callback,
+                "current_failure_callbacks": team_callback_settings_obj.failure_callback,
+            },
+        }
+
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"litellm.proxy.proxy_server.delete_team_callback(): Exception occurred - {str(e)}"
         )
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
