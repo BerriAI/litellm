@@ -41,12 +41,23 @@ async def add_team_callbacks(
     ),
 ):
     """
-    Add a success/failure callback to a team
+    Add a success/failure callback to a team.
 
-    Use this if if you want different teams to have different success/failure callbacks
+    Use this if you want different teams to have different success/failure callbacks.
 
-    Parameters:
-    - callback_name (Literal["langfuse", "langsmith", "gcs"], required): The name of the callback to add
+    ## Request Body
+    ```json
+    {
+        "callback_name": "langfuse|langsmith|gcs|humanloop|arize",
+        "callback_type": "success|failure|success_and_failure",
+        "callback_vars": {
+            "callback_specific_variable": "value"
+        }
+    }
+    ```
+
+    ## Parameters
+    - callback_name (Literal["langfuse", "langsmith", "gcs", "humanloop", "arize"], required): The name of the callback to add
     - callback_type (Literal["success", "failure", "success_and_failure"], required): The type of callback to add. One of:
         - "success": Callback for successful LLM calls
         - "failure": Callback for failed LLM calls
@@ -61,22 +72,33 @@ async def add_team_callbacks(
         - langsmith_api_key: The API key for the Langsmith callback
         - langsmith_project: The project for the Langsmith callback
         - langsmith_base_url: The base URL for the Langsmith callback
+        - humanloop_api_key: The API key for Humanloop
+        - arize_api_key: The API key for Arize
+        - arize_space_key: The space key for Arize
 
-    Example curl:
+    ## Response
+    ```json
+    {
+        "status": "success",
+        "data": {
+            // Updated team object
+        }
+    }
     ```
-    curl -X POST 'http:/localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback' \
+
+    ## Example
+    ```bash
+    curl -X POST 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback' \
         -H 'Content-Type: application/json' \
         -H 'Authorization: Bearer sk-1234' \
         -d '{
         "callback_name": "langfuse",
         "callback_type": "success",
         "callback_vars": {"langfuse_public_key": "pk-lf-xxxx1", "langfuse_secret_key": "sk-xxxxx"}
-        
-    }'
+        }'
     ```
 
     This means for the team where team_id = dbe2f686-a686-4896-864a-4c3924458709, all LLM calls will be logged to langfuse using the public key pk-lf-xxxx1 and the secret key sk-xxxxx
-
     """
     try:
         from litellm.proxy.proxy_server import prisma_client
@@ -204,18 +226,31 @@ async def disable_team_logging(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Disable all logging callbacks for a team
+    Disable all logging callbacks for a team.
 
-    Parameters:
+    ## Parameters
     - team_id (str, required): The unique identifier for the team
 
-    Example curl:
+    ## Response
+    ```json
+    {
+        "status": "success",
+        "message": "Logging disabled for team {team_id}",
+        "data": {
+            "team_id": "string",
+            "success_callbacks": [],
+            "failure_callbacks": []
+        }
+    }
     ```
+
+    ## Example
+    ```bash
     curl -X POST 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/disable_logging' \
         -H 'Authorization: Bearer sk-1234'
     ```
 
-
+    This will remove all callbacks from both success and failure lists for the team, effectively disabling all logging.
     """
     try:
         from litellm.proxy.proxy_server import prisma_client
@@ -303,28 +338,33 @@ async def get_team_callbacks(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Get the success/failure callbacks and variables for a team
+    Get the success/failure callbacks and variables for a team.
 
-    Parameters:
+    ## Parameters
     - team_id (str, required): The unique identifier for the team
 
-    Example curl:
+    ## Response
+    ```json
+    {
+        "status": "success",
+        "data": {
+            "team_id": "string",
+            "success_callbacks": ["callback_name1", "callback_name2"],
+            "failure_callbacks": ["callback_name1", "callback_name2"],
+            "callback_vars": {
+                "var_name": "var_value"
+            }
+        }
+    }
     ```
+
+    ## Example
+    ```bash
     curl -X GET 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback' \
         -H 'Authorization: Bearer sk-1234'
     ```
 
     This will return the callback settings for the team with id dbe2f686-a686-4896-864a-4c3924458709
-
-    Returns {
-            "status": "success",
-            "data": {
-                "team_id": team_id,
-                "success_callbacks": team_callback_settings_obj.success_callback,
-                "failure_callbacks": team_callback_settings_obj.failure_callback,
-                "callback_vars": team_callback_settings_obj.callback_vars,
-            },
-        }
     """
     try:
         from litellm.proxy.proxy_server import prisma_client
@@ -404,20 +444,41 @@ async def delete_team_callback(
     ),
 ):
     """
-    Remove a success/failure callback from a team
+    Remove a success/failure callback from a team.
     
-    Parameters:
+    ## Parameters
     - team_id (str, required): The unique identifier for the team
     - callback_name (str, required): The name of the callback to remove
     - callback_type (str, optional): The type of callback to remove. Options: "success", "failure", "success_and_failure" (default)
     
-    Example curl:
+    ## Response
+    ```json
+    {
+        "status": "success",
+        "message": "Callback '{callback_name}' removed for team {team_id}",
+        "data": {
+            "team_id": "string",
+            "callback_name": "string",
+            "callback_type": "string",
+            "changes": {
+                "success_callback_removed": true|false,
+                "failure_callback_removed": true|false,
+                "vars_removed": ["var_name1", "var_name2"]
+            },
+            "current_success_callbacks": ["remaining_callbacks"],
+            "current_failure_callbacks": ["remaining_callbacks"]
+        }
+    }
     ```
+    
+    ## Example
+    ```bash
     curl -X DELETE 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback/langfuse?callback_type=success_and_failure' \
         -H 'Authorization: Bearer sk-1234'
     ```
     
-    This will remove the langfuse callback from both success and failure callbacks for the team with id dbe2f686-a686-4896-864a-4c3924458709
+    This will remove the langfuse callback from both success and failure callbacks for the team with id dbe2f686-a686-4896-864a-4c3924458709.
+    When a callback is completely removed (from both success and failure lists), any associated callback variables will also be removed.
     """
     try:
         from litellm.proxy.proxy_server import prisma_client
@@ -560,16 +621,52 @@ async def update_team_callback(
     ),
 ):
     """
-    Update an existing callback for a team
+    Update an existing callback for a team.
     
-    Parameters:
+    ## Request Body
+    ```json
+    {
+        "callback_name": "langfuse|langsmith|gcs|humanloop|arize",
+        "callback_type": "success|failure|success_and_failure",
+        "callback_vars": {
+            "callback_specific_variable": "updated_value"
+        }
+    }
+    ```
+    
+    ## Parameters
     - team_id (str, required): The unique identifier for the team
     - callback_name (str, required): The name of the callback to update
     - callback_type (Literal["success", "failure", "success_and_failure"], required): The type of callback to set
     - callback_vars (StandardCallbackDynamicParams, required): A dictionary of variables to pass to the callback
     
-    Example curl:
+    ## Response
+    ```json
+    {
+        "status": "success",
+        "message": "Callback '{callback_name}' updated for team {team_id}",
+        "data": {
+            "team_id": "string",
+            "callback_name": "string",
+            "changes": {
+                "callback_type_updated": true|false,
+                "callback_vars_updated": ["var_name1", "var_name2"],
+                "added_to_success": true|false,
+                "added_to_failure": true|false,
+                "removed_from_success": true|false,
+                "removed_from_failure": true|false
+            },
+            "current_success_callbacks": ["callback_list"],
+            "current_failure_callbacks": ["callback_list"],
+            "updated_vars": {
+                "var_name": "new_value"
+            }
+        }
+    }
     ```
+    
+    ## Example
+    ```bash
     curl -X PATCH 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback/langfuse' \
         -H 'Content-Type: application/json' \
         -H 'Authorization: Bearer sk-1234' \
