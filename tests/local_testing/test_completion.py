@@ -880,6 +880,9 @@ def test_completion_azure_mistral_large_function_calling(provider):
     This primarily tests if the 'Function()' pydantic object correctly handles argument param passed in as a dict vs. string
     """
     litellm.set_verbose = True
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+
+    model_cost = litellm.get_model_cost_map(url="")
     tools = [
         {
             "type": "function",

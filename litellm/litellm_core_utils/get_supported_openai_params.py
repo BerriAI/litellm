@@ -33,6 +33,7 @@ def get_supported_openai_params(  # noqa: PLR0915
     provider_config = litellm.ProviderConfigManager.get_provider_chat_config(
         model=model, provider=LlmProviders(custom_llm_provider)
     )
+
     if provider_config and request_type == "chat_completion":
         return provider_config.get_supported_openai_params(model=model)
 

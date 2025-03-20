@@ -2061,6 +2061,18 @@
         "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/000-000.mistral-ai-large-2407-offer?tab=Overview",
         "supports_tool_choice": true
     },
+    "azure_ai/mistral-large-latest": {
+        "max_tokens": 4096,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000006,
+        "litellm_provider": "azure_ai",
+        "supports_function_calling": true,
+        "mode": "chat",
+        "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/000-000.mistral-ai-large-2407-offer?tab=Overview",
+        "supports_tool_choice": true
+    },
     "azure_ai/ministral-3b": {
         "max_tokens": 4096,
         "max_input_tokens": 128000,
