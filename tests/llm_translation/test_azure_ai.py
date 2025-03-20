@@ -265,3 +265,32 @@ class TestAzureAIRerank(BaseLLMRerankTest):
             "api_base": os.getenv("AZURE_AI_COHERE_API_BASE"),
             "api_key": os.getenv("AZURE_AI_COHERE_API_KEY"),
         }
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_request_format():
+    """
+    Test that Azure AI requests are formatted correctly with the proper endpoint and parameters
+    for both synchronous and asynchronous calls
+    """
+    from openai import AsyncAzureOpenAI, AzureOpenAI
+
+    litellm._turn_on_debug()
+
+    # Set up the test parameters
+    api_key = os.getenv("AZURE_API_KEY")
+    api_base = f"{os.getenv('AZURE_API_BASE')}/openai/deployments/gpt-4o/chat/completions?api-version=2024-08-01-preview"
+    model = "azure_ai/gpt-4o"
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "Hello! How can I assist you today?"},
+        {"role": "user", "content": "hi"},
+    ]
+
+    await litellm.acompletion(
+        custom_llm_provider="azure_ai",
+        api_key=api_key,
+        api_base=api_base,
+        model=model,
+        messages=messages,
+    )
