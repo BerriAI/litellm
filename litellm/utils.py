@@ -1989,11 +1989,23 @@ def supports_native_streaming(model: str, custom_llm_provider: Optional[str]) ->
     Raises:
     Exception: If the given model is not found in model_prices_and_context_window.json.
     """
-    return _supports_factory(
-        model=model,
-        custom_llm_provider=custom_llm_provider,
-        key="supports_native_streaming",
-    )
+    try:
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+        model_info = _get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        supports_native_streaming = (
+            model_info.get("supports_native_streaming", True) or True
+        )
+        return supports_native_streaming
+    except Exception as e:
+        verbose_logger.debug(
+            f"Model not found or error in checking supports_native_streaming support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
+        )
+        return False
 
 
 def supports_response_schema(
