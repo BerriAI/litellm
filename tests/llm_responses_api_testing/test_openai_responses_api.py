@@ -829,7 +829,7 @@ async def test_async_bad_request_bad_param_error():
 
 
 @pytest.mark.asyncio
-async def test_openai_o1_pro_incomplete_response():
+async def test_openai_o1_pro_response_api():
     """
     Test that LiteLLM correctly handles an incomplete response from OpenAI's o1-pro model
     due to reaching max_output_tokens limit.
