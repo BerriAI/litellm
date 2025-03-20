@@ -86,6 +86,7 @@ service_callback: List[CALLBACK_TYPES] = []
 logging_callback_manager = LoggingCallbackManager()
 _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
+    "lunary",
     "openmeter",
     "logfire",
     "literalai",
