@@ -1,9 +1,13 @@
+import asyncio
 import json
 import os
 import sys
+import time
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import respx
 from fastapi.testclient import TestClient
 
 sys.path.insert(
@@ -16,7 +20,8 @@ from litellm.caching.redis_cache import RedisCache
 
 @pytest.mark.parametrize("namespace", [None, "test"])
 @pytest.mark.asyncio
-async def test_redis_cache_async_increment(namespace):
+async def test_redis_cache_async_increment(namespace, monkeypatch):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
     redis_cache = RedisCache(namespace=namespace)
     # Create an AsyncMock for the Redis client
     mock_redis_instance = AsyncMock()
@@ -39,3 +44,13 @@ async def test_redis_cache_async_increment(namespace):
         mock_redis_instance.incrbyfloat.assert_called_once_with(
             name=expected_key, amount=1
         )
+
+
+@pytest.mark.asyncio
+async def test_redis_client_init_with_socket_timeout(monkeypatch):
+    monkeypatch.setenv("REDIS_HOST", "my-fake-host")
+    redis_cache = RedisCache(socket_timeout=1.0)
+    assert redis_cache.redis_kwargs["socket_timeout"] == 1.0
+    client = redis_cache.init_async_client()
+    assert client is not None
+    assert client.connection_pool.connection_kwargs["socket_timeout"] == 1.0

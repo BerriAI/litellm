@@ -101,7 +101,9 @@ const sidebars = {
             "proxy/admin_ui_sso",
             "proxy/self_serve",
             "proxy/public_teams",
-            "proxy/custom_sso"
+            "proxy/custom_sso",
+            "proxy/ui_credentials",
+            "proxy/ui_logs"
           ],
         },
         {
@@ -231,6 +233,7 @@ const sidebars = {
         "providers/sambanova",
         "providers/custom_llm_server",
         "providers/petals",
+        "providers/snowflake"
       ],
     },
     {
@@ -273,7 +276,7 @@ const sidebars = {
       items: [
         {
           type: "category",
-          label: "Chat",
+          label: "/chat/completions",
           link: {
             type: "generated-index",
             title: "Chat Completions",
@@ -286,12 +289,13 @@ const sidebars = {
             "completion/usage",
           ],
         },
+        "response_api",
         "text_completion",
         "embedding/supported_embedding",
         "anthropic_unified",
         {
           type: "category",
-          label: "Image",
+          label: "/images",
           items: [
             "image_generation",
             "image_variations",
@@ -299,7 +303,7 @@ const sidebars = {
         },
         {
           type: "category",
-          label: "Audio",
+          label: "/audio",
           "items": [
             "audio_transcription",
             "text_to_speech",
@@ -361,8 +365,12 @@ const sidebars = {
       ],
     },
     {
-      type: "doc",
-      id: "proxy/prompt_management"
+      type: "category",
+      label: "[Beta] Prompt Management",
+      items: [
+        "proxy/prompt_management",
+        "proxy/custom_prompt_management"
+      ],
     },
     {
       type: "category",

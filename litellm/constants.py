@@ -7,6 +7,7 @@ DEFAULT_MAX_RETRIES = 2
 DEFAULT_FAILURE_THRESHOLD_PERCENT = (
     0.5  # default cooldown a deployment if 50% of requests fail in a given minute
 )
+DEFAULT_REDIS_SYNC_INTERVAL = 1
 DEFAULT_COOLDOWN_TIME_SECONDS = 5
 DEFAULT_REPLICATE_POLLING_RETRIES = 5
 DEFAULT_REPLICATE_POLLING_DELAY_SECONDS = 1
@@ -18,6 +19,7 @@ SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD = 1000  # Minimum number of requests
 REPEATED_STREAMING_CHUNK_LIMIT = 100  # catch if model starts looping the same chunk while streaming. Uses high default to prevent false positives.
 #### Networking settings ####
 request_timeout: float = 6000  # time in seconds
+STREAM_SSE_DONE_STRING: str = "[DONE]"
 
 LITELLM_CHAT_PROVIDERS = [
     "openai",

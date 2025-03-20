@@ -182,9 +182,7 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
                 "REDIS_CLUSTER_NODES environment variable is not valid JSON. Please ensure it's properly formatted."
             )
 
-    verbose_logger.debug(
-        "init_redis_cluster: startup nodes are being initialized."
-    )
+    verbose_logger.debug("init_redis_cluster: startup nodes are being initialized.")
     from redis.cluster import ClusterNode
 
     args = _get_redis_cluster_kwargs()
@@ -307,7 +305,6 @@ def get_redis_async_client(
         return _init_async_redis_sentinel(redis_kwargs)
 
     return async_redis.Redis(
-        socket_timeout=5,
         **redis_kwargs,
     )
 

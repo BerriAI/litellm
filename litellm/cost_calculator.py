@@ -44,7 +44,12 @@ from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_ro
 from litellm.llms.vertex_ai.image_generation.cost_calculator import (
     cost_calculator as vertex_ai_image_cost_calculator,
 )
-from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.responses.utils import ResponseAPILoggingUtils
+from litellm.types.llms.openai import (
+    HttpxBinaryResponseContent,
+    ResponseAPIUsage,
+    ResponsesAPIResponse,
+)
 from litellm.types.rerank import RerankBilledUnits, RerankResponse
 from litellm.types.utils import (
     CallTypesLiteral,
@@ -464,6 +469,13 @@ def _get_usage_object(
     return usage_obj
 
 
+def _is_known_usage_objects(usage_obj):
+    """Returns True if the usage obj is a known Usage type"""
+    return isinstance(usage_obj, litellm.Usage) or isinstance(
+        usage_obj, ResponseAPIUsage
+    )
+
+
 def _infer_call_type(
     call_type: Optional[CallTypesLiteral], completion_response: Any
 ) -> Optional[CallTypesLiteral]:
@@ -573,9 +585,7 @@ def completion_cost(  # noqa: PLR0915
             base_model=base_model,
         )
 
-        verbose_logger.debug(
-            f"completion_response _select_model_name_for_cost_calc: {model}"
-        )
+        verbose_logger.info(f"selected model name for cost calculation: {model}")
 
         if completion_response is not None and (
             isinstance(completion_response, BaseModel)
@@ -587,8 +597,8 @@ def completion_cost(  # noqa: PLR0915
                 )
             else:
                 usage_obj = getattr(completion_response, "usage", {})
-            if isinstance(usage_obj, BaseModel) and not isinstance(
-                usage_obj, litellm.Usage
+            if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
+                usage_obj=usage_obj
             ):
                 setattr(
                     completion_response,
@@ -601,6 +611,14 @@ def completion_cost(  # noqa: PLR0915
                 _usage = usage_obj.model_dump()
             else:
                 _usage = usage_obj
+
+            if ResponseAPILoggingUtils._is_response_api_usage(_usage):
+                _usage = (
+                    ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                        _usage
+                    ).model_dump()
+                )
+
             # get input/output tokens from completion_response
             prompt_tokens = _usage.get("prompt_tokens", 0)
             completion_tokens = _usage.get("completion_tokens", 0)
@@ -790,6 +808,23 @@ def completion_cost(  # noqa: PLR0915
         raise e
 
 
+def get_response_cost_from_hidden_params(
+    hidden_params: Union[dict, BaseModel]
+) -> Optional[float]:
+    if isinstance(hidden_params, BaseModel):
+        _hidden_params_dict = hidden_params.model_dump()
+    else:
+        _hidden_params_dict = hidden_params
+
+    additional_headers = _hidden_params_dict.get("additional_headers", {})
+    if additional_headers and "x-litellm-response-cost" in additional_headers:
+        response_cost = additional_headers["x-litellm-response-cost"]
+        if response_cost is None:
+            return None
+        return float(additional_headers["x-litellm-response-cost"])
+    return None
+
+
 def response_cost_calculator(
     response_object: Union[
         ModelResponse,
@@ -799,6 +834,7 @@ def response_cost_calculator(
         TextCompletionResponse,
         HttpxBinaryResponseContent,
         RerankResponse,
+        ResponsesAPIResponse,
     ],
     model: str,
     custom_llm_provider: Optional[str],
@@ -825,7 +861,7 @@ def response_cost_calculator(
     base_model: Optional[str] = None,
     custom_pricing: Optional[bool] = None,
     prompt: str = "",
-) -> Optional[float]:
+) -> float:
     """
     Returns
     - float or None: cost of response
@@ -837,6 +873,14 @@ def response_cost_calculator(
         else:
             if isinstance(response_object, BaseModel):
                 response_object._hidden_params["optional_params"] = optional_params
+
+                if hasattr(response_object, "_hidden_params"):
+                    provider_response_cost = get_response_cost_from_hidden_params(
+                        response_object._hidden_params
+                    )
+                    if provider_response_cost is not None:
+                        return provider_response_cost
+
             response_cost = completion_cost(
                 completion_response=response_object,
                 model=model,

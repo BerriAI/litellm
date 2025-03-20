@@ -40,6 +40,7 @@ import { Tooltip } from 'antd';
 import Createuser from "./create_user_button";
 import debounce from 'lodash/debounce';
 import { rolesWithWriteAccess } from '../utils/roles';
+import BudgetDurationDropdown from "./common_components/budget_duration_dropdown";
 
 
 
@@ -91,28 +92,31 @@ const getPredefinedTags = (data: any[] | null) => {
   return uniqueTags;
 }
 
-export const getTeamModels = (team: Team | null, allAvailableModels: string[]): string[] => {
-  let tempModelsToPick = [];
-
-  if (team) {
-    if (team.models.length > 0) {
-      if (team.models.includes("all-proxy-models")) {
-        // if the team has all-proxy-models show all available models
-        tempModelsToPick = allAvailableModels;
-      } else {
-        // show team models
-        tempModelsToPick = team.models;
-      }
-    } else {
-      // show all available models if the team has no models set
-      tempModelsToPick = allAvailableModels;
+export const fetchTeamModels = async (userID: string, userRole: string, accessToken: string, teamID: string): Promise<string[]> => {
+  try {
+    if (userID === null || userRole === null) {
+      return [];
     }
-  } else {
-    // no team set, show all available models
-    tempModelsToPick = allAvailableModels;
-  }
 
-  return unfurlWildcardModelsInList(tempModelsToPick, allAvailableModels);
+    if (accessToken !== null) {
+      const model_available = await modelAvailableCall(
+        accessToken,
+        userID,
+        userRole,
+        true,
+        teamID
+      );
+      let available_model_names = model_available["data"].map(
+        (element: { id: string }) => element.id
+      );
+      console.log("available_model_names:", available_model_names);
+      return available_model_names;
+    }
+    return [];
+  } catch (error) {
+    console.error("Error fetching user models:", error);
+    return [];
+  }
 };
 
 export const fetchUserModels = async (userID: string, userRole: string, accessToken: string, setUserModels: (models: string[]) => void) => {
@@ -181,6 +185,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       fetchUserModels(userID, userRole, accessToken, setUserModels);
     }
   }, [accessToken, userID, userRole]);
+
 
   useEffect(() => {
     const fetchGuardrails = async () => {
@@ -260,12 +265,21 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       const response = await keyCreateCall(accessToken, userID, formValues);
 
       console.log("key create Response:", response);
-      setData((prevData) => (prevData ? [...prevData, response] : [response])); // Check if prevData is null
+      
+      // Update the data state in this component
+      setData((prevData) => (prevData ? [...prevData, response] : [response]));
+      
+      // Also directly update the keys list in AllKeysTable without an API call
+      if (window.addNewKeyToList) {
+        window.addNewKeyToList(response);
+      }
+      
       setApiKey(response["key"]);
       setSoftBudget(response["soft_budget"]);
       message.success("API Key Created");
       form.resetFields();
       localStorage.removeItem("userData" + userID);
+
     } catch (error) {
       console.log("error in create key:", error);
       message.error(`Error creating the key: ${error}`);
@@ -277,10 +291,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   };
 
   useEffect(() => {
-    const models = getTeamModels(selectedCreateKeyTeam, userModels);
-    setModelsToPick(models);
+    if (userID && userRole && accessToken && selectedCreateKeyTeam) {
+      fetchTeamModels(userID, userRole, accessToken, selectedCreateKeyTeam.team_id).then((models) => {
+        let allModels = Array.from(new Set([...selectedCreateKeyTeam.models, ...models]));
+        setModelsToPick(allModels);
+      });
+    }
     form.setFieldValue('models', []);
-  }, [selectedCreateKeyTeam, userModels]);
+  }, [selectedCreateKeyTeam]);
 
   // Add a callback function to handle user creation
   const handleUserCreated = (userId: string) => {
@@ -555,11 +573,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   name="budget_duration"
                   help={`Team Reset Budget: ${team?.budget_duration !== null && team?.budget_duration !== undefined ? team?.budget_duration : "None"}`}
                 >
-                  <Select defaultValue={null} placeholder="n/a">
-                    <Select.Option value="24h">daily</Select.Option>
-                    <Select.Option value="7d">weekly</Select.Option>
-                    <Select.Option value="30d">monthly</Select.Option>
-                  </Select>
+                  <BudgetDurationDropdown onChange={(value) => form.setFieldValue('budget_duration', value)} />
                 </Form.Item>
                 <Form.Item
                   className="mt-4"
