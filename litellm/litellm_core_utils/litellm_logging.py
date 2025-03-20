@@ -447,7 +447,9 @@ class Logging(LiteLLMLoggingBaseClass):
         self.messages = messages
         return model, messages, non_default_params
 
-    def get_custom_logger_for_prompt_management(self, model: str) -> CustomLogger:
+    def get_custom_logger_for_prompt_management(
+        self, model: str
+    ) -> Optional[CustomLogger]:
         for (
             custom_logger_compatible_callback
         ) in litellm._known_custom_logger_compatible_callbacks:
@@ -468,7 +470,7 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         if len(custom_prompt_management_loggers) > 0:
             return custom_prompt_management_loggers[0]
-        raise ValueError(f"No custom logger found for model: {model}")
+        return None
 
     def _get_raw_request_body(self, data: Optional[Union[dict, str]]) -> dict:
         if data is None:
