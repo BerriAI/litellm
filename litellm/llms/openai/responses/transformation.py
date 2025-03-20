@@ -65,10 +65,12 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         response_api_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> ResponsesAPIRequestParams:
+    ) -> Dict:
         """No transform applied since inputs are in OpenAI spec already"""
-        return ResponsesAPIRequestParams(
-            model=model, input=input, **response_api_optional_request_params
+        return dict(
+            ResponsesAPIRequestParams(
+                model=model, input=input, **response_api_optional_request_params
+            )
         )
 
     def transform_response_api_response(
