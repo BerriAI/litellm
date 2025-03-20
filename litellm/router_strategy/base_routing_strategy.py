@@ -100,10 +100,6 @@ class BaseRoutingStrategy(ABC):
             if not self.dual_cache.redis_cache:
                 return  # Redis is not initialized
 
-            verbose_router_logger.debug(
-                "Pushing Redis Increment Pipeline for queue: %s",
-                self.redis_increment_operation_queue,
-            )
             if len(self.redis_increment_operation_queue) > 0:
                 asyncio.create_task(
                     self.dual_cache.redis_cache.async_increment_pipeline(
