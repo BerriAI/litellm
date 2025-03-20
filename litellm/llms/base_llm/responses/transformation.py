@@ -97,7 +97,7 @@ class BaseResponsesAPIConfig(ABC):
         response_api_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> ResponsesAPIRequestParams:
+    ) -> Dict:
         pass
 
     @abstractmethod
