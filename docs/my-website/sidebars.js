@@ -365,8 +365,12 @@ const sidebars = {
       ],
     },
     {
-      type: "doc",
-      id: "proxy/prompt_management"
+      type: "category",
+      label: "[Beta] Prompt Management",
+      items: [
+        "proxy/prompt_management",
+        "proxy/custom_prompt_management"
+      ],
     },
     {
       type: "category",
