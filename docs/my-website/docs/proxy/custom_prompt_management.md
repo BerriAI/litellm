@@ -44,28 +44,20 @@ class MyCustomPromptManagement(CustomPromptManagement):
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
-        Retrieve and format prompts based on prompt_id and variables.
+        Retrieve and format prompts based on prompt_id.
         
         Returns:
             - model: The model to use
             - messages: The formatted messages
             - non_default_params: Optional parameters like temperature
         """
-        # Example 1: Simple prompt retrieval
-        if prompt_id == "welcome_prompt":
-            messages = [
-                {"role": "user", "content": "Welcome to our AI assistant! How can I help you today?"},
-            ]
-            return model, messages, non_default_params
-        
-        # Example 2: Prompt with variables
-        elif prompt_id == "personalized_greeting":
-            content = "Hello, {name}! You are {age} years old and live in {city}."
-            content_with_variables = content.format(**(prompt_variables or {}))
-            messages = [
-                {"role": "user", "content": content_with_variables},
-            ]
-            return model, messages, non_default_params
+        # Example matching the diagram: Add system message for prompt_id "1234"
+        if prompt_id == "1234":
+            # Prepend system message while preserving existing messages
+            new_messages = [
+                {"role": "system", "content": "Be a good Bot!"},
+            ] + messages
+            return model, new_messages, non_default_params
         
         # Default: Return original messages if no prompt_id match
         return model, messages, non_default_params
@@ -119,9 +111,7 @@ litellm --config config.yaml --detailed_debug
 
 ### 4. Test Your Custom Prompt Manager
 
-#### Example 1: Simple Prompt ID
-
-When you pass `prompt_id="welcome_prompt"`, the custom prompt manager will replace your empty messages with a predefined welcome message: `"Welcome to our AI assistant! How can I help you today?"`.
+When you pass `prompt_id="1234"`, the custom prompt manager will add a system message "Be a good Bot!" to your conversation:
 
 <Tabs>
 <TabItem value="openai" label="OpenAI Python v1.0.0+">
@@ -135,9 +125,9 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="gpt-4",
-    messages=[],
-    prompt_id="welcome_prompt"
+    model="gemini-1.5-pro",
+    messages=[{"role": "user", "content": "hi"}],
+    prompt_id="1234"
 )
 
 print(response.choices[0].message.content)
@@ -155,7 +145,7 @@ chat = ChatOpenAI(
     openai_api_key="sk-1234",
     openai_api_base="http://0.0.0.0:4000",
     extra_body={
-        "prompt_id": "welcome_prompt"
+        "prompt_id": "1234"
     }
 )
 
@@ -173,134 +163,32 @@ curl -X POST http://0.0.0.0:4000/v1/chat/completions \
 -H "Content-Type: application/json" \
 -H "Authorization: Bearer sk-1234" \
 -d '{
-    "model": "gpt-4",
-    "messages": [],
-    "prompt_id": "welcome_prompt"
+    "model": "gemini-1.5-pro",
+    "messages": [{"role": "user", "content": "hi"}],
+    "prompt_id": "1234"
 }'
 ```
 </TabItem>
 </Tabs>
 
-Expected response:
-
+The request will be transformed from:
 ```json
 {
-  "id": "chatcmpl-123",
-  "choices": [
-    {
-      "finish_reason": "stop",
-      "index": 0,
-      "message": {
-        "content": "I'd be happy to assist you today! How can I help?",
-        "role": "assistant"
-      }
-    }
-  ]
+    "model": "gemini-1.5-pro",
+    "messages": [{"role": "user", "content": "hi"}],
+    "prompt_id": "1234"
 }
 ```
 
-#### Example 2: Prompt ID with Variables
-
-When you pass `prompt_id="personalized_greeting"`, the custom prompt manager will:
-1. Start with the template: `"Hello, {name}! You are {age} years old and live in {city}."`
-2. Replace the variables with your provided values
-3. Create a message with the formatted content: `"Hello, John! You are 30 years old and live in New York."`
-
-<Tabs>
-<TabItem value="openai" label="OpenAI Python v1.0.0+">
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    api_key="sk-1234",
-    base_url="http://0.0.0.0:4000"
-)
-
-response = client.chat.completions.create(
-    model="gpt-4",
-    messages=[],
-    prompt_id="personalized_greeting",
-    prompt_variables={
-        "name": "John",
-        "age": 30,
-        "city": "New York"
-    }
-)
-
-print(response.choices[0].message.content)
-```
-</TabItem>
-
-<TabItem value="langchain" label="Langchain">
-
-```python
-from langchain.chat_models import ChatOpenAI
-from langchain.schema import HumanMessage
-
-chat = ChatOpenAI(
-    model="gpt-4",
-    openai_api_key="sk-1234",
-    openai_api_base="http://0.0.0.0:4000",
-    extra_body={
-        "prompt_id": "personalized_greeting",
-        "prompt_variables": {
-            "name": "John",
-            "age": 30,
-            "city": "New York"
-        }
-    }
-)
-
-messages = []
-response = chat(messages)
-
-print(response.content)
-```
-</TabItem>
-
-<TabItem value="curl" label="Curl">
-
-```shell
-curl -X POST http://0.0.0.0:4000/v1/chat/completions \
--H "Content-Type: application/json" \
--H "Authorization: Bearer sk-1234" \
--d '{
-    "model": "gpt-4",
-    "messages": [],
-    "prompt_id": "personalized_greeting",
-    "prompt_variables": {
-        "name": "John",
-        "age": 30,
-        "city": "New York"
-    }
-}'
-```
-</TabItem>
-</Tabs>
-
-Expected response:
-
+To:
 ```json
 {
-  "id": "chatcmpl-123",
-  "choices": [
-    {
-      "finish_reason": "stop",
-      "index": 0,
-      "message": {
-        "content": "Hi John! I understand you're 30 years old and based in New York. How can I assist you today?",
-        "role": "assistant"
-      }
-    }
-  ]
+    "model": "gemini-1.5-pro",
+    "messages": [
+        {"role": "system", "content": "Be a good Bot!"},
+        {"role": "user", "content": "hi"}
+    ]
 }
 ```
-
-The prompt manager will:
-1. Intercept the request
-2. Check the prompt_id to determine which template to use
-3. If variables are provided, format them into the template
-4. Send the final prompt to the LLM
 
 
