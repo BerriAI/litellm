@@ -4,13 +4,24 @@ import TabItem from '@theme/TabItem';
 
 # Custom Prompt Management
 
-Follow this guide to implement custom hooks that allow connecting LiteLLM to your prompt management system.
+Connect LiteLLM to your prompt management system with custom hooks.
+
+## Overview
+
+
+<Image 
+  img={require('../../img/custom_prompt_management.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+
+## How it works
 
 ## Quick Start
 
-### 1. Implement a `CustomPromptManagement` Class
+### 1. Create Your Custom Prompt Manager
 
-Create a class that inherits from `CustomPromptManagement` to manage prompts and their parameters. The key method to implement is `get_chat_completion_prompt`.
+Create a class that inherits from `CustomPromptManagement` to handle prompt retrieval and formatting:
 
 **Example Implementation**
 
@@ -33,18 +44,12 @@ class MyCustomPromptManagement(CustomPromptManagement):
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
-        Args:
-            model: The model name
-            messages: List of message objects
-            non_default_params: Optional parameters like temperature, max_tokens
-            prompt_id: Identifier for the prompt to retrieve
-            prompt_variables: Variables to format into the prompt
-            dynamic_callback_params: Additional callback parameters
-
+        Retrieve and format prompts based on prompt_id and variables.
+        
         Returns:
-            - model: str - the model to use
-            - messages: List[AllMessageValues] - the messages to use
-            - non_default_params: dict - optional params (e.g. temperature)
+            - model: The model to use
+            - messages: The formatted messages
+            - non_default_params: Optional parameters like temperature
         """
         # Example 1: Simple prompt retrieval
         if prompt_id == "welcome_prompt":
