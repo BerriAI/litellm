@@ -4048,6 +4048,7 @@ export interface CallbackVariable {
   type: "string" | "boolean";
   required: boolean;
   description?: string;
+  sensitive?: boolean;  // New property to indicate if field should be masked
 }
 
 export interface CallbackTypeDefinition {
@@ -4064,9 +4065,9 @@ export const callbackDefinitions: Record<string, CallbackTypeDefinition> = {
     label: "Langfuse",
     description: "Send LLM usage data to Langfuse for monitoring and analytics",
     variables: [
-      { key: "langfuse_public_key", label: "Public Key", type: "string", required: true },
-      { key: "langfuse_secret_key", label: "Secret Key", type: "string", required: true },
-      { key: "langfuse_host", label: "Host URL", type: "string", required: false },
+      { key: "langfuse_public_key", label: "Public Key", type: "string", required: true, sensitive: true },
+      { key: "langfuse_secret_key", label: "Secret Key", type: "string", required: true, sensitive: true },
+      { key: "langfuse_host", label: "Host URL", type: "string", required: false, sensitive: true },
     ]
   },
   "langsmith": {
@@ -4074,9 +4075,9 @@ export const callbackDefinitions: Record<string, CallbackTypeDefinition> = {
     label: "LangSmith",
     description: "Send LLM usage data to LangSmith for monitoring and analytics",
     variables: [
-      { key: "langsmith_api_key", label: "API Key", type: "string", required: true },
-      { key: "langsmith_project", label: "Project", type: "string", required: false },
-      { key: "langsmith_base_url", label: "Base URL", type: "string", required: false },
+      { key: "langsmith_api_key", label: "API Key", type: "string", required: true, sensitive: true },
+      { key: "langsmith_project", label: "Project", type: "string", required: false, sensitive: true },
+      { key: "langsmith_base_url", label: "Base URL", type: "string", required: false, sensitive: true },
     ]
   },
   "gcs": {
@@ -4084,8 +4085,8 @@ export const callbackDefinitions: Record<string, CallbackTypeDefinition> = {
     label: "Google Cloud Storage",
     description: "Log LLM calls to Google Cloud Storage",
     variables: [
-      { key: "gcs_bucket_name", label: "Bucket Name", type: "string", required: true },
-      { key: "gcs_path_service_account", label: "Service Account Path", type: "string", required: true },
+      { key: "gcs_bucket_name", label: "Bucket Name", type: "string", required: true, sensitive: true },
+      { key: "gcs_path_service_account", label: "Service Account Path", type: "string", required: true, sensitive: true },
     ]
   },
   "humanloop": {
@@ -4093,7 +4094,7 @@ export const callbackDefinitions: Record<string, CallbackTypeDefinition> = {
     label: "Humanloop",
     description: "Send LLM usage data to Humanloop",
     variables: [
-      { key: "humanloop_api_key", label: "API Key", type: "string", required: true },
+      { key: "humanloop_api_key", label: "API Key", type: "string", required: true, sensitive: true },
     ]
   },
   "arize": {
@@ -4101,8 +4102,8 @@ export const callbackDefinitions: Record<string, CallbackTypeDefinition> = {
     label: "Arize",
     description: "Send LLM usage data to Arize Phoenix",
     variables: [
-      { key: "arize_api_key", label: "API Key", type: "string", required: true },
-      { key: "arize_space_key", label: "Space Key", type: "string", required: true },
+      { key: "arize_api_key", label: "API Key", type: "string", required: true, sensitive: true },
+      { key: "arize_space_key", label: "Space Key", type: "string", required: true, sensitive: true },
     ]
   }
 };

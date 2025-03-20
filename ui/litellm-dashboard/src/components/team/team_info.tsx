@@ -713,6 +713,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                               >
                                 {variable.type === 'boolean' ? (
                                   <Switch />
+                                ) : variable.sensitive ? (
+                                  <Input.Password placeholder={`Enter ${variable.label}`} />
                                 ) : (
                                   <Input placeholder={`Enter ${variable.label}`} />
                                 )}
@@ -780,6 +782,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       >
                         {variable.type === 'boolean' ? (
                           <Switch />
+                        ) : variable.sensitive ? (
+                          <Input.Password placeholder={`Enter ${variable.label}`} />
                         ) : (
                           <Input placeholder={`Enter ${variable.label}`} />
                         )}
@@ -870,7 +874,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                                 >
                                   {varDef.type === 'boolean' 
                                     ? String(!!callbackVars[varDef.key]) 
-                                    : callbackVars[varDef.key] || '-'}
+                                    : varDef.sensitive && callbackVars[varDef.key]
+                                      ? "••••••••"
+                                      : callbackVars[varDef.key] || '-'}
                                 </Descriptions.Item>
                               ))}
                             </Descriptions>
