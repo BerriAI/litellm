@@ -18,7 +18,8 @@ import {
 } from "@tremor/react";
 
 import {
-  Select as Select2
+  Select as Select2,
+  Tooltip
 } from "antd";
 
 import {
@@ -40,7 +41,9 @@ import {
 } from "./networking";
 import { start } from "repl";
 import TopKeyView from "./top_key_view";
-import useKeyList from "./key_team_helpers/key_list";
+import useKeyList, { Team } from "./key_team_helpers/key_list";
+import TeamDropdown from "./common_components/team_dropdown";
+import GeneralDropdown from "./common_components/general_dropdown";
 console.log("process.env.NODE_ENV", process.env.NODE_ENV);
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
@@ -53,6 +56,8 @@ interface UsagePageProps {
   token: string | null;
   userRole: string | null;
   userID: string | null;
+  teams: Team[] | null;
+  users: any[] | null;
   keys: any[] | null;
   premiumUser: boolean;
 }
@@ -145,6 +150,8 @@ const UsagePage: React.FC<UsagePageProps> = ({
   userRole,
   userID,
   keys,
+  teams,
+  users,
   premiumUser,
 }) => {
   const currentDate = new Date();
@@ -162,12 +169,19 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [globalActivityPerModel, setGlobalActivityPerModel] = useState<any[]>([]);
   const [selectedKeyID, setSelectedKeyID] = useState<string | null>("");
   const [selectedTags, setSelectedTags] = useState<string[]>(["all-tags"]);
+  const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
+  const [selectedUser, setSelectedUser] = useState<string | null>(null);
+
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
     from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), 
     to: new Date(),
   });
   const [proxySettings, setProxySettings] = useState<ProxySettings | null>(null);
   const [totalMonthlySpend, setTotalMonthlySpend] = useState<number>(0);
+
+  console.log("users in usage", users);
+  // teams
+  console.log("teams in usage", teams);
 
   const { keys: fetchedKeys, isLoading: keysLoading } = useKeyList({
     selectedTeam: undefined,
@@ -860,8 +874,25 @@ const UsagePage: React.FC<UsagePageProps> = ({
                 />
                          </Col>
                          <Col>
+                  <Text>Select Team</Text>
+                  <GeneralDropdown 
+                    items={teams} 
+                    key_to_sort_by="team_id"
+                    onChange={(teamId) => {
+                      setSelectedTeam(teamId);
+                    }}
+                  />
+                  <Text>Select User</Text>
+                  <GeneralDropdown 
+                    items={users} 
+                    key_to_sort_by="user_id"
+                    onChange={(userId) => {
+                      setSelectedUser(userId);
+                    }}
+                  />
                   <Text>Select Key</Text>
                   <Select defaultValue="all-keys">
+
                   <SelectItem
                     key="all-keys"
                     value="all-keys"

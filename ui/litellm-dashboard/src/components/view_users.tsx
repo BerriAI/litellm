@@ -83,6 +83,28 @@ if (isLocal != true) {
   console.log = function() {};
 }
 
+export const fetchUsersData = async (accessToken: string, userRole: string, currentPage: number, defaultPageSize: number) => {
+  const cachedUserData = sessionStorage.getItem(`userList_${currentPage}`);
+  if (cachedUserData) {
+    const parsedData = JSON.parse(cachedUserData);
+    return parsedData;
+  } else {
+    const userDataResponse = await userInfoCall(
+      accessToken,
+      null,
+      userRole,
+      true,
+      currentPage,
+      defaultPageSize
+    );
+    sessionStorage.setItem(
+      `userList_${currentPage}`,
+      JSON.stringify(userDataResponse)
+    );
+    return userDataResponse;
+  }
+};
+
 const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   accessToken,
   token,
@@ -207,34 +229,12 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     if (!accessToken || !token || !userRole || !userID) {
       return;
     }
+
     const fetchData = async () => {
       try {
-        // Check session storage first
-        const cachedUserData = sessionStorage.getItem(`userList_${currentPage}`);
-        if (cachedUserData) {
-          const parsedData = JSON.parse(cachedUserData);
-          setUserListResponse(parsedData);
-          setUserData(parsedData.users || []);
-        } else {
-          // Fetch from API if not in cache
-          const userDataResponse = await userInfoCall(
-            accessToken,
-            null,
-            userRole,
-            true,
-            currentPage,
-            defaultPageSize
-          );
-
-          // Store in session storage
-          sessionStorage.setItem(
-            `userList_${currentPage}`,
-            JSON.stringify(userDataResponse)
-          );
-
-          setUserListResponse(userDataResponse);
-          setUserData(userDataResponse.users || []);
-        }
+        const userDataResponse = await fetchUsersData(accessToken, userRole, currentPage, defaultPageSize);
+        setUserListResponse(userDataResponse);
+        setUserData(userDataResponse.users || []);
 
         // Fetch roles if not cached
         const cachedRoles = sessionStorage.getItem('possibleUserRoles');
