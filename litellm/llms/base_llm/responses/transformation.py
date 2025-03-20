@@ -131,3 +131,12 @@ class BaseResponsesAPIConfig(ABC):
             message=error_message,
             headers=headers,
         )
+
+    def should_fake_stream(
+        self,
+        model: Optional[str],
+        stream: Optional[bool],
+        custom_llm_provider: Optional[str] = None,
+    ) -> bool:
+        """Returns True if litellm should fake a stream for the given model and stream value"""
+        return False
