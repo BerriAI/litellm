@@ -25,7 +25,7 @@ Create a class that inherits from `CustomPromptManagement` to handle prompt retr
 
 **Example Implementation**
 
-Create a new file called `custom_prompt.py` and add this code:
+Create a new file called `custom_prompt.py` and add this code. The key method here is `get_chat_completion_prompt` you can implement custom logic to retrieve and format prompts based on the `prompt_id` and `prompt_variables`.
 
 ```python
 from typing import List, Tuple, Optional
