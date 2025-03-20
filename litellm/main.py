@@ -25,6 +25,7 @@ from functools import partial
 from typing import (
     Any,
     Callable,
+    Coroutine,
     Dict,
     List,
     Literal,
@@ -3288,7 +3289,7 @@ def embedding(  # noqa: PLR0915
     litellm_call_id=None,
     logger_fn=None,
     **kwargs,
-) -> EmbeddingResponse:
+) -> Union[EmbeddingResponse, Coroutine[Any, Any, EmbeddingResponse]]:
     """
     Embedding function that calls an API to generate embeddings for the given input.
 
@@ -3409,7 +3410,9 @@ def embedding(  # noqa: PLR0915
     if mock_response is not None:
         return mock_embedding(model=model, mock_response=mock_response)
     try:
-        response: Optional[EmbeddingResponse] = None
+        response: Optional[
+            Union[EmbeddingResponse, Coroutine[Any, Any, EmbeddingResponse]]
+        ] = None
 
         if azure is True or custom_llm_provider == "azure":
             # azure configs
@@ -3901,7 +3904,11 @@ def embedding(  # noqa: PLR0915
             raise LiteLLMUnknownProvider(
                 model=model, custom_llm_provider=custom_llm_provider
             )
-        if response is not None and hasattr(response, "_hidden_params"):
+        if (
+            response is not None
+            and hasattr(response, "_hidden_params")
+            and isinstance(response, EmbeddingResponse)
+        ):
             response._hidden_params["custom_llm_provider"] = custom_llm_provider
 
         if response is None:
@@ -4944,6 +4951,10 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
         else:
             # Call the synchronous function using run_in_executor
             response = await loop.run_in_executor(None, func_with_context)
+        if not isinstance(response, TranscriptionResponse):
+            raise ValueError(
+                f"Invalid response from transcription provider, expected TranscriptionResponse, but got {type(response)}"
+            )
         return response
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
@@ -4977,7 +4988,7 @@ def transcription(
     max_retries: Optional[int] = None,
     custom_llm_provider=None,
     **kwargs,
-) -> TranscriptionResponse:
+) -> Union[TranscriptionResponse, Coroutine[Any, Any, TranscriptionResponse]]:
     """
     Calls openai + azure whisper endpoints.
 
@@ -5046,7 +5057,9 @@ def transcription(
         custom_llm_provider=custom_llm_provider,
     )
 
-    response: Optional[TranscriptionResponse] = None
+    response: Optional[
+        Union[TranscriptionResponse, Coroutine[Any, Any, TranscriptionResponse]]
+    ] = None
     if custom_llm_provider == "azure":
         # azure configs
         api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")

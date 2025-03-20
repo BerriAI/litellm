@@ -1,10 +1,9 @@
 import uuid
-from typing import Any, Optional
+from typing import Any, Coroutine, Optional, Union
 
 from openai import AsyncAzureOpenAI, AzureOpenAI
 from pydantic import BaseModel
 
-import litellm
 from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_name
 from litellm.types.utils import FileTypes
 from litellm.utils import (
@@ -14,6 +13,7 @@ from litellm.utils import (
 )
 
 from .azure import AzureChatCompletion
+from .common_utils import AzureOpenAIError
 
 
 class AzureAudioTranscription(AzureChatCompletion):
@@ -33,20 +33,11 @@ class AzureAudioTranscription(AzureChatCompletion):
         azure_ad_token: Optional[str] = None,
         atranscription: bool = False,
         litellm_params: Optional[dict] = None,
-    ) -> TranscriptionResponse:
+    ) -> Union[TranscriptionResponse, Coroutine[Any, Any, TranscriptionResponse]]:
         data = {"model": model, "file": audio_file, **optional_params}
 
-        # init AzureOpenAI Client
-        azure_client_params = self.initialize_azure_sdk_client(
-            litellm_params=litellm_params or {},
-            api_key=api_key,
-            model_name=model,
-            api_version=api_version,
-            api_base=api_base,
-        )
-
         if atranscription is True:
-            return self.async_audio_transcriptions(  # type: ignore
+            return self.async_audio_transcriptions(
                 audio_file=audio_file,
                 data=data,
                 model_response=model_response,
@@ -54,14 +45,26 @@ class AzureAudioTranscription(AzureChatCompletion):
                 api_key=api_key,
                 api_base=api_base,
                 client=client,
-                azure_client_params=azure_client_params,
                 max_retries=max_retries,
                 logging_obj=logging_obj,
+                model=model,
+                litellm_params=litellm_params,
             )
-        if client is None:
-            azure_client = AzureOpenAI(http_client=litellm.client_session, **azure_client_params)  # type: ignore
-        else:
-            azure_client = client
+
+        azure_client = self.get_azure_openai_client(
+            api_version=api_version,
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            _is_async=False,
+            client=client,
+            litellm_params=litellm_params,
+        )
+        if not isinstance(azure_client, AzureOpenAI):
+            raise AzureOpenAIError(
+                status_code=500,
+                message="azure_client is not an instance of AzureOpenAI",
+            )
 
         ## LOGGING
         logging_obj.pre_call(
@@ -98,24 +101,34 @@ class AzureAudioTranscription(AzureChatCompletion):
     async def async_audio_transcriptions(
         self,
         audio_file: FileTypes,
+        model: str,
         data: dict,
         model_response: TranscriptionResponse,
         timeout: float,
-        azure_client_params: dict,
         logging_obj: Any,
+        api_version: Optional[str] = None,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         client=None,
         max_retries=None,
-    ):
+        litellm_params: Optional[dict] = None,
+    ) -> TranscriptionResponse:
         response = None
         try:
-            if client is None:
-                async_azure_client = AsyncAzureOpenAI(
-                    **azure_client_params,
+            async_azure_client = self.get_azure_openai_client(
+                api_version=api_version,
+                api_base=api_base,
+                api_key=api_key,
+                model=model,
+                _is_async=True,
+                client=client,
+                litellm_params=litellm_params,
+            )
+            if not isinstance(async_azure_client, AsyncAzureOpenAI):
+                raise AzureOpenAIError(
+                    status_code=500,
+                    message="async_azure_client is not an instance of AsyncAzureOpenAI",
                 )
-            else:
-                async_azure_client = client
 
             ## LOGGING
             logging_obj.pre_call(
@@ -168,7 +181,12 @@ class AzureAudioTranscription(AzureChatCompletion):
                 model_response_object=model_response,
                 hidden_params=hidden_params,
                 response_type="audio_transcription",
-            )  # type: ignore
+            )
+            if not isinstance(response, TranscriptionResponse):
+                raise AzureOpenAIError(
+                    status_code=500,
+                    message="response is not an instance of TranscriptionResponse",
+                )
             return response
         except Exception as e:
             ## LOGGING
