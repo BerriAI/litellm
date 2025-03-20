@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import log_db_metrics
+from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.types.utils import (
     StandardLoggingPayload,
     StandardLoggingUserAPIKeyMetadata,
@@ -230,6 +231,11 @@ def _should_track_cost_callback(
     """
     Determine if the cost callback should be tracked based on the kwargs
     """
+
+    # don't run track cost callback if user opted into disabling spend
+    if ProxyUpdateSpend.disable_spend_updates() is True:
+        return False
+
     if (
         user_api_key is not None
         or user_id is not None
