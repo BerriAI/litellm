@@ -36,7 +36,7 @@ class VertexPassThroughRouter:
 
     def get_vertex_credentials(
         self, project_id: Optional[str], location: Optional[str]
-    ) -> VertexPassThroughCredentials:
+    ) -> Optional[VertexPassThroughCredentials]:
         """
         Get the vertex credentials for the given project-id, location
         """
@@ -53,7 +53,7 @@ class VertexPassThroughRouter:
         if deployment_key in self.deployment_key_to_vertex_credentials:
             return self.deployment_key_to_vertex_credentials[deployment_key]
         else:
-            return default_vertex_config
+            return None
 
     def add_vertex_credentials(
         self,
