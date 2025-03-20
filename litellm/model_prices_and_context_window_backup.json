@@ -237,7 +237,7 @@
         "supports_system_messages": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_native_streaming": true,
+        "supports_native_streaming": false,
         "supported_modalities": ["text", "image"],
         "supported_endpoints": ["/v1/responses", "/v1/batch"]
     },
@@ -258,7 +258,7 @@
         "supports_system_messages": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_native_streaming": true,
+        "supports_native_streaming": false,
         "supported_modalities": ["text", "image"],
         "supported_endpoints": ["/v1/responses", "/v1/batch"]
     },
