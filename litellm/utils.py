@@ -1997,9 +1997,9 @@ def supports_native_streaming(model: str, custom_llm_provider: Optional[str]) ->
         model_info = _get_model_info_helper(
             model=model, custom_llm_provider=custom_llm_provider
         )
-        supports_native_streaming = (
-            model_info.get("supports_native_streaming", True) or True
-        )
+        supports_native_streaming = model_info.get("supports_native_streaming", True)
+        if supports_native_streaming is None:
+            supports_native_streaming = True
         return supports_native_streaming
     except Exception as e:
         verbose_logger.debug(
