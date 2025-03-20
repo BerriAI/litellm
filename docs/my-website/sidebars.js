@@ -365,8 +365,12 @@ const sidebars = {
       ],
     },
     {
-      type: "doc",
-      id: "proxy/prompt_management"
+      type: "category",
+      label: "[Beta] Prompt Management",
+      items: [
+        "proxy/prompt_management",
+        "proxy/custom_prompt_management"
+      ],
     },
     {
       type: "category",
@@ -392,6 +396,7 @@ const sidebars = {
         "observability/logfire_integration",
         "observability/argilla",
         "observability/arize_integration",
+        "observability/phoenix_integration",
         "debugging/local_debugging",
         "observability/raw_request_response",
         "observability/custom_callback",

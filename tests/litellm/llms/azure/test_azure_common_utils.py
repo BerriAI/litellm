@@ -68,6 +68,7 @@ def test_initialize_with_api_key(setup_mocks):
         api_base="https://test.openai.azure.com",
         model_name="gpt-4",
         api_version="2023-06-01",
+        is_async=False,
     )
 
     # Verify expected result
@@ -90,6 +91,7 @@ def test_initialize_with_tenant_credentials(setup_mocks):
         api_base="https://test.openai.azure.com",
         model_name="gpt-4",
         api_version=None,
+        is_async=False,
     )
 
     # Verify that get_azure_ad_token_from_entrata_id was called
@@ -117,6 +119,7 @@ def test_initialize_with_username_password(setup_mocks):
         api_base="https://test.openai.azure.com",
         model_name="gpt-4",
         api_version=None,
+        is_async=False,
     )
 
     # Verify that get_azure_ad_token_from_username_password was called
@@ -138,6 +141,7 @@ def test_initialize_with_oidc_token(setup_mocks):
         api_base="https://test.openai.azure.com",
         model_name="gpt-4",
         api_version=None,
+        is_async=False,
     )
 
     # Verify that get_azure_ad_token_from_oidc was called
@@ -158,6 +162,7 @@ def test_initialize_with_enable_token_refresh(setup_mocks):
         api_base="https://test.openai.azure.com",
         model_name="gpt-4",
         api_version=None,
+        is_async=False,
     )
 
     # Verify that get_azure_ad_token_provider was called
@@ -179,6 +184,7 @@ def test_initialize_with_token_refresh_error(setup_mocks):
         api_base="https://test.openai.azure.com",
         model_name="gpt-4",
         api_version=None,
+        is_async=False,
     )
 
     # Verify error was logged
@@ -196,6 +202,7 @@ def test_api_version_from_env_var(setup_mocks):
             api_base="https://test.openai.azure.com",
             model_name="gpt-4",
             api_version=None,
+            is_async=False,
         )
 
     # Verify expected result
@@ -210,6 +217,7 @@ def test_select_azure_base_url_called(setup_mocks):
         api_base="https://test.openai.azure.com",
         model_name="gpt-4",
         api_version="2023-06-01",
+        is_async=False,
     )
 
     # Verify that select_azure_base_url_or_endpoint was called
@@ -300,12 +308,10 @@ async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
     # Get appropriate input for this call type
     input_kwarg = test_inputs.get(call_type.value, {})
 
-    patch_target = "litellm.main.azure_chat_completions.initialize_azure_sdk_client"
-    if call_type == CallTypes.atranscription:
-        patch_target = (
-            "litellm.main.azure_audio_transcriptions.initialize_azure_sdk_client"
-        )
-    elif call_type == CallTypes.arerank:
+    patch_target = (
+        "litellm.llms.azure.common_utils.BaseAzureLLM.initialize_azure_sdk_client"
+    )
+    if call_type == CallTypes.arerank:
         patch_target = (
             "litellm.rerank_api.main.azure_rerank.initialize_azure_sdk_client"
         )
@@ -455,3 +461,177 @@ async def test_ensure_initialize_azure_sdk_client_always_used_azure_text(call_ty
         for call in azure_calls:
             assert "api_key" in call.kwargs, "api_key not found in parameters"
             assert "api_base" in call.kwargs, "api_base not found in parameters"
+
+
+# Test parameters for different API functions with Azure models
+AZURE_API_FUNCTION_PARAMS = [
+    # (function_name, is_async, args)
+    (
+        "completion",
+        False,
+        {
+            "model": "azure/gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_tokens": 10,
+            "api_key": "test-api-key",
+            "api_base": "https://test.openai.azure.com",
+            "api_version": "2023-05-15",
+        },
+    ),
+    (
+        "completion",
+        True,
+        {
+            "model": "azure/gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_tokens": 10,
+            "stream": True,
+            "api_key": "test-api-key",
+            "api_base": "https://test.openai.azure.com",
+            "api_version": "2023-05-15",
+        },
+    ),
+    (
+        "embedding",
+        False,
+        {
+            "model": "azure/text-embedding-ada-002",
+            "input": "Hello world",
+            "api_key": "test-api-key",
+            "api_base": "https://test.openai.azure.com",
+            "api_version": "2023-05-15",
+        },
+    ),
+    (
+        "embedding",
+        True,
+        {
+            "model": "azure/text-embedding-ada-002",
+            "input": "Hello world",
+            "api_key": "test-api-key",
+            "api_base": "https://test.openai.azure.com",
+            "api_version": "2023-05-15",
+        },
+    ),
+    (
+        "speech",
+        False,
+        {
+            "model": "azure/tts-1",
+            "input": "Hello, this is a test of text to speech",
+            "voice": "alloy",
+            "api_key": "test-api-key",
+            "api_base": "https://test.openai.azure.com",
+            "api_version": "2023-05-15",
+        },
+    ),
+    (
+        "speech",
+        True,
+        {
+            "model": "azure/tts-1",
+            "input": "Hello, this is a test of text to speech",
+            "voice": "alloy",
+            "api_key": "test-api-key",
+            "api_base": "https://test.openai.azure.com",
+            "api_version": "2023-05-15",
+        },
+    ),
+    (
+        "transcription",
+        False,
+        {
+            "model": "azure/whisper-1",
+            "file": MagicMock(),
+            "api_key": "test-api-key",
+            "api_base": "https://test.openai.azure.com",
+            "api_version": "2023-05-15",
+        },
+    ),
+    (
+        "transcription",
+        True,
+        {
+            "model": "azure/whisper-1",
+            "file": MagicMock(),
+            "api_key": "test-api-key",
+            "api_base": "https://test.openai.azure.com",
+            "api_version": "2023-05-15",
+        },
+    ),
+]
+
+
+@pytest.mark.parametrize("function_name,is_async,args", AZURE_API_FUNCTION_PARAMS)
+@pytest.mark.asyncio
+async def test_azure_client_reuse(function_name, is_async, args):
+    """
+    Test that multiple Azure API calls reuse the same Azure OpenAI client
+    """
+    litellm.set_verbose = True
+
+    # Determine which client class to mock based on whether the test is async
+    client_path = (
+        "litellm.llms.azure.common_utils.AsyncAzureOpenAI"
+        if is_async
+        else "litellm.llms.azure.common_utils.AzureOpenAI"
+    )
+
+    # Create a proper mock class that can pass isinstance checks
+    mock_client = MagicMock()
+
+    # Create the appropriate patches
+    with patch(client_path) as mock_client_class, patch.object(
+        BaseAzureLLM, "set_cached_openai_client"
+    ) as mock_set_cache, patch.object(
+        BaseAzureLLM, "get_cached_openai_client"
+    ) as mock_get_cache, patch.object(
+        BaseAzureLLM, "initialize_azure_sdk_client"
+    ) as mock_init_azure:
+        # Configure the mock client class to return our mock instance
+        mock_client_class.return_value = mock_client
+
+        # Setup the mock to return None first time (cache miss) then a client for subsequent calls
+        mock_get_cache.side_effect = [None] + [
+            mock_client
+        ] * 9  # First call returns None, rest return the mock client
+
+        # Mock the initialize_azure_sdk_client to return a dict with the necessary params
+        mock_init_azure.return_value = {
+            "api_key": args.get("api_key"),
+            "azure_endpoint": args.get("api_base"),
+            "api_version": args.get("api_version"),
+            "azure_ad_token": None,
+            "azure_ad_token_provider": None,
+        }
+
+        # Make 10 API calls
+        for _ in range(10):
+            try:
+                # Call the appropriate function based on parameters
+                if is_async:
+                    # Add 'a' prefix for async functions
+                    func = getattr(litellm, f"a{function_name}")
+                    await func(**args)
+                else:
+                    func = getattr(litellm, function_name)
+                    func(**args)
+            except Exception:
+                # We expect exceptions since we're mocking the client
+                pass
+
+        # Verify client was created only once
+        assert (
+            mock_client_class.call_count == 1
+        ), f"{'Async' if is_async else ''}AzureOpenAI client should be created only once"
+
+        # Verify initialize_azure_sdk_client was called once
+        assert (
+            mock_init_azure.call_count == 1
+        ), "initialize_azure_sdk_client should be called once"
+
+        # Verify the client was cached
+        assert mock_set_cache.call_count == 1, "Client should be cached once"
+
+        # Verify we tried to get from cache 10 times (once per request)
+        assert mock_get_cache.call_count == 10, "Should check cache for each request"
