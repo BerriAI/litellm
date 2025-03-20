@@ -99,6 +99,8 @@ class AzureOpenAIConfig(BaseConfig):
             "extra_headers",
             "parallel_tool_calls",
             "prediction",
+            "modalities",
+            "audio",
         ]
 
     def _is_response_format_supported_model(self, model: str) -> bool:

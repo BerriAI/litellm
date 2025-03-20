@@ -1368,3 +1368,23 @@ def test_bedrock_invoke_anthropic_max_tokens():
 
     assert "max_tokens_to_sample" not in optional_params
     assert optional_params["max_tokens"] == 1024
+
+
+def test_azure_modalities_param():
+    optional_params = get_optional_params(
+        model="chatgpt-v2",
+        custom_llm_provider="azure",
+        modalities=["text", "audio"],
+        audio={"type": "audio_input", "input": "test.wav"},
+    )
+    assert optional_params["modalities"] == ["text", "audio"]
+    assert optional_params["audio"] == {"type": "audio_input", "input": "test.wav"}
+
+
+def test_litellm_proxy_thinking_param():
+    optional_params = get_optional_params(
+        model="gpt-4o",
+        custom_llm_provider="litellm_proxy",
+        thinking={"type": "enabled", "budget_tokens": 1024},
+    )
+    assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 1024}

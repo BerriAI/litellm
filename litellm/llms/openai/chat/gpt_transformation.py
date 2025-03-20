@@ -125,6 +125,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             "max_retries",
             "extra_headers",
             "parallel_tool_calls",
+            "audio",
         ]  # works across all models
 
         model_specific_params = []
