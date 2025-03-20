@@ -81,6 +81,7 @@ from ..integrations.arize.arize_phoenix import ArizePhoenixLogger
 from ..integrations.athina import AthinaLogger
 from ..integrations.azure_storage.azure_storage import AzureBlobStorageLogger
 from ..integrations.braintrust_logging import BraintrustLogger
+from ..integrations.custom_prompt_management import CustomPromptManagement
 from ..integrations.datadog.datadog import DataDogLogger
 from ..integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
 from ..integrations.dynamodb import DyanmoDBLogger
@@ -429,34 +430,58 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_variables: Optional[dict],
     ) -> Tuple[str, List[AllMessageValues], dict]:
 
-        for (
-            custom_logger_compatible_callback
-        ) in litellm._known_custom_logger_compatible_callbacks:
-            if model.startswith(custom_logger_compatible_callback):
+        custom_logger = self.get_custom_logger_for_prompt_management(model)
+        if custom_logger:
+            model, messages, non_default_params = (
+                custom_logger.get_chat_completion_prompt(
+                    model=model,
+                    messages=messages,
+                    non_default_params=non_default_params,
+                    prompt_id=prompt_id,
+                    prompt_variables=prompt_variables,
+                    dynamic_callback_params=self.standard_callback_dynamic_params,
+                )
+            )
+        self.messages = messages
+        return model, messages, non_default_params
+
+    def get_custom_logger_for_prompt_management(
+        self, model: str
+    ) -> Optional[CustomLogger]:
+        """
+        Get a custom logger for prompt management based on model name or available callbacks.
+
+        Args:
+            model: The model name to check for prompt management integration
+
+        Returns:
+            A CustomLogger instance if one is found, None otherwise
+        """
+        # First check if model starts with a known custom logger compatible callback
+        for callback_name in litellm._known_custom_logger_compatible_callbacks:
+            if model.startswith(callback_name):
                 custom_logger = _init_custom_logger_compatible_class(
-                    logging_integration=custom_logger_compatible_callback,
+                    logging_integration=callback_name,
                     internal_usage_cache=None,
                     llm_router=None,
                 )
+                if custom_logger is not None:
+                    self.model_call_details["prompt_integration"] = model.split("/")[0]
+                    return custom_logger
 
-                if custom_logger is None:
-                    continue
-                old_name = model
+        # Then check for any registered CustomPromptManagement loggers
+        prompt_management_loggers = (
+            litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=CustomPromptManagement
+            )
+        )
 
-                model, messages, non_default_params = (
-                    custom_logger.get_chat_completion_prompt(
-                        model=model,
-                        messages=messages,
-                        non_default_params=non_default_params,
-                        prompt_id=prompt_id,
-                        prompt_variables=prompt_variables,
-                        dynamic_callback_params=self.standard_callback_dynamic_params,
-                    )
-                )
-                self.model_call_details["prompt_integration"] = old_name.split("/")[0]
-        self.messages = messages
+        if prompt_management_loggers:
+            logger = prompt_management_loggers[0]
+            self.model_call_details["prompt_integration"] = logger.__class__.__name__
+            return logger
 
-        return model, messages, non_default_params
+        return None
 
     def _get_raw_request_body(self, data: Optional[Union[dict, str]]) -> dict:
         if data is None:
