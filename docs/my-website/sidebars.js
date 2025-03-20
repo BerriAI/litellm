@@ -396,6 +396,7 @@ const sidebars = {
         "observability/logfire_integration",
         "observability/argilla",
         "observability/arize_integration",
+        "observability/phoenix_integration",
         "debugging/local_debugging",
         "observability/raw_request_response",
         "observability/custom_callback",
