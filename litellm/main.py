@@ -2249,7 +2249,7 @@ def completion(  # type: ignore # noqa: PLR0915
             api_base = (
                 api_base
                 or litellm.api_base
-                or get_secret("OPENROUTER_API_BASE")
+                or get_secret_str("OPENROUTER_API_BASE")
                 or "https://openrouter.ai/api/v1"
             )
 
