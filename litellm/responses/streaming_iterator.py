@@ -210,9 +210,9 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         )
 
 
-class AsyncMockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
+class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     """
-    Async mock iterator - some models like o1-pro do not support streaming, we need to fake a stream
+    mock iterator - some models like o1-pro do not support streaming, we need to fake a stream
     """
 
     def __init__(
