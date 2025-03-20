@@ -40,6 +40,7 @@ import {
 } from "./networking";
 import { start } from "repl";
 import TopKeyView from "./top_key_view";
+import useKeyList from "./key_team_helpers/key_list";
 console.log("process.env.NODE_ENV", process.env.NODE_ENV);
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
@@ -167,6 +168,14 @@ const UsagePage: React.FC<UsagePageProps> = ({
   });
   const [proxySettings, setProxySettings] = useState<ProxySettings | null>(null);
   const [totalMonthlySpend, setTotalMonthlySpend] = useState<number>(0);
+
+  const { keys: fetchedKeys, isLoading: keysLoading } = useKeyList({
+    selectedTeam: undefined,
+    currentOrg: null,
+    accessToken: accessToken || "",
+  });
+
+  const effectiveKeys = keys?.length ? keys : fetchedKeys;
 
   const firstDay = new Date(
     currentDate.getFullYear(),
@@ -862,7 +871,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   >
                     All Keys
                   </SelectItem>
-                    {keys?.map((key: any, index: number) => {
+                    {effectiveKeys?.map((key: any, index: number) => {
                       if (
                         key &&
                         key["key_alias"] !== null &&
