@@ -7,3 +7,5 @@ model_list:
       api_key: os.environ/AZURE_API_KEY
 
 
+litellm_settings:
+  callbacks: ["custom_prompt_management.x42_prompt_management"]
