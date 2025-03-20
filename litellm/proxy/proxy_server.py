@@ -23,6 +23,7 @@ from typing import (
     get_origin,
     get_type_hints,
 )
+
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -32,9 +33,12 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.integrations.opentelemetry import OpenTelemetry
+
     Span = _Span
 else:
     Span = Any
+    OpenTelemetry = Any
 
 
 def showwarning(message, category, filename, lineno, file=None, line=None):
@@ -254,6 +258,7 @@ from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
+    ProxyUpdateSpend,
     _cache_user_row,
     _get_docs_url,
     _get_projected_spend_over_limit,
@@ -775,7 +780,7 @@ disable_spend_logs = False
 jwt_handler = JWTHandler()
 prompt_injection_detection_obj: Optional[_OPTIONAL_PromptInjectionDetection] = None
 store_model_in_db: bool = False
-open_telemetry_logger: Optional[Any] = None
+open_telemetry_logger: Optional[OpenTelemetry] = None
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj = ProxyLogging(
     user_api_key_cache=user_api_key_cache, premium_user=premium_user
@@ -924,6 +929,8 @@ async def update_database(  # noqa: PLR0915
         verbose_proxy_logger.debug(
             f"Enters prisma db call, response_cost: {response_cost}, token: {token}; user_id: {user_id}; team_id: {team_id}"
         )
+        if ProxyUpdateSpend.disable_spend_updates() is True:
+            return
         if token is not None and isinstance(token, str) and token.startswith("sk-"):
             hashed_token = hash_token(token=token)
         else:
@@ -3047,7 +3054,11 @@ async def async_data_generator(
 ):
     verbose_proxy_logger.debug("inside generator")
     try:
-        async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(user_api_key_dict=user_api_key_dict, response=response, request_data=request_data):
+        async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+            request_data=request_data,
+        ):
             verbose_proxy_logger.debug(
                 "async_data_generator: received streaming chunk - {}".format(chunk)
             )
@@ -3271,14 +3282,14 @@ class ProxyStartupEvent:
                 prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
             )
 
-        ### GET STORED CREDENTIALS ###
-        scheduler.add_job(
-            proxy_config.get_credentials,
-            "interval",
-            seconds=10,
-            args=[prisma_client],
-        )
-        await proxy_config.get_credentials(prisma_client=prisma_client)
+            ### GET STORED CREDENTIALS ###
+            scheduler.add_job(
+                proxy_config.get_credentials,
+                "interval",
+                seconds=10,
+                args=[prisma_client],
+            )
+            await proxy_config.get_credentials(prisma_client=prisma_client)
         if (
             proxy_logging_obj is not None
             and proxy_logging_obj.slack_alerting_instance.alerting is not None
