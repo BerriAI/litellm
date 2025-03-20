@@ -1099,6 +1099,26 @@ def test_is_base64_encoded_2():
                 {
                     "role": "user",
                     "content": [
+                        {
+                            "type": "file",
+                            "file": {
+                                "file_id": "123",
+                                "file_name": "test.txt",
+                                "file_size": 100,
+                                "file_type": "text/plain",
+                                "file_url": "https://example.com/test.txt",
+                            },
+                        }
+                    ],
+                }
+            ],
+            True,
+        ),
+        (
+            [
+                {
+                    "role": "user",
+                    "content": [
                         {"type": "image_url", "url": "https://example.com/image.png"}
                     ],
                 }
