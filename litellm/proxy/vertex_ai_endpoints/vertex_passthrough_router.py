@@ -53,7 +53,7 @@ class VertexPassThroughRouter:
         if deployment_key in self.deployment_key_to_vertex_credentials:
             return self.deployment_key_to_vertex_credentials[deployment_key]
         else:
-            return None
+            return default_vertex_config
 
     def add_vertex_credentials(
         self,
