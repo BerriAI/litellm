@@ -2,8 +2,11 @@ import { VirtualKeysPage } from "../page-object-models/virtual-keys.page";
 import { test, expect } from "./../fixtures/fixtures";
 import { loginDetailsSet } from "./../utils/utils";
 
-/* 4644_Test_Basic_Sign_in_Flow */
-test("Login", async ({ loginPage, virtualKeysPage, page }) => {
+test("4644_Test_Basic_Sign_in_Flow", async ({
+  loginPage,
+  virtualKeysPage,
+  page,
+}) => {
   let username = "admin";
   let password = "sk-1234";
   if (loginDetailsSet()) {

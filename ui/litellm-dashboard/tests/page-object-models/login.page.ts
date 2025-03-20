@@ -7,7 +7,7 @@ export class LoginPage {
   private readonly loginSubmit: Locator;
 
   //Initialize locators in constructor
-  constructor(public readonly page: Page) {
+  constructor(private readonly page: Page) {
     this.usernameInput = this.page.getByRole("textbox", { name: "Username:" });
     this.passwordInput = this.page.getByRole("textbox", { name: "Password:" });
     this.loginSubmit = this.page.getByRole("button", { name: "Submit" });
