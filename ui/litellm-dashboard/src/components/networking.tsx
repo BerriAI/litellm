@@ -4040,3 +4040,184 @@ export const updateInternalUserSettings = async (accessToken: string, settings: 
     throw error;
   }
 };
+
+// Type definitions for callbacks
+export interface CallbackVariable {
+  key: string;
+  label: string;
+  type: "string" | "boolean";
+  required: boolean;
+  description?: string;
+}
+
+export interface CallbackTypeDefinition {
+  name: string;
+  label: string;
+  variables: CallbackVariable[];
+  description?: string;
+}
+
+// Callback configuration schema based on API
+export const callbackDefinitions: Record<string, CallbackTypeDefinition> = {
+  "langfuse": {
+    name: "langfuse",
+    label: "Langfuse",
+    description: "Send LLM usage data to Langfuse for monitoring and analytics",
+    variables: [
+      { key: "langfuse_public_key", label: "Public Key", type: "string", required: true },
+      { key: "langfuse_secret_key", label: "Secret Key", type: "string", required: true },
+      { key: "langfuse_host", label: "Host URL", type: "string", required: false },
+    ]
+  },
+  "langsmith": {
+    name: "langsmith",
+    label: "LangSmith",
+    description: "Send LLM usage data to LangSmith for monitoring and analytics",
+    variables: [
+      { key: "langsmith_api_key", label: "API Key", type: "string", required: true },
+      { key: "langsmith_project", label: "Project", type: "string", required: false },
+      { key: "langsmith_base_url", label: "Base URL", type: "string", required: false },
+    ]
+  },
+  "gcs": {
+    name: "gcs",
+    label: "Google Cloud Storage",
+    description: "Log LLM calls to Google Cloud Storage",
+    variables: [
+      { key: "gcs_bucket_name", label: "Bucket Name", type: "string", required: true },
+      { key: "gcs_path_service_account", label: "Service Account Path", type: "string", required: true },
+    ]
+  },
+  "humanloop": {
+    name: "humanloop",
+    label: "Humanloop",
+    description: "Send LLM usage data to Humanloop",
+    variables: [
+      { key: "humanloop_api_key", label: "API Key", type: "string", required: true },
+    ]
+  },
+  "arize": {
+    name: "arize",
+    label: "Arize",
+    description: "Send LLM usage data to Arize Phoenix",
+    variables: [
+      { key: "arize_api_key", label: "API Key", type: "string", required: true },
+      { key: "arize_space_key", label: "Space Key", type: "string", required: true },
+    ]
+  }
+};
+
+export interface TeamCallbackRequest {
+  callback_name: string;
+  callback_type: "success" | "failure" | "success_and_failure";
+  callback_vars: Record<string, string | boolean>;
+}
+
+// Add team callback
+export const addTeamCallback = async (
+  accessToken: string,
+  teamId: string,
+  callbackData: TeamCallbackRequest
+) => {
+  try {
+    const url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/team/${teamId}/callback`
+      : `/team/${teamId}/callback`;
+      
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(callbackData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Add Team Callback Response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to add team callback:", error);
+    throw error;
+  }
+};
+
+// Update team callback
+export const updateTeamCallback = async (
+  accessToken: string,
+  teamId: string,
+  callbackName: string,
+  callbackData: TeamCallbackRequest
+) => {
+  try {
+    const url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/team/${teamId}/callback/${callbackName}`
+      : `/team/${teamId}/callback/${callbackName}`;
+      
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(callbackData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Update Team Callback Response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to update team callback:", error);
+    throw error;
+  }
+};
+
+// Delete team callback
+export const deleteTeamCallback = async (
+  accessToken: string,
+  teamId: string,
+  callbackName: string,
+  callbackType?: "success" | "failure" | "all"
+) => {
+  try {
+    // Default to removing from all locations
+    const queryParams = callbackType ? `?callback_type=${callbackType}` : '';
+    
+    const url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/team/${teamId}/callback/${callbackName}${queryParams}`
+      : `/team/${teamId}/callback/${callbackName}${queryParams}`;
+      
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      }
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Delete Team Callback Response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to delete team callback:", error);
+    throw error;
+  }
+};

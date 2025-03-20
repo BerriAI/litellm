@@ -19,9 +19,21 @@ import {
   Table,
   Icon
 } from "@tremor/react";
-import { teamInfoCall, teamMemberDeleteCall, teamMemberAddCall, teamMemberUpdateCall, Member, teamUpdateCall } from "@/components/networking";
-import { Button, Form, Input, Select, message, InputNumber, Tooltip } from "antd";
-import { InfoCircleOutlined } from '@ant-design/icons';
+import { 
+  teamInfoCall, 
+  teamMemberDeleteCall, 
+  teamMemberAddCall, 
+  teamMemberUpdateCall, 
+  Member, 
+  teamUpdateCall,
+  addTeamCallback,
+  updateTeamCallback,
+  deleteTeamCallback,
+  callbackDefinitions,
+  TeamCallbackRequest
+} from "@/components/networking";
+import { Button, Form, Input, Select, message, InputNumber, Tooltip, Switch, Empty, Descriptions, Space, Popconfirm, Spin } from "antd";
+import { InfoCircleOutlined, PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import {
   Select as Select2,
 } from "antd";
@@ -30,6 +42,12 @@ import MemberModal from "./edit_membership";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 
+interface TeamCallbackSettings {
+  callbacks?: string[];
+  success_callback?: string[];
+  failure_callback?: string[];
+  callback_vars?: Record<string, any>;
+}
 
 interface TeamData {
   team_id: string;
@@ -40,7 +58,10 @@ interface TeamData {
     admins: string[];
     members: string[];
     members_with_roles: Member[];
-    metadata: Record<string, any>;
+    metadata: {
+      callback_settings?: TeamCallbackSettings;
+      [key: string]: any;
+    };
     tpm_limit: number | null;
     rpm_limit: number | null;
     max_budget: number | null;
@@ -83,9 +104,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [loading, setLoading] = useState(true);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
   const [form] = Form.useForm();
+  const [callbackForm] = Form.useForm();
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
   const [isEditing, setIsEditing] = useState(false);
+  const [isAddingCallback, setIsAddingCallback] = useState(false);
+  const [selectedCallback, setSelectedCallback] = useState<string | null>(null);
+  const [submittingCallback, setSubmittingCallback] = useState(false);
 
   console.log("userModels in team info", userModels);
 
@@ -200,6 +225,115 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     }
   };
 
+  // Get active callbacks from team_info
+  const getActiveCallbacks = (): string[] => {
+    if (!teamData?.team_info?.metadata?.callback_settings) return [];
+    
+    const { success_callback = [], failure_callback = [] } = teamData.team_info.metadata.callback_settings;
+    const allCallbacks = [...new Set([...success_callback, ...failure_callback])];
+    
+    return allCallbacks;
+  };
+
+  // Determine callback type based on which arrays it's in
+  const getCallbackType = (callbackName: string): "success" | "failure" | "success_and_failure" => {
+    if (!teamData?.team_info?.metadata?.callback_settings) return "success";
+    
+    const { success_callback = [], failure_callback = [] } = teamData.team_info.metadata.callback_settings;
+    const inSuccess = success_callback.includes(callbackName);
+    const inFailure = failure_callback.includes(callbackName);
+    
+    if (inSuccess && inFailure) return "success_and_failure";
+    if (inSuccess) return "success";
+    if (inFailure) return "failure";
+    
+    return "success"; // Default
+  };
+
+  // Get callback variables for a specific callback
+  const getCallbackVars = (callbackName: string): Record<string, any> => {
+    if (!teamData?.team_info?.metadata?.callback_settings?.callback_vars) return {};
+    
+    const allVars = teamData.team_info.metadata.callback_settings.callback_vars;
+    const callbackDef = callbackDefinitions[callbackName];
+    
+    // If no definition found, return empty object
+    if (!callbackDef) return {};
+    
+    // Filter variables that belong to this callback
+    const relevantVars: Record<string, any> = {};
+    callbackDef.variables.forEach(varDef => {
+      if (allVars[varDef.key] !== undefined) {
+        relevantVars[varDef.key] = allVars[varDef.key];
+      }
+    });
+    
+    return relevantVars;
+  };
+
+  const handleAddCallback = async (values: any) => {
+    try {
+      if (!accessToken) return;
+      setSubmittingCallback(true);
+      
+      const callbackRequest: TeamCallbackRequest = {
+        callback_name: values.callback_name,
+        callback_type: values.callback_type,
+        callback_vars: values.callback_vars || {}
+      };
+      
+      await addTeamCallback(accessToken, teamId, callbackRequest);
+      
+      message.success(`Added ${values.callback_name} callback successfully`);
+      setIsAddingCallback(false);
+      callbackForm.resetFields();
+      fetchTeamInfo();
+    } catch (error) {
+      message.error(`Failed to add callback: ${error}`);
+      console.error("Error adding callback:", error);
+    } finally {
+      setSubmittingCallback(false);
+    }
+  };
+
+  const handleUpdateCallback = async (callbackName: string, values: any) => {
+    try {
+      if (!accessToken) return;
+      setSubmittingCallback(true);
+      
+      const callbackRequest: TeamCallbackRequest = {
+        callback_name: callbackName,
+        callback_type: values.callback_type,
+        callback_vars: values.callback_vars || {}
+      };
+      
+      await updateTeamCallback(accessToken, teamId, callbackName, callbackRequest);
+      
+      message.success(`Updated ${callbackName} callback successfully`);
+      setSelectedCallback(null);
+      callbackForm.resetFields();
+      fetchTeamInfo();
+    } catch (error) {
+      message.error(`Failed to update callback: ${error}`);
+      console.error("Error updating callback:", error);
+    } finally {
+      setSubmittingCallback(false);
+    }
+  };
+
+  const handleDeleteCallback = async (callbackName: string) => {
+    try {
+      if (!accessToken) return;
+      
+      await deleteTeamCallback(accessToken, teamId, callbackName);
+      message.success(`${callbackName} callback deleted successfully`);
+      fetchTeamInfo();
+    } catch (error) {
+      message.error(`Failed to delete callback: ${error}`);
+      console.error("Error deleting callback:", error);
+    }
+  };
+
   if (loading) {
     return <div className="p-4">Loading...</div>;
   }
@@ -226,7 +360,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             <Tab key="overview">Overview</Tab>,
             ...(canEditTeam ? [
               <Tab key="members">Members</Tab>,
-              <Tab key="settings">Settings</Tab>
+              <Tab key="settings">Settings</Tab>,
+              <Tab key="callbacks">Callbacks</Tab>
             ] : [])
           ]}
         </TabList>
@@ -479,6 +614,276 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       {info.blocked ? 'Blocked' : 'Active'}
                     </Badge>
                   </div>
+                </div>
+              )}
+            </Card>
+          </TabPanel>
+
+          {/* Callbacks Panel */}
+          <TabPanel>
+            <Card>
+              <div className="flex justify-between items-center mb-4">
+                <Title>Team Callbacks</Title>
+                {canEditTeam && !isAddingCallback && (
+                  <TremorButton 
+                    onClick={() => {
+                      setIsAddingCallback(true);
+                      setSelectedCallback(null);
+                      callbackForm.resetFields();
+                    }}
+                    icon={PlusIcon}
+                  >
+                    Add Callback
+                  </TremorButton>
+                )}
+              </div>
+              
+              {isAddingCallback ? (
+                <div className="mb-6 p-4 border rounded-md">
+                  <Form
+                    form={callbackForm}
+                    layout="vertical"
+                    onFinish={handleAddCallback}
+                    initialValues={{
+                      callback_type: "success"
+                    }}
+                  >
+                    <Form.Item
+                      name="callback_name"
+                      label="Callback Provider"
+                      rules={[{ required: true, message: 'Please select a callback provider' }]}
+                    >
+                      <Select 
+                        placeholder="Select a callback provider"
+                        onChange={(value) => {
+                          // Reset callback vars when provider changes
+                          callbackForm.setFieldsValue({ callback_vars: {} });
+                        }}
+                      >
+                        {Object.values(callbackDefinitions).map(def => (
+                          <Select.Option key={def.name} value={def.name}>
+                            {def.label}
+                          </Select.Option>
+                        ))}
+                      </Select>
+                    </Form.Item>
+                    
+                    <Form.Item
+                      name="callback_type"
+                      label="Callback Type"
+                      rules={[{ required: true, message: 'Please select when to trigger this callback' }]}
+                    >
+                      <Select placeholder="Select when to trigger this callback">
+                        <Select.Option value="success">On Success</Select.Option>
+                        <Select.Option value="failure">On Failure</Select.Option>
+                        <Select.Option value="success_and_failure">On Success & Failure</Select.Option>
+                      </Select>
+                    </Form.Item>
+                    
+                    <Form.Item
+                      shouldUpdate={(prevValues, currentValues) => 
+                        prevValues.callback_name !== currentValues.callback_name
+                      }
+                    >
+                      {({ getFieldValue }) => {
+                        const callbackName = getFieldValue('callback_name');
+                        if (!callbackName) return null;
+                        
+                        const callbackDef = callbackDefinitions[callbackName];
+                        if (!callbackDef) return null;
+                        
+                        return (
+                          <div className="space-y-4">
+                            <Text className="text-sm text-gray-500 block mb-2">
+                              {callbackDef.description || `Configure parameters for ${callbackDef.label}`}
+                            </Text>
+                            
+                            {callbackDef.variables.map(variable => (
+                              <Form.Item
+                                key={variable.key}
+                                name={['callback_vars', variable.key]}
+                                label={variable.label}
+                                rules={[
+                                  { 
+                                    required: variable.required, 
+                                    message: `Please enter ${variable.label}` 
+                                  }
+                                ]}
+                                tooltip={variable.description}
+                              >
+                                {variable.type === 'boolean' ? (
+                                  <Switch />
+                                ) : (
+                                  <Input placeholder={`Enter ${variable.label}`} />
+                                )}
+                              </Form.Item>
+                            ))}
+                          </div>
+                        );
+                      }}
+                    </Form.Item>
+                    
+                    <div className="flex justify-end gap-2 mt-6">
+                      <Button 
+                        onClick={() => {
+                          setIsAddingCallback(false);
+                          callbackForm.resetFields();
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                      <TremorButton type="submit" loading={submittingCallback}>
+                        Add Callback
+                      </TremorButton>
+                    </div>
+                  </Form>
+                </div>
+              ) : selectedCallback ? (
+                <div className="mb-6 p-4 border rounded-md">
+                  <Form
+                    form={callbackForm}
+                    layout="vertical"
+                    onFinish={(values) => handleUpdateCallback(selectedCallback, values)}
+                    initialValues={{
+                      callback_type: getCallbackType(selectedCallback),
+                      callback_vars: getCallbackVars(selectedCallback)
+                    }}
+                  >
+                    <div className="flex justify-between items-center mb-4">
+                      <Title level={3}>{callbackDefinitions[selectedCallback]?.label || selectedCallback}</Title>
+                    </div>
+                    
+                    <Form.Item
+                      name="callback_type"
+                      label="Callback Type"
+                      rules={[{ required: true, message: 'Please select when to trigger this callback' }]}
+                    >
+                      <Select placeholder="Select when to trigger this callback">
+                        <Select.Option value="success">On Success</Select.Option>
+                        <Select.Option value="failure">On Failure</Select.Option>
+                        <Select.Option value="success_and_failure">On Success & Failure</Select.Option>
+                      </Select>
+                    </Form.Item>
+                    
+                    {callbackDefinitions[selectedCallback]?.variables.map(variable => (
+                      <Form.Item
+                        key={variable.key}
+                        name={['callback_vars', variable.key]}
+                        label={variable.label}
+                        rules={[
+                          { 
+                            required: variable.required, 
+                            message: `Please enter ${variable.label}` 
+                          }
+                        ]}
+                        tooltip={variable.description}
+                      >
+                        {variable.type === 'boolean' ? (
+                          <Switch />
+                        ) : (
+                          <Input placeholder={`Enter ${variable.label}`} />
+                        )}
+                      </Form.Item>
+                    ))}
+                    
+                    <div className="flex justify-end gap-2 mt-6">
+                      <Button 
+                        onClick={() => {
+                          setSelectedCallback(null);
+                          callbackForm.resetFields();
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                      <TremorButton type="submit" loading={submittingCallback}>
+                        Update Callback
+                      </TremorButton>
+                    </div>
+                  </Form>
+                </div>
+              ) : (
+                <div>
+                  {getActiveCallbacks().length > 0 ? (
+                    <div className="space-y-6">
+                      {getActiveCallbacks().map(callbackName => {
+                        const callbackDef = callbackDefinitions[callbackName];
+                        const callbackType = getCallbackType(callbackName);
+                        const callbackVars = getCallbackVars(callbackName);
+                        
+                        return (
+                          <div key={callbackName} className="p-4 border rounded-md">
+                            <div className="flex justify-between items-center mb-4">
+                              <div>
+                                <Title level={3}>{callbackDef?.label || callbackName}</Title>
+                                <Badge color={
+                                  callbackType === "success" ? "green" :
+                                  callbackType === "failure" ? "red" : "blue"
+                                }>
+                                  {callbackType === "success" ? "On Success" :
+                                   callbackType === "failure" ? "On Failure" : "On Success & Failure"}
+                                </Badge>
+                              </div>
+                              {canEditTeam && (
+                                <Space>
+                                  <Button 
+                                    icon={<EditOutlined />}
+                                    onClick={() => {
+                                      setSelectedCallback(callbackName);
+                                      callbackForm.setFieldsValue({
+                                        callback_type: callbackType,
+                                        callback_vars: callbackVars
+                                      });
+                                    }}
+                                  >
+                                    Edit
+                                  </Button>
+                                  <Popconfirm
+                                    title="Delete this callback?"
+                                    description="Are you sure you want to delete this callback? This action cannot be undone."
+                                    onConfirm={() => handleDeleteCallback(callbackName)}
+                                    okText="Delete"
+                                    cancelText="Cancel"
+                                    okButtonProps={{ danger: true }}
+                                  >
+                                    <Button 
+                                      danger 
+                                      icon={<DeleteOutlined />}
+                                    >
+                                      Delete
+                                    </Button>
+                                  </Popconfirm>
+                                </Space>
+                              )}
+                            </div>
+                            
+                            <Descriptions 
+                              bordered 
+                              size="small" 
+                              column={1}
+                              className="mt-4"
+                            >
+                              {callbackDef?.variables.map(varDef => (
+                                <Descriptions.Item 
+                                  key={varDef.key} 
+                                  label={varDef.label}
+                                  labelStyle={{ width: '40%' }}
+                                >
+                                  {varDef.type === 'boolean' 
+                                    ? String(!!callbackVars[varDef.key]) 
+                                    : callbackVars[varDef.key] || '-'}
+                                </Descriptions.Item>
+                              ))}
+                            </Descriptions>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <Empty 
+                      description="No callbacks configured" 
+                      image={Empty.PRESENTED_IMAGE_SIMPLE}
+                    />
+                  )}
                 </div>
               )}
             </Card>
