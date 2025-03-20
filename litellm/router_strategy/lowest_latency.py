@@ -124,7 +124,8 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     len(request_count_dict[id].get("latency", []))
                     < self.routing_args.max_latency_list_size
                 ):
-                    request_count_dict[id].setdefault("latency", []).append(final_value)
+                    latency_value = final_value.total_seconds() if isinstance(final_value, timedelta) else final_value
+                    request_count_dict[id].setdefault("latency", []).append(latency_value)
                 else:
                     request_count_dict[id]["latency"] = request_count_dict[id][
                         "latency"
@@ -332,7 +333,8 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     len(request_count_dict[id].get("latency", []))
                     < self.routing_args.max_latency_list_size
                 ):
-                    request_count_dict[id].setdefault("latency", []).append(final_value)
+                    latency_value = final_value.total_seconds() if isinstance(final_value, timedelta) else final_value
+                    request_count_dict[id].setdefault("latency", []).append(latency_value)
                 else:
                     request_count_dict[id]["latency"] = request_count_dict[id][
                         "latency"
@@ -472,11 +474,15 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 for _call_latency in item_ttft_latency:
                     if isinstance(_call_latency, float):
                         total += _call_latency
+                total = total / len(item_ttft_latency) if total > 0 else float('inf')
+            elif len(item_latency) > 0 and isinstance(item_latency[0], timedelta):
+                for _call_latency in item_latency:
+                    total += _call_latency.total_seconds()
             else:
                 for _call_latency in item_latency:
                     if isinstance(_call_latency, float):
                         total += _call_latency
-            item_latency = total / len(item_latency)
+            item_latency = total / len(item_latency) if total > 0 else float('inf')
 
             # -------------- #
             # Debugging Logic
@@ -503,6 +509,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
         if len(potential_deployments) == 0:
             return None
 
+        if not healthy_deployments:
+            return None
+
         # Sort potential deployments by latency
         sorted_deployments = sorted(potential_deployments, key=lambda x: x[1])
 
@@ -512,9 +521,10 @@ class LowestLatencyLoggingHandler(CustomLogger):
         # Find deployments within buffer of lowest latency
         buffer = self.routing_args.lowest_latency_buffer * lowest_latency
 
+        # If no deployments within buffer, fall back to all sorted deployments
         valid_deployments = [
             x for x in sorted_deployments if x[1] <= lowest_latency + buffer
-        ]
+        ] or sorted_deployments
 
         # Pick a random deployment from valid deployments
         random_valid_deployment = random.choice(valid_deployments)
