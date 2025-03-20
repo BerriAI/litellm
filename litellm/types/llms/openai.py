@@ -436,12 +436,24 @@ class ChatCompletionDocumentObject(TypedDict):
     citations: Optional[CitationsObject]
 
 
+class ChatCompletionFileObjectFile(TypedDict):
+    file_data: Optional[str]
+    file_id: Optional[str]
+    filename: Optional[str]
+
+
+class ChatCompletionFileObject(TypedDict):
+    type: Literal["file"]
+    file: ChatCompletionFileObjectFile
+
+
 OpenAIMessageContentListBlock = Union[
     ChatCompletionTextObject,
     ChatCompletionImageObject,
     ChatCompletionAudioObject,
     ChatCompletionDocumentObject,
     ChatCompletionVideoObject,
+    ChatCompletionFileObject,
 ]
 
 OpenAIMessageContent = Union[
@@ -523,6 +535,7 @@ ValidUserMessageContentTypes = [
     "input_audio",
     "document",
     "video_url",
+    "file",
 ]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
 
 AllMessageValues = Union[
