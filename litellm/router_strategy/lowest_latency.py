@@ -511,6 +511,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
         if len(potential_deployments) == 0:
             return None
 
+        if not healthy_deployments:
+            return None
+
         # Sort potential deployments by latency
         sorted_deployments = sorted(potential_deployments, key=lambda x: x[1])
 
@@ -520,9 +523,10 @@ class LowestLatencyLoggingHandler(CustomLogger):
         # Find deployments within buffer of lowest latency
         buffer = self.routing_args.lowest_latency_buffer * lowest_latency
 
+        # If no deployments within buffer, fall back to all sorted deployments
         valid_deployments = [
-            x for x in sorted_deployments if x[1] <= lowest_latency + buffer
-        ]
+             x for x in sorted_deployments if x[1] <= lowest_latency + buffer
+        ] or sorted_deployments
 
         # Pick a random deployment from valid deployments
         random_valid_deployment = random.choice(valid_deployments)
