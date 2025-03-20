@@ -540,3 +540,231 @@ async def delete_team_callback(
             param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+@router.patch(
+    "/team/{team_id:path}/callback/{callback_name}",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def update_team_callback(
+    data: AddTeamCallback,
+    http_request: Request,
+    team_id: str,
+    callback_name: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
+):
+    """
+    Update an existing callback for a team
+    
+    Parameters:
+    - team_id (str, required): The unique identifier for the team
+    - callback_name (str, required): The name of the callback to update
+    - callback_type (Literal["success", "failure", "success_and_failure"], required): The type of callback to set
+    - callback_vars (StandardCallbackDynamicParams, required): A dictionary of variables to pass to the callback
+    
+    Example curl:
+    ```
+    curl -X PATCH 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback/langfuse' \
+        -H 'Content-Type: application/json' \
+        -H 'Authorization: Bearer sk-1234' \
+        -d '{
+        "callback_name": "langfuse",
+        "callback_type": "success_and_failure",
+        "callback_vars": {"langfuse_public_key": "pk-lf-updated", "langfuse_secret_key": "sk-updated"}
+        }'
+    ```
+    
+    This will update the langfuse callback for the team with id dbe2f686-a686-4896-864a-4c3924458709
+    to use the new API keys and set it to trigger on both success and failure events.
+    """
+    try:
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            raise HTTPException(status_code=500, detail={"error": "No db connected"})
+            
+        # Verify callback_name in path matches the one in the request body
+        if callback_name != data.callback_name:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"Callback name in path '{callback_name}' does not match callback name in request body '{data.callback_name}'"}
+            )
+
+        # Check if team exists
+        _existing_team = await prisma_client.get_data(
+            team_id=team_id, table_name="team", query_type="find_unique"
+        )
+        if _existing_team is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"Team id = {team_id} does not exist."},
+            )
+
+        # Get team callback settings from metadata
+        team_metadata = _existing_team.metadata
+        team_callback_settings = team_metadata.get("callback_settings", {})
+        team_callback_settings_obj = TeamCallbackMetadata(**team_callback_settings)
+        
+        # Track changes for response
+        changes = {
+            "callback_type_updated": False,
+            "callback_vars_updated": [],
+            "added_to_success": False,
+            "added_to_failure": False,
+            "removed_from_success": False,
+            "removed_from_failure": False
+        }
+        
+        # Update callback based on callback_type
+        # First, check if the callback exists in either list
+        callback_in_success = callback_name in (team_callback_settings_obj.success_callback or [])
+        callback_in_failure = callback_name in (team_callback_settings_obj.failure_callback or [])
+        
+        # Then update according to the requested type
+        if data.callback_type == "success":
+            # Add to success if not already there
+            if not callback_in_success:
+                if team_callback_settings_obj.success_callback is None:
+                    team_callback_settings_obj.success_callback = []
+                team_callback_settings_obj.success_callback.append(callback_name)
+                changes["added_to_success"] = True
+                
+            # Remove from failure if it's there
+            if callback_in_failure:
+                team_callback_settings_obj.failure_callback.remove(callback_name)
+                changes["removed_from_failure"] = True
+                
+        elif data.callback_type == "failure":
+            # Add to failure if not already there
+            if not callback_in_failure:
+                if team_callback_settings_obj.failure_callback is None:
+                    team_callback_settings_obj.failure_callback = []
+                team_callback_settings_obj.failure_callback.append(callback_name)
+                changes["added_to_failure"] = True
+                
+            # Remove from success if it's there
+            if callback_in_success:
+                team_callback_settings_obj.success_callback.remove(callback_name)
+                changes["removed_from_success"] = True
+                
+        elif data.callback_type == "success_and_failure":
+            # Add to success if not already there
+            if not callback_in_success:
+                if team_callback_settings_obj.success_callback is None:
+                    team_callback_settings_obj.success_callback = []
+                team_callback_settings_obj.success_callback.append(callback_name)
+                changes["added_to_success"] = True
+                
+            # Add to failure if not already there
+            if not callback_in_failure:
+                if team_callback_settings_obj.failure_callback is None:
+                    team_callback_settings_obj.failure_callback = []
+                team_callback_settings_obj.failure_callback.append(callback_name)
+                changes["added_to_failure"] = True
+        
+        # If any changes were made to the callback lists
+        if any([changes["added_to_success"], changes["added_to_failure"], 
+                changes["removed_from_success"], changes["removed_from_failure"]]):
+            changes["callback_type_updated"] = True
+        
+        # Update callback variables
+        # Define the variable prefixes for each callback to know which ones to update
+        callback_var_prefixes = {
+            "langfuse": ["langfuse_public_key", "langfuse_secret", "langfuse_secret_key", "langfuse_host"],
+            "gcs": ["gcs_bucket_name", "gcs_path_service_account"],
+            "langsmith": ["langsmith_api_key", "langsmith_project", "langsmith_base_url"],
+            "humanloop": ["humanloop_api_key"],
+            "arize": ["arize_api_key", "arize_space_key"],
+        }
+        
+        # Get the variable keys for this callback type
+        relevant_var_keys = callback_var_prefixes.get(callback_name, [])
+        
+        # Initialize callback_vars if it doesn't exist
+        if team_callback_settings_obj.callback_vars is None:
+            team_callback_settings_obj.callback_vars = {}
+            
+        # Update only the variables related to this callback
+        for var_name, var_value in data.callback_vars.items():
+            # Only update if this is a relevant variable for this callback
+            if var_name in relevant_var_keys:
+                # Check if it's a new variable or an update
+                old_value = team_callback_settings_obj.callback_vars.get(var_name)
+                if old_value != var_value:
+                    team_callback_settings_obj.callback_vars[var_name] = var_value
+                    changes["callback_vars_updated"].append(var_name)
+        
+        # If no changes were made at all, return a message
+        if not (changes["callback_type_updated"] or changes["callback_vars_updated"]):
+            return {
+                "status": "success",
+                "message": f"No changes were needed for callback '{callback_name}' for team {team_id}",
+                "data": {
+                    "team_id": team_id,
+                    "callback_name": callback_name,
+                    "current_success_callbacks": team_callback_settings_obj.success_callback,
+                    "current_failure_callbacks": team_callback_settings_obj.failure_callback,
+                    "current_vars": {
+                        var_name: team_callback_settings_obj.callback_vars.get(var_name)
+                        for var_name in relevant_var_keys
+                        if var_name in team_callback_settings_obj.callback_vars
+                    }
+                }
+            }
+        
+        # Update team in database
+        team_metadata["callback_settings"] = team_callback_settings_obj.model_dump()
+        team_metadata_json = json.dumps(team_metadata)
+        
+        updated_team = await prisma_client.db.litellm_teamtable.update(
+            where={"team_id": team_id}, data={"metadata": team_metadata_json}  # type: ignore
+        )
+
+        if updated_team is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"Team id = {team_id} does not exist. Error updating team callback"},
+            )
+
+        return {
+            "status": "success",
+            "message": f"Callback '{callback_name}' updated for team {team_id}",
+            "data": {
+                "team_id": updated_team.team_id,
+                "callback_name": callback_name,
+                "changes": changes,
+                "current_success_callbacks": team_callback_settings_obj.success_callback,
+                "current_failure_callbacks": team_callback_settings_obj.failure_callback,
+                "updated_vars": {
+                    var_name: team_callback_settings_obj.callback_vars.get(var_name)
+                    for var_name in changes["callback_vars_updated"]
+                },
+            },
+        }
+
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"litellm.proxy.proxy_server.update_team_callback(): Exception occurred - {str(e)}"
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Internal Server Error({str(e)})"),
+                type=ProxyErrorTypes.internal_server_error.value,
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Internal Server Error, " + str(e),
+            type=ProxyErrorTypes.internal_server_error.value,
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
