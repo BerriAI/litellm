@@ -48,6 +48,8 @@ spec:
             {{- end }}
             - name: DISABLE_SCHEMA_UPDATE
               value: "false" # always run the migration from the Helm PreSync hook, override the value set
+          resources:
+            {{- toYaml .Values.migrationJob.resources | nindent 12 }}
           {{- with .Values.volumeMounts }}
           volumeMounts:
             {{- toYaml . | nindent 12 }}
