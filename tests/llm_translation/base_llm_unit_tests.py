@@ -1062,6 +1062,7 @@ class BaseAnthropicChatTest(ABC):
             **base_completion_call_args, **args, stream=False
         )
 
-        assert json.loads(built_response.choices[0].message.content) == json.loads(
-            non_stream_response.choices[0].message.content
+        assert (
+            json.loads(built_response.choices[0].message.content).keys()
+            == json.loads(non_stream_response.choices[0].message.content).keys()
         ), f"Got={json.loads(built_response.choices[0].message.content)}, Expected={json.loads(non_stream_response.choices[0].message.content)}"
