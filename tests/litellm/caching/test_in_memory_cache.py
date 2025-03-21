@@ -32,3 +32,14 @@ def test_in_memory_openai_obj_cache():
     assert cached_obj is not None
 
     assert cached_obj == openai_obj
+
+
+def test_in_memory_cache_max_size_per_item():
+    """
+    Test that the cache will not store items larger than the max size per item
+    """
+    in_memory_cache = InMemoryCache(max_size_per_item=100)
+
+    result = in_memory_cache.check_value_size("a" * 100000000)
+
+    assert result is False
