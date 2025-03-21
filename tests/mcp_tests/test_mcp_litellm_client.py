@@ -10,9 +10,10 @@ sys.path.insert(
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 import os
-from langchain_openai import ChatOpenAI
-
+from litellm.mcp_client.tools import load_mcp_tools
+import litellm
 import pytest
+import json
 
 
 @pytest.mark.asyncio
@@ -34,10 +35,14 @@ async def test_mcp_agent():
 
             # Create and run the agent
             print(os.getenv("OPENAI_API_KEY"))
-            model = ChatOpenAI(model="gpt-4o", api_key=os.getenv("OPENAI_API_KEY"))
-            agent = create_react_agent(model, tools)
-            agent_response = await agent.ainvoke({"messages": "what's (3 + 5) x 12?"})
+            llm_response = await litellm.acompletion(
+                model="gpt-4o",
+                api_key=os.getenv("OPENAI_API_KEY"),
+                messages=[{"role": "user", "content": "what's (3 + 5) x 12?"}],
+                tools=tools,
+            )
+            print("LLM RESPONSE: ", json.dumps(llm_response, indent=4, default=str))
 
             # Add assertions to verify the response
-            assert isinstance(agent_response, dict)
-            print(agent_response)
+            assert isinstance(llm_response, dict)
+            print(llm_response)
