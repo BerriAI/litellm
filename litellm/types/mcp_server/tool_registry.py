@@ -30,9 +30,3 @@ class CallToolRequest(BaseModel):
 class ContentItem(BaseModel):
     type: str
     text: Optional[str] = None
-
-
-class CallToolResponse(BaseModel):
-    content: List[ContentItem]
-    isError: Optional[bool] = None
-    _meta: Optional[Dict[str, Any]] = None
