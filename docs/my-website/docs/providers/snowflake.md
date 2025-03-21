@@ -8,7 +8,7 @@ import TabItem from '@theme/TabItem';
 | Description | The Snowflake Cortex LLM REST API lets you access the COMPLETE function via HTTP POST requests|
 | Provider Route on LiteLLM | `snowflake/` |
 | Link to Provider Doc | [Snowflake ↗](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-llm-rest-api) |
-| Base URL | [https://{account-id}.snowflakecomputing.com/api/v2/cortex/inference:complete/](https://{account-id}.snowflakecomputing.com/api/v2/cortex/inference:complete) |
+| Base URL | [snowflakecomputing.com](snowflakecomputing.com) |
 | Supported OpenAI Endpoints | `/chat/completions`, `/completions` |
 
 
@@ -25,16 +25,16 @@ Find the Arctic Embed models [here](https://huggingface.co/collections/Snowflake
     "response_format"
 ```
 
-## API KEYS
+## API Keys
 
-Snowflake does have API keys. Instead, you access the Snowflake API with your JWT token and account identifier.
+Snowflake does have API keys. Instead, you have to access the Snowflake API with your JWT token and account identifier.
 
 ```python
 import os 
 os.environ["SNOWFLAKE_JWT"] = "YOUR JWT"
 os.environ["SNOWFLAKE_ACCOUNT_ID"] = "YOUR ACCOUNT IDENTIFIER"
 ```
-## Usage
+## Python SDK Usage 
 
 ```python
 from litellm import completion
@@ -49,26 +49,38 @@ response = completion(
     messages = [{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
+### Adding an api_base: 
+
+If you want to specify the API base, you don't have to put the full snowflake url:
+
+e.g `https://{account-id}.snowflakecomputing.com/api/v2/cortex/inference:complete/`
+
+Instead, you can just pass
+```python
+response = completion(
+    model="snowflake/mistral-7b", 
+    messages = [{ "content": "Hello, how are you?","role": "user"}],
+    api_base = "snowflakecomputing.com"
+)
+```
+and Litellm will add the `/api/v2/cortex/inference:complete/` and the `account-id` for you.
 
 ## Usage with LiteLLM Proxy 
 
-#### 1. Required env variables
-```bash
-export SNOWFLAKE_JWT=""
-export SNOWFLAKE_ACCOUNT_ID = ""
-```
 
-#### 2. Start the proxy~
+#### 1. Start the proxy~
 ```yaml
 model_list:
   - model_name: mistral-7b
     litellm_params:
         model: snowflake/mistral-7b
-        api_key: YOUR_API_KEY
-        api_base: https://YOUR-ACCOUNT-ID.snowflakecomputing.com/api/v2/cortex/inference:complete
+        snowflake_jwt: <JWT>
+        snowflake_account_id: <ACCOUNT-ID>
+        api_base: snowflakecomputing.com
 
 ```
 
+#### 2. Start Litellm Proxy Server
 ```bash
 litellm --config /path/to/config.yaml
 ```
