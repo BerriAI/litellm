@@ -30,7 +30,7 @@ async def test_mcp_agent():
             await session.initialize()
 
             # Get tools
-            tools = await load_mcp_tools(session)
+            tools = await load_mcp_tools(session=session, format="openai")
             print("MCP TOOLS: ", tools)
 
             # Create and run the agent
