@@ -14,24 +14,26 @@ mcp_tools:
   - name: "get_current_time"
     description: "Get the current time"
     input_schema: {
-      type: object
-      properties:
-        format:
-          type: string
-          description: "The format of the time to return"
-          enum:
-            - "short"
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string",
+          "description": "The format of the time to return",
+          "enum": ["short"]
+        }
+      }
     }
-    handler: "get_current_time"
+    handler: "mcp_tools.get_current_time"
   - name: "get_current_date"
     description: "Get the current date"
     input_schema: {
-      type: object
-      properties:
-        format:
-          type: string
-          description: "The format of the date to return"
-          enum:
-            - "short"
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string",
+          "description": "The format of the date to return",
+          "enum": ["short"]
+        }
+      }
     }
-    handler: "get_current_date"
+    handler: "mcp_tools.get_current_date"
