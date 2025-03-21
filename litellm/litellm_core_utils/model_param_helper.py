@@ -123,7 +123,7 @@ class ModelParamHelper:
 
         This follows the OpenAI API Spec
         """
-        return set(TranscriptionCreateParams.__annotations__.keys())
+        return set(TranscriptionCreateParams.__dict__.keys())
 
     @staticmethod
     def _get_exclude_kwargs() -> Set[str]:
