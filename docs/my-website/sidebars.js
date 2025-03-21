@@ -301,6 +301,7 @@ const sidebars = {
             "image_variations",
           ]
         },
+        "mcp",
         {
           type: "category",
           label: "/audio",
