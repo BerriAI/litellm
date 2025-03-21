@@ -6,12 +6,6 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 
-router = APIRouter(
-    prefix="/mcp",
-    tags=["mcp"],
-)
-
-
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
@@ -19,7 +13,7 @@ from litellm.types.mcp_server.tool_registry import *
 
 router = APIRouter(
     prefix="/mcp",
-    tags=["MCP"],
+    tags=["mcp"],
 )
 
 
