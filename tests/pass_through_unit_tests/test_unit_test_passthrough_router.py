@@ -40,28 +40,31 @@ class TestPassthroughEndpointRouter(unittest.TestCase):
         """
 
         # OpenAI: standard (no region-specific logic)
-        self.router.set_pass_through_credentials("openai", None, "openai_key")
-        self.assertEqual(self.router.get_credentials("openai", None), "openai_key")
+        self.router.add_credentials("openai", None, "openai_key")
+        self.assertEqual(
+            self.router.get_credentials("openai", None), {"api_key": "openai_key"}
+        )
 
         # AssemblyAI: using an API base that contains 'eu' should trigger regional logic.
         api_base_eu = "https://api.eu.assemblyai.com"
-        self.router.set_pass_through_credentials(
-            "assemblyai", api_base_eu, "assemblyai_key"
-        )
+        self.router.add_credentials("assemblyai", api_base_eu, "assemblyai_key")
         # When calling get_credentials, pass the region "eu" (extracted from the API base)
         self.assertEqual(
-            self.router.get_credentials("assemblyai", "eu"), "assemblyai_key"
+            self.router.get_credentials("assemblyai", "eu"),
+            {"api_key": "assemblyai_key"},
         )
 
         # Anthropic: no region set
-        self.router.set_pass_through_credentials("anthropic", None, "anthropic_key")
+        self.router.add_credentials("anthropic", None, "anthropic_key")
         self.assertEqual(
-            self.router.get_credentials("anthropic", None), "anthropic_key"
+            self.router.get_credentials("anthropic", None), {"api_key": "anthropic_key"}
         )
 
         # Cohere: no region set
-        self.router.set_pass_through_credentials("cohere", None, "cohere_key")
-        self.assertEqual(self.router.get_credentials("cohere", None), "cohere_key")
+        self.router.add_credentials("cohere", None, "cohere_key")
+        self.assertEqual(
+            self.router.get_credentials("cohere", None), {"api_key": "cohere_key"}
+        )
 
     def test_get_credentials_from_env(self):
         """
@@ -76,7 +79,7 @@ class TestPassthroughEndpointRouter(unittest.TestCase):
             mock_get_secret.return_value = "env_openai_key"
             # For "openai", if credentials are not set, it should fallback to the env variable.
             result = self.router.get_credentials("openai", None)
-            self.assertEqual(result, "env_openai_key")
+            self.assertEqual(result, {"api_key": "env_openai_key"})
             mock_get_secret.assert_called_once_with("OPENAI_API_KEY")
 
         with patch(
@@ -84,7 +87,7 @@ class TestPassthroughEndpointRouter(unittest.TestCase):
         ) as mock_get_secret:
             mock_get_secret.return_value = "env_cohere_key"
             result = self.router.get_credentials("cohere", None)
-            self.assertEqual(result, "env_cohere_key")
+            self.assertEqual(result, {"api_key": "env_cohere_key"})
             mock_get_secret.assert_called_once_with("COHERE_API_KEY")
 
         with patch(
@@ -92,7 +95,7 @@ class TestPassthroughEndpointRouter(unittest.TestCase):
         ) as mock_get_secret:
             mock_get_secret.return_value = "env_anthropic_key"
             result = self.router.get_credentials("anthropic", None)
-            self.assertEqual(result, "env_anthropic_key")
+            self.assertEqual(result, {"api_key": "env_anthropic_key"})
             mock_get_secret.assert_called_once_with("ANTHROPIC_API_KEY")
 
         with patch(
@@ -100,7 +103,7 @@ class TestPassthroughEndpointRouter(unittest.TestCase):
         ) as mock_get_secret:
             mock_get_secret.return_value = "env_azure_key"
             result = self.router.get_credentials("azure", None)
-            self.assertEqual(result, "env_azure_key")
+            self.assertEqual(result, {"api_key": "env_azure_key"})
             mock_get_secret.assert_called_once_with("AZURE_API_KEY")
 
     def test_default_env_variable_method(self):

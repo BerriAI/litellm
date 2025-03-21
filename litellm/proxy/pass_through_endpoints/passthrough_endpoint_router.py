@@ -17,8 +17,8 @@ class PassthroughEndpointRouter:
         custom_llm_provider: str,
         api_base: Optional[str],
         api_key: Optional[str],
-        credential_name: Optional[str],
-        credential_values: Optional[Dict[str, str]],
+        credential_name: Optional[str] = None,
+        credential_values: Optional[Dict[str, str]] = None,
     ):
         """
         Set credentials for a pass-through endpoint. Used when a user adds a pass-through LLM endpoint on the UI.
