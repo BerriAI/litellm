@@ -177,7 +177,7 @@ async def vertex_proxy_route(
     )
 
     # Use headers from the incoming request if no vertex credentials are found
-    if vertex_credentials.vertex_project is None:
+    if vertex_credentials is None or vertex_credentials.vertex_project is None:
         headers = dict(request.headers) or {}
         verbose_proxy_logger.debug(
             "default_vertex_config  not set, incoming request headers %s", headers

@@ -53,6 +53,7 @@ from litellm.caching.caching import (
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
@@ -4495,33 +4496,62 @@ class Router:
         Each provider uses diff .env vars for pass-through endpoints, this helper uses the deployment credentials to set the .env vars for pass-through endpoints
         """
         if deployment.litellm_params.use_in_pass_through is True:
+            if deployment.litellm_params.litellm_credential_name is not None:
+                credential_dict = CredentialAccessor.get_credential_values(
+                    deployment.litellm_params.litellm_credential_name
+                )
+            else:
+                credential_dict = {}
+
             if custom_llm_provider == "vertex_ai":
                 from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
                     vertex_pass_through_router,
                 )
 
-                if (
-                    deployment.litellm_params.vertex_project is None
-                    or deployment.litellm_params.vertex_location is None
-                    or deployment.litellm_params.vertex_credentials is None
-                ):
+                if deployment.litellm_params.vertex_project is not None:
+                    credential_dict["vertex_project"] = (
+                        deployment.litellm_params.vertex_project
+                    )
+
+                if deployment.litellm_params.vertex_location is not None:
+                    credential_dict["vertex_location"] = (
+                        deployment.litellm_params.vertex_location
+                    )
+
+                if deployment.litellm_params.vertex_credentials is not None:
+                    credential_dict["vertex_credentials"] = (
+                        deployment.litellm_params.vertex_credentials
+                    )
+
+                if len(credential_dict) == 0:
                     raise ValueError(
                         "vertex_project, vertex_location, and vertex_credentials must be set in litellm_params for pass-through endpoints"
                     )
                 vertex_pass_through_router.add_vertex_credentials(
-                    project_id=deployment.litellm_params.vertex_project,
-                    location=deployment.litellm_params.vertex_location,
-                    vertex_credentials=deployment.litellm_params.vertex_credentials,
+                    project_id=credential_dict["vertex_project"],
+                    location=credential_dict["vertex_location"],
+                    vertex_credentials=credential_dict["vertex_credentials"],
                 )
             else:
                 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
                     passthrough_endpoint_router,
                 )
 
+                if deployment.litellm_params.api_base is not None:
+                    credential_dict["api_base"] = deployment.litellm_params.api_base
+
+                if deployment.litellm_params.api_key is not None:
+                    credential_dict["api_key"] = deployment.litellm_params.api_key
+
+                if len(credential_dict) == 0:
+                    raise ValueError(
+                        "api_base and api_key must be set in litellm_params for pass-through endpoints"
+                    )
+
                 passthrough_endpoint_router.set_pass_through_credentials(
                     custom_llm_provider=custom_llm_provider,
-                    api_base=deployment.litellm_params.api_base,
-                    api_key=deployment.litellm_params.api_key,
+                    api_base=credential_dict["api_base"],
+                    api_key=credential_dict["api_key"],
                 )
             pass
         pass

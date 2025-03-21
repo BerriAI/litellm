@@ -36,7 +36,7 @@ class VertexPassThroughRouter:
 
     def get_vertex_credentials(
         self, project_id: Optional[str], location: Optional[str]
-    ) -> VertexPassThroughCredentials:
+    ) -> Optional[VertexPassThroughCredentials]:
         """
         Get the vertex credentials for the given project-id, location
         """
