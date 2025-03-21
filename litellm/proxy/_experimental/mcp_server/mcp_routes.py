@@ -17,7 +17,15 @@ from litellm.proxy._experimental.mcp_server.tool_registry import (
 )
 from litellm.types.mcp_server.tool_registry import *
 
-router = APIRouter()
+router = APIRouter(
+    prefix="/mcp",
+    tags=["MCP"],
+)
+
+
+@router.get("/")
+async def root():
+    return {"message": "MCP Server is running"}
 
 
 @router.get("/tools/list", response_model=ListToolsResponse)
