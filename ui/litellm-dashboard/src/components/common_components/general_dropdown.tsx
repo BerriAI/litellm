@@ -9,9 +9,10 @@ interface GeneralDropdownProps {
   onChange?: (value: string) => void;
   placeholder?: string;
   clearable?: boolean;
+  props?: any;
 }
 
-const GeneralDropdown: React.FC<GeneralDropdownProps> = ({ items, value, key_to_sort_by, onChange, placeholder = "Search", clearable = true }) => {
+const GeneralDropdown: React.FC<GeneralDropdownProps> = ({ items, value, key_to_sort_by, onChange, placeholder = "Search", clearable = true, ...props }) => {
   return (
     <Select
       showSearch
@@ -25,6 +26,7 @@ const GeneralDropdown: React.FC<GeneralDropdownProps> = ({ items, value, key_to_
         return teamAlias.toLowerCase().includes(input.toLowerCase());
       }}
       optionFilterProp="children"
+      {...props}
     >
       {items?.map((item) => (
         <Select.Option key={item[key_to_sort_by]} value={item[key_to_sort_by]}>

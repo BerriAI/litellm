@@ -1,4 +1,4 @@
-import { BarChart, BarList, Card, Title, Table, TableHead, TableHeaderCell, TableRow, TableCell, TableBody, Metric, Subtitle } from "@tremor/react";
+import { BarChart, BarList, Card, Title, Table, TableHead, TableHeaderCell, TableRow, TableCell, TableBody, Metric, Subtitle, Flex } from "@tremor/react";
 
 import React, { useState, useEffect, useMemo } from "react";
 
@@ -877,50 +877,53 @@ const UsagePage: React.FC<UsagePageProps> = ({
             </TabPanel>
             <TabPanel>
             <p className="mb-2 text-gray-500 italic text-[12px]">Customers of your LLM API calls. Tracked when a `user` param is passed in your LLM calls <a className="text-blue-500" href="https://docs.litellm.ai/docs/proxy/users" target="_blank">docs here</a></p>
-              <Grid numItems={2}>
+              <Grid numItems={1}>
                 <Col>
-                <Text>Select Time Range</Text>
-       
-              <DateRangePicker 
-                  enableSelect={true} 
-                  value={dateValue} 
-                  onValueChange={(value) => {
-                    setDateValue(value);
-                    updateEndUserData(value.from, value.to, null); // Call updateModelMetrics with the new date range
-                  }}
-                />
-                         </Col>
-                         <Col>
-                  <Text>Select Team</Text>
+                  <Text>Select Time Range</Text>
+        
+                  <DateRangePicker 
+                    enableSelect={true} 
+                    value={dateValue} 
+                    onValueChange={(value) => {
+                      setDateValue(value);
+                      updateEndUserData(value.from, value.to, null); // Call updateModelMetrics with the new date range
+                    }}
+                  />
+                </Col>
+                <br />
+                <Col style={{ width: "100%" }}>
+                  <Text>Select Key</Text>
+                  <Flex style={{ width: "100%" }}>
                   <GeneralDropdown 
                     items={teams} 
                     key_to_sort_by="team_id"
                     onChange={(teamId) => {
                       setSelectedTeam(teamId);
                     }}
+                    placeholder="Team"
+                    style={{ width: '20%' }}
                   />
-                  <Text>Select User</Text>
                   <GeneralDropdown 
                     items={users} 
                     key_to_sort_by="user_id"
                     onChange={(userId) => {
                       setSelectedUser(userId);
                     }}
+                    placeholder="User"
+                    style={{ width: '20%' }}
                   />
-                  <Text>Select Key</Text>
                   <GeneralDropdown 
                     items={filteredKeys} 
                     key_to_sort_by="key_alias"
                     onChange={(key) => {
                       setSelectedKey(key);
                     }}
+                    style={{ width: '60%' }}
+                    placeholder="Search Key"
                   />
-                  </Col>
-
+                  </Flex>
+                </Col>
               </Grid>
-            
-                
-                
               <Card className="mt-4">
 
 
