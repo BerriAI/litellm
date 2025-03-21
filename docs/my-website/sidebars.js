@@ -137,6 +137,7 @@ const sidebars = {
           label: "[Beta] Guardrails",
           items: [
             "proxy/guardrails/quick_start",
+            "proxy/guardrails/lasso_security",
             "proxy/guardrails/aim_security",
             "proxy/guardrails/aporia_api",
             "proxy/guardrails/bedrock",
