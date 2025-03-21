@@ -947,3 +947,45 @@ def test_get_model_from_request(route, request_data, expected_model):
     from litellm.proxy.auth.user_api_key_auth import get_model_from_request
 
     assert get_model_from_request(request_data, route) == expected_model
+
+
+@pytest.mark.asyncio
+async def test_jwt_non_admin_team_route_access():
+    """
+    Test that a non-admin JWT user cannot access team management routes
+    """
+    from fastapi import Request, HTTPException
+    from starlette.datastructures import URL
+    from unittest.mock import patch
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    mock_jwt_response = {
+        "is_proxy_admin": False,
+        "team_id": None,
+        "team_object": None,
+        "user_id": None,
+        "user_object": None,
+        "org_id": None,
+        "org_object": None,
+        "end_user_id": None,
+        "end_user_object": None,
+        "token": "eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJmR09YQTNhbHFObjByRzJ6OHJQT1FLZVVMSWxCNDFnVWl4VDJ5WE1QVG1ZIn0.eyJleHAiOjE3NDI2MDAzODIsImlhdCI6MTc0MjYwMDA4MiwianRpIjoiODRhNjZmZjAtMTE5OC00YmRkLTk1NzAtNWZhMjNhZjYxMmQyIiwiaXNzIjoiaHR0cDovL2xvY2FsaG9zdDo4MDgwL3JlYWxtcy9saXRlbGxtLXJlYWxtIiwiYXVkIjoiYWNjb3VudCIsInN1YiI6ImZmMGZjOGNiLWUyMjktNDkyYy05NzYwLWNlYzVhMDYxNmI2MyIsInR5cCI6IkJlYXJlciIsImF6cCI6ImxpdGVsbG0tdGVzdC1jbGllbnQtaWQiLCJzaWQiOiI4MTYwNjIxOC0yNmZmLTQwMjAtOWQxNy05Zjc0YmFlNTBkODUiLCJhY3IiOiIxIiwiYWxsb3dlZC1vcmlnaW5zIjpbImh0dHA6Ly9sb2NhbGhvc3Q6NDAwMC8qIl0sInJlYWxtX2FjY2VzcyI6eyJyb2xlcyI6WyJvZmZsaW5lX2FjY2VzcyIsImRlZmF1bHQtcm9sZXMtbGl0ZWxsbS1yZWFsbSIsInVtYV9hdXRob3JpemF0aW9uIl19LCJyZXNvdXJjZV9hY2Nlc3MiOnsiYWNjb3VudCI6eyJyb2xlcyI6WyJtYW5hZ2UtYWNjb3VudCIsIm1hbmFnZS1hY2NvdW50LWxpbmtzIiwidmlldy1wcm9maWxlIl19fSwic2NvcGUiOiJwcm9maWxlIGdyb3Vwcy1zY29wZSBlbWFpbCBsaXRlbGxtLmFwaS5jb25zdW1lciIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJuYW1lIjoiS3Jpc2ggRGhvbGFraWEiLCJncm91cHMiOlsiL28zX21pbmlfYWNjZXNzIl0sInByZWZlcnJlZF91c2VybmFtZSI6ImtycmlzaGRoMiIsImdpdmVuX25hbWUiOiJLcmlzaCIsImZhbWlseV9uYW1lIjoiRGhvbGFraWEiLCJlbWFpbCI6ImtycmlzaGRob2xha2lhMkBnbWFpbC5jb20ifQ.Fu2ErZhnfez-bhn_XmjkywcFdZHcFUSvzIzfdNiEowdA0soLmCyqf9731amP6m68shd9qk11e0mQhxFIAIxZPojViC1Csc9TBXLRRQ8ESMd6gPIj-DBkKVkQSZLJ1uibsh4Oo2RViGtqWVcEt32T8U_xhGdtdzNkJ8qy_e0fdNDsUnhmSaTQvmZJYarW0roIrkC-zYZrX3fftzbQfavSu9eqdfPf6wUttIrkaWThWUuORy-xaeZfSmvsGbEg027hh6QwlChiZTSF8R6bRxoqfPN3ZaGFFgbBXNRYZA_eYi2IevhIwJHi_r4o1UvtKAJyfPefm-M6hCfkN_6da4zsog",
+    }
+
+    # Create request
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/team/new")
+
+    # Mock JWTAuthManager.auth_builder
+    with patch(
+        "litellm.proxy.auth.handle_jwt.JWTAuthManager.auth_builder",
+        return_value=mock_jwt_response,
+    ):
+        try:
+            await user_api_key_auth(request=request, api_key="Bearer fake.jwt.token")
+            pytest.fail(
+                "Expected this call to fail. Non-admin user should not access team routes."
+            )
+        except HTTPException as e:
+            assert e.status_code == 403
+            assert "Unauthorized" in str(e.detail)
