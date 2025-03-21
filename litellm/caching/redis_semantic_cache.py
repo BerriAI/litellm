@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import litellm
 from litellm._logging import print_verbose
+from litellm.litellm_core_utils.prompt_templates.common_utils import get_str_from_messages
 from .base_cache import BaseCache
 
 
@@ -192,7 +193,7 @@ class RedisSemanticCache(BaseCache):
                 print_verbose("No messages provided for semantic caching")
                 return
                 
-            prompt = "".join(message.get("content", "") for message in messages if message.get("content"))
+            prompt = get_str_from_messages(messages)
             value_str = str(value)
 
             # Get TTL and store in Redis semantic cache
@@ -224,7 +225,7 @@ class RedisSemanticCache(BaseCache):
                 print_verbose("No messages provided for semantic cache lookup")
                 return None
                 
-            prompt = "".join(message.get("content", "") for message in messages if message.get("content"))
+            prompt = get_str_from_messages(messages)
             # Check the cache for semantically similar prompts
             results = self.llmcache.check(prompt=prompt)
 
@@ -322,7 +323,7 @@ class RedisSemanticCache(BaseCache):
                 print_verbose("No messages provided for semantic caching")
                 return
                 
-            prompt = "".join(message.get("content", "") for message in messages if message.get("content"))
+            prompt = get_str_from_messages(messages)
             value_str = str(value)
 
             # Generate embedding for the value (response) to cache
@@ -367,7 +368,7 @@ class RedisSemanticCache(BaseCache):
                 kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
                 return None
                 
-            prompt = "".join(message.get("content", "") for message in messages if message.get("content"))
+            prompt = get_str_from_messages(messages)
             
             # Generate embedding for the prompt
             prompt_embedding = await self._get_async_embedding(prompt, **kwargs)
