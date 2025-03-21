@@ -119,7 +119,6 @@ function getTopKeys(data: Array<{ [key: string]: unknown }>): any[] {
   spendKeys.sort((a, b) => Number(b.spend) - Number(a.spend));
 
   const topKeys = spendKeys.slice(0, 5).map((k) => k.key);
-  console.log(`topKeys: ${Object.keys(topKeys[0])}`);
   return topKeys;
 }
 type DataDict = { [key: string]: unknown };
@@ -167,9 +166,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [proxySettings, setProxySettings] = useState<ProxySettings | null>(null);
   const [totalMonthlySpend, setTotalMonthlySpend] = useState<number>(0);
 
-  console.log("users in usage", users);
   // teams
-  console.log("teams in usage", teams);
 
   const { keys: fetchedKeys, isLoading: keysLoading } = useKeyList({
     selectedTeam: undefined,
@@ -177,9 +174,8 @@ const UsagePage: React.FC<UsagePageProps> = ({
     accessToken: accessToken || "",
   });
 
-  const effectiveKeys = keys?.length ? keys : fetchedKeys;
 
-  console.log("effectiveKeys in usage", effectiveKeys);
+  const effectiveKeys = keys?.length ? keys : fetchedKeys;
 
   const firstDay = new Date(
     currentDate.getFullYear(),
@@ -195,7 +191,6 @@ const UsagePage: React.FC<UsagePageProps> = ({
   let startTime = formatDate(firstDay);
   let endTime = formatDate(lastDay);
 
-  console.log("keys in usage", keys);
   console.log("premium user in usage", premiumUser);
 
   function valueFormatterNumbers(number: number) {
@@ -226,7 +221,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   }, [dateValue, selectedTags]);
 
 
-  const updateEndUserData = async (startTime:  Date | undefined, endTime:  Date | undefined, uiSelectedKey: string | null) => {
+  const updateEndUserData = async (startTime:  Date | undefined, endTime:  Date | undefined, keyToken: string | null) => {
     if (!startTime || !endTime || !accessToken) {
       return;
     }
@@ -237,15 +232,12 @@ const UsagePage: React.FC<UsagePageProps> = ({
     // startTime put it to the first hour of the selected date
     startTime.setHours(0, 0, 0, 0);
 
-    console.log("uiSelectedKey", uiSelectedKey);
 
     let newTopUserData = await adminTopEndUsersCall(
       accessToken,
-      uiSelectedKey,
+      keyToken,
       startTime.toISOString(),
       endTime.toISOString(),
-      selectedTeam,
-      selectedUser
     )
     console.log("End user data updated successfully", newTopUserData);
     setTopUsers(newTopUserData);
@@ -615,10 +607,11 @@ const UsagePage: React.FC<UsagePageProps> = ({
   }
 
   useEffect(() => {
-    updateEndUserData(dateValue.from, dateValue.to, selectedKey, selectedTeam, selectedUser);
-  }, [selectedKey, selectedTeam, selectedUser]);
+    const keyToken = effectiveKeys?.find((effectiveKey) => effectiveKey.key_alias === selectedKey)?.token;
 
-  console.log("keys in usage", keys);
+    updateEndUserData(dateValue.from, dateValue.to, keyToken);
+  }, [selectedKey, selectedTeam, selectedUser, effectiveKeys]);
+
   const filteredKeys = useMemo(() => {
     if (!effectiveKeys) return [];
     return effectiveKeys.filter((key) => {
@@ -638,7 +631,6 @@ const UsagePage: React.FC<UsagePageProps> = ({
       return true;
     });
   }, [effectiveKeys, selectedTeam, selectedUser]);
-  console.log("filteredKeys", filteredKeys);
 
   return (
     <div style={{ width: "100%" }} className="p-8">      

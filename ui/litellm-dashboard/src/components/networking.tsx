@@ -1972,8 +1972,6 @@ export const adminTopEndUsersCall = async (
   keyToken: string | null,
   startTime: string | undefined,
   endTime: string | undefined,
-  teamId: string | null,
-  userId: string | null,
 ) => {
   try {
     let url = proxyBaseUrl
@@ -1981,19 +1979,9 @@ export const adminTopEndUsersCall = async (
       : `/global/spend/end_users`;
 
     let body: Record<string, string> = {};
-    if (startTime && endTime) {
-      body.startTime = startTime;
-      body.endTime = endTime;
-    }
-    if (teamId) {
-      body.team_id = teamId;
-    }
-    if (userId) {
-      body.user_id = userId;
-    }
-    if (keyToken !== null) {
-      body.api_key = keyToken;
-    }
+    if (startTime) body.startTime = startTime;
+    if (endTime) body.endTime = endTime;
+    if (keyToken !== null) body.api_key = keyToken;
     const bodyString = JSON.stringify(body);
 
     //message.info("Making top end users request");
@@ -2017,7 +2005,7 @@ export const adminTopEndUsersCall = async (
     }
 
     const data = await response.json();
-    console.log(data);
+    console.log("adminTopEndUsersCall", data);
     //message.success("Top End users received");
     return data;
   } catch (error) {
