@@ -1,16 +1,28 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
+import Image from '@theme/IdealImage';
 
 # /mcp [BETA] - Model Context Protocol
 
-Use Model Context Protocol with LiteLLM. 
+Use Model Context Protocol with LiteLLM
+
+
+<Image 
+  img={require('../img/litellm_mcp.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+<p style={{textAlign: 'left', color: '#666'}}>
+  LiteLLM MCP Architecture: Enabling MCP tool usage across all LiteLLM supported models
+</p>
+
 
 ## Overview
 
-LiteLLM acts as a MCP bridge to utilize **MCP tools** with **all LiteLLM supported models**. LiteLLM offers the following features for using MCP
+LiteLLM acts as a MCP bridge to utilize MCP tools with all LiteLLM supported models. LiteLLM offers the following features for using MCP
 
-- List Available MCP Tools: OpenAI clients can view all available MCP tools
-- Call MCP Tools: OpenAI clients can call MCP tools
+- **List** Available MCP Tools: OpenAI clients can view all available MCP tools
+- **Call** MCP Tools: OpenAI clients can call MCP tools
+
 
 ## Usage
 
