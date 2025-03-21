@@ -58,10 +58,6 @@ async def test_mcp_agent():
             )
             openai_tool = llm_response["choices"][0]["message"]["tool_calls"][0]
 
-            # Convert the OpenAI tool to an MCP tool
-            mcp_tool = transform_openai_tool_to_mcp_tool(openai_tool)
-            print("MCP TOOL: ", mcp_tool)
-
             # Call the tool using MCP client
             call_result = await call_openai_tool(
                 session=session,
