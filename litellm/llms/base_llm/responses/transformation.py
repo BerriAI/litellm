@@ -7,7 +7,6 @@ import httpx
 from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
-    ResponsesAPIRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStreamingResponse,
 )
@@ -97,7 +96,7 @@ class BaseResponsesAPIConfig(ABC):
         response_api_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> ResponsesAPIRequestParams:
+    ) -> Dict:
         pass
 
     @abstractmethod
@@ -131,3 +130,12 @@ class BaseResponsesAPIConfig(ABC):
             message=error_message,
             headers=headers,
         )
+
+    def should_fake_stream(
+        self,
+        model: Optional[str],
+        stream: Optional[bool],
+        custom_llm_provider: Optional[str] = None,
+    ) -> bool:
+        """Returns True if litellm should fake a stream for the given model and stream value"""
+        return False
