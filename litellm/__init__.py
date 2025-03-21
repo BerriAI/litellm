@@ -48,6 +48,7 @@ from litellm.constants import (
     huggingface_models,
     empower_models,
     together_ai_models,
+    bitdeerai_models,
     baseten_models,
     REPEATED_STREAMING_CHUNK_LIMIT,
     request_timeout,
@@ -183,6 +184,7 @@ baseten_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 snowflake_key: Optional[str] = None
+bitdeerai_api_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
@@ -418,6 +420,7 @@ galadriel_models: List = []
 sambanova_models: List = []
 assemblyai_models: List = []
 snowflake_models: List = []
+bitdeerai_models: List = []
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -648,6 +651,7 @@ model_list = (
     + assemblyai_models
     + jina_ai_models
     + snowflake_models
+    + bitdeerai_models
 )
 
 model_list_set = set(model_list)
@@ -704,6 +708,7 @@ models_by_provider: dict = {
     "assemblyai": assemblyai_models,
     "jina_ai": jina_ai_models,
     "snowflake": snowflake_models,
+    "bitdeerai":bitdeerai_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -847,6 +852,13 @@ from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
 from .llms.gemini.chat.transformation import (
     GoogleAIStudioGeminiConfig,
     GoogleAIStudioGeminiConfig as GeminiConfig,  # aliased to maintain backwards compatibility
+)
+
+from .llms.bitdeerai.chat.transformation import (
+    BitdeerAIChatConfig
+)
+from .llms.bitdeerai.embed.transformation import (
+    BitdeerAIEmbeddingConfig
 )
 
 
