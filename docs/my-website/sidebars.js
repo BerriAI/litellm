@@ -293,6 +293,7 @@ const sidebars = {
         "text_completion",
         "embedding/supported_embedding",
         "anthropic_unified",
+        "mcp",
         {
           type: "category",
           label: "/images",
