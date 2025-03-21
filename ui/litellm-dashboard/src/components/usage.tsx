@@ -895,6 +895,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   <Text>Select Key</Text>
                   <Flex style={{ width: "100%" }}>
                   <GeneralDropdown 
+                    id="team-dropdown"
                     items={teams} 
                     key_to_sort_by="team_id"
                     onChange={(teamId) => {
@@ -904,6 +905,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                     style={{ width: '20%' }}
                   />
                   <GeneralDropdown 
+                    id="user-dropdown"
                     items={users} 
                     key_to_sort_by="user_id"
                     onChange={(userId) => {
@@ -912,7 +914,8 @@ const UsagePage: React.FC<UsagePageProps> = ({
                     placeholder="User"
                     style={{ width: '20%' }}
                   />
-                  <GeneralDropdown 
+                  <GeneralDropdown
+                    id="key-dropdown"
                     items={filteredKeys} 
                     key_to_sort_by="key_alias"
                     onChange={(key) => {
