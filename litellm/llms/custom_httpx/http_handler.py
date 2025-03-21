@@ -655,6 +655,21 @@ class HTTPHandler:
         except Exception as e:
             raise e
 
+    def delete(
+        self,
+        url: str,
+        params: Optional[dict] = None,
+        headers: Optional[dict] = None,
+    ):
+        try:
+            response = self.client.delete(
+                url, params= params, headers=headers
+            )
+            return response
+        except Exception as e:
+            raise e
+
+
     def __del__(self) -> None:
         try:
             self.close()
@@ -672,6 +687,7 @@ class HTTPHandler:
             return HTTPTransport(local_address="0.0.0.0")
         else:
             return None
+    
 
 
 def get_async_httpx_client(

@@ -47,3 +47,17 @@ class HTTPHandler:
             return response
         except Exception as e:
             raise e
+
+    async def delete(
+        self,
+        url: str,
+        data: Optional[Union[dict, str]] = None,
+        params: Optional[dict] = None,
+        headers: Optional[dict] = None,
+    ):
+        try:
+            response = await self.client.delete(
+                url, data = data, params= params, headers=headers
+            )
+        except Exception as e:
+            raise e

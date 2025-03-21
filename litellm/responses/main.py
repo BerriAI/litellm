@@ -243,3 +243,227 @@ def responses(
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+
+@client
+async def aresponses_retrieve(
+    response_id: str,
+    custom_llm_provider:str,
+    include: Optional[List[ResponseIncludable]] = None,
+    # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+    # The extra values given here take precedence over values defined on the client or passed to this method.
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    **kwargs,
+) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
+    """
+    Async: Handles responses API requests by reusing the synchronous function
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        kwargs["aresponses"] = True
+
+        func = partial(
+            responses_retrieve,
+            response_id,
+            custom_llm_provider,
+            include=include,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            timeout=timeout,
+            **kwargs,
+        )
+
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+        return response
+    except Exception as e:
+        raise e
+
+@client
+def responses_retrieve(
+    response_id:str,
+    custom_llm_provider:str,
+    include: Optional[List[ResponseIncludable]] = None,
+    # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+    # The extra values given here take precedence over values defined on the client or passed to this method.
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    **kwargs,
+):
+    """
+    Synchronous version of the Responses API.
+    Uses the synchronous HTTP handler to make requests.
+    """
+    litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
+    litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+    _is_async = kwargs.pop("aresponses", False) is True
+
+    # get llm provider logic
+    litellm_params = GenericLiteLLMParams(**kwargs)
+
+    # get provider config
+    responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+        ProviderConfigManager.get_provider_responses_api_config(
+            model= None,
+            provider=litellm.LlmProviders(custom_llm_provider),
+        )
+    )
+
+    response_api_retrieve_optional_request_params = {}
+    if include is not None:
+        response_api_retrieve_optional_request_params["include"] = include
+
+    if responses_api_provider_config is None:
+        raise litellm.BadRequestError(
+            custom_llm_provider=custom_llm_provider,
+            message=f"Responses API not available for custom_llm_provider={custom_llm_provider}",
+        )
+
+    # Pre Call logging
+    if litellm_logging_obj:
+        litellm_logging_obj.update_environment_variables(
+            model= None,
+            optional_params= {},
+            litellm_params={
+                "litellm_call_id": litellm_call_id,
+            },
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    # Call the handler with _is_async flag instead of directly calling the async handler
+    response = base_llm_http_handler.response_api_retrieve_handler(
+        response_id=response_id,
+        responses_api_provider_config=responses_api_provider_config,
+        response_api_retrieve_optional_request_params=response_api_retrieve_optional_request_params,
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params,
+        logging_obj=litellm_logging_obj,
+        extra_headers=extra_headers,
+        extra_body=extra_body,
+        timeout=timeout or request_timeout,
+        _is_async=_is_async,
+        client=kwargs.get("client"),
+    )
+
+    return response
+
+@client
+def responses_delete(
+    response_id:str,
+    custom_llm_provider:str,
+    # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+    # The extra values given here take precedence over values defined on the client or passed to this method.
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    **kwargs,
+):
+    """
+    Synchronous version of the Responses API.
+    Uses the synchronous HTTP handler to make requests.
+    """
+    litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
+    litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+    _is_async = kwargs.pop("aresponses", False) is True
+
+    # get llm provider logic
+
+    litellm_params = GenericLiteLLMParams(**kwargs)
+
+    # get provider config
+    responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+        ProviderConfigManager.get_provider_responses_api_config(
+            model= None,
+            provider=litellm.LlmProviders(custom_llm_provider),
+        )
+    )
+
+    if responses_api_provider_config is None:
+        raise litellm.BadRequestError(
+            custom_llm_provider=custom_llm_provider,
+            message=f"Responses API not available for custom_llm_provider={custom_llm_provider}",
+        )
+
+
+    # Pre Call logging
+    if litellm_logging_obj:
+        litellm_logging_obj.update_environment_variables(
+            model= None,
+            optional_params= {},
+            litellm_params={
+                "litellm_call_id": litellm_call_id,
+            },
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    # Call the handler with _is_async flag instead of directly calling the async handler
+    response = base_llm_http_handler.response_api_delete_handler(
+        response_id=response_id,
+        responses_api_provider_config=responses_api_provider_config,
+        response_api_delete_optional_request_params={},
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params,
+        logging_obj=litellm_logging_obj,
+        extra_headers=extra_headers,
+        extra_body=extra_body,
+        timeout=timeout or request_timeout,
+        _is_async=_is_async,
+        client=kwargs.get("client"),
+    )
+
+    return response
+
+@client
+async def aresponses_delete(
+    response_id: str,
+    custom_llm_provider:str,
+    include: Optional[List[ResponseIncludable]] = None,
+    # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+    # The extra values given here take precedence over values defined on the client or passed to this method.
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    **kwargs,
+) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
+    """
+    Async: Handles responses API requests by reusing the synchronous function
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        kwargs["aresponses"] = True
+
+        func = partial(
+            responses_delete,
+            response_id,
+            custom_llm_provider,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            timeout=timeout,
+            **kwargs,
+        )
+
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+        return response
+    except Exception as e:
+        raise e
