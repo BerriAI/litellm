@@ -27,12 +27,10 @@ When MCP clients connect to LiteLLM they can follow this workflow:
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo-end-user-test
+  - model_name: gpt-4o
     litellm_params:
-      model: azure/chatgpt-v-2
-      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
-      api_version: "2023-05-15"
-      api_key: os.environ/AZURE_API_KEY
+      model: openai/gpt-4o
+      api_key: sk-xxxxxxx
 
 
 
