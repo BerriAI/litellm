@@ -16,7 +16,8 @@ LiteLLM supports Model Context Protocol (MCP) tools by offering a client that ex
 
 ```python
 import asyncio
-from litellm import experimental_create_mcp_client, completion
+import litellm
+from litellm import experimental_create_mcp_client
 from litellm.mcp_stdio import experimental_stdio_mcp_transport
 
 async def main():
@@ -82,7 +83,7 @@ async def main():
         tools = await client_one.list_tools(format="openai")
         
         # Use OpenAI client connected to LiteLLM Proxy Server
-        client = openai.OpenAI(
+        client = OpenAI(
             api_key="sk-1234",
             base_url="http://0.0.0.0:4000"
         )
@@ -224,7 +225,7 @@ litellm --config config.yaml --detailed_debug
 </Tabs>
 
 
-#### 3. Make an LLM API request 
+#### 4. Make an LLM API request 
 
 
 
