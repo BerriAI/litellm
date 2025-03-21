@@ -1,8 +1,8 @@
+import json
 from typing import Any, Callable, Dict, List, Optional
 
-from pydantic import BaseModel
-
 from litellm._logging import verbose_logger
+from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.types.mcp_server.tool_registry import MCPTool
 
 
@@ -31,6 +31,7 @@ class MCPToolRegistry:
             input_schema=input_schema,
             handler=handler,
         )
+        verbose_logger.debug(f"Registered tool: {name}")
 
     def get_tool(self, name: str) -> Optional[MCPTool]:
         """
@@ -44,21 +45,24 @@ class MCPToolRegistry:
         """
         return list(self.tools.values())
 
-    def load_tools_from_config(self, config: Dict[str, Any]) -> None:
+    def load_tools_from_config(
+        self, mcp_tools_config: Optional[Dict[str, Any]] = None
+    ) -> None:
         """
         Load and register tools from the proxy config
 
         Args:
-            config: The loaded proxy configuration
+            mcp_tools_config: The mcp_tools config from the proxy config
         """
-        if "mcp_tools" not in config:
-            return
+        if mcp_tools_config is None:
+            raise ValueError(
+                "mcp_tools_config is required, please set `mcp_tools` in your proxy config"
+            )
 
-        # Import handlers dynamically
-        import importlib
-        import sys
+        for tool_config in mcp_tools_config:
+            if not isinstance(tool_config, dict):
+                raise ValueError("mcp_tools_config must be a list of dictionaries")
 
-        for tool_config in config["mcp_tools"]:
             name = tool_config.get("name")
             description = tool_config.get("description")
             input_schema = tool_config.get("input_schema", {})
@@ -69,36 +73,31 @@ class MCPToolRegistry:
 
             # Try to resolve the handler
             # First check if it's a module path (e.g., "module.submodule.function")
-            if "." in handler_name:
-                module_path, func_name = handler_name.rsplit(".", 1)
-                try:
-                    module = importlib.import_module(module_path)
-                    handler = getattr(module, func_name)
-                except (ImportError, AttributeError):
-                    verbose_logger.warning(
-                        f"Warning: Could not load handler {handler_name} for tool {name}"
-                    )
-                    continue
-            else:
-                # Check if it's in the global namespace
-                handler = globals().get(handler_name)
-                if handler is None:
-                    # Check if it's in sys.modules
-                    for module_name, module in sys.modules.items():
-                        if hasattr(module, handler_name):
-                            handler = getattr(module, handler_name)
-                            break
+            if handler_name is None:
+                raise ValueError(f"handler is required for tool {name}")
+            handler = get_instance_fn(handler_name)
 
-                if handler is None:
-                    verbose_logger.warning(
-                        f"Warning: Could not find handler {handler_name} for tool {name}"
-                    )
-                    continue
+            if handler is None:
+                verbose_logger.warning(
+                    f"Warning: Could not find handler {handler_name} for tool {name}"
+                )
+                continue
 
             # Register the tool
+            if name is None:
+                raise ValueError(f"name is required for tool {name}")
+            if description is None:
+                raise ValueError(f"description is required for tool {name}")
+
             self.register_tool(
                 name=name,
                 description=description,
                 input_schema=input_schema,
                 handler=handler,
             )
+        verbose_logger.debug(
+            "all registered tools: %s", json.dumps(self.tools, indent=4, default=str)
+        )
+
+
+global_mcp_tool_registry = MCPToolRegistry()
