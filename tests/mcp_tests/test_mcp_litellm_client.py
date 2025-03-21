@@ -44,5 +44,10 @@ async def test_mcp_agent():
             print("LLM RESPONSE: ", json.dumps(llm_response, indent=4, default=str))
 
             # Add assertions to verify the response
-            assert isinstance(llm_response, dict)
-            print(llm_response)
+            assert llm_response["choices"][0]["message"]["tool_calls"] is not None
+            assert (
+                llm_response["choices"][0]["message"]["tool_calls"][0]["function"][
+                    "name"
+                ]
+                == "add"
+            )
