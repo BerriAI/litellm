@@ -794,7 +794,7 @@ def test_redis_cache_completion():
     response3 = completion(
         model="gpt-3.5-turbo", messages=messages, caching=True, temperature=0.5
     )
-    response4 = completion(model="azure/chatgpt-v-2", messages=messages, caching=True)
+    response4 = completion(model="gpt-4o-mini", messages=messages, caching=True)
 
     print("\nresponse 1", response1)
     print("\nresponse 2", response2)
