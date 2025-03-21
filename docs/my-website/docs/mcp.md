@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# /mcp Model Context Protocol [Beta]
+# /mcp Model Context Protocol [BETA]
 
 Use Model Context Protocol with LiteLLM. 
 
