@@ -190,16 +190,19 @@ class AssemblyAIPassthroughLoggingHandler:
             if request_region == "eu"
             else self.assembly_ai_base_url
         )
-        _api_key = passthrough_endpoint_router.get_credentials(
+        credentials = passthrough_endpoint_router.get_credentials(
             custom_llm_provider="assemblyai",
             region_name=request_region,
         )
-        if _api_key is None:
+        if credentials is None:
+            raise ValueError("AssemblyAI Credentials not found")
+        api_key = credentials.get("api_key")
+        if api_key is None:
             raise ValueError("AssemblyAI API key not found")
         try:
             url = f"{_base_url}/v2/transcript/{transcript_id}"
             headers = {
-                "Authorization": f"Bearer {_api_key}",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             }
 
