@@ -284,7 +284,9 @@ class HttpPassThroughEndpointHelpers:
 
     @staticmethod
     def get_response_headers(
-        headers: httpx.Headers, litellm_call_id: Optional[str] = None
+        headers: httpx.Headers,
+        litellm_call_id: Optional[str] = None,
+        custom_headers: Optional[dict] = None,
     ) -> dict:
         excluded_headers = {"transfer-encoding", "content-encoding"}
 
@@ -295,6 +297,8 @@ class HttpPassThroughEndpointHelpers:
         }
         if litellm_call_id:
             return_headers["x-litellm-call-id"] = litellm_call_id
+        if custom_headers:
+            return_headers.update(custom_headers)
 
         return return_headers
 
@@ -596,12 +600,20 @@ async def pass_through_request(  # noqa: PLR0915
             )
         )
 
+        custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=user_api_key_dict,
+            call_id=litellm_call_id,
+            model_id=None,
+            cache_key=None,
+            api_base=str(url._uri_reference),
+        )
+
         return Response(
             content=content,
             status_code=response.status_code,
             headers=HttpPassThroughEndpointHelpers.get_response_headers(
                 headers=response.headers,
-                litellm_call_id=litellm_call_id,
+                custom_headers=custom_headers,
             ),
         )
     except Exception as e:
