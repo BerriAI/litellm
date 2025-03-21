@@ -2060,9 +2060,29 @@ class RawRequestTypedDict(TypedDict, total=False):
     error: Optional[str]
 
 
+class CredentialInfo(TypedDict, total=False):
+    description: str
+    use_in_pass_through: bool
+    custom_llm_provider: Optional[str]
+
+
 class CredentialBase(BaseModel):
     credential_name: str
-    credential_info: dict
+    credential_info: Union[CredentialInfo, dict]
+
+    @model_validator(mode="before")
+    @classmethod
+    def check_credential_params(cls, values):
+        """
+        if 'use_in_pass_through' is set, require 'custom_llm_provider'
+        """
+        if values.get("credential_info", {}).get(
+            "use_in_pass_through"
+        ) and not values.get("credential_info", {}).get("custom_llm_provider"):
+            raise ValueError(
+                "custom_llm_provider must be set if use_in_pass_through is set"
+            )
+        return values
 
 
 class CredentialItem(CredentialBase):

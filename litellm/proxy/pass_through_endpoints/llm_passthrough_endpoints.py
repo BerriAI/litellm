@@ -73,10 +73,15 @@ async def gemini_proxy_route(
     updated_url = base_url.copy_with(path=encoded_endpoint)
 
     # Add or update query parameters
-    gemini_api_key: Optional[str] = passthrough_endpoint_router.get_credentials(
+    credentials = passthrough_endpoint_router.get_credentials(
         custom_llm_provider="gemini",
         region_name=None,
     )
+    if credentials is None:
+        raise Exception(
+            "Required 'GEMINI_API_KEY' in environment to make pass-through calls to Google AI Studio."
+        )
+    gemini_api_key = credentials.get("api_key")
     if gemini_api_key is None:
         raise Exception(
             "Required 'GEMINI_API_KEY' in environment to make pass-through calls to Google AI Studio."
@@ -132,10 +137,15 @@ async def cohere_proxy_route(
     updated_url = base_url.copy_with(path=encoded_endpoint)
 
     # Add or update query parameters
-    cohere_api_key = passthrough_endpoint_router.get_credentials(
+    credentials = passthrough_endpoint_router.get_credentials(
         custom_llm_provider="cohere",
         region_name=None,
     )
+    if credentials is None:
+        raise Exception(
+            "Required 'COHERE_API_KEY' in environment to make pass-through calls to Cohere."
+        )
+    cohere_api_key = credentials.get("api_key")
 
     ## check for streaming
     is_streaming_request = False
@@ -184,10 +194,15 @@ async def anthropic_proxy_route(
     updated_url = base_url.copy_with(path=encoded_endpoint)
 
     # Add or update query parameters
-    anthropic_api_key = passthrough_endpoint_router.get_credentials(
+    credentials = passthrough_endpoint_router.get_credentials(
         custom_llm_provider="anthropic",
         region_name=None,
     )
+    if credentials is None:
+        raise Exception(
+            "Required 'ANTHROPIC_API_KEY' in environment to make pass-through calls to Anthropic."
+        )
+    anthropic_api_key = credentials.get("api_key")
 
     ## check for streaming
     is_streaming_request = False
@@ -346,10 +361,15 @@ async def assemblyai_proxy_route(
     updated_url = base_url.copy_with(path=encoded_endpoint)
 
     # Add or update query parameters
-    assemblyai_api_key = passthrough_endpoint_router.get_credentials(
+    credentials = passthrough_endpoint_router.get_credentials(
         custom_llm_provider="assemblyai",
         region_name=assembly_region,
     )
+    if credentials is None:
+        raise Exception(
+            "Required 'ASSEMBLYAI_API_KEY' in environment to make pass-through calls to AssemblyAI."
+        )
+    assemblyai_api_key = credentials.get("api_key")
 
     ## check for streaming
     is_streaming_request = False
@@ -391,21 +411,27 @@ async def azure_proxy_route(
 
     Just use `{PROXY_BASE_URL}/azure/{endpoint:path}`
     """
-    base_target_url = get_secret_str(secret_name="AZURE_API_BASE")
-    if base_target_url is None:
-        raise Exception(
-            "Required 'AZURE_API_BASE' in environment to make pass-through calls to Azure."
-        )
     # Add or update query parameters
-    azure_api_key = passthrough_endpoint_router.get_credentials(
+    credentials = passthrough_endpoint_router.get_credentials(
         custom_llm_provider=litellm.LlmProviders.AZURE.value,
         region_name=None,
     )
+    if credentials is None:
+        raise Exception(
+            "Required 'AZURE_API_KEY' in environment to make pass-through calls to Azure."
+        )
+    azure_api_key = credentials.get("api_key")
     if azure_api_key is None:
         raise Exception(
             "Required 'AZURE_API_KEY' in environment to make pass-through calls to Azure."
         )
-
+    base_target_url = credentials.get("api_base") or get_secret_str(
+        secret_name="AZURE_API_BASE"
+    )
+    if base_target_url is None:
+        raise Exception(
+            "Required 'AZURE_API_BASE' in environment to make pass-through calls to Azure."
+        )
     return await BaseOpenAIPassThroughHandler._base_openai_pass_through_handler(
         endpoint=endpoint,
         request=request,
@@ -435,10 +461,15 @@ async def openai_proxy_route(
     """
     base_target_url = "https://api.openai.com/"
     # Add or update query parameters
-    openai_api_key = passthrough_endpoint_router.get_credentials(
+    credentials = passthrough_endpoint_router.get_credentials(
         custom_llm_provider=litellm.LlmProviders.OPENAI.value,
         region_name=None,
     )
+    if credentials is None:
+        raise Exception(
+            "Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI."
+        )
+    openai_api_key = credentials.get("api_key")
     if openai_api_key is None:
         raise Exception(
             "Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI."
