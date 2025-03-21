@@ -7,7 +7,8 @@ Use Model Context Protocol with LiteLLM.
 
 ## Overview
 
-LiteLLM supports Model Context Protocol (MCP) tools by offering a client that exposes a tools method for retrieving tools from a MCP server
+
+LiteLLM acts as a MCP bridge to utilize **MCP tools** with **all LiteLLM supported models**. LiteLLM offers a client that exposes a tools method for retrieving tools from a MCP server.
 
 ## Usage
 
