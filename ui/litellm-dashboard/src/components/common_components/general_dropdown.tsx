@@ -7,14 +7,17 @@ interface GeneralDropdownProps {
   value?: string;
   key_to_sort_by?: string;
   onChange?: (value: string) => void;
+  placeholder?: string;
+  clearable?: boolean;
 }
 
-const GeneralDropdown: React.FC<GeneralDropdownProps> = ({ items, value, key_to_sort_by, onChange }) => {
+const GeneralDropdown: React.FC<GeneralDropdownProps> = ({ items, value, key_to_sort_by, onChange, placeholder = "Search", clearable = true }) => {
   return (
     <Select
       showSearch
-      placeholder="Search or select a team"
+      placeholder={placeholder}
       value={value}
+      allowClear={clearable}
       onChange={onChange}
       filterOption={(input, option) => {
         if (!option) return false;

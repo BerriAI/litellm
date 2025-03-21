@@ -1,6 +1,6 @@
 import { BarChart, BarList, Card, Title, Table, TableHead, TableHeaderCell, TableRow, TableCell, TableBody, Metric, Subtitle } from "@tremor/react";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 
 import ViewUserSpend from "./view_user_spend";
 import { ProxySettings } from "./user_dashboard";
@@ -18,13 +18,6 @@ import {
 } from "@tremor/react";
 
 import {
-  Select as Select2,
-  Tooltip
-} from "antd";
-
-import {
-  userSpendLogsCall,
-  keyInfoCall,
   adminSpendLogsCall,
   adminTopKeysCall,
   adminTopModelsCall,
@@ -32,19 +25,15 @@ import {
   teamSpendLogsCall,
   tagsSpendLogsCall,
   allTagNamesCall,
-  modelMetricsCall,
-  modelAvailableCall,
   adminspendByProvider,
   adminGlobalActivity,
   adminGlobalActivityPerModel,
   getProxyUISettings
 } from "./networking";
-import { start } from "repl";
 import TopKeyView from "./top_key_view";
 import useKeyList, { Team } from "./key_team_helpers/key_list";
-import TeamDropdown from "./common_components/team_dropdown";
 import GeneralDropdown from "./common_components/general_dropdown";
-console.log("process.env.NODE_ENV", process.env.NODE_ENV);
+
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 if (isLocal !== true) {
@@ -167,11 +156,10 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [spendByProvider, setSpendByProvider] = useState<any[]>([]);
   const [globalActivity, setGlobalActivity] = useState<GlobalActivityData>({} as GlobalActivityData);
   const [globalActivityPerModel, setGlobalActivityPerModel] = useState<any[]>([]);
-  const [selectedKeyID, setSelectedKeyID] = useState<string | null>("");
   const [selectedTags, setSelectedTags] = useState<string[]>(["all-tags"]);
   const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
-
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
     from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), 
     to: new Date(),
@@ -190,6 +178,8 @@ const UsagePage: React.FC<UsagePageProps> = ({
   });
 
   const effectiveKeys = keys?.length ? keys : fetchedKeys;
+
+  console.log("effectiveKeys in usage", effectiveKeys);
 
   const firstDay = new Date(
     currentDate.getFullYear(),
@@ -234,7 +224,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   useEffect(() => {
     updateTagSpendData(dateValue.from, dateValue.to);
   }, [dateValue, selectedTags]);
-  
+
 
   const updateEndUserData = async (startTime:  Date | undefined, endTime:  Date | undefined, uiSelectedKey: string | null) => {
     if (!startTime || !endTime || !accessToken) {
@@ -253,7 +243,9 @@ const UsagePage: React.FC<UsagePageProps> = ({
       accessToken,
       uiSelectedKey,
       startTime.toISOString(),
-      endTime.toISOString()
+      endTime.toISOString(),
+      selectedTeam,
+      selectedUser
     )
     console.log("End user data updated successfully", newTopUserData);
     setTopUsers(newTopUserData);
@@ -505,7 +497,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const fetchTopEndUsers = () => {
     if (!accessToken) return;
     fetchAndSetData(
-      () => adminTopEndUsersCall(accessToken, null, undefined, undefined),
+      () => adminTopEndUsersCall(accessToken, null, undefined, undefined, selectedTeam, selectedUser),
       setTopUsers,
       "Error fetching top end users"
     );
@@ -622,6 +614,31 @@ const UsagePage: React.FC<UsagePageProps> = ({
     );
   }
 
+  useEffect(() => {
+    updateEndUserData(dateValue.from, dateValue.to, selectedKey, selectedTeam, selectedUser);
+  }, [selectedKey, selectedTeam, selectedUser]);
+
+  console.log("keys in usage", keys);
+  const filteredKeys = useMemo(() => {
+    if (!effectiveKeys) return [];
+    return effectiveKeys.filter((key) => {
+      // If no team and no user selected, return all keys
+      if (!selectedTeam && !selectedUser) return true;
+      
+      // If team selected but key doesn't match, only filter if team is selected
+      if (selectedTeam && key.team_id !== selectedTeam) {
+        return false;
+      }
+      
+      // If user selected but key doesn't match, only filter if user is selected  
+      if (selectedUser && key.user_id !== selectedUser) {
+        return false;
+      }
+
+      return true;
+    });
+  }, [effectiveKeys, selectedTeam, selectedUser]);
+  console.log("filteredKeys", filteredKeys);
 
   return (
     <div style={{ width: "100%" }} className="p-8">      
@@ -891,39 +908,13 @@ const UsagePage: React.FC<UsagePageProps> = ({
                     }}
                   />
                   <Text>Select Key</Text>
-                  <Select defaultValue="all-keys">
-
-                  <SelectItem
-                    key="all-keys"
-                    value="all-keys"
-                    onClick={() => {
-                      updateEndUserData(dateValue.from, dateValue.to, null);
+                  <GeneralDropdown 
+                    items={filteredKeys} 
+                    key_to_sort_by="key_alias"
+                    onChange={(key) => {
+                      setSelectedKey(key);
                     }}
-                  >
-                    All Keys
-                  </SelectItem>
-                    {effectiveKeys?.map((key: any, index: number) => {
-                      if (
-                        key &&
-                        key["key_alias"] !== null &&
-                        key["key_alias"].length > 0
-                      ) {
-                        return (
-                          
-                          <SelectItem
-                            key={index}
-                            value={String(index)}
-                            onClick={() => {
-                              updateEndUserData(dateValue.from, dateValue.to, key["token"]);
-                            }}
-                          >
-                            {key["key_alias"]}
-                          </SelectItem>
-                        );
-                      }
-                      return null; // Add this line to handle the case when the condition is not met
-                    })}
-                  </Select>
+                  />
                   </Col>
 
               </Grid>
