@@ -1,6 +1,9 @@
 from typing import Set
 
-from openai.types.audio.transcription_create_params import TranscriptionCreateParams
+from openai.types.audio.transcription_create_params import (
+    TranscriptionCreateParamsNonStreaming,
+    TranscriptionCreateParamsStreaming,
+)
 from openai.types.chat.completion_create_params import (
     CompletionCreateParamsNonStreaming,
     CompletionCreateParamsStreaming,
@@ -123,7 +126,10 @@ class ModelParamHelper:
 
         This follows the OpenAI API Spec
         """
-        return set(TranscriptionCreateParams.__dict__.keys())
+        all_transcription_kwargs = set(
+            TranscriptionCreateParamsNonStreaming.__annotations__.keys()
+        ).union(set(TranscriptionCreateParamsStreaming.__annotations__.keys()))
+        return all_transcription_kwargs
 
     @staticmethod
     def _get_exclude_kwargs() -> Set[str]:
