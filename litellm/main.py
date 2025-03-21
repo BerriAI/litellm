@@ -2604,6 +2604,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 encoding=encoding,
                 logging_obj=logging,
                 acompletion=acompletion,
+                client=client,
             )
 
             ## RESPONSE OBJECT
