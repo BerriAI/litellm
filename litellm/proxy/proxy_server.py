@@ -236,6 +236,9 @@ from litellm.proxy.openai_files_endpoints.files_endpoints import (
 )
 from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+    passthrough_endpoint_router,
+)
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     router as llm_passthrough_router,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
@@ -2155,7 +2158,7 @@ class ProxyConfig:
 
         ## CREDENTIALS
         credential_list_dict = self.load_credential_list(config=config)
-        litellm.credential_list = credential_list_dict
+        self.add_credentials_to_proxy(credential_list_dict)
         return router, router.get_model_list(), general_settings
 
     def _load_alerting_settings(self, general_settings: dict):
@@ -2838,6 +2841,22 @@ class ProxyConfig:
         for idx in sorted(idx_to_delete, reverse=True):
             litellm.credential_list.pop(idx)
 
+    def add_credentials_to_proxy(self, credentials: List[CredentialItem]):
+        CredentialAccessor.upsert_credentials(
+            credentials
+        )  # upsert credentials that are in the all-up list
+        for credential in credentials:
+            custom_llm_provider = credential.credential_info.get("custom_llm_provider")
+            if (
+                credential.credential_info.get("use_in_pass_through") is True
+                and custom_llm_provider is not None
+            ):
+                passthrough_endpoint_router.upsert_credentials(
+                    custom_llm_provider=custom_llm_provider,
+                    credential_name=credential.credential_name,
+                    credential_values=credential.credential_values,
+                )  # upsert credentials that are in the all-up list
+
     async def get_credentials(self, prisma_client: PrismaClient):
         try:
             credentials = await prisma_client.db.litellm_credentialstable.find_many()
@@ -2845,9 +2864,7 @@ class ProxyConfig:
             await self.delete_credentials(
                 credentials
             )  # delete credentials that are not in the all-up list
-            CredentialAccessor.upsert_credentials(
-                credentials
-            )  # upsert credentials that are in the all-up list
+            self.add_credentials_to_proxy(credentials)
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy_server.py::get_credentials() - Error getting credentials from DB - {}".format(
