@@ -1151,6 +1151,10 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
 
     model_config = ConfigDict(protected_namespaces=())
 
+class LiteLLM_BudgetTableFull(LiteLLM_BudgetTable):
+    """Represents all params for a LiteLLM_BudgetTable record"""
+    budget_id: str
+    created_at: datetime
 
 class LiteLLM_TeamMemberTable(LiteLLM_BudgetTable):
     """

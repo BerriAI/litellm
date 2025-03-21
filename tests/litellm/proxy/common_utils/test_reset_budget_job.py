@@ -3,7 +3,7 @@ import json
 import os
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,8 +20,8 @@ from litellm.proxy.utils import ProxyLogging
 # Mock classes for testing
 class MockPrismaClient:
     def __init__(self):
-        self.data = {"key": [], "user": [], "team": []}
-        self.updated_data = {"key": [], "user": [], "team": []}
+        self.data = {"key": [], "user": [], "team": [], "budget": [], "enduser": []}
+        self.updated_data = {"key": [], "user": [], "team": [], "budget": [], "enduser": []}
 
     async def get_data(self, table_name, query_type, **kwargs):
         return self.data.get(table_name, [])
@@ -145,9 +145,48 @@ def test_reset_budget_for_team(reset_budget_job, mock_prisma_client):
     assert updated_team.budget_reset_at > now
 
 
+
+def test_reset_budget_for_enduser(reset_budget_job, mock_prisma_client):
+    # Setup test data
+    now = datetime.now(timezone.utc)
+    test_budget = type(
+        "LiteLLM_BudgetTable",
+        (),
+        {
+            "max_budget": 500.0,
+            "budget_duration": "1d",
+            "budget_reset_at": now,
+            "budget_id": "test-budget-1",
+        },
+    )
+
+    test_enduser = type(
+        "LiteLLM_EndUserTable",
+        (),
+        {
+            "spend": 20.0,
+            "litellm_budget_table": test_budget,
+            "user_id": "test-enduser-1",
+        },
+    )
+
+    mock_prisma_client.data["budget"] = [test_budget]
+    mock_prisma_client.data["enduser"] = [test_enduser]
+
+    # Run the test
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_endusers())
+
+    # Verify results
+    assert len(mock_prisma_client.updated_data["enduser"]) == 1
+    assert len(mock_prisma_client.updated_data["budget"]) == 1
+    updated_enduser = mock_prisma_client.updated_data["enduser"][0]
+    updated_budget = mock_prisma_client.updated_data["budget"][0]
+    assert updated_enduser.spend == 0.0
+    assert updated_budget.budget_reset_at > now
+
 def test_reset_budget_all(reset_budget_job, mock_prisma_client):
     # Setup test data
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     # Create test objects for all three types
     test_key = type(
@@ -183,9 +222,32 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
         },
     )
 
+    test_budget = type(
+        "LiteLLM_BudgetTable",
+        (),
+        {
+            "max_budget": 500.0,
+            "budget_duration": "1d",
+            "budget_reset_at": now,
+            "budget_id": "test-budget-1",
+        },
+    )
+
+    test_enduser = type(
+        "LiteLLM_EndUserTable",
+        (),
+        {
+            "spend": 20.0,
+            "litellm_budget_table": test_budget,
+            "user_id": "test-enduser-1",
+        },
+    )
+
     mock_prisma_client.data["key"] = [test_key]
     mock_prisma_client.data["user"] = [test_user]
     mock_prisma_client.data["team"] = [test_team]
+    mock_prisma_client.data["budget"] = [test_budget]
+    mock_prisma_client.data["enduser"] = [test_enduser]
 
     # Run the test
     asyncio.run(reset_budget_job.reset_budget())
@@ -194,8 +256,11 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
     assert len(mock_prisma_client.updated_data["key"]) == 1
     assert len(mock_prisma_client.updated_data["user"]) == 1
     assert len(mock_prisma_client.updated_data["team"]) == 1
+    assert len(mock_prisma_client.updated_data["enduser"]) == 1
+    assert len(mock_prisma_client.updated_data["budget"]) == 1
 
     # Check that all spends were reset to 0
     assert mock_prisma_client.updated_data["key"][0].spend == 0.0
     assert mock_prisma_client.updated_data["user"][0].spend == 0.0
     assert mock_prisma_client.updated_data["team"][0].spend == 0.0
+    assert mock_prisma_client.updated_data["enduser"][0].spend == 0.0
