@@ -10,7 +10,7 @@ Has 4 methods:
 
 import json
 import time
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from .base_cache import BaseCache
 
@@ -30,10 +30,39 @@ class InMemoryCache(BaseCache):
             max_size_in_memory or 200
         )  # set an upper bound of 200 items in-memory
         self.default_ttl = default_ttl or 600
+        self.max_size_per_item = 1024  # 1MB = 1024KB
 
         # in-memory cache
         self.cache_dict: dict = {}
         self.ttl_dict: dict = {}
+
+    def check_value_size(self, value: Any):
+        """
+        Check if value size exceeds max_size_per_item (1MB)
+        Returns True if value size is acceptable, False otherwise
+        """
+        try:
+            # Handle special types
+            if hasattr(value, "model_dump"):  # Pydantic v2
+                value = value.model_dump()
+            elif hasattr(value, "dict"):  # Pydantic v1
+                value = value.dict()
+            elif hasattr(value, "isoformat"):  # datetime objects
+                value = value.isoformat()
+
+            # Convert value to JSON string to get a consistent size measurement
+            if not isinstance(value, (str, bytes)):
+                value = json.dumps(
+                    value, default=str
+                )  # default=str handles any remaining datetime objects
+
+            # Get size in KB (1KB = 1024 bytes)
+            value_size = len(str(value).encode("utf-8")) / 1024
+
+            return value_size <= self.max_size_per_item
+        except Exception:
+            # If we can't measure the size, assume it's too large
+            return False
 
     def evict_cache(self):
         """
@@ -61,6 +90,8 @@ class InMemoryCache(BaseCache):
         if len(self.cache_dict) >= self.max_size_in_memory:
             # only evict when cache is full
             self.evict_cache()
+        if not self.check_value_size(value):
+            return
 
         self.cache_dict[key] = value
         if "ttl" in kwargs and kwargs["ttl"] is not None:
