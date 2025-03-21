@@ -1,34 +1,22 @@
+import asyncio
 import os
 import sys
-import time
-import traceback
-import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from dotenv import load_dotenv
-import json
-import asyncio
 
 load_dotenv()
 import os
-import tempfile
-from uuid import uuid4
+
 from litellm.proxy._types import LiteLLM_BudgetTableFull
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
-from litellm.proxy._types import (
-    LiteLLM_VerificationToken,
-    LiteLLM_UserTable,
-    LiteLLM_TeamTable,
-)
-from litellm.types.services import ServiceTypes
 
 # Note: In our "fake" items we use dicts with fields that our fake reset functions modify.
 # In a real-world scenario, these would be instances of LiteLLM_VerificationToken, LiteLLM_UserTable, etc.
@@ -182,7 +170,6 @@ async def test_reset_budget_users_partial_failure():
     )
 
 
-
 @pytest.mark.asyncio
 async def test_reset_budget_endusers_partial_failure():
     """
@@ -194,13 +181,40 @@ async def test_reset_budget_endusers_partial_failure():
         "spend": 20.0,
         "budget_id": "budget1",
     }  # Will trigger simulated failure
-    user2 = {"user_id": "user2", "spend": 25.0, "budget_id": "budget1"}  # Should be updated
-    user3 = {"user_id": "user3", "spend": 30.0, "budget_id": "budget1"}  # Should be updated
-    user4 = {"user_id": "user4", "spend": 35.0, "budget_id": "budget1"}  # Should be updated
-    user5 = {"user_id": "user5", "spend": 40.0, "budget_id": "budget1"}  # Should be updated
-    user6 = {"user_id": "user6", "spend": 45.0, "budget_id": "budget1"}  # Should be updated
-    
-    budget1 = LiteLLM_BudgetTableFull(**{"budget_id": "budget1", "max_budget": 65.0, "budget_duration": "2d", "created_at": datetime.now(timezone.utc) - timedelta(days=3)})
+    user2 = {
+        "user_id": "user2",
+        "spend": 25.0,
+        "budget_id": "budget1",
+    }  # Should be updated
+    user3 = {
+        "user_id": "user3",
+        "spend": 30.0,
+        "budget_id": "budget1",
+    }  # Should be updated
+    user4 = {
+        "user_id": "user4",
+        "spend": 35.0,
+        "budget_id": "budget1",
+    }  # Should be updated
+    user5 = {
+        "user_id": "user5",
+        "spend": 40.0,
+        "budget_id": "budget1",
+    }  # Should be updated
+    user6 = {
+        "user_id": "user6",
+        "spend": 45.0,
+        "budget_id": "budget1",
+    }  # Should be updated
+
+    budget1 = LiteLLM_BudgetTableFull(
+        **{
+            "budget_id": "budget1",
+            "max_budget": 65.0,
+            "budget_duration": "2d",
+            "created_at": datetime.now(timezone.utc) - timedelta(days=3),
+        }
+    )
 
     prisma_client = MagicMock()
 
@@ -210,7 +224,6 @@ async def test_reset_budget_endusers_partial_failure():
         elif table_name == "enduser":
             return [user1, user2, user3, user4, user5, user6]
         return []
-
 
     prisma_client.get_data = AsyncMock()
     prisma_client.get_data.side_effect = get_data_mock
@@ -229,7 +242,7 @@ async def test_reset_budget_endusers_partial_failure():
             raise Exception("Simulated failure for user1")
         enduser["spend"] = 0.0
         return enduser
-        
+
     with patch.object(
         ResetBudgetJob, "_reset_budget_for_enduser", side_effect=fake_reset_enduser
     ) as mock_reset_enduser:
@@ -255,6 +268,7 @@ async def test_reset_budget_endusers_partial_failure():
         call.kwargs.get("call_type") == "reset_budget_endusers"
         for call in failure_hook_calls
     )
+
 
 @pytest.mark.asyncio
 async def test_reset_budget_teams_partial_failure():
@@ -339,8 +353,15 @@ async def test_reset_budget_continues_other_categories_on_failure():
     user2 = {"id": "user2", "spend": 25.0, "budget_duration": 120}  # Succeeds
     team1 = {"id": "team1", "spend": 30.0, "budget_duration": 180}
     team2 = {"id": "team2", "spend": 35.0, "budget_duration": 180}
-    enduser1 = {"user_id": "user1", "spend": 25.0, "budget_id": "budget1"} 
-    budget1 = LiteLLM_BudgetTableFull(**{"budget_id": "budget1", "max_budget": 65.0, "budget_duration": "2d", "created_at": datetime.now(timezone.utc) - timedelta(days=3)})
+    enduser1 = {"user_id": "user1", "spend": 25.0, "budget_id": "budget1"}
+    budget1 = LiteLLM_BudgetTableFull(
+        **{
+            "budget_id": "budget1",
+            "max_budget": 65.0,
+            "budget_duration": "2d",
+            "created_at": datetime.now(timezone.utc) - timedelta(days=3),
+        }
+    )
 
     prisma_client = MagicMock()
 
@@ -389,11 +410,11 @@ async def test_reset_budget_continues_other_categories_on_failure():
             current_time + timedelta(seconds=team["budget_duration"])
         ).isoformat()
         return team
-    
+
     async def fake_reset_enduser(enduser):
         enduser["spend"] = 0.0
         return enduser
-    
+
     with patch.object(
         ResetBudgetJob, "_reset_budget_for_key", side_effect=fake_reset_key
     ) as mock_reset_key, patch.object(
@@ -438,6 +459,7 @@ async def test_reset_budget_continues_other_categories_on_failure():
     enduser_call = calls[4]
     assert enduser_call.kwargs.get("table_name") == "enduser"
     assert len(enduser_call.kwargs.get("data_list", [])) == 1
+
 
 # ---------------------------------------------------------------------------
 # Additional tests for service logger behavior (keys, users, teams, endusers)
@@ -487,9 +509,10 @@ async def test_service_logger_keys_success():
 
     # Verify success hook call
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_called_once()
-    args, kwargs = (
-        proxy_logging_obj.service_logging_obj.async_service_success_hook.call_args
-    )
+    (
+        args,
+        kwargs,
+    ) = proxy_logging_obj.service_logging_obj.async_service_success_hook.call_args
     event_metadata = kwargs.get("event_metadata", {})
     assert event_metadata.get("num_keys_found") == len(keys)
     assert event_metadata.get("num_keys_updated") == len(keys)
@@ -548,9 +571,10 @@ async def test_service_logger_keys_failure():
             )
 
     proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_called_once()
-    args, kwargs = (
-        proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args
-    )
+    (
+        args,
+        kwargs,
+    ) = proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args
     event_metadata = kwargs.get("event_metadata", {})
     assert event_metadata.get("num_keys_found") == len(keys)
     keys_found_str = event_metadata.get("keys_found", "")
@@ -600,9 +624,10 @@ async def test_service_logger_users_success():
             mock_verbose_exc.assert_not_called()
 
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_called_once()
-    args, kwargs = (
-        proxy_logging_obj.service_logging_obj.async_service_success_hook.call_args
-    )
+    (
+        args,
+        kwargs,
+    ) = proxy_logging_obj.service_logging_obj.async_service_success_hook.call_args
     event_metadata = kwargs.get("event_metadata", {})
     assert event_metadata.get("num_users_found") == len(users)
     assert event_metadata.get("num_users_updated") == len(users)
@@ -659,9 +684,10 @@ async def test_service_logger_users_failure():
             )
 
     proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_called_once()
-    args, kwargs = (
-        proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args
-    )
+    (
+        args,
+        kwargs,
+    ) = proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args
     event_metadata = kwargs.get("event_metadata", {})
     assert event_metadata.get("num_users_found") == len(users)
     users_found_str = event_metadata.get("users_found", "")
@@ -710,9 +736,10 @@ async def test_service_logger_teams_success():
             mock_verbose_exc.assert_not_called()
 
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_called_once()
-    args, kwargs = (
-        proxy_logging_obj.service_logging_obj.async_service_success_hook.call_args
-    )
+    (
+        args,
+        kwargs,
+    ) = proxy_logging_obj.service_logging_obj.async_service_success_hook.call_args
     event_metadata = kwargs.get("event_metadata", {})
     assert event_metadata.get("num_teams_found") == len(teams)
     assert event_metadata.get("num_teams_updated") == len(teams)
@@ -769,15 +796,15 @@ async def test_service_logger_teams_failure():
             )
 
     proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_called_once()
-    args, kwargs = (
-        proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args
-    )
+    (
+        args,
+        kwargs,
+    ) = proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args
     event_metadata = kwargs.get("event_metadata", {})
     assert event_metadata.get("num_teams_found") == len(teams)
     teams_found_str = event_metadata.get("teams_found", "")
     assert "team1" in teams_found_str
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_not_called()
-
 
 
 @pytest.mark.asyncio
@@ -787,11 +814,18 @@ async def test_service_logger_endusers_success():
     the correct metadata and no exception is logged.
     """
     endusers = [
-       {"user_id": "user1", "spend": 25.0, "budget_id": "budget1"},
-       {"user_id": "user2", "spend": 25.0, "budget_id": "budget1"}
+        {"user_id": "user1", "spend": 25.0, "budget_id": "budget1"},
+        {"user_id": "user2", "spend": 25.0, "budget_id": "budget1"},
     ]
     budgets = [
-        LiteLLM_BudgetTableFull(**{"budget_id": "budget1", "max_budget": 65.0, "budget_duration": "2d", "created_at": datetime.now(timezone.utc) - timedelta(days=3)})
+        LiteLLM_BudgetTableFull(
+            **{
+                "budget_id": "budget1",
+                "max_budget": 65.0,
+                "budget_duration": "2d",
+                "created_at": datetime.now(timezone.utc) - timedelta(days=3),
+            }
+        )
     ]
 
     async def fake_get_data(*, table_name, query_type, **kwargs):
@@ -829,9 +863,10 @@ async def test_service_logger_endusers_success():
             mock_verbose_exc.assert_not_called()
 
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_called_once()
-    args, kwargs = (
-        proxy_logging_obj.service_logging_obj.async_service_success_hook.call_args
-    )
+    (
+        args,
+        kwargs,
+    ) = proxy_logging_obj.service_logging_obj.async_service_success_hook.call_args
     event_metadata = kwargs.get("event_metadata", {})
     assert event_metadata.get("num_budgets_found") == len(budgets)
     assert event_metadata.get("num_endusers_found") == len(endusers)
@@ -847,11 +882,18 @@ async def test_service_logger_users_failure():
     logs the exception, and does not call the success hook.
     """
     endusers = [
-       {"user_id": "user1", "spend": 25.0, "budget_id": "budget1"},
-       {"user_id": "user2", "spend": 25.0, "budget_id": "budget1"}
+        {"user_id": "user1", "spend": 25.0, "budget_id": "budget1"},
+        {"user_id": "user2", "spend": 25.0, "budget_id": "budget1"},
     ]
     budgets = [
-        LiteLLM_BudgetTableFull(**{"budget_id": "budget1", "max_budget": 65.0, "budget_duration": "2d", "created_at": datetime.now(timezone.utc) - timedelta(days=3)})
+        LiteLLM_BudgetTableFull(
+            **{
+                "budget_id": "budget1",
+                "max_budget": 65.0,
+                "budget_duration": "2d",
+                "created_at": datetime.now(timezone.utc) - timedelta(days=3),
+            }
+        )
     ]
 
     async def fake_get_data(*, table_name, query_type, **kwargs):
@@ -897,9 +939,10 @@ async def test_service_logger_users_failure():
             )
 
     proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_called_once()
-    args, kwargs = (
-        proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args
-    )
+    (
+        args,
+        kwargs,
+    ) = proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args
     event_metadata = kwargs.get("event_metadata", {})
     assert event_metadata.get("num_budgets_found") == len(budgets)
     assert event_metadata.get("num_endusers_found") == len(endusers)
