@@ -2989,13 +2989,31 @@ def completion(  # type: ignore # noqa: PLR0915
         elif custom_llm_provider == "snowflake" or model in litellm.snowflake_models: 
             try:
                 client = HTTPHandler(timeout=timeout) if stream is False else None # Keep this here, otherwise, the httpx.client closes and streaming is impossible
+                snowflake_api_key = (
+                    api_key
+                    or kwargs.get("snowflake_jwt", None)
+                )
+                snowflake_account_id = (
+                    get_secret_str("SNOWFLAKE_ACCOUNT_ID")
+                    or kwargs.get("snowflake_account_id", None)
+                )
+                # Check if api_base is already a full URL, this is mostly for mock testing
+                if api_base and (api_base.startswith("http://") or api_base.startswith("https://")):
+                    snowflake_api_base = api_base
+                else:
+                    api_base =(
+                        api_base
+                        or "snowflakecomputing.com"
+                    )
+                    snowflake_api_base = f"https://{snowflake_account_id}.{api_base}/api/v2/cortex/inference:complete"
+
                 response = base_llm_http_handler.completion(
                     model=model,
                     messages=messages,
                     headers=headers,
                     model_response=model_response,
-                    api_key=api_key,
-                    api_base=api_base,
+                    api_key= snowflake_api_key,
+                    api_base=snowflake_api_base,
                     acompletion=acompletion,
                     logging_obj=logging,
                     optional_params=optional_params,
@@ -3006,7 +3024,6 @@ def completion(  # type: ignore # noqa: PLR0915
                     encoding=encoding,
                     stream=stream,
                 )   
-
 
             except Exception as e:
                 ## LOGGING - log the original exception returned
