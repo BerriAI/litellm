@@ -1,12 +1,9 @@
 import asyncio
-import json
 import os
 import sys
-import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pytest
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -21,7 +18,13 @@ from litellm.proxy.utils import ProxyLogging
 class MockPrismaClient:
     def __init__(self):
         self.data = {"key": [], "user": [], "team": [], "budget": [], "enduser": []}
-        self.updated_data = {"key": [], "user": [], "team": [], "budget": [], "enduser": []}
+        self.updated_data = {
+            "key": [],
+            "user": [],
+            "team": [],
+            "budget": [],
+            "enduser": [],
+        }
 
     async def get_data(self, table_name, query_type, **kwargs):
         return self.data.get(table_name, [])
@@ -145,7 +148,6 @@ def test_reset_budget_for_team(reset_budget_job, mock_prisma_client):
     assert updated_team.budget_reset_at > now
 
 
-
 def test_reset_budget_for_enduser(reset_budget_job, mock_prisma_client):
     # Setup test data
     now = datetime.now(timezone.utc)
@@ -183,6 +185,7 @@ def test_reset_budget_for_enduser(reset_budget_job, mock_prisma_client):
     updated_budget = mock_prisma_client.updated_data["budget"][0]
     assert updated_enduser.spend == 0.0
     assert updated_budget.budget_reset_at > now
+
 
 def test_reset_budget_all(reset_budget_job, mock_prisma_client):
     # Setup test data
