@@ -36,7 +36,7 @@ from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
 from litellm.llms.anthropic.common_utils import process_anthropic_headers
 from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
 from httpx import Headers
-from base_llm_unit_tests import BaseLLMChatTest
+from base_llm_unit_tests import BaseLLMChatTest, BaseAnthropicChatTest
 
 
 def streaming_format_tests(chunk: dict, idx: int):
@@ -462,7 +462,7 @@ def test_create_json_tool_call_for_response_format():
 from litellm import completion
 
 
-class TestAnthropicCompletion(BaseLLMChatTest):
+class TestAnthropicCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
     def get_base_completion_call_args(self) -> dict:
         return {"model": "anthropic/claude-3-5-sonnet-20240620"}
 
