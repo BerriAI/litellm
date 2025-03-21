@@ -1,10 +1,15 @@
 # Create server parameters for stdio connection
+import os
+import sys
+import pytest
+
+sys.path.insert(
+    0, os.path.abspath("../../..")
+)  # Adds the parent directory to the system path
+
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 import os
-from langchain_mcp_adapters.tools import load_mcp_tools
-from langgraph.prebuilt import create_react_agent
-
 from langchain_openai import ChatOpenAI
 
 import pytest
