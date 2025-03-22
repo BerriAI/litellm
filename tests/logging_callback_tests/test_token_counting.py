@@ -248,34 +248,23 @@ async def test_stream_token_counting_anthropic_with_include_usage():
     )
 
 
-@pytest.mark.asyncio
-async def test_openai_web_search_logging_cost_tracking():
-    """Makes a simple web search request and validates the response contains web search annotations and all expected fields are present"""
+async def _setup_web_search_test():
+    """Helper function to setup common test requirements"""
     litellm._turn_on_debug()
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
-    response = await litellm.acompletion(
-        model="openai/gpt-4o-search-preview",
-        messages=[
-            {
-                "role": "user",
-                "content": "What was a positive news story from today?",
-            }
-        ],
-    )
-    print("litellm response: ", response.model_dump_json(indent=4))
+    return test_custom_logger
 
+
+async def _verify_web_search_cost(test_custom_logger, expected_context_size):
+    """Helper function to verify web search costs"""
     await asyncio.sleep(1)
 
-    print(
-        "logged standard logging payload: ",
-        json.dumps(test_custom_logger.standard_logging_payload, indent=4),
-    )
     standard_logging_payload = test_custom_logger.standard_logging_payload
     response_cost = standard_logging_payload.get("response_cost")
     assert response_cost is not None
 
-    # Assert the cost = Token Usage + Web Search Cost
+    # Calculate token cost
     model_map_information = standard_logging_payload["model_map_information"]
     model_map_value: ModelInfoBase = model_map_information["model_map_value"]
     total_token_cost = (
@@ -285,9 +274,57 @@ async def test_openai_web_search_logging_cost_tracking():
         standard_logging_payload["completion_tokens"]
         * model_map_value["output_cost_per_token"]
     )
-    print("total token cost:", total_token_cost)
+
+    # Verify total cost
     assert (
         response_cost
         == total_token_cost
-        + model_map_value["search_context_cost_per_query"]["search_context_size_low"]
+        + model_map_value["search_context_cost_per_query"][expected_context_size]
     )
+
+
+@pytest.mark.asyncio
+async def test_openai_web_search_logging_cost_tracking_no_explicit_search_context_size():
+    """Cost is tracked as `search_context_size_medium` when no `search_context_size` is passed in"""
+    test_custom_logger = await _setup_web_search_test()
+
+    response = await litellm.acompletion(
+        model="openai/gpt-4o-search-preview",
+        messages=[
+            {"role": "user", "content": "What was a positive news story from today?"}
+        ],
+    )
+
+    await _verify_web_search_cost(test_custom_logger, "search_context_size_medium")
+
+
+@pytest.mark.asyncio
+async def test_openai_web_search_logging_cost_tracking_explicit_search_context_size():
+    """search_context_size=low passed in, so cost tracked as `search_context_size_low`"""
+    test_custom_logger = await _setup_web_search_test()
+
+    response = await litellm.acompletion(
+        model="openai/gpt-4o-search-preview",
+        messages=[
+            {"role": "user", "content": "What was a positive news story from today?"}
+        ],
+        web_search_options={"search_context_size": "low"},
+    )
+
+    await _verify_web_search_cost(test_custom_logger, "search_context_size_low")
+
+
+@pytest.mark.asyncio
+async def test_openai_web_search_with_tool_call_logging_cost_tracking():
+    """search_context_size=high passed in tool call, so cost tracked as `search_context_size_high`"""
+    test_custom_logger = await _setup_web_search_test()
+
+    response = await litellm.aresponses(
+        model="openai/gpt-4o",
+        input=[
+            {"role": "user", "content": "What was a positive news story from today?"}
+        ],
+        tools=[{"type": "web_search_preview", "search_context_size": "high"}],
+    )
+
+    await _verify_web_search_cost(test_custom_logger, "search_context_size_high")

@@ -1752,6 +1752,7 @@ class StandardLoggingPayload(TypedDict):
     model_parameters: dict
     hidden_params: StandardLoggingHiddenParams
     guardrail_information: Optional[StandardLoggingGuardrailInformation]
+    standard_built_in_tools_params: Optional[StandardBuiltInToolsParams]
 
 
 from typing import AsyncIterator, Iterator
