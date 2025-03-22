@@ -27,7 +27,6 @@ from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
     _get_user_role,
     _handle_failed_db_connection_for_get_key_object,
-    _is_allowed_route,
     _is_user_proxy_admin,
     _virtual_key_max_budget_check,
     _virtual_key_soft_budget_check,
