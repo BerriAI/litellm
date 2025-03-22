@@ -518,6 +518,15 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         ],
                     },
                 },
+                "search_context_cost_per_1k_calls": {
+                    "type": "object",
+                    "properties": {
+                        "low_context": {"type": "number"},
+                        "medium_context": {"type": "number"},
+                        "high_context": {"type": "number"},
+                    },
+                    "additionalProperties": False,
+                },
                 "supported_modalities": {
                     "type": "array",
                     "items": {
