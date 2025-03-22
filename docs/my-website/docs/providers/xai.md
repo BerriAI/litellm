@@ -82,7 +82,7 @@ from litellm import completion
 os.environ["XAI_API_KEY"] = "your-api-key"
 
 response = completion(
-    model="xai/grok-2-latest",
+    model="xai/grok-2-vision-latest",
     messages=[
         {
             "role": "user",
