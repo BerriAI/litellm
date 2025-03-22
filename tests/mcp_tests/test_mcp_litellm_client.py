@@ -42,11 +42,12 @@ async def test_mcp_agent():
                 api_key=os.getenv("OPENAI_API_KEY"),
                 messages=messages,
                 tools=tools,
+                tool_choice="required",
             )
             print("LLM RESPONSE: ", json.dumps(llm_response, indent=4, default=str))
-
             # Add assertions to verify the response
             assert llm_response["choices"][0]["message"]["tool_calls"] is not None
+
             assert (
                 llm_response["choices"][0]["message"]["tool_calls"][0]["function"][
                     "name"
