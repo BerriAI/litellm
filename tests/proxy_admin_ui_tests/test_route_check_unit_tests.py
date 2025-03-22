@@ -30,9 +30,6 @@ from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKey
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     router as llm_passthrough_router,
 )
-from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
-    router as vertex_router,
-)
 
 # Replace the actual hash_token function with our mock
 import litellm.proxy.auth.route_checks
@@ -96,7 +93,7 @@ def test_is_llm_api_route():
     assert RouteChecks.is_llm_api_route("/key/regenerate/82akk800000000jjsk") is False
     assert RouteChecks.is_llm_api_route("/key/82akk800000000jjsk/delete") is False
 
-    all_llm_api_routes = vertex_router.routes + llm_passthrough_router.routes
+    all_llm_api_routes = llm_passthrough_router.routes
 
     # check all routes in llm_passthrough_router, ensure they are considered llm api routes
     for route in all_llm_api_routes:
