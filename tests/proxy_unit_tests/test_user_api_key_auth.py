@@ -332,7 +332,7 @@ async def test_auth_with_allowed_routes(route, should_raise_error):
     ],
 )
 def test_is_ui_route_allowed(route, user_role, expected_result):
-    from litellm.proxy.auth.user_api_key_auth import _is_ui_route
+    from litellm.proxy.auth.auth_checks import _is_ui_route
     from litellm.proxy._types import LiteLLM_UserTable
 
     user_obj = LiteLLM_UserTable(
@@ -370,7 +370,7 @@ def test_is_ui_route_allowed(route, user_role, expected_result):
     ],
 )
 def test_is_api_route_allowed(route, user_role, expected_result):
-    from litellm.proxy.auth.user_api_key_auth import _is_api_route_allowed
+    from litellm.proxy.auth.auth_checks import _is_api_route_allowed
     from litellm.proxy._types import LiteLLM_UserTable
 
     user_obj = LiteLLM_UserTable(
@@ -638,7 +638,7 @@ async def test_soft_budget_alert():
 
 
 def test_is_allowed_route():
-    from litellm.proxy.auth.user_api_key_auth import _is_allowed_route
+    from litellm.proxy.auth.auth_checks import _is_allowed_route
     from litellm.proxy._types import UserAPIKeyAuth
     import datetime
 
@@ -649,7 +649,6 @@ def test_is_allowed_route():
         "token_type": "api",
         "request": request,
         "request_data": {"input": ["hello world"], "model": "embedding-small"},
-        "api_key": "9644159bc181998825c44c788b1526341ed2e825d1b6f562e23173759e14bb86",
         "valid_token": UserAPIKeyAuth(
             token="9644159bc181998825c44c788b1526341ed2e825d1b6f562e23173759e14bb86",
             key_name="sk-...CJjQ",
@@ -737,7 +736,7 @@ def test_is_allowed_route():
     ],
 )
 def test_is_user_proxy_admin(user_obj, expected_result):
-    from litellm.proxy.auth.user_api_key_auth import _is_user_proxy_admin
+    from litellm.proxy.auth.auth_checks import _is_user_proxy_admin
 
     assert _is_user_proxy_admin(user_obj) == expected_result
 
