@@ -21,12 +21,21 @@ Use Model Context Protocol with LiteLLM
 LiteLLM acts as a MCP bridge to utilize MCP tools with all LiteLLM supported models. LiteLLM offers the following features for using MCP
 
 - **List** Available MCP Tools: OpenAI clients can view all available MCP tools
+  - `litellm.experimental_mcp_client.load_mcp_tools` to list all available MCP tools
 - **Call** MCP Tools: OpenAI clients can call MCP tools
+  - `litellm.experimental_mcp_client.call_openai_tool` to call an OpenAI tool on an MCP server
 
 
 ## Usage
 
 ### 1. List Available MCP Tools
+
+In this example we'll use `litellm.experimental_mcp_client.load_mcp_tools` to list all available MCP tools on any MCP server. This method can be used in two ways:
+
+- `format="mcp"` - (default) Return MCP tools 
+  - Returns: `mcp.types.Tool`
+- `format="openai"` - Return MCP tools converted to OpenAI API compatible tools. Allows using with OpenAI endpoints.
+  - Returns: `openai.types.chat.ChatCompletionToolParam`
 
 <Tabs>
 <TabItem value="sdk" label="LiteLLM Python SDK">
@@ -36,12 +45,8 @@ LiteLLM acts as a MCP bridge to utilize MCP tools with all LiteLLM supported mod
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 import os
-from litellm.mcp_client.tools import (
-    load_mcp_tools,
-    transform_openai_tool_to_mcp_tool,
-    call_openai_tool,
-)
 import litellm
+from litellm import experimental_mcp_client
 
 
 server_params = StdioServerParameters(
@@ -56,12 +61,10 @@ async with stdio_client(server_params) as (read, write):
         await session.initialize()
 
         # Get tools
-        tools = await load_mcp_tools(session=session, format="openai")
+        tools = await experimental_mcp_client.load_mcp_tools(session=session, format="openai")
         print("MCP TOOLS: ", tools)
 
-        # Create and run the agent
         messages = [{"role": "user", "content": "what's (3 + 5)"}]
-        print(os.getenv("OPENAI_API_KEY"))
         llm_response = await litellm.acompletion(
             model="gpt-4o",
             api_key=os.getenv("OPENAI_API_KEY"),

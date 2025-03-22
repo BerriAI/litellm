@@ -10,11 +10,7 @@ sys.path.insert(
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 import os
-from litellm.mcp_client.tools import (
-    load_mcp_tools,
-    transform_openai_tool_to_mcp_tool,
-    call_openai_tool,
-)
+from litellm import experimental_mcp_client
 import litellm
 import pytest
 import json
@@ -34,12 +30,13 @@ async def test_mcp_agent():
             await session.initialize()
 
             # Get tools
-            tools = await load_mcp_tools(session=session, format="openai")
+            tools = await experimental_mcp_client.load_mcp_tools(
+                session=session, format="openai"
+            )
             print("MCP TOOLS: ", tools)
 
             # Create and run the agent
             messages = [{"role": "user", "content": "what's (3 + 5)"}]
-            print(os.getenv("OPENAI_API_KEY"))
             llm_response = await litellm.acompletion(
                 model="gpt-4o",
                 api_key=os.getenv("OPENAI_API_KEY"),
@@ -59,7 +56,7 @@ async def test_mcp_agent():
             openai_tool = llm_response["choices"][0]["message"]["tool_calls"][0]
 
             # Call the tool using MCP client
-            call_result = await call_openai_tool(
+            call_result = await experimental_mcp_client.call_openai_tool(
                 session=session,
                 openai_tool=openai_tool,
             )
