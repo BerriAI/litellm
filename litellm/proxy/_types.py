@@ -1631,7 +1631,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
 
 class LiteLLM_UserTableFiltered(BaseModel):  # done to avoid exposing sensitive data
     user_id: str
-    user_email: str
+    user_email: Optional[str] = None
 
 
 class LiteLLM_UserTableWithKeyCount(LiteLLM_UserTable):
