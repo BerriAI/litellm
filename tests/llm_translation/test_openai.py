@@ -17,6 +17,10 @@ import litellm
 from litellm import Choices, Message, ModelResponse
 from base_llm_unit_tests import BaseLLMChatTest
 import asyncio
+from litellm.types.llms.openai import (
+    ChatCompletionAnnotation,
+    ChatCompletionAnnotationURLCitation,
+)
 
 
 def test_openai_prediction_param():
@@ -393,8 +397,28 @@ def test_openai_chat_completion_streaming_handler_reasoning_content():
     assert response.choices[0].delta.reasoning_content == "."
 
 
+def validate_response_url_citation(url_citation: ChatCompletionAnnotationURLCitation):
+    assert "end_index" in url_citation
+    assert "start_index" in url_citation
+    assert "url" in url_citation
+
+
+def validate_model_response_contains_web_search_annotations(response: ModelResponse):
+    """validates litellm response contains web search annotations"""
+    message = response.choices[0].message
+    annotations: ChatCompletionAnnotation = message.annotations
+    print("annotations: ", annotations)
+    assert annotations is not None
+    assert isinstance(annotations, list)
+    for annotation in annotations:
+        assert annotation["type"] == "url_citation"
+        url_citation: ChatCompletionAnnotationURLCitation = annotation["url_citation"]
+        validate_response_url_citation(url_citation)
+
+
 def test_openai_web_search():
-    # litellm._turn_on_debug()
+    """Makes a simple web search request and validates the response contains web search annotations and all expected fields are present"""
+    litellm._turn_on_debug()
     response = litellm.completion(
         model="openai/gpt-4o-search-preview",
         messages=[
@@ -405,3 +429,4 @@ def test_openai_web_search():
         ],
     )
     print("litellm response: ", response.model_dump_json(indent=4))
+    validate_model_response_contains_web_search_annotations(response)
