@@ -1,6 +1,5 @@
 from typing import Set
 
-from openai.types.audio.transcription_create_params import TranscriptionCreateParams
 from openai.types.chat.completion_create_params import (
     CompletionCreateParamsNonStreaming,
     CompletionCreateParamsStreaming,
@@ -13,6 +12,7 @@ from openai.types.completion_create_params import (
 )
 from openai.types.embedding_create_params import EmbeddingCreateParams
 
+from litellm._logging import verbose_logger
 from litellm.types.rerank import RerankRequest
 
 
@@ -123,7 +123,19 @@ class ModelParamHelper:
 
         This follows the OpenAI API Spec
         """
-        return set(TranscriptionCreateParams.__annotations__.keys())
+        try:
+            from openai.types.audio.transcription_create_params import (
+                TranscriptionCreateParamsNonStreaming,
+                TranscriptionCreateParamsStreaming,
+            )
+
+            all_transcription_kwargs = set(
+                TranscriptionCreateParamsNonStreaming.__annotations__.keys()
+            ).union(set(TranscriptionCreateParamsStreaming.__annotations__.keys()))
+            return all_transcription_kwargs
+        except Exception as e:
+            verbose_logger.warning("Error getting transcription kwargs %s", str(e))
+            return set()
 
     @staticmethod
     def _get_exclude_kwargs() -> Set[str]:
