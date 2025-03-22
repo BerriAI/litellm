@@ -264,8 +264,17 @@ class TestVertexAIPassThroughHandler:
                 custom_headers={"Authorization": f"Bearer {test_token}"},
             )
 
+    @pytest.mark.parametrize(
+        "initial_endpoint",
+        [
+            "publishers/google/models/gemini-1.5-flash:generateContent",
+            "v1/projects/bad-project/locations/bad-location/publishers/google/models/gemini-1.5-flash:generateContent",
+        ],
+    )
     @pytest.mark.asyncio
-    async def test_vertex_passthrough_with_default_credentials(self, monkeypatch):
+    async def test_vertex_passthrough_with_default_credentials(
+        self, monkeypatch, initial_endpoint
+    ):
         """
         Test that when no passthrough credentials are set, default credentials are used in the request
         """
@@ -291,15 +300,13 @@ class TestVertexAIPassThroughHandler:
         )
 
         # Use different project/location in request than the default
-        request_project = "non-existing-project"
-        request_location = "bad-location"
-        endpoint = f"/v1/projects/{request_project}/locations/{request_location}/publishers/google/models/gemini-1.5-flash:generateContent"
+        endpoint = initial_endpoint
 
         mock_request = Request(
             scope={
                 "type": "http",
                 "method": "POST",
-                "path": endpoint,
+                "path": f"/vertex_ai/{endpoint}",
                 "headers": {},
             }
         )
