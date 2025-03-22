@@ -3715,6 +3715,7 @@ def embedding(  # noqa: PLR0915
                     aembedding=aembedding,
                     print_verbose=print_verbose,
                     custom_llm_provider="vertex_ai",
+                    client=client,
                 )
             else:
                 response = vertex_embedding.embedding(

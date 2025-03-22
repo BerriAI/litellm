@@ -27,9 +27,11 @@ from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_image
 from litellm.types.llms.vertex_ai import PartType, BlobType
 import httpx
 
+
 def encode_image_to_base64(image_path):
     with open(image_path, "rb") as image_file:
-        return base64.b64encode(image_file.read()).decode('utf-8')
+        return base64.b64encode(image_file.read()).decode("utf-8")
+
 
 def test_completion_pydantic_obj_2():
     from pydantic import BaseModel
@@ -1269,19 +1271,20 @@ from typing import Dict, Any
 # Import your actual module here
 # from your_module import _process_gemini_image, PartType, FileDataType, BlobType
 
+
 # Add these fixtures below existing fixtures
 @pytest.fixture
 def vertex_client():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
     return HTTPHandler()
+
 
 @pytest.fixture
 def encoded_images():
-    image_paths = [
-        "duck.png",
-        "guinea.png"
-    ]
+    image_paths = ["duck.png", "guinea.png"]
     return [encode_image_to_base64(path) for path in image_paths]
+
 
 @pytest.fixture
 def mock_convert_url_to_base64():
@@ -1325,55 +1328,62 @@ def test_process_gemini_image_http_url(
     result = _process_gemini_image(http_url)
     # assert result["file_data"]["file_uri"] == http_url
 
+
 @pytest.mark.parametrize(
     "input_string, expected_closer_index",
     [
-        ("Duck", 0),    # Duck closer to duck image
+        ("Duck", 0),  # Duck closer to duck image
         ("Guinea", 1),  # Guinea closer to guinea image
     ],
 )
-
-def test_vertex_embeddings_distances(vertex_client, encoded_images, input_string, expected_closer_index):
+def test_vertex_embeddings_distances(
+    vertex_client, encoded_images, input_string, expected_closer_index
+):
     """
     Test cosine distances between image and text embeddings using Vertex AI multimodalembedding@001
     """
     from unittest.mock import patch
-    
+
     # Mock different embedding values to simulate realistic distances
     mock_image_embeddings = [
         [0.9] + [0.1] * 767,  # Duck embedding - closer to "Duck"
-        [0.1] * 767 + [0.9]   # Guinea embedding - closer to "Guinea"
+        [0.1] * 767 + [0.9],  # Guinea embedding - closer to "Guinea"
     ]
-    
+
     image_embeddings = []
     mock_response = MagicMock()
-    
+
     with patch.object(vertex_client, "post", return_value=mock_response):
         for idx, encoded_image in enumerate(encoded_images):
             mock_response.json.return_value = {
-                "predictions": [{"embeddings": {"values": mock_image_embeddings[idx]}}]
+                "predictions": [{"imageEmbedding": mock_image_embeddings[idx]}]
             }
+            mock_response.status_code = 200
             response = litellm.embedding(
                 model="vertex_ai/multimodalembedding@001",
                 input=[f"data:image/png;base64,{encoded_image}"],
-                client=vertex_client
+                client=vertex_client,
             )
-            image_embeddings.append(response.data[0]["embedding"])
+            print("response: ", response)
+            image_embeddings.append(response.data[0].embedding)
 
     # Mock text embedding based on input string
-    mock_text_embedding = [0.9] + [0.1] * 767 if input_string == "Duck" else [0.1] * 767 + [0.9]
+    mock_text_embedding = (
+        [0.9] + [0.1] * 767 if input_string == "Duck" else [0.1] * 767 + [0.9]
+    )
     text_mock_response = MagicMock()
     text_mock_response.json.return_value = {
-        "predictions": [{"embeddings": {"values": mock_text_embedding}}]
+        "predictions": [{"imageEmbedding": mock_text_embedding}]
     }
-    
+    text_mock_response.status_code = 200
     with patch.object(vertex_client, "post", return_value=text_mock_response):
         text_response = litellm.embedding(
             model="vertex_ai/multimodalembedding@001",
             input=[input_string],
-            client=vertex_client
+            client=vertex_client,
         )
-        text_embedding = text_response.data[0]["embedding"]
+        print("text_response: ", text_response)
+        text_embedding = text_response.data[0].embedding
 
     image_embeddings_array = np.array(image_embeddings)
     text_embedding_array = np.array(text_embedding).reshape(1, -1)
@@ -1381,9 +1391,12 @@ def test_vertex_embeddings_distances(vertex_client, encoded_images, input_string
     cosine_dist = cosine_distances(image_embeddings_array, text_embedding_array)
 
     # Validate that the expected image has smaller distance
-    assert cosine_dist[expected_closer_index] < cosine_dist[1 - expected_closer_index], \
-        f"Distance to image {expected_closer_index} should be smaller for '{input_string}' with model 'multimodalembedding@001'"
+    assert (
+        cosine_dist[expected_closer_index] < cosine_dist[1 - expected_closer_index]
+    ), f"Distance to image {expected_closer_index} should be smaller for '{input_string}' with model 'multimodalembedding@001'"
 
     # Optionally print distances for manual inspection
     for idx, distance in enumerate(cosine_dist.flatten()):
-        print(f"Image {idx+1} cosine distance to '{input_string}' (model: multimodalembedding@001): {distance:.4f}")
+        print(
+            f"Image {idx+1} cosine distance to '{input_string}' (model: multimodalembedding@001): {distance:.4f}"
+        )
