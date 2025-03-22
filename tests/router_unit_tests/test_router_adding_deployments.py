@@ -36,11 +36,11 @@ def test_initialize_deployment_for_pass_through_success():
     )
 
     # Verify the credentials were properly set
-    from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
-        vertex_pass_through_router,
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        passthrough_endpoint_router,
     )
 
-    vertex_creds = vertex_pass_through_router.get_vertex_credentials(
+    vertex_creds = passthrough_endpoint_router.get_vertex_credentials(
         project_id="test-project", location="us-central1"
     )
     assert vertex_creds.vertex_project == "test-project"
