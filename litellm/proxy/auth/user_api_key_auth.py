@@ -249,6 +249,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
     parent_otel_span: Optional[Span] = None
     start_time = datetime.now()
     route: str = get_request_route(request=request)
+    valid_token: Optional[UserAPIKeyAuth] = None
 
     try:
 
@@ -393,7 +394,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         parent_otel_span=parent_otel_span,
                     )
 
-                valid_token: Optional[UserAPIKeyAuth] = UserAPIKeyAuth(
+                valid_token = UserAPIKeyAuth(
                     api_key=None,
                     team_id=team_id,
                     team_tpm_limit=(
@@ -425,7 +426,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 )
 
                 # return UserAPIKeyAuth object
-                return valid_token
+                return cast(UserAPIKeyAuth, valid_token)
 
         #### ELSE ####
         ## CHECK PASS-THROUGH ENDPOINTS ##
