@@ -1975,7 +1975,7 @@ def supports_system_messages(model: str, custom_llm_provider: Optional[str]) -> 
     )
 
 
-def supports_web_search(model: str, custom_llm_provider: Optional[str]) -> bool:
+def supports_web_search(model: str, custom_llm_provider: Optional[str] = None) -> bool:
     """
     Check if the given model supports web search and return a boolean value.
 
