@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import traceback
 from unittest import mock
 from unittest.mock import MagicMock, patch
 
@@ -261,4 +262,72 @@ class TestVertexAIPassThroughHandler:
                 endpoint=endpoint,
                 target=f"https://{test_location}-aiplatform.googleapis.com/v1/projects/{test_project}/locations/{test_location}/publishers/google/models/gemini-1.5-flash:generateContent",
                 custom_headers={"Authorization": f"Bearer {test_token}"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_vertex_passthrough_with_default_credentials(self, monkeypatch):
+        """
+        Test that when no passthrough credentials are set, default credentials are used in the request
+        """
+        from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
+            PassthroughEndpointRouter,
+        )
+
+        # Setup default credentials
+        default_project = "default-project"
+        default_location = "us-central1"
+        default_credentials = "default-creds"
+
+        pass_through_router = PassthroughEndpointRouter()
+        pass_through_router.default_vertex_config = VertexPassThroughCredentials(
+            vertex_project=default_project,
+            vertex_location=default_location,
+            vertex_credentials=default_credentials,
+        )
+
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router",
+            pass_through_router,
+        )
+
+        # Use different project/location in request than the default
+        request_project = "non-existing-project"
+        request_location = "bad-location"
+        endpoint = f"/v1/projects/{request_project}/locations/{request_location}/publishers/google/models/gemini-1.5-flash:generateContent"
+
+        mock_request = Request(
+            scope={
+                "type": "http",
+                "method": "POST",
+                "path": endpoint,
+                "headers": {},
+            }
+        )
+        mock_response = Response()
+
+        with mock.patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._ensure_access_token_async"
+        ) as mock_ensure_token, mock.patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._get_token_and_url"
+        ) as mock_get_token, mock.patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route:
+            mock_ensure_token.return_value = ("test-auth-header", default_project)
+            mock_get_token.return_value = (default_credentials, "")
+
+            try:
+                await vertex_proxy_route(
+                    endpoint=endpoint,
+                    request=mock_request,
+                    fastapi_response=mock_response,
+                )
+            except Exception as e:
+                traceback.print_exc()
+                print(f"Error: {e}")
+
+            # Verify default credentials were used
+            mock_create_route.assert_called_once_with(
+                endpoint=endpoint,
+                target=f"https://{default_location}-aiplatform.googleapis.com/v1/projects/{default_project}/locations/{default_location}/publishers/google/models/gemini-1.5-flash:generateContent",
+                custom_headers={"Authorization": f"Bearer {default_credentials}"},
             )

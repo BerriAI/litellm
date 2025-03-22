@@ -150,19 +150,17 @@ class PassthroughEndpointRouter:
         """
         Get the vertex credentials for the given project-id, location
         """
-        default_vertex_config: Optional[VertexPassThroughCredentials] = None
-
         deployment_key = self._get_deployment_key(
             project_id=project_id,
             location=location,
         )
 
         if deployment_key is None:
-            return default_vertex_config
+            return self.default_vertex_config
         if deployment_key in self.deployment_key_to_vertex_credentials:
             return self.deployment_key_to_vertex_credentials[deployment_key]
         else:
-            return default_vertex_config
+            return self.default_vertex_config
 
     def _get_credential_name_for_provider(
         self,
