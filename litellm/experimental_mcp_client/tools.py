@@ -53,7 +53,7 @@ async def load_mcp_tools(
         format: The format to convert the tools to
     By default, the tools are returned in MCP format.
 
-    If format is set to "openai", the tools are converted to OpenAI tools.
+    If format is set to "openai", the tools are converted to OpenAI API compatible tools.
     """
     tools = await session.list_tools()
     if format == "openai":
@@ -80,7 +80,15 @@ async def call_openai_tool(
     session: ClientSession,
     openai_tool: ChatCompletionToolParam,
 ) -> CallToolResult:
-    """Call an OpenAI tool using MCP client."""
+    """
+    Call an OpenAI tool using MCP client.
+
+    Args:
+        session: The MCP session to use
+        openai_tool: The OpenAI tool to call. You can get this from the `choices[0].message.tool_calls[0]` of the response from the OpenAI API.
+    Returns:
+        The result of the MCP tool call.
+    """
     mcp_tool = transform_openai_tool_to_mcp_tool(
         openai_tool=openai_tool,
     )
