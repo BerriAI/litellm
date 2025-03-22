@@ -456,7 +456,6 @@ async def vertex_proxy_route(
         request=request,
         api_key=api_key_to_use,
     )
-
     vertex_project: Optional[str] = get_vertex_project_id_from_url(endpoint)
     vertex_location: Optional[str] = get_vertex_location_from_url(endpoint)
     vertex_credentials = passthrough_endpoint_router.get_vertex_credentials(

@@ -55,37 +55,6 @@
 #         else:
 #             return default_vertex_config
 
-#     def add_vertex_credentials(
-#         self,
-#         project_id: str,
-#         location: str,
-#         vertex_credentials: VERTEX_CREDENTIALS_TYPES,
-#     ):
-#         """
-#         Add the vertex credentials for the given project-id, location
-#         """
-
-#         deployment_key = self._get_deployment_key(
-#             project_id=project_id,
-#             location=location,
-#         )
-#         if deployment_key is None:
-#             verbose_proxy_logger.debug(
-#                 "No deployment key found for project-id, location"
-#             )
-#             return
-#         vertex_pass_through_credentials = VertexPassThroughCredentials(
-#             vertex_project=project_id,
-#             vertex_location=location,
-#             vertex_credentials=vertex_credentials,
-#         )
-#         self.deployment_key_to_vertex_credentials[deployment_key] = (
-#             vertex_pass_through_credentials
-#         )
-#         verbose_proxy_logger.debug(
-#             f"self.deployment_key_to_vertex_credentials: {json.dumps(self.deployment_key_to_vertex_credentials, indent=4, default=str)}"
-#         )
-
 
 #     @staticmethod
 #     def _get_vertex_project_id_from_url(url: str) -> Optional[str]:

@@ -23,48 +23,6 @@
 # default_vertex_config: Optional[VertexPassThroughCredentials] = None
 
 
-# def _get_vertex_env_vars() -> VertexPassThroughCredentials:
-#     """
-#     Helper to get vertex pass through config from environment variables
-
-#     The following environment variables are used:
-#     - DEFAULT_VERTEXAI_PROJECT (project id)
-#     - DEFAULT_VERTEXAI_LOCATION (location)
-#     - DEFAULT_GOOGLE_APPLICATION_CREDENTIALS (path to credentials file)
-#     """
-#     return VertexPassThroughCredentials(
-#         vertex_project=get_secret_str("DEFAULT_VERTEXAI_PROJECT"),
-#         vertex_location=get_secret_str("DEFAULT_VERTEXAI_LOCATION"),
-#         vertex_credentials=get_secret_str("DEFAULT_GOOGLE_APPLICATION_CREDENTIALS"),
-#     )
-
-
-# def set_default_vertex_config(config: Optional[dict] = None):
-#     """Sets vertex configuration from provided config and/or environment variables
-
-#     Args:
-#         config (Optional[dict]): Configuration dictionary
-#         Example: {
-#             "vertex_project": "my-project-123",
-#             "vertex_location": "us-central1",
-#             "vertex_credentials": "os.environ/GOOGLE_CREDS"
-#         }
-#     """
-#     global default_vertex_config
-
-#     # Initialize config dictionary if None
-#     if config is None:
-#         default_vertex_config = _get_vertex_env_vars()
-#         return
-
-#     if isinstance(config, dict):
-#         for key, value in config.items():
-#             if isinstance(value, str) and value.startswith("os.environ/"):
-#                 config[key] = litellm.get_secret(value)
-
-#     _set_default_vertex_config(VertexPassThroughCredentials(**config))
-
-
 # def _set_default_vertex_config(
 #     vertex_pass_through_credentials: VertexPassThroughCredentials,
 # ):
