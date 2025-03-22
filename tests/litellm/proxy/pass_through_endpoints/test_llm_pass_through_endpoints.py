@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from unittest import mock
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -17,7 +18,9 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
     create_pass_through_route,
+    vertex_proxy_route,
 )
+from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
 
 class TestBaseOpenAIPassThroughHandler:
@@ -176,3 +179,72 @@ class TestBaseOpenAIPassThroughHandler:
         print(f"query_params: {call_kwargs['query_params']}")
         assert call_kwargs["stream"] is False
         assert call_kwargs["query_params"] == {"model": "gpt-4"}
+
+
+class TestVertexAIPassThroughHandler:
+    """
+    Case 1: User set passthrough credentials - confirm credentials used.
+
+    Case 2: User set default credentials, no exact passthrough credentials - confirm default credentials used.
+
+    Case 3: No default credentials, incorrect project/base passed - confirm no credentials used.
+    """
+
+    @pytest.mark.asyncio
+    async def test_vertex_passthrough_with_credentials(self):
+        """
+        Test that when passthrough credentials are set, they are correctly used in the request
+        """
+        # Mock request
+        mock_request = Request(
+            scope={
+                "type": "http",
+                "method": "POST",
+                "path": "/vertex_ai/models/test-model/predict",
+                "headers": {},
+            }
+        )
+
+        # Mock response
+        mock_response = Response()
+
+        # Mock vertex credentials
+        test_project = "test-project"
+        test_location = "us-central1"
+        test_token = "test-token-123"
+
+        with mock.patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_vertex_credentials"
+        ) as mock_get_creds, mock.patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._ensure_access_token_async"
+        ) as mock_ensure_token, mock.patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._get_token_and_url"
+        ) as mock_get_token, mock.patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route:
+
+            # Setup mock returns
+            mock_get_creds.return_value = VertexPassThroughCredentials(
+                vertex_project=test_project,
+                vertex_location=test_location,
+                vertex_credentials="test-creds",
+            )
+            mock_ensure_token.return_value = ("test-auth-header", test_project)
+            mock_get_token.return_value = (test_token, "")
+
+            # Call the route
+            try:
+                await vertex_proxy_route(
+                    endpoint="models/test-model/predict",
+                    request=mock_request,
+                    fastapi_response=mock_response,
+                )
+            except Exception as e:
+                print(f"Error: {e}")
+
+            # Verify create_pass_through_route was called with correct arguments
+            mock_create_route.assert_called_once_with(
+                endpoint="models/test-model/predict",
+                target=f"https://{test_location}-aiplatform.googleapis.com/v1/projects/{test_project}/locations/{test_location}/models/test-model/predict",
+                custom_headers={"Authorization": f"Bearer {test_token}"},
+            )
