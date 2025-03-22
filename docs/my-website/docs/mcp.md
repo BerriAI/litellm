@@ -51,7 +51,7 @@ from litellm import experimental_mcp_client
 
 server_params = StdioServerParameters(
     command="python3",
-    # Make sure to update to the full absolute path to your math_server.py file
+    # Make sure to update to the full absolute path to your mcp_server.py file
     args=["./mcp_server.py"],
 )
 
@@ -74,6 +74,52 @@ async with stdio_client(server_params) as (read, write):
         print("LLM RESPONSE: ", json.dumps(llm_response, indent=4, default=str))
 ```
 
+</TabItem>
+
+<TabItem value="openai" label="OpenAI SDK + LiteLLM Proxy">
+
+In this example we'll walk through how you can use the OpenAI SDK pointed to the LiteLLM proxy to call MCP tools. The key difference here is we use the OpenAI SDK to make the LLM API request
+
+```python title="MCP Client List Tools" showLineNumbers
+# Create server parameters for stdio connection
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+import os
+from openai import OpenAI
+from litellm import experimental_mcp_client
+
+server_params = StdioServerParameters(
+    command="python3",
+    # Make sure to update to the full absolute path to your mcp_server.py file
+    args=["./mcp_server.py"],
+)
+
+async with stdio_client(server_params) as (read, write):
+    async with ClientSession(read, write) as session:
+        # Initialize the connection
+        await session.initialize()
+
+        # Get tools using litellm mcp client
+        tools = await experimental_mcp_client.load_mcp_tools(session=session, format="openai")
+        print("MCP TOOLS: ", tools)
+
+        # Use OpenAI SDK pointed to LiteLLM proxy
+        client = OpenAI(
+            api_key="your-api-key",  # Your LiteLLM proxy API key
+            base_url="http://localhost:4000"  # Your LiteLLM proxy URL
+        )
+
+        messages = [{"role": "user", "content": "what's (3 + 5)"}]
+        llm_response = client.chat.completions.create(
+            model="gpt-4",
+            messages=messages,
+            tools=tools
+        )
+        print("LLM RESPONSE: ", llm_response)
+```
+</TabItem>
+</Tabs>
+
 
 ### 2. List and Call MCP Tools
 
@@ -90,6 +136,8 @@ The first llm response returns a list of OpenAI tools. We take the first tool ca
 - Calls the MCP Tool on the MCP server
 - Returns the result of the MCP Tool call
 
+<Tabs>
+<TabItem value="sdk" label="LiteLLM Python SDK">
 
 ```python title="MCP Client List and Call Tools" showLineNumbers
 # Create server parameters for stdio connection
@@ -102,7 +150,7 @@ from litellm import experimental_mcp_client
 
 server_params = StdioServerParameters(
     command="python3",
-    # Make sure to update to the full absolute path to your math_server.py file
+    # Make sure to update to the full absolute path to your mcp_server.py file
     args=["./mcp_server.py"],
 )
 
@@ -154,56 +202,71 @@ async with stdio_client(server_params) as (read, write):
 ```
 
 </TabItem>
-<TabItem value="proxy" label="LiteLLM Proxy Server">
+<TabItem value="proxy" label="OpenAI SDK + LiteLLM Proxy">
 
-```python
-import asyncio
+In this example we'll walk through how you can use the OpenAI SDK pointed to the LiteLLM proxy to call MCP tools. The key difference here is we use the OpenAI SDK to make the LLM API request
+
+```python title="MCP Client with OpenAI SDK" showLineNumbers
+# Create server parameters for stdio connection
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+import os
 from openai import OpenAI
-from litellm import experimental_create_mcp_client
-from litellm.mcp_stdio import experimental_stdio_mcp_transport
+from litellm import experimental_mcp_client
 
-async def main():
-    client_one = None
+server_params = StdioServerParameters(
+    command="python3",
+    # Make sure to update to the full absolute path to your mcp_server.py file
+    args=["./mcp_server.py"],
+)
 
-    try:
-        # Initialize an MCP client to connect to a `stdio` MCP server:
-        transport = experimental_stdio_mcp_transport(
-            command='node',
-            args=['src/stdio/dist/server.js']
-        )
-        client_one = await experimental_create_mcp_client(
-            transport=transport
-        )
+async with stdio_client(server_params) as (read, write):
+    async with ClientSession(read, write) as session:
+        # Initialize the connection
+        await session.initialize()
 
-        # Get tools from MCP client
-        tools = await client_one.list_tools(format="openai")
-        
-        # Use OpenAI client connected to LiteLLM Proxy Server
+        # Get tools using litellm mcp client
+        tools = await experimental_mcp_client.load_mcp_tools(session=session, format="openai")
+        print("MCP TOOLS: ", tools)
+
+        # Use OpenAI SDK pointed to LiteLLM proxy
         client = OpenAI(
-            api_key="sk-1234",
-            base_url="http://0.0.0.0:4000"
+            api_key="your-api-key",  # Your LiteLLM proxy API key
+            base_url="http://localhost:8000"  # Your LiteLLM proxy URL
         )
-        response = client.chat.completions.create(
+
+        messages = [{"role": "user", "content": "what's (3 + 5)"}]
+        llm_response = client.chat.completions.create(
             model="gpt-4",
-            tools=tools,
-            messages=[
-                {
-                    "role": "user",
-                    "content": "Find products under $100"
-                }
-            ]
+            messages=messages,
+            tools=tools
         )
+        print("LLM RESPONSE: ", llm_response)
 
-        print(response.choices[0].message.content)
-    except Exception as error:
-        print(error)
-    finally:
-        await asyncio.gather(
-            client_one.close() if client_one else asyncio.sleep(0),
+        # Get the first tool call
+        tool_call = llm_response.choices[0].message.tool_calls[0]
+        
+        # Call the tool using MCP client
+        call_result = await experimental_mcp_client.call_openai_tool(
+            session=session,
+            openai_tool=tool_call.model_dump(),
         )
+        print("MCP TOOL CALL RESULT: ", call_result)
 
-if __name__ == "__main__":
-    asyncio.run(main())
+        # Send the tool result back to the LLM
+        messages.append(llm_response.choices[0].message.model_dump())
+        messages.append({
+            "role": "tool",
+            "content": str(call_result.content[0].text),
+            "tool_call_id": tool_call.id,
+        })
+
+        final_response = client.chat.completions.create(
+            model="gpt-4",
+            messages=messages,
+            tools=tools
+        )
+        print("FINAL RESPONSE: ", final_response)
 ```
 
 </TabItem>
