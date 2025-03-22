@@ -50,9 +50,12 @@ class StandardBuiltInToolCostTracking:
                     ),
                     model_info=model_info,
                 )
-        # elif isinstance(response_object, ResponsesAPIResponse):
-        #     if response_object.web_search_options is not None:
-        #         return 0.0
+            elif StandardBuiltInToolCostTracking.response_includes_annotations(
+                response_object
+            ):
+                return StandardBuiltInToolCostTracking.get_default_cost_for_web_search(
+                    model_info
+                )
         return 0.0
 
     @staticmethod
@@ -79,6 +82,18 @@ class StandardBuiltInToolCostTracking:
             return search_context_pricing.get("search_context_size_high", 0.0)
         else:
             return 0.0
+
+    @staticmethod
+    def get_default_cost_for_web_search(model_info: ModelInfo) -> float:
+        """
+        If no web search options are provided, use the `search_context_size_medium` pricing.
+
+        https://platform.openai.com/docs/pricing#web-search
+        """
+        search_context_pricing: SearchContextCostPerQuery = (
+            model_info.get("search_context_cost_per_query", {}) or {}
+        ) or {}
+        return search_context_pricing.get("search_context_size_medium", 0.0)
 
     @staticmethod
     def response_includes_annotations(response_object: ModelResponse) -> bool:
