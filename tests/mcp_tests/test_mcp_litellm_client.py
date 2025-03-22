@@ -18,10 +18,12 @@ import json
 
 @pytest.mark.asyncio
 async def test_mcp_agent():
+    local_server_path = "./mcp_server.py"
+    ci_cd_server_path = "tests/mcp_tests/mcp_server.py"
     server_params = StdioServerParameters(
         command="python3",
         # Make sure to update to the full absolute path to your math_server.py file
-        args=["./mcp_server.py"],
+        args=[ci_cd_server_path],
     )
 
     async with stdio_client(server_params) as (read, write):
