@@ -84,8 +84,10 @@ class ModelParamHelper:
         This follows the OpenAI API Spec
         """
         all_chat_completion_kwargs = set(
-            CompletionCreateParamsNonStreaming.__annotations__.keys()
-        ).union(set(CompletionCreateParamsStreaming.__annotations__.keys()))
+            getattr(CompletionCreateParamsNonStreaming, "__annotations__", {}).keys()
+        ).union(
+            set(getattr(CompletionCreateParamsStreaming, "__annotations__", {}).keys())
+        )
         return all_chat_completion_kwargs
 
     @staticmethod
@@ -96,8 +98,16 @@ class ModelParamHelper:
         This follows the OpenAI API Spec
         """
         all_text_completion_kwargs = set(
-            TextCompletionCreateParamsNonStreaming.__annotations__.keys()
-        ).union(set(TextCompletionCreateParamsStreaming.__annotations__.keys()))
+            getattr(
+                TextCompletionCreateParamsNonStreaming, "__annotations__", {}
+            ).keys()
+        ).union(
+            set(
+                getattr(
+                    TextCompletionCreateParamsStreaming, "__annotations__", {}
+                ).keys()
+            )
+        )
         return all_text_completion_kwargs
 
     @staticmethod
@@ -114,7 +124,7 @@ class ModelParamHelper:
 
         This follows the OpenAI API Spec
         """
-        return set(EmbeddingCreateParams.__annotations__.keys())
+        return set(getattr(EmbeddingCreateParams, "__annotations__", {}).keys())
 
     @staticmethod
     def _get_litellm_supported_transcription_kwargs() -> Set[str]:
@@ -128,10 +138,10 @@ class ModelParamHelper:
                 TranscriptionCreateParamsNonStreaming,
                 TranscriptionCreateParamsStreaming,
             )
+            non_streaming_kwargs = set(getattr(TranscriptionCreateParamsNonStreaming, "__annotations__", {}).keys())
+            streaming_kwargs = set(getattr(TranscriptionCreateParamsStreaming, "__annotations__", {}).keys())
 
-            all_transcription_kwargs = set(
-                TranscriptionCreateParamsNonStreaming.__annotations__.keys()
-            ).union(set(TranscriptionCreateParamsStreaming.__annotations__.keys()))
+            all_transcription_kwargs = non_streaming_kwargs.union(streaming_kwargs)
             return all_transcription_kwargs
         except Exception as e:
             verbose_logger.warning("Error getting transcription kwargs %s", str(e))
