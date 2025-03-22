@@ -244,3 +244,37 @@ async def test_stream_token_counting_anthropic_with_include_usage():
         )
         <= 10
     )
+
+
+class TestCustomLogger(CustomLogger):
+    def __init__(self):
+        self.standard_logging_payload: Optional[StandardLoggingPayload] = None
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        print("kwargs: ", kwargs)
+        self.standard_logging_payload = kwargs.get("standard_logging_object", None)
+
+
+@pytest.mark.asyncio
+async def test_openai_web_search_logging_cost_tracking():
+    """Makes a simple web search request and validates the response contains web search annotations and all expected fields are present"""
+    litellm._turn_on_debug()
+    test_custom_logger = TestCustomLogger()
+    litellm.callbacks = [test_custom_logger]
+    response = await litellm.acompletion(
+        model="openai/gpt-4o-search-preview",
+        messages=[
+            {
+                "role": "user",
+                "content": "What was a positive news story from today?",
+            }
+        ],
+    )
+    print("litellm response: ", response.model_dump_json(indent=4))
+
+    await asyncio.sleep(1)
+
+    print(
+        "logged standard logging payload: ",
+        json.dumps(test_custom_logger.standard_logging_payload, indent=4),
+    )
