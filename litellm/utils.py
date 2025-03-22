@@ -4545,6 +4545,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                     "supports_native_streaming", None
                 ),
                 supports_web_search=_model_info.get("supports_web_search", False),
+                search_context_cost_per_query=_model_info.get(
+                    "search_context_cost_per_query", None
+                ),
                 tpm=_model_info.get("tpm", None),
                 rpm=_model_info.get("rpm", None),
             )
