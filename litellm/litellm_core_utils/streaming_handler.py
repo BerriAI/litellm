@@ -799,6 +799,10 @@ class CustomStreamWrapper:
                 "provider_specific_fields" in response_obj
                 and response_obj["provider_specific_fields"] is not None
             )
+            or (
+                "annotations" in model_response.choices[0].delta
+                and model_response.choices[0].delta.annotations is not None
+            )
         ):
             return True
         else:
@@ -939,7 +943,6 @@ class CustomStreamWrapper:
             and model_response.choices[0].delta.audio is not None
         ):
             return model_response
-
         else:
             if hasattr(model_response, "usage"):
                 self.chunks.append(model_response)
