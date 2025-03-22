@@ -17,7 +17,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_messages_pt,
     anthropic_pt,
     claude_2_1_pt,
-    convert_to_anthropic_image_obj,
+    convert_to_anthropic_media_obj,
     convert_url_to_base64,
     llama_2_chat_pt,
     prompt_factory,
@@ -198,10 +198,11 @@ def test_convert_url_to_img():
         ("data:image/jpeg;base64,1234", "image/jpeg"),
         ("data:application/pdf;base64,1234", "application/pdf"),
         (r"data:image\/jpeg;base64,1234", "image/jpeg"),
+        (r"data:video\/mp4;base64,1234", "video/mp4"),
     ],
 )
-def test_base64_image_input(url, expected_media_type):
-    response = convert_to_anthropic_image_obj(openai_image_url=url, format=None)
+def test_base64_media_input(url, expected_media_type):
+    response = convert_to_anthropic_media_obj(openai_media_url=url, format=None)
 
     assert response["media_type"] == expected_media_type
 
@@ -675,17 +676,21 @@ def test_just_system_message():
         assert "bedrock requires at least one non-system message" in str(e.value)
 
 
-def test_convert_generic_image_chunk_to_openai_image_obj():
+@pytest.mark.parametrize(
+    "url",
+    ["https://i.pinimg.com/736x/b4/b1/be/b4b1becad04d03a9071db2817fc9fe77.jpg",
+     "https://videos.pexels.com/video-files/3571264/3571264-sd_426_240_30fps.mp4"],
+)
+def test_convert_generic_media_chunk_to_openai_media_obj(url):
     from litellm.litellm_core_utils.prompt_templates.factory import (
-        convert_generic_image_chunk_to_openai_image_obj,
-        convert_to_anthropic_image_obj,
+        convert_generic_media_chunk_to_openai_media_obj,
+        convert_to_anthropic_media_obj,
     )
 
-    url = "https://i.pinimg.com/736x/b4/b1/be/b4b1becad04d03a9071db2817fc9fe77.jpg"
-    image_obj = convert_to_anthropic_image_obj(url, format=None)
-    url_str = convert_generic_image_chunk_to_openai_image_obj(image_obj)
-    image_obj = convert_to_anthropic_image_obj(url_str, format=None)
-    print(image_obj)
+    media_obj = convert_to_anthropic_media_obj(url, format=None)
+    url_str = convert_generic_media_chunk_to_openai_media_obj(media_obj)
+    media_obj = convert_to_anthropic_media_obj(url_str, format=None)
+    print(len(media_obj))
 
 
 def test_hf_chat_template():
