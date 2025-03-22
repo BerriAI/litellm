@@ -382,6 +382,28 @@ class ChatCompletionThinkingBlock(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
+class ChatCompletionAnnotationURLCitation(TypedDict, total=False):
+    end_index: int
+    """The index of the last character of the URL citation in the message."""
+
+    start_index: int
+    """The index of the first character of the URL citation in the message."""
+
+    title: str
+    """The title of the web resource."""
+
+    url: str
+    """The URL of the web resource."""
+
+
+class ChatCompletionAnnotation(TypedDict, total=False):
+    type: Literal["url_citation"]
+    """The type of the URL citation. Always `url_citation`."""
+
+    url_citation: ChatCompletionAnnotationURLCitation
+    """A URL citation when using web search."""
+
+
 class OpenAIChatCompletionTextObject(TypedDict):
     type: Literal["text"]
     text: str
