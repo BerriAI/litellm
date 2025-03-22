@@ -5286,10 +5286,11 @@ class Router:
 
             if len(returned_models) == 0:  # check if wildcard route
                 potential_wildcard_models = self.pattern_router.route(model_name)
-                if potential_wildcard_models is not None:
-                    returned_models.extend(
-                        [DeploymentTypedDict(**m) for m in potential_wildcard_models]  # type: ignore
-                    )
+                if model_name is not None and potential_wildcard_models is not None:
+                    for m in potential_wildcard_models:
+                        deployment_typed_dict = DeploymentTypedDict(**m)  # type: ignore
+                        deployment_typed_dict["model_name"] = model_name
+                        returned_models.append(deployment_typed_dict)
 
             if model_name is None:
                 returned_models += self.model_list
