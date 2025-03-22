@@ -40,7 +40,7 @@ In this example we'll use `litellm.experimental_mcp_client.load_mcp_tools` to li
 <Tabs>
 <TabItem value="sdk" label="LiteLLM Python SDK">
 
-```python title="MCP Client Example" showLineNumbers
+```python title="MCP Client List Tools" showLineNumbers
 # Create server parameters for stdio connection
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -76,17 +76,28 @@ async with stdio_client(server_params) as (read, write):
 
 
 ### 2. List and Call MCP Tools
-```python title="MCP Client Example" showLineNumbers
+
+In this example we'll use 
+- `litellm.experimental_mcp_client.load_mcp_tools` to list all available MCP tools on any MCP server
+- `litellm.experimental_mcp_client.call_openai_tool` to call an OpenAI tool on an MCP server
+
+The first llm response returns a list of OpenAI tools. We take the first tool call from the LLM response and pass it to `litellm.experimental_mcp_client.call_openai_tool` to call the tool on the MCP server.
+
+#### How `litellm.experimental_mcp_client.call_openai_tool` works
+
+- Accepts an OpenAI Tool Call from the LLM response
+- Converts the OpenAI Tool Call to an MCP Tool
+- Calls the MCP Tool on the MCP server
+- Returns the result of the MCP Tool call
+
+
+```python title="MCP Client List and Call Tools" showLineNumbers
 # Create server parameters for stdio connection
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 import os
-from litellm.mcp_client.tools import (
-    load_mcp_tools,
-    transform_openai_tool_to_mcp_tool,
-    call_openai_tool,
-)
 import litellm
+from litellm import experimental_mcp_client
 
 
 server_params = StdioServerParameters(
@@ -101,12 +112,10 @@ async with stdio_client(server_params) as (read, write):
         await session.initialize()
 
         # Get tools
-        tools = await load_mcp_tools(session=session, format="openai")
+        tools = await experimental_mcp_client.load_mcp_tools(session=session, format="openai")
         print("MCP TOOLS: ", tools)
 
-        # Create and run the agent
         messages = [{"role": "user", "content": "what's (3 + 5)"}]
-        print(os.getenv("OPENAI_API_KEY"))
         llm_response = await litellm.acompletion(
             model="gpt-4o",
             api_key=os.getenv("OPENAI_API_KEY"),
@@ -114,22 +123,14 @@ async with stdio_client(server_params) as (read, write):
             tools=tools,
         )
         print("LLM RESPONSE: ", json.dumps(llm_response, indent=4, default=str))
-# Add assertions to verify the response
-        assert llm_response["choices"][0]["message"]["tool_calls"] is not None
-        assert (
-            llm_response["choices"][0]["message"]["tool_calls"][0]["function"][
-                "name"
-            ]
-            == "add"
-        )
-        openai_tool = llm_response["choices"][0]["message"]["tool_calls"][0]
 
+        openai_tool = llm_response["choices"][0]["message"]["tool_calls"][0]
         # Call the tool using MCP client
-        call_result = await call_openai_tool(
+        call_result = await experimental_mcp_client.call_openai_tool(
             session=session,
             openai_tool=openai_tool,
         )
-        print("CALL RESULT: ", call_result)
+        print("MCP TOOL CALL RESULT: ", call_result)
 
         # send the tool result to the LLM
         messages.append(llm_response["choices"][0]["message"])
@@ -140,7 +141,7 @@ async with stdio_client(server_params) as (read, write):
                 "tool_call_id": openai_tool["id"],
             }
         )
-        print("final messages: ", messages)
+        print("final messages with tool result: ", messages)
         llm_response = await litellm.acompletion(
             model="gpt-4o",
             api_key=os.getenv("OPENAI_API_KEY"),
