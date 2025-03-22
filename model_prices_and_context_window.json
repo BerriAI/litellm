@@ -1435,7 +1435,7 @@
         "input_cost_per_token_batches": 0.0000375,
         "output_cost_per_token_batches": 0.000075,
         "cache_read_input_token_cost": 0.0000375,
-        "litellm_provider": "openai",
+        "litellm_provider": "azure",
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
