@@ -393,7 +393,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         parent_otel_span=parent_otel_span,
                     )
 
-                valid_token = UserAPIKeyAuth(
+                valid_token: Optional[UserAPIKeyAuth] = UserAPIKeyAuth(
                     api_key=None,
                     team_id=team_id,
                     team_tpm_limit=(
