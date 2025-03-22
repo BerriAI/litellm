@@ -630,6 +630,7 @@ class Delta(OpenAIObject):
         audio: Optional[ChatCompletionAudioResponse] = None,
         reasoning_content: Optional[str] = None,
         thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None,
+        annotations: Optional[List[ChatCompletionAnnotation]] = None,
         **params,
     ):
         super(Delta, self).__init__(**params)
@@ -640,6 +641,7 @@ class Delta(OpenAIObject):
         self.function_call: Optional[Union[FunctionCall, Any]] = None
         self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None
         self.audio: Optional[ChatCompletionAudioResponse] = None
+        self.annotations: Optional[List[ChatCompletionAnnotation]] = None
 
         if reasoning_content is not None:
             self.reasoning_content = reasoning_content
@@ -652,6 +654,12 @@ class Delta(OpenAIObject):
         else:
             # ensure default response matches OpenAI spec
             del self.thinking_blocks
+
+        # Add annotations to the delta, ensure they are only on Delta if they exist (Match OpenAI spec)
+        if annotations is not None:
+            self.annotations = annotations
+        else:
+            del self.annotations
 
         if function_call is not None and isinstance(function_call, dict):
             self.function_call = FunctionCall(**function_call)
