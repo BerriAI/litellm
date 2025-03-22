@@ -1240,4 +1240,5 @@ async def ui_view_users(
         return [LiteLLM_UserTableFiltered(**user.model_dump()) for user in users]
 
     except Exception as e:
+        verbose_proxy_logger.exception(f"Error searching users: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error searching users: {str(e)}")
