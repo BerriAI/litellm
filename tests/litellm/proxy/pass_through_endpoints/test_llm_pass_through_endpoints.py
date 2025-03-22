@@ -3,7 +3,7 @@ import os
 import sys
 import traceback
 from unittest import mock
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
@@ -419,3 +419,40 @@ class TestVertexAIPassThroughHandler:
                 target=f"https://{test_location}-aiplatform.googleapis.com/v1/projects/{test_project}/locations/{test_location}/publishers/google/models/gemini-1.5-flash:generateContent",
                 custom_headers={"authorization": f"Bearer {test_token}"},
             )
+
+    @pytest.mark.asyncio
+    async def test_async_vertex_proxy_route_api_key_auth(self):
+        """
+        Critical
+
+        This is how Vertex AI JS SDK will Auth to Litellm Proxy
+        """
+        # Mock dependencies
+        mock_request = Mock()
+        mock_request.headers = {"x-litellm-api-key": "test-key-123"}
+        mock_request.method = "POST"
+        mock_response = Mock()
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth"
+        ) as mock_auth:
+            mock_auth.return_value = {"api_key": "test-key-123"}
+
+            with patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+            ) as mock_pass_through:
+                mock_pass_through.return_value = AsyncMock(
+                    return_value={"status": "success"}
+                )
+
+                # Call the function
+                result = await vertex_proxy_route(
+                    endpoint="v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent",
+                    request=mock_request,
+                    fastapi_response=mock_response,
+                )
+
+                # Verify user_api_key_auth was called with the correct Bearer token
+                mock_auth.assert_called_once()
+                call_args = mock_auth.call_args[1]
+                assert call_args["api_key"] == "Bearer test-key-123"
