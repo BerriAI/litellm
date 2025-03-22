@@ -12,7 +12,7 @@ Use Model Context Protocol with LiteLLM
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 <p style={{textAlign: 'left', color: '#666'}}>
-  LiteLLM MCP Architecture: Enabling MCP tool usage across all LiteLLM supported models
+  LiteLLM MCP Architecture: Use MCP tools with all LiteLLM supported models
 </p>
 
 
