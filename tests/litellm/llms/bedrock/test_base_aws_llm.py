@@ -98,3 +98,25 @@ def test_auth_functions_tracer_wrapping():
             assert (
                 has_tracer_wrap
             ), f"Auth function on line {line_number} is not wrapped with @tracer.wrap: {line.strip()}"
+
+
+def test_loading_bearer_token_from_env():
+    aws_region_name = "us"
+    endpoint_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
+    data = ""
+    headers = {}
+
+    extra_headers = {}
+    base_aws_llm = BaseAWSLLM()
+    credentials = base_aws_llm.get_credentials()
+    aws_prep_req = base_aws_llm.get_request_headers(credentials, aws_region_name, extra_headers, endpoint_url, data, headers)
+    assert 'Authorization' in aws_prep_req.headers.keys()
+    assert 'Bearer' not in aws_prep_req.headers["Authorization"]
+
+    os.environ['AWS_EXTRA_HEADERS_AUTH_BEARER_TOKEN'] = "fake_token"
+    extra_headers = {}
+    base_aws_llm = BaseAWSLLM()
+    credentials = base_aws_llm.get_credentials()
+    aws_prep_req = base_aws_llm.get_request_headers(credentials, aws_region_name, extra_headers, endpoint_url, data, headers)
+    assert 'Authorization' in aws_prep_req.headers.keys()
+    assert aws_prep_req.headers['Authorization'] == "Bearer fake_token"
