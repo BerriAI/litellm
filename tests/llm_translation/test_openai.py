@@ -3,6 +3,7 @@ import os
 import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
+from typing import Optional
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -403,10 +404,8 @@ def validate_response_url_citation(url_citation: ChatCompletionAnnotationURLCita
     assert "url" in url_citation
 
 
-def validate_model_response_contains_web_search_annotations(response: ModelResponse):
+def validate_web_search_annotations(annotations: ChatCompletionAnnotation):
     """validates litellm response contains web search annotations"""
-    message = response.choices[0].message
-    annotations: ChatCompletionAnnotation = message.annotations
     print("annotations: ", annotations)
     assert annotations is not None
     assert isinstance(annotations, list)
@@ -429,4 +428,33 @@ def test_openai_web_search():
         ],
     )
     print("litellm response: ", response.model_dump_json(indent=4))
-    validate_model_response_contains_web_search_annotations(response)
+    message = response.choices[0].message
+    annotations: ChatCompletionAnnotation = message.annotations
+    validate_web_search_annotations(annotations)
+
+
+def test_openai_web_search_streaming():
+    """Makes a simple web search request and validates the response contains web search annotations and all expected fields are present"""
+    # litellm._turn_on_debug()
+    test_openai_web_search: Optional[ChatCompletionAnnotation] = None
+    response = litellm.completion(
+        model="openai/gpt-4o-search-preview",
+        messages=[
+            {
+                "role": "user",
+                "content": "What was a positive news story from today?",
+            }
+        ],
+        stream=True,
+    )
+    for chunk in response:
+        print("litellm response chunk: ", chunk)
+        if (
+            hasattr(chunk.choices[0].delta, "annotations")
+            and chunk.choices[0].delta.annotations is not None
+        ):
+            test_openai_web_search = chunk.choices[0].delta.annotations
+
+    # Assert this request has at-least one web search annotation
+    assert test_openai_web_search is not None
+    validate_web_search_annotations(test_openai_web_search)
