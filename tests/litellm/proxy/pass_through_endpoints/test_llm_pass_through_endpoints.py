@@ -191,16 +191,39 @@ class TestVertexAIPassThroughHandler:
     """
 
     @pytest.mark.asyncio
-    async def test_vertex_passthrough_with_credentials(self):
+    async def test_vertex_passthrough_with_credentials(self, monkeypatch):
         """
         Test that when passthrough credentials are set, they are correctly used in the request
         """
+        from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
+            PassthroughEndpointRouter,
+        )
+
+        vertex_project = "test-project"
+        vertex_location = "us-central1"
+        vertex_credentials = "test-creds"
+
+        pass_through_router = PassthroughEndpointRouter()
+
+        pass_through_router.add_vertex_credentials(
+            project_id=vertex_project,
+            location=vertex_location,
+            vertex_credentials=vertex_credentials,
+        )
+
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router",
+            pass_through_router,
+        )
+
+        endpoint = f"/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/gemini-1.5-flash:generateContent"
+
         # Mock request
         mock_request = Request(
             scope={
                 "type": "http",
                 "method": "POST",
-                "path": "/vertex_ai/models/test-model/predict",
+                "path": endpoint,
                 "headers": {},
             }
         )
@@ -209,33 +232,24 @@ class TestVertexAIPassThroughHandler:
         mock_response = Response()
 
         # Mock vertex credentials
-        test_project = "test-project"
-        test_location = "us-central1"
-        test_token = "test-token-123"
+        test_project = vertex_project
+        test_location = vertex_location
+        test_token = vertex_credentials
 
         with mock.patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_vertex_credentials"
-        ) as mock_get_creds, mock.patch(
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._ensure_access_token_async"
         ) as mock_ensure_token, mock.patch(
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._get_token_and_url"
         ) as mock_get_token, mock.patch(
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
         ) as mock_create_route:
-
-            # Setup mock returns
-            mock_get_creds.return_value = VertexPassThroughCredentials(
-                vertex_project=test_project,
-                vertex_location=test_location,
-                vertex_credentials="test-creds",
-            )
             mock_ensure_token.return_value = ("test-auth-header", test_project)
             mock_get_token.return_value = (test_token, "")
 
             # Call the route
             try:
                 await vertex_proxy_route(
-                    endpoint="models/test-model/predict",
+                    endpoint=endpoint,
                     request=mock_request,
                     fastapi_response=mock_response,
                 )
@@ -244,7 +258,7 @@ class TestVertexAIPassThroughHandler:
 
             # Verify create_pass_through_route was called with correct arguments
             mock_create_route.assert_called_once_with(
-                endpoint="models/test-model/predict",
-                target=f"https://{test_location}-aiplatform.googleapis.com/v1/projects/{test_project}/locations/{test_location}/models/test-model/predict",
+                endpoint=endpoint,
+                target=f"https://{test_location}-aiplatform.googleapis.com/v1/projects/{test_project}/locations/{test_location}/publishers/google/models/gemini-1.5-flash:generateContent",
                 custom_headers={"Authorization": f"Bearer {test_token}"},
             )
