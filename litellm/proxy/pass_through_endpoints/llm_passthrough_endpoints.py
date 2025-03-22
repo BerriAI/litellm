@@ -463,9 +463,11 @@ async def vertex_proxy_route(
         location=vertex_location,
     )
 
+    headers_passed_through = False
     # Use headers from the incoming request if no vertex credentials are found
     if vertex_credentials is None or vertex_credentials.vertex_project is None:
         headers = dict(request.headers) or {}
+        headers_passed_through = True
         verbose_proxy_logger.debug(
             "default_vertex_config  not set, incoming request headers %s", headers
         )
@@ -516,8 +518,6 @@ async def vertex_proxy_route(
         vertex_location=vertex_location,
         vertex_project=vertex_project,
     )
-    # base_url = httpx.URL(base_target_url)
-    # updated_url = base_url.copy_with(path=encoded_endpoint)
 
     verbose_proxy_logger.debug("updated url %s", updated_url)
 
@@ -534,12 +534,21 @@ async def vertex_proxy_route(
         target=target,
         custom_headers=headers,
     )  # dynamically construct pass-through endpoint based on incoming path
-    received_value = await endpoint_func(
-        request,
-        fastapi_response,
-        user_api_key_dict,
-        stream=is_streaming_request,  # type: ignore
-    )
+
+    try:
+        received_value = await endpoint_func(
+            request,
+            fastapi_response,
+            user_api_key_dict,
+            stream=is_streaming_request,  # type: ignore
+        )
+    except Exception as e:
+        if headers_passed_through:
+            raise Exception(
+                f"No credentials found on proxy for this request. Headers were passed through directly but request failed with error: {str(e)}"
+            )
+        else:
+            raise e
 
     return received_value
 
