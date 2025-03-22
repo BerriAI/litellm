@@ -15,6 +15,12 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.0000,
+            "search_context_size_medium": 0.0000,
+            "search_context_size_high": 0.0000
+        },
         "deprecation_date": "date when the model becomes deprecated in the format YYYY-MM-DD"
     },
     "omni-moderation-latest": {
@@ -59,6 +65,31 @@
     },
     "gpt-4o": {
         "max_tokens": 16384,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.0000025,
+        "output_cost_per_token": 0.000010,
+        "input_cost_per_token_batches": 0.00000125,
+        "output_cost_per_token_batches": 0.00000500,
+        "cache_read_input_token_cost": 0.00000125,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.030,
+            "search_context_size_medium": 0.035,
+            "search_context_size_high": 0.050
+        }
+    },
+    "gpt-4o-search-preview": {
+       "max_tokens": 16384,
         "max_input_tokens": 128000,
         "max_output_tokens": 16384,
         "input_cost_per_token": 0.0000025,
@@ -201,6 +232,31 @@
         "supports_system_messages": true,
         "supports_tool_choice": true
     },
+    "gpt-4o-mini-search-preview": {
+        "max_tokens": 16384,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.00000015,
+        "output_cost_per_token": 0.00000060,
+        "input_cost_per_token_batches": 0.000000075,
+        "output_cost_per_token_batches": 0.00000030,
+        "cache_read_input_token_cost": 0.000000075,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.025,
+            "search_context_size_medium": 0.0275,
+            "search_context_size_high": 0.030
+        }
+    },
     "gpt-4o-mini-2024-07-18": {
         "max_tokens": 16384,
         "max_input_tokens": 128000,
@@ -218,7 +274,12 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 30.00,
+            "search_context_size_medium": 35.00,
+            "search_context_size_high": 50.00
+        }
     },
     "o1-pro": {
         "max_tokens": 100000,
