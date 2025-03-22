@@ -97,6 +97,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_pdf_input: Optional[bool]
     supports_native_streaming: Optional[bool]
     supports_parallel_function_calling: Optional[bool]
+    supports_web_search: Optional[bool]
 
 
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
