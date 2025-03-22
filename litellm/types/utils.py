@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
+from openai.types.chat.chat_completion import ChatCompletion
 from openai.types.completion_usage import (
     CompletionTokensDetails,
     CompletionUsage,
@@ -27,6 +28,7 @@ from ..litellm_core_utils.core_helpers import map_finish_reason
 from .guardrails import GuardrailEventHooks
 from .llms.openai import (
     Batch,
+    ChatCompletionAnnotation,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
@@ -527,6 +529,7 @@ class Message(OpenAIObject):
     provider_specific_fields: Optional[Dict[str, Any]] = Field(
         default=None, exclude=True
     )
+    annotations: Optional[List[ChatCompletionAnnotation]] = None
 
     def __init__(
         self,
@@ -538,6 +541,7 @@ class Message(OpenAIObject):
         provider_specific_fields: Optional[Dict[str, Any]] = None,
         reasoning_content: Optional[str] = None,
         thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None,
+        annotations: Optional[List[ChatCompletionAnnotation]] = None,
         **params,
     ):
         init_values: Dict[str, Any] = {
@@ -565,6 +569,9 @@ class Message(OpenAIObject):
 
         if thinking_blocks is not None:
             init_values["thinking_blocks"] = thinking_blocks
+
+        if annotations is not None:
+            init_values["annotations"] = annotations
 
         if reasoning_content is not None:
             init_values["reasoning_content"] = reasoning_content
