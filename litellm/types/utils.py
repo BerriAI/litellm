@@ -100,6 +100,12 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_web_search: Optional[bool]
 
 
+class SearchContextCostPerQuery(TypedDict, total=False):
+    search_context_size_low: float
+    search_context_size_medium: float
+    search_context_size_high: float
+
+
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     key: Required[str]  # the key in litellm.model_cost which is returned
 
@@ -136,6 +142,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_second: Optional[float]  # for OpenAI Speech models
+    search_context_cost_per_query: Optional[
+        SearchContextCostPerQuery
+    ]  # Cost for using web search tool
 
     litellm_provider: Required[str]
     mode: Required[

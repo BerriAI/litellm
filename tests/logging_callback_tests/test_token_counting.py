@@ -21,16 +21,18 @@ sys.path.insert(
 import litellm
 import asyncio
 from typing import Optional
-from litellm.types.utils import StandardLoggingPayload, Usage
+from litellm.types.utils import StandardLoggingPayload, Usage, ModelInfoBase
 from litellm.integrations.custom_logger import CustomLogger
 
 
 class TestCustomLogger(CustomLogger):
     def __init__(self):
         self.recorded_usage: Optional[Usage] = None
+        self.standard_logging_payload: Optional[StandardLoggingPayload] = None
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         standard_logging_payload = kwargs.get("standard_logging_object")
+        self.standard_logging_payload = standard_logging_payload
         print(
             "standard_logging_payload",
             json.dumps(standard_logging_payload, indent=4, default=str),
@@ -246,15 +248,6 @@ async def test_stream_token_counting_anthropic_with_include_usage():
     )
 
 
-class TestCustomLogger(CustomLogger):
-    def __init__(self):
-        self.standard_logging_payload: Optional[StandardLoggingPayload] = None
-
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        print("kwargs: ", kwargs)
-        self.standard_logging_payload = kwargs.get("standard_logging_object", None)
-
-
 @pytest.mark.asyncio
 async def test_openai_web_search_logging_cost_tracking():
     """Makes a simple web search request and validates the response contains web search annotations and all expected fields are present"""
@@ -277,4 +270,24 @@ async def test_openai_web_search_logging_cost_tracking():
     print(
         "logged standard logging payload: ",
         json.dumps(test_custom_logger.standard_logging_payload, indent=4),
+    )
+    standard_logging_payload = test_custom_logger.standard_logging_payload
+    response_cost = standard_logging_payload.get("response_cost")
+    assert response_cost is not None
+
+    # Assert the cost = Token Usage + Web Search Cost
+    model_map_information = standard_logging_payload["model_map_information"]
+    model_map_value: ModelInfoBase = model_map_information["model_map_value"]
+    total_token_cost = (
+        standard_logging_payload["prompt_tokens"]
+        * model_map_value["input_cost_per_token"]
+    ) + (
+        standard_logging_payload["completion_tokens"]
+        * model_map_value["output_cost_per_token"]
+    )
+    print("total token cost:", total_token_cost)
+    assert (
+        response_cost
+        == total_token_cost
+        + model_map_value["search_context_cost_per_query"]["search_context_size_low"]
     )
