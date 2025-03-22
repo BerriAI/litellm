@@ -165,7 +165,6 @@ def test_llm_api_route(route_checks):
             route="/v1/chat/completions",
             request=MockRequest(),
             valid_token=UserAPIKeyAuth(api_key="test_key"),
-            api_key="test_key",
             request_data={},
         )
         is None
@@ -183,7 +182,6 @@ def test_key_info_route_allowed(route_checks):
             route="/key/info",
             request=MockRequest(query_params={"key": "test_key"}),
             valid_token=UserAPIKeyAuth(api_key="test_key"),
-            api_key="test_key",
             request_data={},
         )
         is None
@@ -201,7 +199,6 @@ def test_user_info_route_allowed(route_checks):
             route="/user/info",
             request=MockRequest(query_params={"user_id": "test_user"}),
             valid_token=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
-            api_key="test_key",
             request_data={},
         )
         is None
@@ -219,7 +216,6 @@ def test_user_info_route_forbidden(route_checks):
             route="/user/info",
             request=MockRequest(query_params={"user_id": "wrong_user"}),
             valid_token=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
-            api_key="test_key",
             request_data={},
         )
     assert exc_info.value.status_code == 403
