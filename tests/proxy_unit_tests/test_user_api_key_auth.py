@@ -4,6 +4,9 @@
 import os
 import sys
 
+import litellm.proxy
+import litellm.proxy.proxy_server
+
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
@@ -950,7 +953,7 @@ def test_get_model_from_request(route, request_data, expected_model):
 
 
 @pytest.mark.asyncio
-async def test_jwt_non_admin_team_route_access():
+async def test_jwt_non_admin_team_route_access(monkeypatch):
     """
     Test that a non-admin JWT user cannot access team management routes
     """
@@ -958,6 +961,8 @@ async def test_jwt_non_admin_team_route_access():
     from starlette.datastructures import URL
     from unittest.mock import patch
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    import json
+    from litellm.proxy._types import ProxyException
 
     mock_jwt_response = {
         "is_proxy_admin": False,
@@ -973,8 +978,14 @@ async def test_jwt_non_admin_team_route_access():
     }
 
     # Create request
-    request = Request(scope={"type": "http"})
+    request = Request(
+        scope={"type": "http", "headers": [("Authorization", "Bearer fake.jwt.token")]}
+    )
     request._url = URL(url="/team/new")
+
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "general_settings", {"enable_jwt_auth": True}
+    )
 
     # Mock JWTAuthManager.auth_builder
     with patch(
@@ -986,6 +997,6 @@ async def test_jwt_non_admin_team_route_access():
             pytest.fail(
                 "Expected this call to fail. Non-admin user should not access team routes."
             )
-        except HTTPException as e:
-            assert e.status_code == 403
-            assert "Unauthorized" in str(e.detail)
+        except ProxyException as e:
+            print("e", e)
+            assert "Only proxy admin can be used to generate" in str(e.message)
