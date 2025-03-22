@@ -33,6 +33,7 @@ from .llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
     OpenAIChatCompletionChunk,
+    WebSearchOptions,
 )
 from .rerank import RerankResponse
 
@@ -1620,6 +1621,18 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_user_email: Optional[str]
     user_api_key_team_alias: Optional[str]
     user_api_key_end_user_id: Optional[str]
+
+
+class StandardBuiltInToolsParams(TypedDict, total=False):
+    """
+    Standard built-in OpenAItools parameters
+
+    This is used to calculate the cost of built-in tools, insert any standard built-in tools parameters here
+
+    OpenAI charges users based on the `web_search_options` parameter
+    """
+
+    web_search_options: Optional[WebSearchOptions]
 
 
 class StandardLoggingPromptManagementMetadata(TypedDict):
