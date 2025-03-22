@@ -1089,6 +1089,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             end_time=end_time,
                             logging_obj=self,
                             status="success",
+                            standard_built_in_tools_params=self.standard_built_in_tools_params,
                         )
                     )
                 elif isinstance(result, dict):  # pass-through endpoints
@@ -1101,6 +1102,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             end_time=end_time,
                             logging_obj=self,
                             status="success",
+                            standard_built_in_tools_params=self.standard_built_in_tools_params,
                         )
                     )
             elif standard_logging_object is not None:
@@ -1178,6 +1180,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         end_time=end_time,
                         logging_obj=self,
                         status="success",
+                        standard_built_in_tools_params=self.standard_built_in_tools_params,
                     )
                 )
             callbacks = self.get_combined_callback_list(
@@ -1718,6 +1721,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     end_time=end_time,
                     logging_obj=self,
                     status="success",
+                    standard_built_in_tools_params=self.standard_built_in_tools_params,
                 )
             )
         callbacks = self.get_combined_callback_list(
@@ -1934,6 +1938,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 status="failure",
                 error_str=str(exception),
                 original_exception=exception,
+                standard_built_in_tools_params=self.standard_built_in_tools_params,
             )
         )
         return start_time, end_time
@@ -3390,6 +3395,7 @@ def get_standard_logging_object_payload(
     status: StandardLoggingPayloadStatus,
     error_str: Optional[str] = None,
     original_exception: Optional[Exception] = None,
+    standard_built_in_tools_params: Optional[StandardBuiltInToolsParams] = None,
 ) -> Optional[StandardLoggingPayload]:
     try:
         kwargs = kwargs or {}
@@ -3565,6 +3571,7 @@ def get_standard_logging_object_payload(
             guardrail_information=metadata.get(
                 "standard_logging_guardrail_information", None
             ),
+            standard_built_in_tools_params=standard_built_in_tools_params,
         )
 
         emit_standard_logging_payload(payload)
