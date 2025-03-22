@@ -4495,11 +4495,11 @@ class Router:
         Each provider uses diff .env vars for pass-through endpoints, this helper uses the deployment credentials to set the .env vars for pass-through endpoints
         """
         if deployment.litellm_params.use_in_pass_through is True:
-            if custom_llm_provider == "vertex_ai":
-                from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
-                    vertex_pass_through_router,
-                )
+            from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+                passthrough_endpoint_router,
+            )
 
+            if custom_llm_provider == "vertex_ai":
                 if (
                     deployment.litellm_params.vertex_project is None
                     or deployment.litellm_params.vertex_location is None
@@ -4508,16 +4508,12 @@ class Router:
                     raise ValueError(
                         "vertex_project, vertex_location, and vertex_credentials must be set in litellm_params for pass-through endpoints"
                     )
-                vertex_pass_through_router.add_vertex_credentials(
+                passthrough_endpoint_router.add_vertex_credentials(
                     project_id=deployment.litellm_params.vertex_project,
                     location=deployment.litellm_params.vertex_location,
                     vertex_credentials=deployment.litellm_params.vertex_credentials,
                 )
             else:
-                from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-                    passthrough_endpoint_router,
-                )
-
                 passthrough_endpoint_router.set_pass_through_credentials(
                     custom_llm_provider=custom_llm_provider,
                     api_base=deployment.litellm_params.api_base,
