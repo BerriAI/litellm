@@ -15,6 +15,11 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "search_context_cost_per_1k_calls": {
+            "low_context": 0.0000,
+            "medium_context": 0.0000,
+            "high_context": 0.0000
+        },
         "deprecation_date": "date when the model becomes deprecated in the format YYYY-MM-DD"
     },
     "omni-moderation-latest": {
