@@ -197,6 +197,18 @@ model LiteLLM_Config {
   param_value Json?
 }
 
+// daily aggregates for spend
+model DailyUserSpend {
+  id        String   @id @default(cuid())
+  user_id   String
+  date      DateTime @default(now())
+  spend     Float    @default(0.0)
+
+  @@unique([user_id, date])
+  @@index([user_id])
+  @@index([date])
+}
+
 // View spend, model, api_key per request
 model LiteLLM_SpendLogs {
   request_id          String @id

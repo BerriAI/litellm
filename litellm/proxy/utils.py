@@ -2477,6 +2477,83 @@ class ProxyUpdateSpend:
             )
 
     @staticmethod
+    async def update_daily_user_spend(
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+    ) -> None:
+        """
+        Aggregates spend from litellm_spendlogs into daily totals.
+        Uses batch processing and handles DB connection issues with retries.
+
+        Args:
+            n_retry_times (int): Number of times to retry on DB connection errors
+            prisma_client (PrismaClient): Prisma client instance
+            proxy_logging_obj (ProxyLogging): Logging object for tracking errors
+        """
+        for i in range(n_retry_times + 1):
+            start_time = time.time()
+            try:
+                # Get the current date in UTC
+                current_time = datetime.utcnow()
+                # Round down to the nearest 5 minute mark
+                window_end = current_time.replace(
+                    minute=(current_time.minute // 5) * 5, second=0, microsecond=0
+                )
+                window_start = window_end - timedelta(minutes=5)
+                # Query to get spend grouped by user_id for the 5-minute window
+                aggregated_spend = await prisma_client.db.litellm_spendlogs.group_by(
+                    by=["user"],
+                    where={"startTime": {"gte": window_start, "lt": window_end}},
+                    _sum={"spend": True},
+                )
+
+                # Get the date for these records (without time)
+                current_date = window_end.date()
+
+                # Batch update DailySpend table
+                async with prisma_client.db.tx() as transaction:
+                    for record in aggregated_spend:
+                        if record.user and record._sum.get("spend"):
+                            # First get the current daily spend
+                            await transaction.dailyspend.upsert(
+                                where={
+                                    "user_id_date": {
+                                        "user_id": record.user,
+                                        "date": current_date,
+                                    }
+                                },
+                                data={
+                                    "create": {
+                                        "user_id": record.user,
+                                        "date": current_date,
+                                        "spend": record._sum["spend"],
+                                    },
+                                    "update": {
+                                        "spend": {"increment": record._sum["spend"]}
+                                    },
+                                },
+                            )
+
+                verbose_proxy_logger.debug(
+                    f"Successfully updated spend for {len(aggregated_spend)} users "
+                    f"for period {window_start} to {window_end}"
+                )
+                break
+
+            except DB_CONNECTION_ERROR_TYPES as e:
+                if i >= n_retry_times:
+                    _raise_failed_update_spend_exception(
+                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+                    )
+                await asyncio.sleep(2**i)  # Exponential backoff
+
+            except Exception as e:
+                _raise_failed_update_spend_exception(
+                    e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+                )
+
+    @staticmethod
     def disable_spend_updates() -> bool:
         """
         returns True if should not update spend in db
