@@ -6172,12 +6172,12 @@ async def model_info_v1(  # noqa: PLR0915
     )
 
     if len(all_models_str) > 0:
-        model_names = all_models_str
-        llm_model_list = llm_router.get_model_list()
+        _relevant_models = []
+        for model in all_models_str:
+            router_models = llm_router.get_model_list(model_name=model)
+            if router_models is not None:
+                _relevant_models.extend(router_models)
         if llm_model_list is not None:
-            _relevant_models = [
-                m for m in llm_model_list if m["model_name"] in model_names
-            ]
             all_models = copy.deepcopy(_relevant_models)  # type: ignore
         else:
             all_models = []
