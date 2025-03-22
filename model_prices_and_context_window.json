@@ -17,9 +17,9 @@
         "supports_system_messages": true,
         "supports_web_search": true,
         "search_context_cost_per_1k_calls": {
-            "low_context": 0.0000,
-            "medium_context": 0.0000,
-            "high_context": 0.0000
+            "search_context_size_low": 0.0000,
+            "search_context_size_medium": 0.0000,
+            "search_context_size_high": 0.0000
         },
         "deprecation_date": "date when the model becomes deprecated in the format YYYY-MM-DD"
     },
@@ -83,9 +83,9 @@
         "supports_tool_choice": true,
         "supports_web_search": true,
         "search_context_cost_per_1k_calls": {
-            "low_context": 30.00,
-            "medium_context": 35.00,
-            "high_context": 50.00
+            "search_context_size_low": 30.00,
+            "search_context_size_medium": 35.00,
+            "search_context_size_high": 50.00
         }
     },
     "gpt-4o-search-preview": {
@@ -108,9 +108,9 @@
         "supports_tool_choice": true,
         "supports_web_search": true,
         "search_context_cost_per_1k_calls": {
-            "low_context": 30.00,
-            "medium_context": 35.00,
-            "high_context": 50.00
+            "search_context_size_low": 30.00,
+            "search_context_size_medium": 35.00,
+            "search_context_size_high": 50.00
         }
     },
     "gpt-4.5-preview": {
@@ -239,9 +239,9 @@
         "supports_tool_choice": true,
         "supports_web_search": true,
         "search_context_cost_per_1k_calls": {
-            "low_context": 30.00,
-            "medium_context": 35.00,
-            "high_context": 50.00
+            "search_context_size_low": 25.00,
+            "search_context_size_medium": 27.50,
+            "search_context_size_high": 30.00
         }
     },
     "gpt-4o-mini-search-preview": {
@@ -264,9 +264,9 @@
         "supports_tool_choice": true,
         "supports_web_search": true,
         "search_context_cost_per_1k_calls": {
-            "low_context": 30.00,
-            "medium_context": 35.00,
-            "high_context": 50.00
+            "search_context_size_low": 25.00,
+            "search_context_size_medium": 27.50,
+            "search_context_size_high": 30.00
         }
     },
     "gpt-4o-mini-2024-07-18": {
@@ -288,9 +288,9 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "search_context_cost_per_1k_calls": {
-            "low_context": 30.00,
-            "medium_context": 35.00,
-            "high_context": 50.00
+            "search_context_size_low": 30.00,
+            "search_context_size_medium": 35.00,
+            "search_context_size_high": 50.00
         }
     },
     "o1-pro": {
