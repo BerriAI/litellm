@@ -2,6 +2,7 @@ from typing import Dict, Optional
 
 from litellm._logging import verbose_logger
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
 
 class PassthroughEndpointRouter:
@@ -11,6 +12,9 @@ class PassthroughEndpointRouter:
 
     def __init__(self):
         self.credentials: Dict[str, str] = {}
+        self.deployment_key_to_vertex_credentials: Dict[
+            str, VertexPassThroughCredentials
+        ] = {}
 
     def set_pass_through_credentials(
         self,
@@ -61,6 +65,38 @@ class PassthroughEndpointRouter:
                 )
             )
             return get_secret_str(_env_variable_name)
+
+    def _get_deployment_key(
+        self, project_id: Optional[str], location: Optional[str]
+    ) -> Optional[str]:
+        """
+        Get the deployment key for the given project-id, location
+        """
+        if project_id is None or location is None:
+            return None
+        return f"{project_id}-{location}"
+
+    def get_vertex_credentials(
+        self, project_id: Optional[str], location: Optional[str]
+    ) -> Optional[VertexPassThroughCredentials]:
+        """
+        Get the vertex credentials for the given project-id, location
+        """
+        # from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
+        #     default_vertex_config,
+        # )
+        default_vertex_config: Optional[VertexPassThroughCredentials] = None
+
+        deployment_key = self._get_deployment_key(
+            project_id=project_id,
+            location=location,
+        )
+        if deployment_key is None:
+            return default_vertex_config
+        if deployment_key in self.deployment_key_to_vertex_credentials:
+            return self.deployment_key_to_vertex_credentials[deployment_key]
+        else:
+            return default_vertex_config
 
     def _get_credential_name_for_provider(
         self,

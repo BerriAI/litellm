@@ -219,6 +219,29 @@ async def test_get_vertex_credentials_stored():
 
 
 @pytest.mark.asyncio
+async def test_default_credentials():
+    """
+    Test get_vertex_credentials with stored credentials.
+
+    Tests if default credentials are used if set.
+
+    Tests if no default credentials are used, if no default set
+    """
+    router = VertexPassThroughRouter()
+    router.add_vertex_credentials(
+        project_id="test-project",
+        location="us-central1",
+        vertex_credentials='{"credentials": "test-creds"}',
+    )
+
+    creds = router.get_vertex_credentials(
+        project_id="test-project", location="us-central2"
+    )
+
+    assert creds is None
+
+
+@pytest.mark.asyncio
 async def test_add_vertex_credentials():
     """Test add_vertex_credentials functionality"""
     router = VertexPassThroughRouter()
