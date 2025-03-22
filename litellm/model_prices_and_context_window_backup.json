@@ -82,6 +82,31 @@
         "supports_system_messages": true,
         "supports_tool_choice": true
     },
+    "gpt-4o-search-preview-2025-03-11": {
+        "max_tokens": 16384,
+         "max_input_tokens": 128000,
+         "max_output_tokens": 16384,
+         "input_cost_per_token": 0.0000025,
+         "output_cost_per_token": 0.000010,
+         "input_cost_per_token_batches": 0.00000125,
+         "output_cost_per_token_batches": 0.00000500,
+         "cache_read_input_token_cost": 0.00000125,
+         "litellm_provider": "openai",
+         "mode": "chat",
+         "supports_function_calling": true,
+         "supports_parallel_function_calling": true,
+         "supports_response_schema": true,
+         "supports_vision": true,
+         "supports_prompt_caching": true,
+         "supports_system_messages": true,
+         "supports_tool_choice": true,
+         "supports_web_search": true,
+         "search_context_cost_per_query": {
+             "search_context_size_low": 0.030,
+             "search_context_size_medium": 0.035,
+             "search_context_size_high": 0.050
+         }
+     },
     "gpt-4o-search-preview": {
        "max_tokens": 16384,
         "max_input_tokens": 128000,
