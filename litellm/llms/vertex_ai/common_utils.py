@@ -1,3 +1,4 @@
+import re
 from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
@@ -280,3 +281,62 @@ def _convert_vertex_datetime_to_openai_datetime(vertex_datetime: str) -> int:
     dt = datetime.strptime(vertex_datetime, "%Y-%m-%dT%H:%M:%S.%fZ")
     # Convert to Unix timestamp (seconds since epoch)
     return int(dt.timestamp())
+
+
+def get_vertex_project_id_from_url(url: str) -> Optional[str]:
+    """
+    Get the vertex project id from the url
+
+    `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/models/${MODEL_ID}:streamGenerateContent`
+    """
+    match = re.search(r"/projects/([^/]+)", url)
+    return match.group(1) if match else None
+
+
+def get_vertex_location_from_url(url: str) -> Optional[str]:
+    """
+    Get the vertex location from the url
+
+    `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/models/${MODEL_ID}:streamGenerateContent`
+    """
+    match = re.search(r"/locations/([^/]+)", url)
+    return match.group(1) if match else None
+
+
+def construct_target_url(
+    base_url: str,
+    requested_route: str,
+    default_vertex_location: Optional[str],
+    default_vertex_project: Optional[str],
+) -> httpx.URL:
+    """
+    Allow user to specify their own project id / location.
+
+    If missing, use defaults
+
+    Handle cachedContent scenario - https://github.com/BerriAI/litellm/issues/5460
+
+    Constructed Url:
+    POST https://LOCATION-aiplatform.googleapis.com/{version}/projects/PROJECT_ID/locations/LOCATION/cachedContents
+    """
+    new_base_url = httpx.URL(base_url)
+    if "locations" in requested_route:  # contains the target project id + location
+        updated_url = new_base_url.copy_with(path=requested_route)
+        return updated_url
+    """
+    - Add endpoint version (e.g. v1beta for cachedContent, v1 for rest)
+    - Add default project id
+    - Add default location
+    """
+    vertex_version: Literal["v1", "v1beta1"] = "v1"
+    if "cachedContent" in requested_route:
+        vertex_version = "v1beta1"
+
+    base_requested_route = "{}/projects/{}/locations/{}".format(
+        vertex_version, default_vertex_project, default_vertex_location
+    )
+
+    updated_requested_route = "/" + base_requested_route + requested_route
+
+    updated_url = new_base_url.copy_with(path=updated_requested_route)
+    return updated_url
