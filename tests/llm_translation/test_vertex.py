@@ -1191,8 +1191,8 @@ def test_process_gemini_media():
     assert base64_result["inline_data"]["data"] == "/9j/4AAQSkZJRg..."
 
 
-def test_get_image_mime_type_from_url():
-    """Test the _get_image_mime_type_from_url function for different image URLs"""
+def test_get_media_mime_type_from_url():
+    """Test the _get_media_mime_type_from_url function for different image URLs"""
     from litellm.llms.vertex_ai.gemini.transformation import (
         _get_media_mime_type_from_url,
     )
@@ -1218,6 +1218,16 @@ def test_get_image_mime_type_from_url():
     )
     assert (
         _get_media_mime_type_from_url("https://example.com/IMAGE.WEBP") == "image/webp"
+    )
+
+    # Test PDF files
+    assert (
+        _get_media_mime_type_from_url("https://raft.github.io/raft.pdf") == "application/pdf"
+    )
+
+    # Test Video files
+    assert (
+        _get_media_mime_type_from_url("https://videos.pexels.com/video-files/3571264/3571264-sd_426_240_30fps.mp4") == "video/mp4"
     )
 
     # Test unsupported formats

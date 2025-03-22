@@ -33,10 +33,11 @@ def _process_media_response(response: Response, url: str) -> str:
             "png": "image/png",
             "gif": "image/gif",
             "webp": "image/webp",
+            "mp4": "video/mp4",
         }.get(med_type)
         if _med_type is None:
             raise Exception(
-                f"Error: Unsupported media format. Format={_med_type}. Supported types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']"
+                f"Error: Unsupported media format. Format={_med_type}. Supported types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'video/mp4']"
             )
         med_type = _med_type
     else:
