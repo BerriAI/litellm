@@ -16,7 +16,7 @@ $ litellm --model ollama/codellama
 ## replace openai base
 ```python 
 import openai # openai v1.0.0+
-client = openai.OpenAI(api_key="anything",base_url="http://0.0.0.0:8000") # set proxy to base_url
+client = openai.OpenAI(api_key="sk-1234",base_url="http://0.0.0.0:8000") # set proxy to base_url
 # request sent to model set on litellm proxy, `litellm --model`
 response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
     {

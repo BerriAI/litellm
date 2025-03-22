@@ -87,7 +87,7 @@ def test_chat_completion_exception(client):
         assert type(code_in_error) == str
 
         # make an openai client to call _make_status_error_from_response
-        openai_client = openai.OpenAI(api_key="anything")
+        openai_client = openai.OpenAI(api_key="sk-1234")
         openai_exception = openai_client._make_status_error_from_response(
             response=response
         )
@@ -129,7 +129,7 @@ def test_chat_completion_exception_azure(mock_acompletion, client):
         assert json_response.keys() == {"error"}
 
         # make an openai client to call _make_status_error_from_response
-        openai_client = openai.OpenAI(api_key="anything")
+        openai_client = openai.OpenAI(api_key="sk-1234")
         openai_exception = openai_client._make_status_error_from_response(
             response=response
         )
@@ -163,7 +163,7 @@ def test_embedding_auth_exception_azure(mock_aembedding, client):
         assert json_response.keys() == {"error"}
 
         # make an openai client to call _make_status_error_from_response
-        openai_client = openai.OpenAI(api_key="anything")
+        openai_client = openai.OpenAI(api_key="sk-1234")
         openai_exception = openai_client._make_status_error_from_response(
             response=response
         )
@@ -194,7 +194,7 @@ def test_exception_openai_bad_model(client):
         assert json_response.keys() == {"error"}
 
         # make an openai client to call _make_status_error_from_response
-        openai_client = openai.OpenAI(api_key="anything")
+        openai_client = openai.OpenAI(api_key="sk-1234")
         openai_exception = openai_client._make_status_error_from_response(
             response=response
         )
@@ -223,7 +223,7 @@ def test_chat_completion_exception_any_model(client):
         assert json_response.keys() == {"error"}
 
         # make an openai client to call _make_status_error_from_response
-        openai_client = openai.OpenAI(api_key="anything")
+        openai_client = openai.OpenAI(api_key="sk-1234")
         openai_exception = openai_client._make_status_error_from_response(
             response=response
         )
@@ -253,7 +253,7 @@ def test_embedding_exception_any_model(client):
         assert json_response.keys() == {"error"}
 
         # make an openai client to call _make_status_error_from_response
-        openai_client = openai.OpenAI(api_key="anything")
+        openai_client = openai.OpenAI(api_key="sk-1234")
         openai_exception = openai_client._make_status_error_from_response(
             response=response
         )
@@ -306,7 +306,7 @@ def test_chat_completion_exception_azure_context_window(mock_acompletion, client
         assert json_response == context_length_exceeded_error_response_dict
 
         # make an openai client to call _make_status_error_from_response
-        openai_client = openai.OpenAI(api_key="anything")
+        openai_client = openai.OpenAI(api_key="sk-1234")
         openai_exception = openai_client._make_status_error_from_response(
             response=response
         )

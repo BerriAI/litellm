@@ -144,7 +144,7 @@ Set `extra_body={"metadata": { }}` to `metadata` you want to pass
 ```python
 import openai
 client = openai.OpenAI(
-    api_key="anything",
+    api_key="sk-1234",
     base_url="http://0.0.0.0:4000"
 )
 
@@ -348,7 +348,7 @@ Set `extra_body={"metadata": { }}` to `metadata` you want to pass
 ```python
 import openai
 client = openai.OpenAI(
-    api_key="anything",
+    api_key="sk-1234",
     base_url="http://0.0.0.0:4000"
 )
 

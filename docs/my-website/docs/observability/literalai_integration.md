@@ -90,7 +90,7 @@ from literalai import LiteralClient
 from openai import OpenAI
 
 client = OpenAI(
-    api_key="anything",            # litellm proxy virtual key
+    api_key="sk-1234",            # litellm proxy virtual key
     base_url="http://0.0.0.0:4000" # litellm proxy base_url
 )
 
