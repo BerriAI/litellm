@@ -391,3 +391,17 @@ def test_openai_chat_completion_streaming_handler_reasoning_content():
     )
 
     assert response.choices[0].delta.reasoning_content == "."
+
+
+def test_openai_web_search():
+    # litellm._turn_on_debug()
+    response = litellm.completion(
+        model="openai/gpt-4o-search-preview",
+        messages=[
+            {
+                "role": "user",
+                "content": "What was a positive news story from today?",
+            }
+        ],
+    )
+    print("litellm response: ", response.model_dump_json(indent=4))
