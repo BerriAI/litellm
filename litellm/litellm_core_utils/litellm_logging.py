@@ -35,6 +35,9 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.pagerduty.pagerduty import PagerDutyAlerting
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
+    StandardBuiltInToolCostTracking,
+)
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
@@ -48,6 +51,7 @@ from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
     ResponseCompletedEvent,
     ResponsesAPIResponse,
+    WebSearchOptions,
 )
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
@@ -60,6 +64,7 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     RawRequestTypedDict,
+    StandardBuiltInToolsParams,
     StandardCallbackDynamicParams,
     StandardLoggingAdditionalHeaders,
     StandardLoggingHiddenParams,
@@ -264,7 +269,9 @@ class Logging(LiteLLMLoggingBaseClass):
         self.standard_callback_dynamic_params: StandardCallbackDynamicParams = (
             self.initialize_standard_callback_dynamic_params(kwargs)
         )
-
+        self.standard_built_in_tools_params: StandardBuiltInToolsParams = (
+            self.initialize_standard_built_in_tools_params(kwargs)
+        )
         ## TIME TO FIRST TOKEN LOGGING ##
         self.completion_start_time: Optional[datetime.datetime] = None
         self._llm_caching_handler: Optional[LLMCachingHandler] = None
@@ -368,6 +375,20 @@ class Logging(LiteLLMLoggingBaseClass):
         checks if langfuse_secret_key, gcs_bucket_name in kwargs and sets the corresponding attributes in StandardCallbackDynamicParams
         """
         return _initialize_standard_callback_dynamic_params(kwargs)
+
+    def initialize_standard_built_in_tools_params(
+        self, kwargs: Optional[Dict] = None
+    ) -> StandardBuiltInToolsParams:
+        """
+        Initialize the standard built-in tools params from the kwargs
+
+        checks if web_search_options in kwargs or tools and sets the corresponding attribute in StandardBuiltInToolsParams
+        """
+        return StandardBuiltInToolsParams(
+            web_search_options=StandardBuiltInToolCostTracking._get_web_search_options(
+                kwargs or {}
+            )
+        )
 
     def update_environment_variables(
         self,
@@ -903,6 +924,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "optional_params": self.optional_params,
                 "custom_pricing": custom_pricing,
                 "prompt": prompt,
+                "standard_built_in_tools_params": self.standard_built_in_tools_params,
             }
         except Exception as e:  # error creating kwargs for cost calculation
             debug_info = StandardLoggingModelCostFailureDebugInformation(
@@ -1102,6 +1124,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     prompt="",
                     completion=getattr(result, "content", ""),
                     total_time=float_diff,
+                    standard_built_in_tools_params=self.standard_built_in_tools_params,
                 )
 
             return start_time, end_time, result
