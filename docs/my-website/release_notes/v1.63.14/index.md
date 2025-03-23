@@ -58,13 +58,13 @@ Here's a Demo Instance to test changes:
 1. **New LLM Features**
 
 - Bedrock: Support bedrock application inference profiles [Docs](https://docs.litellm.ai/docs/providers/bedrock#bedrock-application-inference-profile)
-   - Infer aws region from bedrock application profile id
+   - Infer aws region from bedrock application profile id - (`arn:aws:bedrock:us-east-1:...`)
 - Ollama - support calling via `/v1/completions` - [NEEDS DOCS]https://github.com/BerriAI/litellm/pull/9333
 - Bedrock - support `us.deepseek.r1-v1:0` model name [Docs](../../docs/providers/bedrock#supported-aws-bedrock-models)
 
 https://github.com/BerriAI/litellm/pull/9363
 - OpenRouter - `OPENROUTER_API_BASE` env var support [Docs](../../docs/providers/openrouter.md)
-- Azure - add audio model parameter support - https://github.com/BerriAI/litellm/commit/fe24b9d90b95012ac030f6919a766cbeab1b1ae3
+- Azure - add audio model parameter support - [Docs](../../docs/providers/azure#azure-audio-model)
 - OpenAI - ‘file’ message type support - https://github.com/BerriAI/litellm/commit/12e730885bd3948543dca902293f461c1bc4fb60
 - OpenAI - o1-pro Responses API streaming support - https://github.com/BerriAI/litellm/pull/9419
 - Passthrough Endpoints - support returning api-base on pass-through endpoints - https://github.com/BerriAI/litellm/pull/9439
