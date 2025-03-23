@@ -598,6 +598,11 @@ class Message(OpenAIObject):
             # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
             del self.audio
 
+        if annotations is None:
+            # ensure default response matches OpenAI spec
+            # Some OpenAI compatible APIs raise an error if annotations are passed in
+            del self.annotations
+
         if reasoning_content is None:
             # ensure default response matches OpenAI spec
             del self.reasoning_content
