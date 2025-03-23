@@ -3,19 +3,20 @@ import TabItem from '@theme/TabItem';
 
 # Using Web Search
 
-How to use web search capabilities with the `/chat/completions` endpoint
+Use web search with litellm
 
-
-
-Works for:
-- OpenAI GPT-4 with web search
+| Feature | Details |
+|---------|---------|
+| Supported Endpoints | - `/chat/completions` <br/> - `/responses` |
+| Supported Providers | `openai` |
+| LiteLLM Version | `v1.63.15-nightly` or higher |
 
 ## Quick Start
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
-```python
+```python showLineNumbers
 from litellm import completion
 
 response = completion(
@@ -50,7 +51,7 @@ litellm --config /path/to/config.yaml
 
 3. Test it! 
 
-```bash
+```bash showLineNumbers
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
@@ -75,7 +76,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 Use `litellm.supports_web_search(model="openai/gpt-4-turbo-preview")` -> returns `True` if model can perform web searches
 
-```python
+```python showLineNumbers
 assert litellm.supports_web_search(model="openai/gpt-4-turbo-preview") == True
 ```
 </TabItem>
@@ -111,7 +112,7 @@ curl -X 'GET' \
 
 Expected Response 
 
-```json
+```json showLineNumbers
 {
   "data": [
     {
