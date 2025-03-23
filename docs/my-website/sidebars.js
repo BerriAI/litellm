@@ -243,6 +243,7 @@ const sidebars = {
         "exception_mapping",
         "completion/provider_specific_params",
         "guides/finetuned_models",
+        "guides/security_settings",
         "completion/audio",
         "completion/web_search",
         "completion/document_understanding",
