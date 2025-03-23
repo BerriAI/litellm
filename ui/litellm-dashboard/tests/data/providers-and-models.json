@@ -1,0 +1,8 @@
+{
+  "OpenAI": [
+    "omni-moderation-latest",
+    "omni-moderation-latest-intents",
+    "omni-moderation-2024-09-26"
+  ],
+  "Anthropic": ["claude-instant-1", "claude-instant-1.2", "claude-2"]
+}

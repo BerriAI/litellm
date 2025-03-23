@@ -25,9 +25,7 @@ export class ModelsPage {
     /**this.openaiProviderComboboxOption = this.page
       .locator("span")
       .filter({ hasText: "OpenAI" });*/
-    this.litellmModelNameCombobox = this.page.locator(
-      ".ant-select-selection-overflow"
-    );
+    this.litellmModelNameCombobox = this.page.locator("#model");
     /*this.modelMappingPublicNameInput = this.page
       .getByRole("row", { name: "omni-moderation-latest omni-" })
       .getByTestId("base-input");*/
@@ -44,7 +42,9 @@ export class ModelsPage {
 
   // Parametized Locators
   getAllModelsTableCellValue(allModelsTableCellValue: string): Locator {
-    return this.page.getByRole("cell", { name: allModelsTableCellValue }); //.first();
+    return this.page
+      .getByRole("cell", { name: allModelsTableCellValue })
+      .first();
   }
 
   // 'Add Model' Tab //
@@ -53,18 +53,32 @@ export class ModelsPage {
   }
 
   // Parametized Form Locators
-  getProviderComboboxOption(providerComboboxOption: string): Locator {
-    return this.page
+  /*getProviderComboboxOption(providerComboboxOption: string): Locator {
+    this.page
       .locator("span")
       .filter({ hasText: providerComboboxOption });
+  }*/
+
+  fillProviderComboboxBox(providerComboboxText: string) {
+    this.page
+      .getByRole("combobox", { name: "* Provider question-circle :" })
+      .fill(providerComboboxText);
   }
 
-  getLitellmModelNameComboboxOption(
+  getLitellmModelNameCombobox(): Locator {
+    return this.litellmModelNameCombobox;
+  }
+
+  /*getLitellmModelNameComboboxOption(
     litellmModelNameComboboxOption: string
   ): Locator {
     return this.page
       .getByTitle(litellmModelNameComboboxOption, { exact: true })
       .locator("div");
+  }*/
+
+  fillLitellmModelNameCombobox(litellmModelNameComboboxOption: string) {
+    this.page.locator("#model").fill(litellmModelNameComboboxOption);
   }
 
   getLitellmModelMappingModel(litellmModelMappingModel: string): Locator {
@@ -90,8 +104,8 @@ export class ModelsPage {
     return this.litellmModelNameCombobox;
   }
 
-  getAPIKeyInputBox(): Locator {
-    return this.apiKeyInput;
+  getAPIKeyInputBox(provider: string): Locator {
+    return this.page.getByRole("textbox", { name: `* ${provider} API Key :` });
   }
 
   getAddModelSubmitButton(): Locator {
