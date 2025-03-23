@@ -100,8 +100,8 @@ https://github.com/BerriAI/litellm/pull/9363
    - fix invalid package import - [PR](https://github.com/BerriAI/litellm/pull/9338)
    - migrate to using standardloggingpayload for metadata, ensures spans land successfully - [PR](https://github.com/BerriAI/litellm/pull/9338)
    - fix logging to just log the LLM I/O - [PR](https://github.com/BerriAI/litellm/pull/9353)
-   - key/team based logging support - [PR](https://github.com/BerriAI/litellm/pull/9353)
-- StandardLoggingPayload - Log litellm_model_name in payload. Allows knowing what the model sent to API provider was - [PR](https://github.com/BerriAI/litellm/commit/a34cc2031dbebf9d0d26f9f96724cca37b690c57)
+   - Dynamic API Key/Space param support - [Get Started](../../docs/observability/arize_integration#pass-arize-spacekey-per-request)
+- StandardLoggingPayload - Log litellm_model_name in payload. Allows knowing what the model sent to API provider was - [Get Started](../../docs/proxy/logging_spec#standardlogginghiddenparams)
 - Prompt Management - Allow building custom prompt management integration - https://github.com/BerriAI/litellm/pull/9384
 
 ## Performance / Reliability improvements
