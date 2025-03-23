@@ -35,15 +35,15 @@ class StandardBuiltInToolCostTracking:
         - Web Search
 
         """
-        model_info = litellm.get_model_info(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-
         if standard_built_in_tools_params is not None:
             if (
                 standard_built_in_tools_params.get("web_search_options", None)
                 is not None
             ):
+                model_info = StandardBuiltInToolCostTracking._safe_get_model_info(
+                    model=model, custom_llm_provider=custom_llm_provider
+                )
+
                 return StandardBuiltInToolCostTracking.get_cost_for_web_search(
                     web_search_options=standard_built_in_tools_params.get(
                         "web_search_options", None
@@ -60,10 +60,24 @@ class StandardBuiltInToolCostTracking:
             if StandardBuiltInToolCostTracking.chat_completion_response_includes_annotations(
                 response_object
             ):
+                model_info = StandardBuiltInToolCostTracking._safe_get_model_info(
+                    model=model, custom_llm_provider=custom_llm_provider
+                )
                 return StandardBuiltInToolCostTracking.get_default_cost_for_web_search(
                     model_info
                 )
         return 0.0
+
+    @staticmethod
+    def _safe_get_model_info(
+        model: str, custom_llm_provider: Optional[str] = None
+    ) -> Optional[ModelInfo]:
+        try:
+            return litellm.get_model_info(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+        except Exception:
+            return None
 
     @staticmethod
     def get_cost_for_web_search(
@@ -92,12 +106,16 @@ class StandardBuiltInToolCostTracking:
         )
 
     @staticmethod
-    def get_default_cost_for_web_search(model_info: ModelInfo) -> float:
+    def get_default_cost_for_web_search(
+        model_info: Optional[ModelInfo] = None,
+    ) -> float:
         """
         If no web search options are provided, use the `search_context_size_medium` pricing.
 
         https://platform.openai.com/docs/pricing#web-search
         """
+        if model_info is None:
+            return 0.0
         search_context_pricing: SearchContextCostPerQuery = (
             model_info.get("search_context_cost_per_query", {}) or {}
         ) or {}
