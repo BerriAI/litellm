@@ -66,7 +66,7 @@ jobs:
             pip install python-multipart
             pip install google-cloud-aiplatform
             pip install prometheus-client==0.20.0
-            pip install "pydantic==2.7.1"
+            pip install "pydantic==2.10.0"
             pip install "diskcache==5.6.1"
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
@@ -185,7 +185,7 @@ jobs:
             pip install python-multipart
             pip install google-cloud-aiplatform
             pip install prometheus-client==0.20.0
-            pip install "pydantic==2.7.1"
+            pip install "pydantic==2.10.0"
             pip install "diskcache==5.6.1"
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
@@ -285,7 +285,7 @@ jobs:
             pip install python-multipart
             pip install google-cloud-aiplatform
             pip install prometheus-client==0.20.0
-            pip install "pydantic==2.7.1"
+            pip install "pydantic==2.10.0"
             pip install "diskcache==5.6.1"
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
@@ -530,7 +530,7 @@ jobs:
             pip install python-multipart
             pip install google-cloud-aiplatform
             pip install prometheus-client==0.20.0
-            pip install "pydantic==2.7.1"
+            pip install "pydantic==2.10.0"
             pip install "diskcache==5.6.1"
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
@@ -2014,7 +2014,7 @@ jobs:
             pip install "openai==1.68.2"
             pip install "assemblyai==0.37.0"
             python -m pip install --upgrade pip
-            pip install "pydantic==2.7.1"
+            pip install "pydantic==2.10.0"
             pip install "pytest==7.3.1"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
@@ -2289,7 +2289,7 @@ jobs:
             pip install aiohttp
             pip install "openai==1.68.2"
             python -m pip install --upgrade pip
-            pip install "pydantic==2.7.1"
+            pip install "pydantic==2.10.0"
             pip install "pytest==7.3.1"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
