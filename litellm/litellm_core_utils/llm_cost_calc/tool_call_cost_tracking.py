@@ -104,7 +104,12 @@ class StandardBuiltInToolCostTracking:
     ) -> bool:
         for _choice in response_object.choices:
             message = getattr(_choice, "message", None)
-            if message is not None and hasattr(message, "annotations"):
+            if (
+                message is not None
+                and hasattr(message, "annotations")
+                and message.annotations is not None
+                and len(message.annotations) > 0
+            ):
                 return True
         return False
 
