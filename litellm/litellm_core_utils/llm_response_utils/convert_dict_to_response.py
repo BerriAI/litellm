@@ -494,6 +494,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         provider_specific_fields=provider_specific_fields,
                         reasoning_content=reasoning_content,
                         thinking_blocks=thinking_blocks,
+                        annotations=choice["message"].get("annotations", None),
                     )
                     finish_reason = choice.get("finish_reason", None)
                 if finish_reason is None:

@@ -559,6 +559,7 @@ class ModelGroupInfo(BaseModel):
     rpm: Optional[int] = None
     supports_parallel_function_calling: bool = Field(default=False)
     supports_vision: bool = Field(default=False)
+    supports_web_search: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
     supported_openai_params: Optional[List[str]] = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
