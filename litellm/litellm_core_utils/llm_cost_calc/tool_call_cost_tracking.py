@@ -2,7 +2,7 @@
 Helper utilities for tracking the cost of built-in tools.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import litellm
 from litellm.types.llms.openai import FileSearchTool, WebSearchOptions
@@ -135,10 +135,11 @@ class StandardBuiltInToolCostTracking:
     def _get_web_search_options(kwargs: Dict) -> Optional[WebSearchOptions]:
         if "web_search_options" in kwargs:
             return WebSearchOptions(**kwargs.get("web_search_options", {}))
-        if "tools" in kwargs:
-            tools = kwargs.get("tools", [])
-            if tools is None:
-                return None
+
+        tools = StandardBuiltInToolCostTracking._get_tools_from_kwargs(
+            kwargs, "web_search_preview"
+        )
+        if tools:
             # Look for web search tool in the tools array
             for tool in tools:
                 if isinstance(tool, dict):
@@ -147,12 +148,18 @@ class StandardBuiltInToolCostTracking:
         return None
 
     @staticmethod
-    def _get_file_search_tool_call(kwargs: Dict) -> Optional[FileSearchTool]:
+    def _get_tools_from_kwargs(kwargs: Dict, tool_type: str) -> Optional[List[Dict]]:
         if "tools" in kwargs:
             tools = kwargs.get("tools", [])
-            if tools is None:
-                return None
-            # Look for web search tool in the tools array
+            return tools
+        return None
+
+    @staticmethod
+    def _get_file_search_tool_call(kwargs: Dict) -> Optional[FileSearchTool]:
+        tools = StandardBuiltInToolCostTracking._get_tools_from_kwargs(
+            kwargs, "file_search"
+        )
+        if tools:
             for tool in tools:
                 if isinstance(tool, dict):
                     if StandardBuiltInToolCostTracking._is_file_search_tool_call(tool):
