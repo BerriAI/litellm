@@ -244,6 +244,7 @@ const sidebars = {
         "completion/provider_specific_params",
         "guides/finetuned_models",
         "completion/audio",
+        "completion/web_search",
         "completion/document_understanding",
         "completion/vision",
         "completion/json_mode",
