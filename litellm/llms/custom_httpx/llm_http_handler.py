@@ -20,6 +20,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
+    MockResponsesAPIStreamingIterator,
     ResponsesAPIStreamingIterator,
     SyncResponsesAPIStreamingIterator,
 )
@@ -978,6 +979,7 @@ class BaseLLMHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         _is_async: bool = False,
+        fake_stream: bool = False,
     ) -> Union[
         ResponsesAPIResponse,
         BaseResponsesAPIStreamingIterator,
@@ -1003,6 +1005,7 @@ class BaseLLMHTTPHandler:
                 extra_body=extra_body,
                 timeout=timeout,
                 client=client if isinstance(client, AsyncHTTPHandler) else None,
+                fake_stream=fake_stream,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -1051,14 +1054,27 @@ class BaseLLMHTTPHandler:
         try:
             if stream:
                 # For streaming, use stream=True in the request
+                if fake_stream is True:
+                    stream, data = self._prepare_fake_stream_request(
+                        stream=stream,
+                        data=data,
+                        fake_stream=fake_stream,
+                    )
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
                     data=json.dumps(data),
                     timeout=timeout
                     or response_api_optional_request_params.get("timeout"),
-                    stream=True,
+                    stream=stream,
                 )
+                if fake_stream is True:
+                    return MockResponsesAPIStreamingIterator(
+                        response=response,
+                        model=model,
+                        logging_obj=logging_obj,
+                        responses_api_provider_config=responses_api_provider_config,
+                    )
 
                 return SyncResponsesAPIStreamingIterator(
                     response=response,
@@ -1100,6 +1116,7 @@ class BaseLLMHTTPHandler:
         extra_body: Optional[Dict[str, Any]] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        fake_stream: bool = False,
     ) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
         """
         Async version of the responses API handler.
@@ -1145,21 +1162,35 @@ class BaseLLMHTTPHandler:
                 "headers": headers,
             },
         )
-
         # Check if streaming is requested
         stream = response_api_optional_request_params.get("stream", False)
 
         try:
             if stream:
                 # For streaming, we need to use stream=True in the request
+                if fake_stream is True:
+                    stream, data = self._prepare_fake_stream_request(
+                        stream=stream,
+                        data=data,
+                        fake_stream=fake_stream,
+                    )
+
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
                     data=json.dumps(data),
                     timeout=timeout
                     or response_api_optional_request_params.get("timeout"),
-                    stream=True,
+                    stream=stream,
                 )
+
+                if fake_stream is True:
+                    return MockResponsesAPIStreamingIterator(
+                        response=response,
+                        model=model,
+                        logging_obj=logging_obj,
+                        responses_api_provider_config=responses_api_provider_config,
+                    )
 
                 # Return the streaming iterator
                 return ResponsesAPIStreamingIterator(
@@ -1177,6 +1208,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout
                     or response_api_optional_request_params.get("timeout"),
                 )
+
         except Exception as e:
             raise self._handle_error(
                 e=e,
@@ -1188,6 +1220,21 @@ class BaseLLMHTTPHandler:
             raw_response=response,
             logging_obj=logging_obj,
         )
+
+    def _prepare_fake_stream_request(
+        self,
+        stream: bool,
+        data: dict,
+        fake_stream: bool,
+    ) -> Tuple[bool, dict]:
+        """
+        Handles preparing a request when `fake_stream` is True.
+        """
+        if fake_stream is True:
+            stream = False
+            data.pop("stream", None)
+            return stream, data
+        return stream, data
 
     def _handle_error(
         self,

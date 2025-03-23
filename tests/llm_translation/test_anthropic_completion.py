@@ -36,7 +36,7 @@ from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
 from litellm.llms.anthropic.common_utils import process_anthropic_headers
 from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
 from httpx import Headers
-from base_llm_unit_tests import BaseLLMChatTest
+from base_llm_unit_tests import BaseLLMChatTest, BaseAnthropicChatTest
 
 
 def streaming_format_tests(chunk: dict, idx: int):
@@ -455,14 +455,15 @@ def test_create_json_tool_call_for_response_format():
     _input_schema = tool.get("input_schema")
     assert _input_schema is not None
     assert _input_schema.get("type") == "object"
-    assert _input_schema.get("properties") == {"values": custom_schema}
+    assert _input_schema.get("name") == custom_schema["name"]
+    assert _input_schema.get("age") == custom_schema["age"]
     assert "additionalProperties" not in _input_schema
 
 
 from litellm import completion
 
 
-class TestAnthropicCompletion(BaseLLMChatTest):
+class TestAnthropicCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
     def get_base_completion_call_args(self) -> dict:
         return {"model": "anthropic/claude-3-5-sonnet-20240620"}
 

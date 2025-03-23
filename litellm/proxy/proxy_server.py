@@ -240,6 +240,9 @@ from litellm.proxy.openai_files_endpoints.files_endpoints import (
 )
 from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+    passthrough_endpoint_router,
+)
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     router as llm_passthrough_router,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
@@ -276,8 +279,6 @@ from litellm.proxy.utils import (
 from litellm.proxy.vertex_ai_endpoints.langfuse_endpoints import (
     router as langfuse_router,
 )
-from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import router as vertex_router
-from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import set_default_vertex_config
 from litellm.router import (
     AssistantsTypedDict,
     Deployment,
@@ -2119,7 +2120,9 @@ class ProxyConfig:
 
         ## default config for vertex ai routes
         default_vertex_config = config.get("default_vertex_config", None)
-        set_default_vertex_config(config=default_vertex_config)
+        passthrough_endpoint_router.set_default_vertex_config(
+            config=default_vertex_config
+        )
 
         ## ROUTER SETTINGS (e.g. routing_strategy, ...)
         router_settings = config.get("router_settings", None)
@@ -8170,7 +8173,6 @@ app.include_router(batches_router)
 app.include_router(rerank_router)
 app.include_router(fine_tuning_router)
 app.include_router(credential_router)
-app.include_router(vertex_router)
 app.include_router(llm_passthrough_router)
 app.include_router(mcp_router)
 app.include_router(anthropic_router)

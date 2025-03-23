@@ -136,6 +136,40 @@ def test_is_chunk_non_empty(initialized_custom_stream_wrapper: CustomStreamWrapp
     )
 
 
+def test_is_chunk_non_empty_with_annotations(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """Unit test if non-empty when annotations are present"""
+    chunk = {
+        "id": "e89b6501-8ac2-464c-9550-7cd3daf94350",
+        "object": "chat.completion.chunk",
+        "created": 1741037890,
+        "model": "deepseek-reasoner",
+        "system_fingerprint": "fp_5417b77867_prod0225",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "content": None,
+                    "annotations": [
+                        {"type": "url_citation", "url": "https://www.google.com"}
+                    ],
+                },
+                "logprobs": None,
+                "finish_reason": None,
+            }
+        ],
+    }
+    assert (
+        initialized_custom_stream_wrapper.is_chunk_non_empty(
+            completion_obj=MagicMock(),
+            model_response=ModelResponseStream(**chunk),
+            response_obj=MagicMock(),
+        )
+        is True
+    )
+
+
 def test_optional_combine_thinking_block_in_choices(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):
