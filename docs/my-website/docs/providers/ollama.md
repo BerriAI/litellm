@@ -240,7 +240,7 @@ model_list:
 ```bash
 litellm --config /path/to/config.yaml --detailed_debug
 
-# RUNNING ON http://0.0.0.0:4000
+# RUNNING ON http://0.0.0.0:4000 
 ```
 
 3. Test it! 
