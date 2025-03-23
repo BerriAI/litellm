@@ -15,6 +15,8 @@ A CustomGuardrail has 4 methods to enforce guardrails
 - `async_moderation_hook` - (Optional) reject request, runs while making LLM API call (help to lower latency)
 - `async_post_call_success_hook`- (Optional) apply guardrail on input/output, runs after making LLM API call
 - `async_post_call_streaming_iterator_hook` - (Optional) pass the entire stream to the guardrail
+
+
 **[See detailed spec of methods here](#customguardrail-methods)**
 
 **Example `CustomGuardrail` Class**
