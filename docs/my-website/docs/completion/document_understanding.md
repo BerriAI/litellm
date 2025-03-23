@@ -200,3 +200,92 @@ Expected Response
 
 </TabItem>
 </Tabs>
+
+
+## OpenAI 'file' message type
+
+This is currently only supported for OpenAI models. 
+
+This will be supported for all providers soon. 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import base64
+from litellm import completion
+
+with open("draconomicon.pdf", "rb") as f:
+    data = f.read()
+
+base64_string = base64.b64encode(data).decode("utf-8")
+
+completion = completion(
+    model="gpt-4o",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": "draconomicon.pdf",
+                        "file_data": f"data:application/pdf;base64,{base64_string}",
+                    }
+                },
+                {
+                    "type": "text",
+                    "text": "What is the first dragon in the book?",
+                }
+            ],
+        },
+    ],
+)
+
+print(completion.choices[0].message.content)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: openai-model
+    litellm_params:
+      model: gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+```
+
+2. Start the proxy
+
+```bash
+litellm --config config.yaml
+```
+
+3. Test it!
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{ 
+    "model": "openai-model",
+    "messages": [
+        {"role": "user", "content": [
+            {
+                "type": "file",
+                "file": {
+                    "filename": "draconomicon.pdf",
+                    "file_data": f"data:application/pdf;base64,{base64_string}",
+                }
+            }
+        ]}
+    ]
+}'
+```
+
+</TabItem>
+</Tabs>
