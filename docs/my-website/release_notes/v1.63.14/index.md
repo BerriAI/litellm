@@ -59,7 +59,7 @@ Here's a Demo Instance to test changes:
 
 - Bedrock: Support bedrock application inference profiles [Docs](https://docs.litellm.ai/docs/providers/bedrock#bedrock-application-inference-profile)
    - Infer aws region from bedrock application profile id - (`arn:aws:bedrock:us-east-1:...`)
-- Ollama - support calling via `/v1/completions` - [NEEDS DOCS]https://github.com/BerriAI/litellm/pull/9333
+- Ollama - support calling via `/v1/completions` [Get Started](../../docs/providers/ollama#using-ollama-fim-on-v1completions)
 - Bedrock - support `us.deepseek.r1-v1:0` model name [Docs](../../docs/providers/bedrock#supported-aws-bedrock-models)
 
 https://github.com/BerriAI/litellm/pull/9363
@@ -97,35 +97,33 @@ https://github.com/BerriAI/litellm/pull/9363
 
 - Support post-call guardrails for streaming responses - https://github.com/BerriAI/litellm/commit/4a31b32a88b7729a032e58ab046079d17000087f [NEEDS DOCS] 
 - Arize [Get Started](../../docs/observability/arize_integration)
-   - fix invalid package import - [PR](https://github.com/BerriAI/litellm/pull/9338)
-   - migrate to using standardloggingpayload for metadata, ensures spans land successfully - [PR](https://github.com/BerriAI/litellm/pull/9338)
-   - fix logging to just log the LLM I/O - [PR](https://github.com/BerriAI/litellm/pull/9353)
-   - Dynamic API Key/Space param support - [Get Started](../../docs/observability/arize_integration#pass-arize-spacekey-per-request)
-- StandardLoggingPayload - Log litellm_model_name in payload. Allows knowing what the model sent to API provider was - [Get Started](../../docs/proxy/logging_spec#standardlogginghiddenparams)
-- Prompt Management - Allow building custom prompt management integration - https://github.com/BerriAI/litellm/pull/9384
+   - fix invalid package import [PR](https://github.com/BerriAI/litellm/pull/9338)
+   - migrate to using standardloggingpayload for metadata, ensures spans land successfully [PR](https://github.com/BerriAI/litellm/pull/9338)
+   - fix logging to just log the LLM I/O [PR](https://github.com/BerriAI/litellm/pull/9353)
+   - Dynamic API Key/Space param support [Get Started](../../docs/observability/arize_integration#pass-arize-spacekey-per-request)
+- StandardLoggingPayload - Log litellm_model_name in payload. Allows knowing what the model sent to API provider was [Get Started](../../docs/proxy/logging_spec#standardlogginghiddenparams)
+- Prompt Management - Allow building custom prompt management integration [Get Started](../../docs/proxy/custom_prompt_management.md)
 
 ## Performance / Reliability improvements
 
-- Redis Caching - add 5s default timeout, prevents hanging redis connection from impacting llm calls - https://github.com/BerriAI/litellm/commit/db92956ae33ed4c4e3233d7e1b0c7229817159bf
-- Allow disabling all spend updates / writes to DB - patch to allow disabling all spend updates to DB with a flag - https://github.com/BerriAI/litellm/pull/9331
-- Azure OpenAI - correctly re-use azure openai client - https://github.com/BerriAI/litellm/commit/f2026ef907c06d94440930917add71314b901413
-- Azure OpenAI - uses litellm.ssl_verify on Azure/OpenAI clients 
-- Usage-based routing - Wildcard model support https://github.com/BerriAI/litellm/pull/9355
-- Usage-based routing - Support batch writing increments to redis - reduces latency to same as ‘simple-shuffle’ - https://github.com/BerriAI/litellm/pull/9357
-- Router - show reason for model cooldown on ‘no healthy deployments available error’ - https://github.com/BerriAI/litellm/pull/9438
-- Caching - add max value limit to an item in in-memory cache (1MB) - prevents OOM errors on large image url’s being sent through proxy - https://github.com/BerriAI/litellm/pull/9448
+- Redis Caching - add 5s default timeout, prevents hanging redis connection from impacting llm calls [PR](https://github.com/BerriAI/litellm/commit/db92956ae33ed4c4e3233d7e1b0c7229817159bf)
+- Allow disabling all spend updates / writes to DB - patch to allow disabling all spend updates to DB with a flag [PR](https://github.com/BerriAI/litellm/pull/9331)
+- Azure OpenAI - correctly re-use azure openai client, fixes perf issue from previous Stable release [PR](https://github.com/BerriAI/litellm/commit/f2026ef907c06d94440930917add71314b901413)
+- Azure OpenAI - uses litellm.ssl_verify on Azure/OpenAI clients [PR](https://github.com/BerriAI/litellm/commit/f2026ef907c06d94440930917add71314b901413)
+- Usage-based routing - Wildcard model support [Get Started](../../docs/proxy/usage_based_routing#wildcard-model-support)
+- Usage-based routing - Support batch writing increments to redis - reduces latency to same as ‘simple-shuffle’ [PR](https://github.com/BerriAI/litellm/pull/9357)
+- Router - show reason for model cooldown on ‘no healthy deployments available error’ [PR](https://github.com/BerriAI/litellm/pull/9438)
+- Caching - add max value limit to an item in in-memory cache (1MB) - prevents OOM errors on large image url’s being sent through proxy [PR](https://github.com/BerriAI/litellm/pull/9448)
 
 
 ## General Improvements
 
-- Multiple OIDC Provider support - https://github.com/BerriAI/litellm/commit/324864b7750747ae40345def796c1578263f5896
 - Passthrough Endpoints - support returning api-base on pass-through endpoints Response Headers [Docs](../../docs/proxy/response_headers#litellm-specific-headers)
-- SSL - support reading ssl security level from env var - Allows user to specify lower security settings - https://github.com/BerriAI/litellm/pull/9330
-- Credentials - only poll Credentials table when `STORE_MODEL_IN_DB` is True - https://github.com/BerriAI/litellm/pull/9376
-- Image URL Handling - new architecture doc on image url handling - https://docs.litellm.ai/docs/proxy/image_handling
-- OpenAI - bump to pip install "openai==1.68.2" - https://github.com/BerriAI/litellm/commit/e85e3bc52a9de86ad85c3dbb12d87664ee567a5a
-- Gunicorn - security fix - bump gunicorn==23.0.0 # server dep
-
+- SSL - support reading ssl security level from env var - Allows user to specify lower security settings [Get Started](../../docs/guides/security_settings)
+- Credentials - only poll Credentials table when `STORE_MODEL_IN_DB` is True [PR](https://github.com/BerriAI/litellm/pull/9376)
+- Image URL Handling - new architecture doc on image url handling [Docs](../../docs/proxy/image_handling)
+- OpenAI - bump to pip install "openai==1.68.2" [PR](https://github.com/BerriAI/litellm/commit/e85e3bc52a9de86ad85c3dbb12d87664ee567a5a)
+- Gunicorn - security fix - bump gunicorn==23.0.0 [PR](https://github.com/BerriAI/litellm/commit/7e9fc92f5c7fea1e7294171cd3859d55384166eb)
 
 
 ## Complete Git Diff
