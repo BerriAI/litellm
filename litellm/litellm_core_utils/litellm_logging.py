@@ -386,7 +386,10 @@ class Logging(LiteLLMLoggingBaseClass):
         return StandardBuiltInToolsParams(
             web_search_options=StandardBuiltInToolCostTracking._get_web_search_options(
                 kwargs or {}
-            )
+            ),
+            file_search=StandardBuiltInToolCostTracking._get_file_search_tool_call(
+                kwargs or {}
+            ),
         )
 
     def update_environment_variables(

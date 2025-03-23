@@ -421,6 +421,14 @@ class WebSearchOptions(TypedDict, total=False):
     """Approximate location parameters for the search."""
 
 
+class FileSearchTool(TypedDict, total=False):
+    type: Literal["file_search"]
+    """The type of tool being defined: `file_search`"""
+
+    vector_store_ids: Optional[List[str]]
+    """The IDs of the vector stores to search."""
+
+
 class ChatCompletionAnnotationURLCitation(TypedDict, total=False):
     end_index: int
     """The index of the last character of the URL citation in the message."""
