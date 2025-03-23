@@ -847,7 +847,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ```python 
 import openai
 client = openai.AsyncOpenAI(
-    api_key="anything",            # litellm proxy api key
+    api_key="sk-1234",            # litellm proxy api key
     base_url="http://0.0.0.0:4000" # litellm proxy base url
 )
 
