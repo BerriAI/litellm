@@ -61,8 +61,6 @@ Here's a Demo Instance to test changes:
    - Infer aws region from bedrock application profile id - (`arn:aws:bedrock:us-east-1:...`)
 - Ollama - support calling via `/v1/completions` [Get Started](../../docs/providers/ollama#using-ollama-fim-on-v1completions)
 - Bedrock - support `us.deepseek.r1-v1:0` model name [Docs](../../docs/providers/bedrock#supported-aws-bedrock-models)
-
-https://github.com/BerriAI/litellm/pull/9363
 - OpenRouter - `OPENROUTER_API_BASE` env var support [Docs](../../docs/providers/openrouter.md)
 - Azure - add audio model parameter support - [Docs](../../docs/providers/azure#azure-audio-model)
 - OpenAI - PDF File support [Docs](../../docs/completion/document_understanding#openai-file-message-type)
