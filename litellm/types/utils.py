@@ -13,6 +13,7 @@ from openai.types.completion_usage import (
     CompletionUsage,
     PromptTokensDetails,
 )
+from openai.types.llms.openai import FileSearchTool
 from openai.types.moderation import (
     Categories,
     CategoryAppliedInputTypes,
@@ -1633,6 +1634,7 @@ class StandardBuiltInToolsParams(TypedDict, total=False):
     """
 
     web_search_options: Optional[WebSearchOptions]
+    file_search: Optional[FileSearchTool]
 
 
 class StandardLoggingPromptManagementMetadata(TypedDict):
