@@ -9,6 +9,7 @@ Use web search with litellm
 |---------|---------|
 | Supported Endpoints | - `/chat/completions` <br/> - `/responses` |
 | Supported Providers | `openai` |
+| LiteLLM Cost Tracking | ✅ Supported |
 | LiteLLM Version | `v1.63.15-nightly` or higher |
 
 ## Quick Start
@@ -20,14 +21,13 @@ Use web search with litellm
 from litellm import completion
 
 response = completion(
-    model="openai/gpt-4-turbo-preview",
+    model="openai/gpt-4o-search-preview",
     messages=[
         {
             "role": "user",
             "content": "What was a positive news story from today?",
         }
     ],
-    tool_choice="auto",  # Enable web search capability
 )
 ```
 </TabItem>
@@ -37,9 +37,9 @@ response = completion(
 
 ```yaml
 model_list:
-  - model_name: gpt-4-turbo
+  - model_name: gpt-4o-search-preview
     litellm_params:
-      model: openai/gpt-4-turbo-preview
+      model: openai/gpt-4o-search-preview
       api_key: os.environ/OPENAI_API_KEY
 ```
 
@@ -56,14 +56,13 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
 -d '{
-    "model": "gpt-4-turbo",
+    "model": "gpt-4o-search-preview",
     "messages": [
         {
             "role": "user",
             "content": "What was a positive news story from today?"
         }
     ],
-    "tool_choice": "auto"
 }'
 ```
 </TabItem>
@@ -74,10 +73,10 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 <Tabs>
 <TabItem label="SDK" value="sdk">
 
-Use `litellm.supports_web_search(model="openai/gpt-4-turbo-preview")` -> returns `True` if model can perform web searches
+Use `litellm.supports_web_search(model="openai/gpt-4o-search-preview")` -> returns `True` if model can perform web searches
 
 ```python showLineNumbers
-assert litellm.supports_web_search(model="openai/gpt-4-turbo-preview") == True
+assert litellm.supports_web_search(model="openai/gpt-4o-search-preview") == True
 ```
 </TabItem>
 
@@ -87,9 +86,9 @@ assert litellm.supports_web_search(model="openai/gpt-4-turbo-preview") == True
 
 ```yaml
 model_list:
-  - model_name: gpt-4-turbo
+  - model_name: gpt-4o-search-preview
     litellm_params:
-      model: openai/gpt-4-turbo-preview
+      model: openai/gpt-4o-search-preview
       api_key: os.environ/OPENAI_API_KEY
     model_info:
       supports_web_search: True
@@ -116,7 +115,7 @@ Expected Response
 {
   "data": [
     {
-      "model_group": "gpt-4-turbo",
+      "model_group": "gpt-4o-search-preview",
       "providers": ["openai"],
       "max_tokens": 128000,
       "supports_web_search": true, # 👈 supports_web_search is true
