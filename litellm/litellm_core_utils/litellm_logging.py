@@ -51,7 +51,6 @@ from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
     ResponseCompletedEvent,
     ResponsesAPIResponse,
-    WebSearchOptions,
 )
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
