@@ -4925,6 +4925,11 @@ class Router:
                 ):
                     model_group_info.supports_function_calling = True
                 if (
+                    model_info.get("supports_web_search", None) is not None
+                    and model_info["supports_web_search"] is True  # type: ignore
+                ):
+                    model_group_info.supports_web_search = True
+                if (
                     model_info.get("supported_openai_params", None) is not None
                     and model_info["supported_openai_params"] is not None
                 ):
