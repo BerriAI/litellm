@@ -26,14 +26,6 @@ This release is primarily focused on:
 - UI - Credential Management, re-use credentials when adding new models
 - UI - Test Connection to LLM Provider before adding a model
 
-:::info
-
-This release will be live on 03/16/2025
-
-:::
-
-<!-- <Image img={require('../../img/release_notes/v16311_release.jpg')} /> -->
-
 ## Known Issues
 - 🚨 Known issue on Azure OpenAI - We don't recommend upgrading if you use Azure OpenAI. This version failed our Azure OpenAI load test
 

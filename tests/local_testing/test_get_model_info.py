@@ -500,6 +500,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_tool_choice": {"type": "boolean"},
                 "supports_video_input": {"type": "boolean"},
                 "supports_vision": {"type": "boolean"},
+                "supports_web_search": {"type": "boolean"},
                 "tool_use_system_prompt_tokens": {"type": "number"},
                 "tpm": {"type": "number"},
                 "supported_endpoints": {
@@ -517,6 +518,15 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/batch",
                         ],
                     },
+                },
+                "search_context_cost_per_query": {
+                    "type": "object",
+                    "properties": {
+                        "search_context_size_low": {"type": "number"},
+                        "search_context_size_medium": {"type": "number"},
+                        "search_context_size_high": {"type": "number"},
+                    },
+                    "additionalProperties": False,
                 },
                 "supported_modalities": {
                     "type": "array",
