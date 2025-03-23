@@ -12,7 +12,10 @@ Use web search with litellm
 | LiteLLM Cost Tracking | ✅ Supported |
 | LiteLLM Version | `v1.63.15-nightly` or higher |
 
-## Quick Start
+
+## `/chat/completions` (litellm.completion)
+
+### Quick Start
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -73,7 +76,7 @@ response = client.chat.completions.create(
 </TabItem>
 </Tabs>
 
-## Search context size
+### Search context size
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -123,6 +126,127 @@ response = client.chat.completions.create(
 ```
 </TabItem>
 </Tabs>
+
+## `/responses` (litellm.responses)
+
+### Quick Start
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers
+from litellm import responses
+
+response = responses(
+    model="openai/gpt-4o",
+    input=[
+        {
+            "role": "user",
+            "content": "What was a positive news story from today?"
+        }
+    ],
+    tools=[{
+        "type": "web_search_preview"  # enables web search with default medium context size
+    }]
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+```
+
+2. Start the proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```python showLineNumbers
+from openai import OpenAI
+
+# Point to your proxy server
+client = OpenAI(
+    api_key="sk-1234",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.responses.create(
+    model="gpt-4o",
+    tools=[{
+        "type": "web_search_preview"
+    }],
+    input="What was a positive news story from today?",
+)
+
+print(response.output_text)
+```
+</TabItem>
+</Tabs>
+
+### Search context size
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers
+from litellm import responses
+
+# Customize search context size
+response = responses(
+    model="openai/gpt-4o",
+    input=[
+        {
+            "role": "user",
+            "content": "What was a positive news story from today?"
+        }
+    ],
+    tools=[{
+        "type": "web_search_preview",
+        "search_context_size": "low"  # Options: "low", "medium" (default), "high"
+    }]
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```python showLineNumbers
+from openai import OpenAI
+
+# Point to your proxy server
+client = OpenAI(
+    api_key="sk-1234",
+    base_url="http://0.0.0.0:4000"
+)
+
+# Customize search context size
+response = client.responses.create(
+    model="gpt-4o",
+    tools=[{
+        "type": "web_search_preview",
+        "search_context_size": "low"  # Options: "low", "medium" (default), "high"
+    }],
+    input="What was a positive news story from today?",
+)
+
+print(response.output_text)
+```
+</TabItem>
+</Tabs>
+
+
+
+
+
 
 ## Checking if a model supports web search
 
