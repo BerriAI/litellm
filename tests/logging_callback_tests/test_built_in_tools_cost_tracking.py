@@ -113,8 +113,20 @@ async def test_openai_web_search_logging_cost_tracking_explicit_search_context_s
 
 
 @pytest.mark.asyncio
-async def test_openai_web_search_with_tool_call_logging_cost_tracking():
-    """search_context_size=high passed in tool call, so cost tracked as `search_context_size_high`"""
+@pytest.mark.parametrize(
+    "tools_config,expected_context_size",
+    [
+        (
+            [{"type": "web_search_preview", "search_context_size": "high"}],
+            "search_context_size_high",
+        ),
+        ([{"type": "web_search_preview"}], "search_context_size_medium"),
+    ],
+)
+async def test_openai_responses_api_web_search_cost_tracking(
+    tools_config, expected_context_size
+):
+    """Test web search cost tracking with different search context sizes"""
     test_custom_logger = await _setup_web_search_test()
 
     response = await litellm.aresponses(
@@ -122,7 +134,7 @@ async def test_openai_web_search_with_tool_call_logging_cost_tracking():
         input=[
             {"role": "user", "content": "What was a positive news story from today?"}
         ],
-        tools=[{"type": "web_search_preview", "search_context_size": "high"}],
+        tools=tools_config,
     )
 
-    await _verify_web_search_cost(test_custom_logger, "search_context_size_high")
+    await _verify_web_search_cost(test_custom_logger, expected_context_size)
