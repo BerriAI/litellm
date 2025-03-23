@@ -137,6 +137,8 @@ class StandardBuiltInToolCostTracking:
             return WebSearchOptions(**kwargs.get("web_search_options", {}))
         if "tools" in kwargs:
             tools = kwargs.get("tools", [])
+            if tools is None:
+                return None
             # Look for web search tool in the tools array
             for tool in tools:
                 if isinstance(tool, dict):
@@ -148,6 +150,8 @@ class StandardBuiltInToolCostTracking:
     def _get_file_search_tool_call(kwargs: Dict) -> Optional[FileSearchTool]:
         if "tools" in kwargs:
             tools = kwargs.get("tools", [])
+            if tools is None:
+                return None
             # Look for web search tool in the tools array
             for tool in tools:
                 if isinstance(tool, dict):
