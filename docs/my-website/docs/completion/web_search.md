@@ -51,19 +51,75 @@ litellm --config /path/to/config.yaml
 
 3. Test it! 
 
-```bash showLineNumbers
-curl -X POST 'http://0.0.0.0:4000/chat/completions' \
--H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
--d '{
-    "model": "gpt-4o-search-preview",
-    "messages": [
+```python showLineNumbers
+from openai import OpenAI
+
+# Point to your proxy server
+client = OpenAI(
+    api_key="sk-1234",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="gpt-4o-search-preview",
+    messages=[
+        {
+            "role": "user",
+            "content": "What was a positive news story from today?"
+        }
+    ]
+)
+```
+</TabItem>
+</Tabs>
+
+## Search context size
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers
+from litellm import completion
+
+# Customize search context size
+response = completion(
+    model="openai/gpt-4o-search-preview",
+    messages=[
+        {
+            "role": "user",
+            "content": "What was a positive news story from today?",
+        }
+    ],
+    web_search_options={
+        "search_context_size": "low"  # Options: "low", "medium" (default), "high"
+    }
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```python showLineNumbers
+from openai import OpenAI
+
+# Point to your proxy server
+client = OpenAI(
+    api_key="sk-1234",
+    base_url="http://0.0.0.0:4000"
+)
+
+# Customize search context size
+response = client.chat.completions.create(
+    model="gpt-4o-search-preview",
+    messages=[
         {
             "role": "user",
             "content": "What was a positive news story from today?"
         }
     ],
-}'
+    web_search_options={
+        "search_context_size": "low"  # Options: "low", "medium" (default), "high"
+    }
+)
 ```
 </TabItem>
 </Tabs>
