@@ -65,54 +65,43 @@ Here's a Demo Instance to test changes:
 https://github.com/BerriAI/litellm/pull/9363
 - OpenRouter - `OPENROUTER_API_BASE` env var support [Docs](../../docs/providers/openrouter.md)
 - Azure - add audio model parameter support - [Docs](../../docs/providers/azure#azure-audio-model)
-- OpenAI - ‘file’ message type support - https://github.com/BerriAI/litellm/commit/12e730885bd3948543dca902293f461c1bc4fb60
-- OpenAI - o1-pro Responses API streaming support - https://github.com/BerriAI/litellm/pull/9419
-- Passthrough Endpoints - support returning api-base on pass-through endpoints - https://github.com/BerriAI/litellm/pull/9439
-- [BETA] MCP - Use MCP Tools with LiteLLM SDK - https://github.com/BerriAI/litellm/pull/9436 [NEEDS NOTE RE: advanced section not live yet RELEASE]
+- OpenAI - PDF File support [Docs](../../docs/completion/document_understanding#openai-file-message-type)
+- OpenAI - o1-pro Responses API streaming support [Docs](../../docs/response_api.md#streaming)
+- [BETA] MCP - Use MCP Tools with LiteLLM SDK [Docs](../../docs/mcp)
 
 2. **Bug Fixes**
 
-- Voyage: prompt token on embedding tracking fix - https://github.com/BerriAI/litellm/commit/56d3e75b330c3c3862dc6e1c51c1210e48f1068e
-- Streaming - Prevents final chunk w/ usage from being ignored (impacted bedrock streaming + cost tracking) - https://github.com/BerriAI/litellm/commit/dd2c980d5bb9e1a3b125e364c5d841751e67c96d
-- Sagemaker - Fix ‘Too little data for declared Content-Length’ error - https://github.com/BerriAI/litellm/pull/9326
-- OpenAI-compatible models - fix issue when calling openai-compatible models w/ custom_llm_provider set - https://github.com/BerriAI/litellm/pull/9355
-- VertexAI - Embedding ‘outputDimensionality’ support - https://github.com/BerriAI/litellm/commit/437dbe724620675295f298164a076cbd8019d304
-- Anthropic - return consistent json response format on streaming/non-streaming - https://github.com/BerriAI/litellm/pull/9437
+- Voyage: prompt token on embedding tracking fix - [PR](https://github.com/BerriAI/litellm/commit/56d3e75b330c3c3862dc6e1c51c1210e48f1068e)
+- Streaming - Prevents final chunk w/ usage from being ignored (impacted bedrock streaming + cost tracking) - [PR](https://github.com/BerriAI/litellm/commit/dd2c980d5bb9e1a3b125e364c5d841751e67c96d)
+- Sagemaker - Fix ‘Too little data for declared Content-Length’ error - [PR](https://github.com/BerriAI/litellm/pull/9326)
+- OpenAI-compatible models - fix issue when calling openai-compatible models w/ custom_llm_provider set - [PR](https://github.com/BerriAI/litellm/pull/9355)
+- VertexAI - Embedding ‘outputDimensionality’ support - [PR](https://github.com/BerriAI/litellm/commit/437dbe724620675295f298164a076cbd8019d304)
+- Anthropic - return consistent json response format on streaming/non-streaming - [PR](https://github.com/BerriAI/litellm/pull/9437)
 
 ## Spend Tracking Improvements
 
 - `litellm_proxy/` - support reading litellm response cost header from proxy, when using client sdk 
-- Reset Budget Job - fix budget reset error on keys/teams/users - https://github.com/BerriAI/litellm/pull/9329
+- Reset Budget Job - fix budget reset error on keys/teams/users - [PR](https://github.com/BerriAI/litellm/pull/9329)
 
 ## UI
 
 1. Users Page
-   - Feature: Control default internal user settings
+   - Feature: Control default internal user settings [PR](https://github.com/BerriAI/litellm/pull/9374)
 2. Icons:
    - Feature: Replace external "artificialanalysis.ai" icons by local svg [PR](https://github.com/BerriAI/litellm/pull/9374)
 3. Sign In/Sign Out
    - Fix: Default login when `default_user_id` user does not exist in DB [PR](https://github.com/BerriAI/litellm/pull/9395)
 
 
-## Security
-
-1. Support for Rotating Master Keys [Getting Started](https://docs.litellm.ai/docs/proxy/master_key_rotations)
-2. Fix: Internal User Viewer Permissions, don't allow `internal_user_viewer` role to see `Test Key Page` or `Create Key Button` [More information on role based access controls](https://docs.litellm.ai/docs/proxy/access_control)
-3. Emit audit logs on All user + model Create/Update/Delete endpoints [Getting Started](https://docs.litellm.ai/docs/proxy/multiple_admins)
-4. JWT
-    - Support multiple JWT OIDC providers [Getting Started](https://docs.litellm.ai/docs/proxy/token_auth)
-    - Fix JWT access with Groups not working when team is assigned All Proxy Models access
-5. Using K/V pairs in 1 AWS Secret [Getting Started](https://docs.litellm.ai/docs/secret#using-kv-pairs-in-1-aws-secret)
-
-
 ## Logging Integrations
 
 - Support post-call guardrails for streaming responses - https://github.com/BerriAI/litellm/commit/4a31b32a88b7729a032e58ab046079d17000087f [NEEDS DOCS] 
-- Arize - fix invalid package import - https://github.com/BerriAI/litellm/pull/9338
-- Arize - migrate to using standardloggingpayload for metadata, ensures spans land successfully - https://github.com/BerriAI/litellm/pull/9338
-- Arize - fix logging to just log the LLM I/O - https://github.com/BerriAI/litellm/pull/9353
-- Arize - key/team based logging support - https://github.com/BerriAI/litellm/pull/9353
-- StandardLoggingPayload - Log litellm_model_name in payload. Allows knowing what the model sent to API provider was - https://github.com/BerriAI/litellm/commit/a34cc2031dbebf9d0d26f9f96724cca37b690c57
+- Arize [Get Started](../../docs/observability/arize_integration)
+   - fix invalid package import - [PR](https://github.com/BerriAI/litellm/pull/9338)
+   - migrate to using standardloggingpayload for metadata, ensures spans land successfully - [PR](https://github.com/BerriAI/litellm/pull/9338)
+   - fix logging to just log the LLM I/O - [PR](https://github.com/BerriAI/litellm/pull/9353)
+   - key/team based logging support - [PR](https://github.com/BerriAI/litellm/pull/9353)
+- StandardLoggingPayload - Log litellm_model_name in payload. Allows knowing what the model sent to API provider was - [PR](https://github.com/BerriAI/litellm/commit/a34cc2031dbebf9d0d26f9f96724cca37b690c57)
 - Prompt Management - Allow building custom prompt management integration - https://github.com/BerriAI/litellm/pull/9384
 
 ## Performance / Reliability improvements
@@ -130,11 +119,13 @@ https://github.com/BerriAI/litellm/pull/9363
 ## General Improvements
 
 - Multiple OIDC Provider support - https://github.com/BerriAI/litellm/commit/324864b7750747ae40345def796c1578263f5896
+- Passthrough Endpoints - support returning api-base on pass-through endpoints Response Headers [Docs](../../docs/proxy/response_headers#litellm-specific-headers)
 - SSL - support reading ssl security level from env var - Allows user to specify lower security settings - https://github.com/BerriAI/litellm/pull/9330
 - Credentials - only poll Credentials table when `STORE_MODEL_IN_DB` is True - https://github.com/BerriAI/litellm/pull/9376
 - Image URL Handling - new architecture doc on image url handling - https://docs.litellm.ai/docs/proxy/image_handling
 - OpenAI - bump to pip install "openai==1.68.2" - https://github.com/BerriAI/litellm/commit/e85e3bc52a9de86ad85c3dbb12d87664ee567a5a
 - Gunicorn - security fix - bump gunicorn==23.0.0 # server dep
+
 
 
 ## Complete Git Diff
