@@ -5,7 +5,11 @@ Helper utilities for tracking the cost of built-in tools.
 from typing import Any, Dict, Optional
 
 import litellm
-from litellm.types.llms.openai import WebSearchOptions
+from litellm.types.llms.openai import (
+    ResponseOutputItem,
+    ResponsesAPIResponse,
+    WebSearchOptions,
+)
 from litellm.types.utils import (
     ModelInfo,
     ModelResponse,
@@ -52,13 +56,12 @@ class StandardBuiltInToolCostTracking:
             )
 
         if isinstance(response_object, ModelResponse):
-            if StandardBuiltInToolCostTracking.response_includes_annotations(
+            if StandardBuiltInToolCostTracking.chat_completion_response_includes_annotations(
                 response_object
             ):
                 return StandardBuiltInToolCostTracking.get_default_cost_for_web_search(
                     model_info
                 )
-
         return 0.0
 
     @staticmethod
@@ -99,7 +102,9 @@ class StandardBuiltInToolCostTracking:
         return search_context_pricing.get("search_context_size_medium", 0.0)
 
     @staticmethod
-    def response_includes_annotations(response_object: ModelResponse) -> bool:
+    def chat_completion_response_includes_annotations(
+        response_object: ModelResponse,
+    ) -> bool:
         for _choice in response_object.choices:
             message = getattr(_choice, "message", None)
             if message is not None and hasattr(message, "annotations"):
@@ -115,6 +120,14 @@ class StandardBuiltInToolCostTracking:
             # Look for web search tool in the tools array
             for tool in tools:
                 if isinstance(tool, dict):
-                    if "search_context_size" in tool:
+                    if StandardBuiltInToolCostTracking._web_search_tool_call(tool):
                         return WebSearchOptions(**tool)
         return None
+
+    @staticmethod
+    def _web_search_tool_call(tool: Dict) -> bool:
+        if tool.get("type", None) == "web_search_preview":
+            return True
+        if "search_context_size" in tool:
+            return True
+        return False
