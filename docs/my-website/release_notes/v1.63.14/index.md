@@ -95,7 +95,7 @@ https://github.com/BerriAI/litellm/pull/9363
 
 ## Logging Integrations
 
-- Support post-call guardrails for streaming responses - https://github.com/BerriAI/litellm/commit/4a31b32a88b7729a032e58ab046079d17000087f [NEEDS DOCS] 
+- Support post-call guardrails for streaming responses [Get Started](../../docs/proxy/guardrails/custom_guardrail#1-write-a-customguardrail-class)
 - Arize [Get Started](../../docs/observability/arize_integration)
    - fix invalid package import [PR](https://github.com/BerriAI/litellm/pull/9338)
    - migrate to using standardloggingpayload for metadata, ensures spans land successfully [PR](https://github.com/BerriAI/litellm/pull/9338)
