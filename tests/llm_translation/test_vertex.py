@@ -1281,7 +1281,10 @@ def vertex_client():
 
 @pytest.fixture
 def encoded_images():
-    image_paths = ["duck.png", "guinea.png"]
+    image_paths = [
+        "./tests/llm_translation/duck.png",
+        "./tests/llm_translation/guinea.png",
+    ]
     return [encode_image_to_base64(path) for path in image_paths]
 
 
