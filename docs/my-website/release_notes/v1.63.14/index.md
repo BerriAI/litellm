@@ -85,7 +85,7 @@ Here's a Demo Instance to test changes:
 ## UI
 
 1. Users Page
-   - Feature: Control default internal user settings [PR](https://github.com/BerriAI/litellm/pull/9374)
+   - Feature: Control default internal user settings [PR](https://github.com/BerriAI/litellm/pull/9328)
 2. Icons:
    - Feature: Replace external "artificialanalysis.ai" icons by local svg [PR](https://github.com/BerriAI/litellm/pull/9374)
 3. Sign In/Sign Out
