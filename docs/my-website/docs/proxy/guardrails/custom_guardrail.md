@@ -128,6 +128,21 @@ class myCustomGuardrail(CustomGuardrail):
                     ):
                         raise ValueError("Guardrail failed Coffee Detected")
 
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_data: dict,
+    ) -> AsyncGenerator[ModelResponseStream, None]:
+        """
+        Passes the entire stream to the guardrail
+
+        This is useful for guardrails that need to see the entire response, such as PII masking.
+
+        See Aim guardrail implementation for an example - https://github.com/BerriAI/litellm/blob/d0e022cfacb8e9ebc5409bb652059b6fd97b45c0/litellm/proxy/guardrails/guardrail_hooks/aim.py#L168
+        """
+        async for item in response:
+            yield item
 
 ```
 
