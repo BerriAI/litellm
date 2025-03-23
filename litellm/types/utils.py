@@ -13,7 +13,6 @@ from openai.types.completion_usage import (
     CompletionUsage,
     PromptTokensDetails,
 )
-from openai.types.llms.openai import FileSearchTool
 from openai.types.moderation import (
     Categories,
     CategoryAppliedInputTypes,
@@ -33,6 +32,7 @@ from .llms.openai import (
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
+    FileSearchTool,
     OpenAIChatCompletionChunk,
     WebSearchOptions,
 )
