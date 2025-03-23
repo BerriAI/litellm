@@ -1,5 +1,5 @@
 # used by CI/CD testing
-openai==1.66.1
+openai==1.68.2
 python-dotenv
 tiktoken
 importlib_metadata

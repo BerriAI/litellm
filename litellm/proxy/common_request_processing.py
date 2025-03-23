@@ -57,7 +57,9 @@ class ProxyBaseLLMRequestProcessing:
             "x-litellm-call-id": call_id,
             "x-litellm-model-id": model_id,
             "x-litellm-cache-key": cache_key,
-            "x-litellm-model-api-base": api_base,
+            "x-litellm-model-api-base": (
+                api_base.split("?")[0] if api_base else None
+            ),  # don't include query params, risk of leaking sensitive info
             "x-litellm-version": version,
             "x-litellm-model-region": model_region,
             "x-litellm-response-cost": str(response_cost),
