@@ -86,8 +86,9 @@ class StandardBuiltInToolCostTracking:
             return search_context_pricing.get("search_context_size_medium", 0.0)
         elif web_search_options.get("search_context_size", None) == "high":
             return search_context_pricing.get("search_context_size_high", 0.0)
-        else:
-            return 0.0
+        return StandardBuiltInToolCostTracking.get_default_cost_for_web_search(
+            model_info
+        )
 
     @staticmethod
     def get_default_cost_for_web_search(model_info: ModelInfo) -> float:
