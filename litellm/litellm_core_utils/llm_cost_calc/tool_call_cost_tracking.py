@@ -5,11 +5,7 @@ Helper utilities for tracking the cost of built-in tools.
 from typing import Any, Dict, Optional
 
 import litellm
-from litellm.types.llms.openai import (
-    ResponseOutputItem,
-    ResponsesAPIResponse,
-    WebSearchOptions,
-)
+from litellm.types.llms.openai import WebSearchOptions
 from litellm.types.utils import (
     ModelInfo,
     ModelResponse,
