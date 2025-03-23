@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.responses.main import aresponses_retrieve, aresponses_delete
 
 router = APIRouter()
 
@@ -106,8 +107,51 @@ async def get_response(
     -H "Authorization: Bearer sk-1234"
     ```
     """
-    # TODO: Implement response retrieval logic
-    pass
+    from litellm.proxy.proxy_server import (
+        add_litellm_data_to_request,
+        general_settings,
+        proxy_config,
+        version,
+    )
+
+    data: Dict = {}
+    try:
+        # Include original request and headers in the data
+        data = await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
+        )
+
+        headers = dict(request.headers)
+        response = await aresponses_retrieve(
+            response_id= response_id, **headers
+        )
+
+        ### RESPONSE HEADERS ###
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        api_base = hidden_params.get("api_base", None) or ""
+
+        fastapi_response.headers.update(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
+                api_base=api_base,
+                version=version,
+            )
+        )
+        return response
+
+    except Exception as e:
+        error_msg = f"{str(e)}"
+        raise ProxyException(
+            message=getattr(e, "message", error_msg),
+            type=getattr(e, "type", "None"),
+            param=getattr(e, "param", "None"),
+            code=getattr(e, "status_code", 500),
+        )
 
 
 @router.delete(
@@ -136,8 +180,48 @@ async def delete_response(
     -H "Authorization: Bearer sk-1234"
     ```
     """
-    # TODO: Implement response deletion logic
-    pass
+    from litellm.proxy.proxy_server import (
+        add_litellm_data_to_request,
+        general_settings,
+        proxy_config,
+        version,
+    )
+    data = {}
+    try:
+        data = await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
+        )
+        headers = dict(request.headers)
+        custom_llm_provider = headers.get("custom_llm_provider")
+        response = await aresponses_delete(
+            response_id= response_id,custom_llm_provider=custom_llm_provider
+        )
+
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        api_base = hidden_params.get("api_base", None) or ""
+
+        fastapi_response.headers.update(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
+                api_base=api_base,
+                version=version,
+            )
+        )
+        return response
+
+    except Exception as e:
+        error_msg = f"{str(e)}"
+        raise ProxyException(
+            message=getattr(e, "message", error_msg),
+            type=getattr(e, "type", "None"),
+            param=getattr(e, "param", "None"),
+            code=getattr(e, "status_code", 500),
+        )
 
 
 @router.get(
