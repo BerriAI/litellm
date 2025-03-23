@@ -272,7 +272,7 @@ async with stdio_client(server_params) as (read, write):
 </TabItem>
 </Tabs>
 
-## Advanced
+## Upcoming Features
 
 :::info
 
