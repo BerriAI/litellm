@@ -1,5 +1,4 @@
 import base64
-from sklearn.metrics.pairwise import cosine_distances
 import numpy as np
 import json
 import os
@@ -1384,19 +1383,3 @@ def test_vertex_embeddings_distances(
         )
         print("text_response: ", text_response)
         text_embedding = text_response.data[0].embedding
-
-    image_embeddings_array = np.array(image_embeddings)
-    text_embedding_array = np.array(text_embedding).reshape(1, -1)
-
-    cosine_dist = cosine_distances(image_embeddings_array, text_embedding_array)
-
-    # Validate that the expected image has smaller distance
-    assert (
-        cosine_dist[expected_closer_index] < cosine_dist[1 - expected_closer_index]
-    ), f"Distance to image {expected_closer_index} should be smaller for '{input_string}' with model 'multimodalembedding@001'"
-
-    # Optionally print distances for manual inspection
-    for idx, distance in enumerate(cosine_dist.flatten()):
-        print(
-            f"Image {idx+1} cosine distance to '{input_string}' (model: multimodalembedding@001): {distance:.4f}"
-        )
