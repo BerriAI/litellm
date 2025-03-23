@@ -70,7 +70,6 @@ Here's a Demo Instance to test changes:
 2. **Bug Fixes**
 
 - Voyage: prompt token on embedding tracking fix - [PR](https://github.com/BerriAI/litellm/commit/56d3e75b330c3c3862dc6e1c51c1210e48f1068e)
-- Streaming - Prevents final chunk w/ usage from being ignored (impacted bedrock streaming + cost tracking) - [PR](https://github.com/BerriAI/litellm/commit/dd2c980d5bb9e1a3b125e364c5d841751e67c96d)
 - Sagemaker - Fix ‘Too little data for declared Content-Length’ error - [PR](https://github.com/BerriAI/litellm/pull/9326)
 - OpenAI-compatible models - fix issue when calling openai-compatible models w/ custom_llm_provider set - [PR](https://github.com/BerriAI/litellm/pull/9355)
 - VertexAI - Embedding ‘outputDimensionality’ support - [PR](https://github.com/BerriAI/litellm/commit/437dbe724620675295f298164a076cbd8019d304)
@@ -79,7 +78,9 @@ Here's a Demo Instance to test changes:
 ## Spend Tracking Improvements
 
 - `litellm_proxy/` - support reading litellm response cost header from proxy, when using client sdk 
-- Reset Budget Job - fix budget reset error on keys/teams/users - [PR](https://github.com/BerriAI/litellm/pull/9329)
+- Reset Budget Job - fix budget reset error on keys/teams/users [PR](https://github.com/BerriAI/litellm/pull/9329)
+- Streaming - Prevents final chunk w/ usage from being ignored (impacted bedrock streaming + cost tracking) [PR](https://github.com/BerriAI/litellm/pull/9314)
+
 
 ## UI
 
