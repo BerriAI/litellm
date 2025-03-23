@@ -38,24 +38,27 @@ class StandardBuiltInToolCostTracking:
         model_info = litellm.get_model_info(
             model=model, custom_llm_provider=custom_llm_provider
         )
+
+        if (
+            standard_built_in_tools_params is not None
+            and standard_built_in_tools_params.get("web_search_options", None)
+            is not None
+        ):
+            return StandardBuiltInToolCostTracking.get_cost_for_web_search(
+                web_search_options=standard_built_in_tools_params.get(
+                    "web_search_options", None
+                ),
+                model_info=model_info,
+            )
+
         if isinstance(response_object, ModelResponse):
-            if (
-                standard_built_in_tools_params is not None
-                and standard_built_in_tools_params.get("web_search_options", None)
-                is not None
-            ):
-                return StandardBuiltInToolCostTracking.get_cost_for_web_search(
-                    web_search_options=standard_built_in_tools_params.get(
-                        "web_search_options", None
-                    ),
-                    model_info=model_info,
-                )
-            elif StandardBuiltInToolCostTracking.response_includes_annotations(
+            if StandardBuiltInToolCostTracking.response_includes_annotations(
                 response_object
             ):
                 return StandardBuiltInToolCostTracking.get_default_cost_for_web_search(
                     model_info
                 )
+
         return 0.0
 
     @staticmethod
