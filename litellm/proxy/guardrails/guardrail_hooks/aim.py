@@ -105,7 +105,9 @@ class AimGuardrail(CustomGuardrail):
         self, data: dict, hook: str, key_alias: Optional[str]
     ) -> None:
         user_email = data.get("metadata", {}).get("headers", {}).get("x-aim-user-email")
-        headers = self._build_aim_headers(hook=hook, key_alias=key_alias, user_email=user_email)
+        headers = self._build_aim_headers(
+            hook=hook, key_alias=key_alias, user_email=user_email
+        )
         print(headers)
         response = await self.async_handler.post(
             f"{self.api_base}/detect/openai",
