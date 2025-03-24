@@ -115,13 +115,13 @@ async def test_openai_web_search_logging_cost_tracking(
     "tools_config,expected_context_size,stream",
     [
         (
-            [{"type": "web_search_preview", "search_context_size": "high"}],
-            "search_context_size_high",
+            [{"type": "web_search_preview", "search_context_size": "low"}],
+            "search_context_size_low",
             True,
         ),
         (
-            [{"type": "web_search_preview", "search_context_size": "high"}],
-            "search_context_size_high",
+            [{"type": "web_search_preview", "search_context_size": "low"}],
+            "search_context_size_low",
             False,
         ),
         ([{"type": "web_search_preview"}], "search_context_size_medium", True),
