@@ -1140,7 +1140,7 @@ def convert_to_gemini_tool_call_result(
 
 
 def convert_to_anthropic_tool_result(
-    message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage]
+    message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
 ) -> AnthropicMessagesToolResultParam:
     """
     OpenAI message with a tool result looks like:
@@ -2458,7 +2458,7 @@ def _convert_to_bedrock_tool_call_invoke(
 
 
 def _convert_to_bedrock_tool_call_result(
-    message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage]
+    message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
 ) -> BedrockContentBlock:
     """
     OpenAI message with a tool result looks like:
@@ -2632,7 +2632,7 @@ def get_user_message_block_or_continue_message(
 def return_assistant_continue_message(
     assistant_continue_message: Optional[
         Union[str, ChatCompletionAssistantMessage]
-    ] = None
+    ] = None,
 ) -> ChatCompletionAssistantMessage:
     if assistant_continue_message and isinstance(assistant_continue_message, str):
         return ChatCompletionAssistantMessage(

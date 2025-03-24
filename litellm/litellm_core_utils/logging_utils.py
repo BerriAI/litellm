@@ -30,7 +30,7 @@ Helper utils used for logging callbacks
 
 
 def convert_litellm_response_object_to_str(
-    response_obj: Union[Any, LiteLLMModelResponse]
+    response_obj: Union[Any, LiteLLMModelResponse],
 ) -> Optional[str]:
     """
     Get the string of the response object from LiteLLM

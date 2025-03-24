@@ -1,5 +1,5 @@
 """
-Contains utils used by OpenAI compatible endpoints 
+Contains utils used by OpenAI compatible endpoints
 """
 
 from typing import Optional

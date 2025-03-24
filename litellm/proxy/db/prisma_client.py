@@ -252,7 +252,7 @@ class PrismaManager:
 
 
 def should_update_prisma_schema(
-    disable_updates: Optional[Union[bool, str]] = None
+    disable_updates: Optional[Union[bool, str]] = None,
 ) -> bool:
     """
     Determines if Prisma Schema updates should be applied during startup.

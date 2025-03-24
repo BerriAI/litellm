@@ -222,7 +222,9 @@ class VertexPassthroughLoggingHandler:
     @staticmethod
     def _get_custom_llm_provider_from_url(url: str) -> str:
         parsed_url = urlparse(url)
-        if parsed_url.hostname and parsed_url.hostname.endswith("generativelanguage.googleapis.com"):
+        if parsed_url.hostname and parsed_url.hostname.endswith(
+            "generativelanguage.googleapis.com"
+        ):
             return litellm.LlmProviders.GEMINI.value
         return litellm.LlmProviders.VERTEX_AI.value
 

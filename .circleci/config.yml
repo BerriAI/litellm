@@ -89,7 +89,7 @@ jobs:
           command: |
             cd litellm
             python -m pip install black
-            python -m black .
+            python -m black --check .
             cd ..
       - run:
           name: Linting Testing
@@ -1103,7 +1103,7 @@ jobs:
           name: Install Helm
           command: |
             curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-      
+
       # Install kind
       - run:
           name: Install Kind
@@ -1111,7 +1111,7 @@ jobs:
             curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
             chmod +x ./kind
             sudo mv ./kind /usr/local/bin/kind
-      
+
       # Install kubectl
       - run:
           name: Install kubectl
@@ -1119,19 +1119,19 @@ jobs:
             curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
             chmod +x kubectl
             sudo mv kubectl /usr/local/bin/
-      
+
       # Create kind cluster
       - run:
           name: Create Kind Cluster
           command: |
             kind create cluster --name litellm-test
-      
+
       # Run helm lint
       - run:
           name: Run helm lint
           command: |
             helm lint ./deploy/charts/litellm-helm
-      
+
       # Run helm tests
       - run:
           name: Run helm tests
@@ -1148,7 +1148,7 @@ jobs:
             # Run the helm tests
             helm test litellm --logs
             helm test litellm --logs
-      
+
       # Cleanup
       - run:
           name: Cleanup
@@ -1881,7 +1881,7 @@ jobs:
           no_output_timeout:
             120m
             # Clean up first container
-      
+
   proxy_build_from_pip_tests:
     # Change from docker to machine executor
     machine:
@@ -2306,7 +2306,7 @@ jobs:
           name: Install Playwright Browsers
           command: |
             npx playwright install
-      
+
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .

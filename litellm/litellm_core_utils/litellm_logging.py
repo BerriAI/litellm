@@ -3591,7 +3591,7 @@ def emit_standard_logging_payload(payload: StandardLoggingPayload):
 
 
 def get_standard_logging_metadata(
-    metadata: Optional[Dict[str, Any]]
+    metadata: Optional[Dict[str, Any]],
 ) -> StandardLoggingMetadata:
     """
     Clean and filter the metadata dictionary to include only the specified keys in StandardLoggingMetadata.

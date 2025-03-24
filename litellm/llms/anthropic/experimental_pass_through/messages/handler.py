@@ -1,6 +1,6 @@
 """
 - call /messages on Anthropic API
-- Make streaming + non-streaming request - just pass it through direct to Anthropic. No need to do anything special here 
+- Make streaming + non-streaming request - just pass it through direct to Anthropic. No need to do anything special here
 - Ensure requests are logged in the DB - stream + non-stream
 
 """

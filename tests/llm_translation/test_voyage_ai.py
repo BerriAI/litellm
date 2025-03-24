@@ -62,7 +62,13 @@ def test_voyage_ai_embedding_prompt_token_mapping():
         client = HTTPHandler()
         litellm.set_verbose = True
 
-        with patch.object(client, "post", return_value=MagicMock(status_code=200, json=lambda: {"usage": {"total_tokens": 120}})) as mock_client:
+        with patch.object(
+            client,
+            "post",
+            return_value=MagicMock(
+                status_code=200, json=lambda: {"usage": {"total_tokens": 120}}
+            ),
+        ) as mock_client:
             response = litellm.embedding(
                 model="voyage/voyage-3-lite",
                 input=["a"],

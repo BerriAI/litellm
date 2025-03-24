@@ -1,5 +1,5 @@
 """
-Support for Snowflake REST API 
+Support for Snowflake REST API
 """
 
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple

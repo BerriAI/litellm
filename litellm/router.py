@@ -613,7 +613,7 @@ class Router:
 
     @staticmethod
     def _create_redis_cache(
-        cache_config: Dict[str, Any]
+        cache_config: Dict[str, Any],
     ) -> Union[RedisCache, RedisClusterCache]:
         """
         Initializes either a RedisCache or RedisClusterCache based on the cache_config.

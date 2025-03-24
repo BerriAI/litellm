@@ -48,7 +48,7 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
 
 
 def validate_custom_validate_return_type(
-    fn: Optional[Callable[..., Any]]
+    fn: Optional[Callable[..., Any]],
 ) -> Optional[Callable[..., Literal[True]]]:
     if fn is None:
         return None

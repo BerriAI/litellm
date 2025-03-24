@@ -1,7 +1,7 @@
 """
 KEY MANAGEMENT
 
-All /key management endpoints 
+All /key management endpoints
 
 /key/generate
 /key/info

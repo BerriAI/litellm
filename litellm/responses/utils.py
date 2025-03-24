@@ -60,7 +60,7 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def get_requested_response_api_optional_param(
-        params: Dict[str, Any]
+        params: Dict[str, Any],
     ) -> ResponsesAPIOptionalRequestParams:
         """
         Filter parameters to only include those defined in ResponsesAPIOptionalRequestParams.

@@ -10,11 +10,16 @@ from fastapi.exceptions import HTTPException
 from httpx import Request, Response
 
 from litellm import DualCache
-from litellm.proxy.guardrails.guardrail_hooks.aim import AimGuardrail, AimGuardrailMissingSecrets
+from litellm.proxy.guardrails.guardrail_hooks.aim import (
+    AimGuardrail,
+    AimGuardrailMissingSecrets,
+)
 from litellm.proxy.proxy_server import StreamingCallbackError, UserAPIKeyAuth
 from litellm.types.utils import ModelResponseStream
 
-sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
 import litellm
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
@@ -84,7 +89,9 @@ async def test_callback(mode: str):
         ],
         config_file_path="",
     )
-    aim_guardrails = [callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)]
+    aim_guardrails = [
+        callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)
+    ]
     assert len(aim_guardrails) == 1
     aim_guardrail = aim_guardrails[0]
 
@@ -98,7 +105,11 @@ async def test_callback(mode: str):
         with patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
             return_value=Response(
-                json={"detected": True, "details": {}, "detection_message": "Jailbreak detected"},
+                json={
+                    "detected": True,
+                    "details": {},
+                    "detection_message": "Jailbreak detected",
+                },
                 status_code=200,
                 request=Request(method="POST", url="http://aim"),
             ),
@@ -134,7 +145,9 @@ async def test_post_call_stream__all_chunks_are_valid(monkeypatch, length: int):
         ],
         config_file_path="",
     )
-    aim_guardrails = [callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)]
+    aim_guardrails = [
+        callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)
+    ]
     assert len(aim_guardrails) == 1
     aim_guardrail = aim_guardrails[0]
 
@@ -150,7 +163,9 @@ async def test_post_call_stream__all_chunks_are_valid(monkeypatch, length: int):
 
     websocket_mock = AsyncMock()
 
-    messages_from_aim = [b'{"verified_chunk": {"choices": [{"delta": {"content": "A"}}]}}'] * length
+    messages_from_aim = [
+        b'{"verified_chunk": {"choices": [{"delta": {"content": "A"}}]}}'
+    ] * length
     messages_from_aim.append(b'{"done": true}')
     websocket_mock.recv = ReceiveMock(messages_from_aim, delay=0.2)
 
@@ -158,7 +173,9 @@ async def test_post_call_stream__all_chunks_are_valid(monkeypatch, length: int):
     async def connect_mock(*args, **kwargs):
         yield websocket_mock
 
-    monkeypatch.setattr("litellm.proxy.guardrails.guardrail_hooks.aim.connect", connect_mock)
+    monkeypatch.setattr(
+        "litellm.proxy.guardrails.guardrail_hooks.aim.connect", connect_mock
+    )
 
     results = []
     async for result in aim_guardrail.async_post_call_streaming_iterator_hook(
@@ -188,7 +205,9 @@ async def test_post_call_stream__blocked_chunks(monkeypatch):
         ],
         config_file_path="",
     )
-    aim_guardrails = [callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)]
+    aim_guardrails = [
+        callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)
+    ]
     assert len(aim_guardrails) == 1
     aim_guardrail = aim_guardrails[0]
 
@@ -213,7 +232,9 @@ async def test_post_call_stream__blocked_chunks(monkeypatch):
     async def connect_mock(*args, **kwargs):
         yield websocket_mock
 
-    monkeypatch.setattr("litellm.proxy.guardrails.guardrail_hooks.aim.connect", connect_mock)
+    monkeypatch.setattr(
+        "litellm.proxy.guardrails.guardrail_hooks.aim.connect", connect_mock
+    )
 
     results = []
     with pytest.raises(StreamingCallbackError, match="Jailbreak detected"):
@@ -227,4 +248,7 @@ async def test_post_call_stream__blocked_chunks(monkeypatch):
     # Chunks that were received before the blocking message should be returned as usual.
     assert len(results) == 1
     assert results[0].choices[0].delta.content == "A"
-    assert websocket_mock.send.mock_calls == [call('{"choices": [{"delta": {"content": "A"}}]}'), call('{"done": true}')]
+    assert websocket_mock.send.mock_calls == [
+        call('{"choices": [{"delta": {"content": "A"}}]}'),
+        call('{"done": true}'),
+    ]

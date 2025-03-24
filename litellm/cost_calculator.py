@@ -820,7 +820,7 @@ def completion_cost(  # noqa: PLR0915
 
 
 def get_response_cost_from_hidden_params(
-    hidden_params: Union[dict, BaseModel]
+    hidden_params: Union[dict, BaseModel],
 ) -> Optional[float]:
     if isinstance(hidden_params, BaseModel):
         _hidden_params_dict = hidden_params.model_dump()

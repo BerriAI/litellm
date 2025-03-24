@@ -471,7 +471,7 @@ def load_credentials_from_list(kwargs: dict):
 
 
 def get_dynamic_callbacks(
-    dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]]
+    dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]],
 ) -> List:
     returned_callbacks = litellm.callbacks.copy()
     if dynamic_callbacks:
@@ -6117,7 +6117,7 @@ def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
 
 
 def validate_chat_completion_tool_choice(
-    tool_choice: Optional[Union[dict, str]]
+    tool_choice: Optional[Union[dict, str]],
 ) -> Optional[Union[dict, str]]:
     """
     Confirm the tool choice is passed in the OpenAI format.

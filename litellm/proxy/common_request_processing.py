@@ -350,7 +350,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _get_pre_call_type(
-        route_type: Literal["acompletion", "aresponses"]
+        route_type: Literal["acompletion", "aresponses"],
     ) -> Literal["completion", "responses"]:
         if route_type == "acompletion":
             return "completion"

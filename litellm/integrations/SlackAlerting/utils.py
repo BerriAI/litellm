@@ -17,7 +17,7 @@ else:
 
 
 def process_slack_alerting_variables(
-    alert_to_webhook_url: Optional[Dict[AlertType, Union[List[str], str]]]
+    alert_to_webhook_url: Optional[Dict[AlertType, Union[List[str], str]]],
 ) -> Optional[Dict[AlertType, Union[List[str], str]]]:
     """
     process alert_to_webhook_url

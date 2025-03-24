@@ -138,8 +138,17 @@ class ModelParamHelper:
                 TranscriptionCreateParamsNonStreaming,
                 TranscriptionCreateParamsStreaming,
             )
-            non_streaming_kwargs = set(getattr(TranscriptionCreateParamsNonStreaming, "__annotations__", {}).keys())
-            streaming_kwargs = set(getattr(TranscriptionCreateParamsStreaming, "__annotations__", {}).keys())
+
+            non_streaming_kwargs = set(
+                getattr(
+                    TranscriptionCreateParamsNonStreaming, "__annotations__", {}
+                ).keys()
+            )
+            streaming_kwargs = set(
+                getattr(
+                    TranscriptionCreateParamsStreaming, "__annotations__", {}
+                ).keys()
+            )
 
             all_transcription_kwargs = non_streaming_kwargs.union(streaming_kwargs)
             return all_transcription_kwargs

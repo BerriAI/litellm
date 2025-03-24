@@ -1,14 +1,14 @@
 """
-Support for o1/o3 model family 
+Support for o1/o3 model family
 
 https://platform.openai.com/docs/guides/reasoning
 
 Translations handled by LiteLLM:
-- modalities: image => drop param (if user opts in to dropping param)  
-- role: system ==> translate to role 'user' 
-- streaming => faked by LiteLLM 
-- Tools, response_format =>  drop param (if user opts in to dropping param) 
-- Logprobs => drop param (if user opts in to dropping param) 
+- modalities: image => drop param (if user opts in to dropping param)
+- role: system ==> translate to role 'user'
+- streaming => faked by LiteLLM
+- Tools, response_format =>  drop param (if user opts in to dropping param)
+- Logprobs => drop param (if user opts in to dropping param)
 """
 
 from typing import List, Optional

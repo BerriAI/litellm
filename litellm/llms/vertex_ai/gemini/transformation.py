@@ -1,5 +1,5 @@
 """
-Transformation logic from OpenAI format to Gemini format. 
+Transformation logic from OpenAI format to Gemini format.
 
 Why separate file? Make it easy to see how transformation works
 """

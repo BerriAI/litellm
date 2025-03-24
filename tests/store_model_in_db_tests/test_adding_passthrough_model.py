@@ -1,12 +1,12 @@
 """
 Test adding a pass through assemblyai model + api key + api base to the db
-wait 20 seconds 
-make request 
+wait 20 seconds
+make request
 
-Cases to cover 
-1. user points api base to <proxy-base>/assemblyai 
+Cases to cover
+1. user points api base to <proxy-base>/assemblyai
 2. user points api base to <proxy-base>/asssemblyai/us
-3. user points api base to <proxy-base>/assemblyai/eu 
+3. user points api base to <proxy-base>/assemblyai/eu
 4. Bad API Key / credential - 401
 """
 

@@ -1,4 +1,3 @@
-
 import os
 import io
 import pathlib
@@ -14,13 +13,16 @@ import litellm
 
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 
+
 @pytest.fixture
 def test_bytes():
-    return b'litellm', b'litellm'
+    return b"litellm", b"litellm"
+
 
 @pytest.fixture
 def test_io_bytes(test_bytes):
     return io.BytesIO(test_bytes[0]), test_bytes[1]
+
 
 @pytest.fixture
 def test_file():
@@ -33,13 +35,14 @@ def test_file():
     f.seek(0)
     return f, content
 
+
 @pytest.mark.parametrize(
     "fixture_name",
     [
         "test_bytes",
         "test_io_bytes",
         "test_file",
-    ]
+    ],
 )
 def test_audio_file_handling(fixture_name, request):
     handler = BaseLLMHTTPHandler()

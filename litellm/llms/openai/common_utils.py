@@ -172,7 +172,7 @@ class BaseOpenAILLM:
 
     @staticmethod
     def get_openai_client_initialization_param_fields(
-        client_type: Literal["openai", "azure"]
+        client_type: Literal["openai", "azure"],
     ) -> List[str]:
         """Returns a list of fields that are used to initialize the OpenAI client"""
         import inspect

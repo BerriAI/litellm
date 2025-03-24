@@ -2,11 +2,11 @@
 ## Common auth checks between jwt + key based auth
 """
 Got Valid Token from Cache, DB
-Run checks for: 
+Run checks for:
 
 1. If user can call model
-2. If user is in budget 
-3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget 
+2. If user is in budget
+3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
 """
 import asyncio
 import re

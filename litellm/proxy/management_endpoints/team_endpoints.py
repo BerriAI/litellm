@@ -1,7 +1,7 @@
 """
 TEAM MANAGEMENT
 
-All /team management endpoints 
+All /team management endpoints
 
 /team/new
 /team/info

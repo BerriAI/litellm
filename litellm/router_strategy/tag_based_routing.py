@@ -123,7 +123,7 @@ async def get_deployments_for_tag(
 
 
 def _get_tags_from_request_kwargs(
-    request_kwargs: Optional[Dict[Any, Any]] = None
+    request_kwargs: Optional[Dict[Any, Any]] = None,
 ) -> List[str]:
     """
     Helper to get tags from request kwargs

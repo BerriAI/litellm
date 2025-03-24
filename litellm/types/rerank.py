@@ -21,7 +21,6 @@ class RerankRequest(BaseModel):
     max_tokens_per_doc: Optional[int] = None
 
 
-
 class OptionalRerankParams(TypedDict, total=False):
     query: str
     top_n: Optional[int]

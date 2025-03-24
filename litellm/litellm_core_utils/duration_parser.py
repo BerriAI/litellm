@@ -1,7 +1,7 @@
 """
 Helper utilities for parsing durations - 1s, 1d, 10d, 30d, 1mo, 2mo
 
-duration_in_seconds is used in diff parts of the code base, example 
+duration_in_seconds is used in diff parts of the code base, example
 - Router - Provider budget routing
 - Proxy - Key, Team Generation
 """

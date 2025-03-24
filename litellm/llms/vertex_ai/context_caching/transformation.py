@@ -1,5 +1,5 @@
 """
-Transformation logic for context caching. 
+Transformation logic for context caching.
 
 Why separate file? Make it easy to see how transformation works
 """
@@ -18,7 +18,7 @@ from ..gemini.transformation import (
 
 
 def get_first_continuous_block_idx(
-    filtered_messages: List[Tuple[int, AllMessageValues]]  # (idx, message)
+    filtered_messages: List[Tuple[int, AllMessageValues]],  # (idx, message)
 ) -> int:
     """
     Find the array index that ends the first continuous sequence of message blocks.

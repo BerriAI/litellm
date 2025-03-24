@@ -4,7 +4,7 @@ This is a file for the AWS Secret Manager Integration
 Relevant issue: https://github.com/BerriAI/litellm/issues/1883
 
 Requires:
-* `os.environ["AWS_REGION_NAME"], 
+* `os.environ["AWS_REGION_NAME"],
 * `pip install boto3>=1.28.57`
 """
 

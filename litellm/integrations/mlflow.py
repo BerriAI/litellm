@@ -54,8 +54,10 @@ class MlflowLogger(CustomLogger):
 
         inputs = self._construct_input(kwargs)
         input_messages = inputs.get("messages", [])
-        output_messages = [c.message.model_dump(exclude_none=True)
-                           for c in getattr(response_obj, "choices", [])]
+        output_messages = [
+            c.message.model_dump(exclude_none=True)
+            for c in getattr(response_obj, "choices", [])
+        ]
         if messages := [*input_messages, *output_messages]:
             set_span_chat_messages(span, messages)
         if tools := inputs.get("tools"):

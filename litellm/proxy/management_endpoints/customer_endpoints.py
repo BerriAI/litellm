@@ -1,9 +1,9 @@
 """
 CUSTOMER MANAGEMENT
 
-All /customer management endpoints 
+All /customer management endpoints
 
-/customer/new   
+/customer/new
 /customer/info
 /customer/update
 /customer/delete

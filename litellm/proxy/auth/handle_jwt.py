@@ -1,9 +1,9 @@
 """
-Supports using JWT's for authenticating into the proxy. 
+Supports using JWT's for authenticating into the proxy.
 
-Currently only supports admin. 
+Currently only supports admin.
 
-JWT token must have 'litellm_proxy_admin' in scope. 
+JWT token must have 'litellm_proxy_admin' in scope.
 """
 
 import json

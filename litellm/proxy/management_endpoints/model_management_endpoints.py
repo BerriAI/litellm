@@ -3,7 +3,7 @@ Allow proxy admin to add/update/delete models in the db
 
 Currently most endpoints are in `proxy_server.py`, but those should  be moved here over time.
 
-Endpoints here: 
+Endpoints here:
 
 model/{model_id}/update - PATCH endpoint for model update.
 """
