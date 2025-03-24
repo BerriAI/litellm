@@ -3,6 +3,7 @@ LiteLLM MCP Server Routes
 """
 
 import asyncio
+from typing import Any, Dict
 
 import mcp.types as types
 from anyio import BrokenResourceError
@@ -16,7 +17,6 @@ from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
-from litellm.types.mcp_server.tool_registry import *
 
 from .sse_transport import SseServerTransport
 
@@ -55,7 +55,7 @@ async def list_tools() -> list[types.Tool]:
 
 @server.call_tool()
 async def handle_call_tool(
-    name: str, arguments: dict | None
+    name: str, arguments: Dict[str, Any] | None
 ) -> list[types.TextContent | types.ImageContent | types.EmbeddedResource]:
     """
     Call a specific tool with the provided arguments

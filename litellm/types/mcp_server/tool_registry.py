@@ -9,6 +9,9 @@ class MCPTool(BaseModel):
     input_schema: Dict[str, Any]
     handler: Callable
 
+    class Config:
+        arbitrary_types_allowed = True
+
 
 class ToolSchema(BaseModel):
     name: str
