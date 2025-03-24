@@ -14,7 +14,6 @@ numpy==2.1.1 # semantic caching
 prisma==0.11.0 # for db
 mangum==0.17.0 # for aws lambda functions
 pynacl==1.5.0 # for encrypting keys
-mcp==1.4.1    # for MCP server
 google-cloud-aiplatform==1.47.0 # for vertex ai calls
 anthropic[vertex]==0.21.3
 google-generativeai==0.5.0 # for vertex ai calls
@@ -52,4 +51,5 @@ tenacity==8.2.3  # for retrying requests, when litellm.num_retries set
 pydantic==2.10.0 # proxy + openai req.
 jsonschema==4.22.0 # validating json schema
 websockets==13.1.0 # for realtime API
+mcp==1.4.1    # for MCP server
 ####
