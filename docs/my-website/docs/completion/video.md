@@ -4,7 +4,7 @@ import TabItem from '@theme/TabItem';
 # Using Video Models
 
 ## Quick Start
-Example passing images to a model 
+Example passing videos to a model 
 
 
 ## Proxy Config setup
@@ -41,16 +41,14 @@ files_settings:
 This configuration:
 - Sets up storage providers (GCS and S3) with their retention policies
 - Configures provider-specific file endpoints for Azure and OpenAI
-- Retention is enforced through bucket lifecycle rules
-- All files uploaded will follow these retention settings
 
 ## 1. Local File and process on Vertex + Bedrock 
 
 When uploading a local file, the process follows these steps:
 
 1. Client makes a POST request to `/files` endpoint with the local file
-2. Client MUST specify required storage location(s) based on intended model usage
-3. LiteLLM uploads the file to specified storage locations
+2. Client MUST specify required storage custom_llm_provider(s) based on intended model usage
+3. LiteLLM uploads the file to specified custom_llm_provider(s)
 4. A file ID is returned to the client
 5. Files have a 7-day retention policy (configured by admin)
 
@@ -63,15 +61,6 @@ curl https://api.litellm.ai/v1/files \
   -F custom_llm_provider='["vertex_ai"]'  # Required: specify ["vertex_ai"], ["bedrock"], or ["vertex_ai", "bedrock"]
 ```
 
-You can optionally specify storage locations:
-
-```bash
-curl https://api.litellm.ai/v1/files \
-  -H "Authorization: Bearer sk-1234" \
-  -F purpose="fine-tune" \
-  -F file="@mydata.jsonl" \
-  -F custom_llm_provider='["vertex_ai"]'  # or ["vertex_ai", "bedrock"]
-```
 
 After uploading, you can use the file_id in a /chat/completions request:
 
@@ -101,7 +90,7 @@ curl "https://api.litellm.ai/v1/chat/completions" \
 
 ## 2. Existing file in S3 and process on Vertex + Bedrock 
 
-For files already in S3, you can avoid downloading and re-uploading by using the `/upload` endpoint:
+For files already in S3, you can avoid downloading and re-uploading by specifying the `source` parameter:
 
 ```bash
 # custom_llm_provider is required
@@ -110,11 +99,11 @@ curl -X POST "https://api.litellm.ai/files" \
   -H "Content-Type: application/json" \
   -d '{
     "source": "bedrock://your-bedrock-bucket/path/to/mydata.jsonl",
-    "custom_llm_provider": ["vertex_ai"]  # Required: specify target storage location
+    "custom_llm_provider": ["vertex_ai"]  # Required: specify target custom_llm_provider
   }'
 ```
 
-This performs a direct copy from S3 to the specified storage location(s), which is more efficient than downloading and re-uploading.
+This performs a direct copy from S3 to the specified custom_llm_provider(s), which is more efficient than downloading and re-uploading.
 
 After the S3 file is copied, you can use the returned file_id in your /chat/completions request:
 
@@ -146,7 +135,7 @@ curl "https://api.litellm.ai/v1/chat/completions" \
 ## Best Practices
 
 **Storage Location Selection**: 
-   - You MUST specify storage locations based on your model requirements
+   - You MUST specify custom_llm_provider based on your model requirements
    - For Vertex AI models, specify `["vertex_ai"]`
    - For Bedrock models, specify `["bedrock"]`
    - For fallback scenarios, specify both `["vertex_ai", "bedrock"]`
