@@ -90,7 +90,7 @@ curl "https://api.litellm.ai/v1/chat/completions" \
 
 ## 2. Existing file in S3 and process on Vertex + Bedrock 
 
-For files already in S3, you can avoid downloading and re-uploading by specifying the `source` parameter:
+For files already in S3, you can avoid downloading and re-uploading by using a presigned URL:
 
 ```bash
 # custom_llm_provider is required
@@ -98,12 +98,12 @@ curl -X POST "https://api.litellm.ai/files" \
   -H "Authorization: Bearer sk-1234" \
   -H "Content-Type: application/json" \
   -d '{
-    "source": "bedrock://your-bedrock-bucket/path/to/mydata.jsonl",
+    "source": "https://your-bucket.s3.amazonaws.com/path/to/mydata.jsonl?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=...",
     "custom_llm_provider": ["vertex_ai"]  # Required: specify target custom_llm_provider
   }'
 ```
 
-This performs a direct copy from S3 to the specified custom_llm_provider(s), which is more efficient than downloading and re-uploading.
+This performs a direct copy from the S3 presigned URL to the specified custom_llm_provider(s), which is more efficient than downloading and re-uploading.
 
 After the S3 file is copied, you can use the returned file_id in your /chat/completions request:
 
