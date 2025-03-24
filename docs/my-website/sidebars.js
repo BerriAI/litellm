@@ -248,6 +248,7 @@ const sidebars = {
         "completion/web_search",
         "completion/document_understanding",
         "completion/vision",
+        "completion/video",
         "completion/json_mode",
         "reasoning_content",
         "completion/prompt_caching",
