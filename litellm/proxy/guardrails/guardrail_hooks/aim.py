@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from websockets.asyncio.client import ClientConnection, connect
 
 from litellm import DualCache
+from litellm._version import version as litellm_version
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.custom_httpx.http_handler import (
@@ -104,11 +105,11 @@ class AimGuardrail(CustomGuardrail):
         self, data: dict, hook: str, key_alias: Optional[str]
     ) -> None:
         user_email = data.get("metadata", {}).get("headers", {}).get("x-aim-user-email")
+        headers = self._build_aim_headers(hook=hook, key_alias=key_alias, user_email=user_email)
+        print(headers)
         response = await self.async_handler.post(
             f"{self.api_base}/detect/openai",
-            headers=self._build_aim_headers(
-                hook=hook, key_alias=key_alias, user_email=user_email
-            ),
+            headers=headers,
             json={"messages": data.get("messages", [])},
         )
         response.raise_for_status()
@@ -152,10 +153,11 @@ class AimGuardrail(CustomGuardrail):
     def _build_aim_headers(
         self, *, hook: str, key_alias: Optional[str], user_email: Optional[str]
     ):
-        headers = (
+        return (
             {
                 "Authorization": f"Bearer {self.api_key}",
                 "x-aim-litellm-hook": hook,
+                "x-aim-litellm-version": litellm_version,
             }
             | ({"x-aim-user-email": user_email} if user_email else {})
             | (
@@ -166,8 +168,6 @@ class AimGuardrail(CustomGuardrail):
                 else {}
             )
         )
-
-        return headers
 
     async def async_post_call_success_hook(
         self,
