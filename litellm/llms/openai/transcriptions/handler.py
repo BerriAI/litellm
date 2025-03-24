@@ -89,9 +89,14 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         if "response_format" not in data or (
             data["response_format"] == "text" or data["response_format"] == "json"
         ):
-            data["response_format"] = (
-                "verbose_json"  # ensures 'duration' is received - used for cost calculation
-            )
+            # NOTE:
+            # THIS IS A HACK TO ALLOW OPENAI 'GPT-4o' TRANSCRIBE MODELS TO WORK
+            if 'transcribe' in data['model']:
+                data['response_format'] = data['response_format']
+            else:
+                data["response_format"] = (
+                    "verbose_json"  # ensures 'duration' is received - used for cost calculation
+                )
 
         if atranscription is True:
             return self.async_audio_transcriptions(  # type: ignore
