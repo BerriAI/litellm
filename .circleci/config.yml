@@ -870,6 +870,7 @@ jobs:
           name: Install Dependencies
           command: |
             python -m pip install --upgrade pip
+            pip install numpydoc
             python -m pip install -r requirements.txt
             pip install "respx==0.21.1"
             pip install "pytest==7.3.1"
@@ -878,7 +879,6 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
-            pip install numpydoc
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
