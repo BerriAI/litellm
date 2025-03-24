@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import json
 import os
@@ -11,6 +12,10 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
 
+from unittest.mock import patch
+
+import litellm
+from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.proxy_server import app, prisma_client
 
 
@@ -400,3 +405,28 @@ async def test_ui_view_spend_logs_unauthorized(client):
         headers={"Authorization": "Bearer invalid-token"},
     )
     assert response.status_code == 401 or response.status_code == 403
+
+
+class TestSpendLogsPayload:
+    @pytest.mark.asyncio
+    async def test_spend_logs_payload_api_base_e2e(self):
+        litellm.callbacks = [_ProxyDBLogger(message_logging=False)]
+        # litellm._turn_on_debug()
+
+        with patch.object(
+            litellm.proxy.proxy_server, "_set_spend_logs_payload"
+        ) as mock_client:
+            response = await litellm.acompletion(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": "Hello, world!"}],
+                mock_response="Hello, world!",
+            )
+
+            assert response.choices[0].message.content == "Hello, world!"
+
+            await asyncio.sleep(1)
+
+            mock_client.assert_called_once()
+
+    def test_spend_logs_payload_with_prompts_enabled(self):
+        pass
