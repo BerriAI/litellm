@@ -3,14 +3,17 @@ LiteLLM MCP Server Routes
 """
 
 import asyncio
-from typing import Any, Dict
+from typing import Any, Dict, List, Union
 
-import mcp.types as types
 from anyio import BrokenResourceError
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
+from mcp.types import EmbeddedResource as MCPEmbeddedResource
+from mcp.types import ImageContent as MCPImageContent
+from mcp.types import TextContent as MCPTextContent
+from mcp.types import Tool as MCPTool
 from pydantic import ValidationError
 
 from litellm._logging import verbose_logger
@@ -36,14 +39,14 @@ sse = SseServerTransport("/mcp/sse/messages")
 
 
 @server.list_tools()
-async def list_tools() -> list[types.Tool]:
+async def list_tools() -> list[MCPTool]:
     """
     List all available tools
     """
     tools = []
     for tool in global_mcp_tool_registry.list_tools():
         tools.append(
-            types.Tool(
+            MCPTool(
                 name=tool.name,
                 description=tool.description,
                 inputSchema=tool.input_schema,
@@ -56,7 +59,7 @@ async def list_tools() -> list[types.Tool]:
 @server.call_tool()
 async def handle_call_tool(
     name: str, arguments: Dict[str, Any] | None
-) -> list[types.TextContent | types.ImageContent | types.EmbeddedResource]:
+) -> List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]:
     """
     Call a specific tool with the provided arguments
     """
@@ -68,9 +71,9 @@ async def handle_call_tool(
 
     try:
         result = tool.handler(**arguments)
-        return [types.TextContent(text=str(result), type="text")]
+        return [MCPTextContent(text=str(result), type="text")]
     except Exception as e:
-        return [types.TextContent(text=f"Error: {str(e)}", type="text")]
+        return [MCPTextContent(text=f"Error: {str(e)}", type="text")]
 
 
 @router.get("/", response_class=StreamingResponse)
