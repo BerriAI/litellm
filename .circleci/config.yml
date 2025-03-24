@@ -7,7 +7,7 @@ orbs:
 jobs:
   local_testing:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.13.1
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -126,7 +126,7 @@ jobs:
             - local_testing_coverage
   langfuse_logging_unit_tests:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.13.1
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -610,7 +610,7 @@ jobs:
             - litellm_assistants_api_coverage
   load_testing:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.13.1
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
