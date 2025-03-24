@@ -580,7 +580,6 @@ class TestSpendLogsPayload:
                         payload[key] == value
                     ), f"Expected {key} to be {value}, but got {payload[key]}"
 
-    @pytest.mark.skip(reason="Test found bug, let's fix and repush.")
     @pytest.mark.asyncio
     async def test_spend_logs_payload_success_log_with_router(self):
         from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -597,6 +596,9 @@ class TestSpendLogsPayload:
                     "litellm_params": {
                         "model": "claude-3-7-sonnet-20250219",
                     },
+                    "model_info": {
+                        "id": "my-unique-model-id",
+                    },
                 }
             ]
         )
@@ -609,7 +611,7 @@ class TestSpendLogsPayload:
             client, "post", side_effect=self.mock_anthropic_response
         ):
             response = await router.acompletion(
-                model="claude-3-7-sonnet-20250219",
+                model="my-anthropic-model-group",
                 messages=[{"role": "user", "content": "Hello, world!"}],
                 metadata={"user_api_key_end_user_id": "test_user_1"},
                 client=client,
@@ -651,7 +653,7 @@ class TestSpendLogsPayload:
                     "end_user": "test_user_1",
                     "api_base": "https://api.anthropic.com/v1/messages",
                     "model_group": "my-anthropic-model-group",
-                    "model_id": "",
+                    "model_id": "my-unique-model-id",
                     "requester_ip_address": None,
                     "custom_llm_provider": "anthropic",
                     "messages": "{}",
