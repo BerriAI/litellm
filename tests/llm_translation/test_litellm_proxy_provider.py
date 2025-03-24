@@ -447,3 +447,5 @@ def test_litellm_gateway_from_sdk_with_response_cost_in_additional_headers():
             ]
             == "120"
         )
+
+        assert response._hidden_params["response_cost"] == 120
