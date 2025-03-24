@@ -15,6 +15,7 @@ sys.path.insert(
 from unittest.mock import patch
 
 import litellm
+from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.proxy_server import app, prisma_client
 
@@ -415,11 +416,12 @@ class TestSpendLogsPayload:
 
         with patch.object(
             litellm.proxy.proxy_server, "_set_spend_logs_payload"
-        ) as mock_client:
+        ) as mock_client, patch.object(litellm.proxy.proxy_server, "prisma_client"):
             response = await litellm.acompletion(
                 model="gpt-4o",
                 messages=[{"role": "user", "content": "Hello, world!"}],
                 mock_response="Hello, world!",
+                metadata={"user_api_key_end_user_id": "test_user_1"},
             )
 
             assert response.choices[0].message.content == "Hello, world!"
@@ -427,6 +429,58 @@ class TestSpendLogsPayload:
             await asyncio.sleep(1)
 
             mock_client.assert_called_once()
+
+            kwargs = mock_client.call_args.kwargs
+            payload: SpendLogsPayload = kwargs["payload"]
+            expected_payload = SpendLogsPayload(
+                **{
+                    "request_id": "chatcmpl-34df56d5-4807-45c1-bb99-61e52586b802",
+                    "call_type": "acompletion",
+                    "api_key": "",
+                    "cache_hit": "None",
+                    "startTime": datetime.datetime(
+                        2025, 3, 24, 22, 2, 42, 975883, tzinfo=datetime.timezone.utc
+                    ),
+                    "endTime": datetime.datetime(
+                        2025, 3, 24, 22, 2, 42, 989132, tzinfo=datetime.timezone.utc
+                    ),
+                    "completionStartTime": datetime.datetime(
+                        2025, 3, 24, 22, 2, 42, 989132, tzinfo=datetime.timezone.utc
+                    ),
+                    "model": "gpt-4o",
+                    "user": "",
+                    "team_id": "",
+                    "metadata": '{"applied_guardrails": [], "batch_models": null, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": null}}',
+                    "cache_key": "Cache OFF",
+                    "spend": 0.00022500000000000002,
+                    "total_tokens": 30,
+                    "prompt_tokens": 10,
+                    "completion_tokens": 20,
+                    "request_tags": "[]",
+                    "end_user": "test_user_1",
+                    "api_base": "",
+                    "model_group": "",
+                    "model_id": "",
+                    "requester_ip_address": None,
+                    "custom_llm_provider": "openai",
+                    "messages": "{}",
+                    "response": "{}",
+                }
+            )
+
+            for key, value in expected_payload.items():
+                if key in [
+                    "request_id",
+                    "startTime",
+                    "endTime",
+                    "completionStartTime",
+                    "endTime",
+                ]:
+                    assert payload[key] is not None
+                else:
+                    assert (
+                        payload[key] == value
+                    ), f"Expected {key} to be {value}, but got {payload[key]}"
 
     def test_spend_logs_payload_with_prompts_enabled(self):
         pass
