@@ -320,7 +320,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         drop_params: bool,
     ) -> Dict:
         for param, value in non_default_params.items():
-            print("ALL PARAMS", param)
             if param == "temperature":
                 optional_params["temperature"] = value
             if param == "top_p":
