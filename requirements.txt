@@ -51,5 +51,5 @@ tenacity==8.2.3  # for retrying requests, when litellm.num_retries set
 pydantic==2.10.0 # proxy + openai req.
 jsonschema==4.22.0 # validating json schema
 websockets==13.1.0 # for realtime API
-mcp==1.4.1    # for MCP server
+mcp==1.5.0    # for MCP server
 ####
