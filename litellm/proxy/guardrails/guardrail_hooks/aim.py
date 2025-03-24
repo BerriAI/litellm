@@ -155,15 +155,22 @@ class AimGuardrail(CustomGuardrail):
     def _build_aim_headers(
         self, *, hook: str, key_alias: Optional[str], user_email: Optional[str]
     ):
+        """
+        A helper function to build the http headers that are required by AIM guardrails.
+        """
         return (
             {
                 "Authorization": f"Bearer {self.api_key}",
+                # Used by Aim to apply only the guardrails that should be applied in a specific request phase.
                 "x-aim-litellm-hook": hook,
+                # Used by Aim to track LiteLLM version and provide backward compatibility.
                 "x-aim-litellm-version": litellm_version,
             }
+            # Used by Aim to track guardrails violations by user.
             | ({"x-aim-user-email": user_email} if user_email else {})
             | (
                 {
+                    # Used by Aim apply only the guardrails that are associated with the key alias.
                     "x-aim-litellm-key-alias": key_alias,
                 }
                 if key_alias
