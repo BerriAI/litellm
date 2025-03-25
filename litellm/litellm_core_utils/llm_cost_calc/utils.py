@@ -157,12 +157,17 @@ def generic_cost_per_token(
             cast(
                 Optional[int], getattr(usage.prompt_tokens_details, "text_tokens", None)
             )
-            or usage.prompt_tokens  # default to prompt tokens, if this field is not set
+            or 0  # default to prompt tokens, if this field is not set
         )
         audio_tokens = (
             cast(Optional[int], getattr(usage.prompt_tokens_details, "audio_tokens", 0))
             or 0
         )
+
+    ## EDGE CASE - text tokens not set inside PromptTokensDetails
+    if text_tokens == 0:
+        text_tokens = usage.prompt_tokens - cache_hit_tokens - audio_tokens
+
     prompt_base_cost = _get_prompt_token_base_cost(model_info=model_info, usage=usage)
 
     prompt_cost = float(text_tokens) * prompt_base_cost
@@ -194,6 +199,37 @@ def generic_cost_per_token(
     completion_base_cost = _get_completion_token_base_cost(
         model_info=model_info, usage=usage
     )
-    completion_cost = usage["completion_tokens"] * completion_base_cost
+    text_tokens = usage.completion_tokens
+    audio_tokens = 0
+    if usage.completion_tokens_details is not None:
+        audio_tokens = (
+            cast(
+                Optional[int],
+                getattr(usage.completion_tokens_details, "audio_tokens", 0),
+            )
+            or 0
+        )
+        text_tokens = (
+            cast(
+                Optional[int],
+                getattr(usage.completion_tokens_details, "text_tokens", None),
+            )
+            or usage.completion_tokens  # default to completion tokens, if this field is not set
+        )
+
+    ## TEXT COST
+    completion_cost = float(text_tokens) * completion_base_cost
+
+    _output_cost_per_audio_token: Optional[float] = model_info.get(
+        "output_cost_per_audio_token"
+    )
+
+    ## AUDIO COST
+    if (
+        _output_cost_per_audio_token is not None
+        and audio_tokens is not None
+        and audio_tokens > 0
+    ):
+        completion_cost += float(audio_tokens) * _output_cost_per_audio_token
 
     return prompt_cost, completion_cost
