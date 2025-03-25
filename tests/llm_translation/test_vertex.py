@@ -1283,7 +1283,9 @@ def vertex_client():
 def encoded_images():
     image_paths = [
         "./tests/llm_translation/duck.png",
+        # "./duck.png",
         "./tests/llm_translation/guinea.png",
+        # "./guinea.png",
     ]
     return [encode_image_to_base64(path) for path in image_paths]
 
@@ -1338,7 +1340,7 @@ def test_process_gemini_image_http_url(
         ("Guinea", 1),  # Guinea closer to guinea image
     ],
 )
-def test_vertex_embeddings_distances(
+def test_aaavertex_embeddings_distances(
     vertex_client, encoded_images, input_string, expected_closer_index
 ):
     """
@@ -1355,7 +1357,14 @@ def test_vertex_embeddings_distances(
     image_embeddings = []
     mock_response = MagicMock()
 
-    with patch.object(vertex_client, "post", return_value=mock_response):
+    def mock_auth_token(*args, **kwargs):
+        return "my-fake-token", "pathrise-project"
+
+    with patch.object(vertex_client, "post", return_value=mock_response), patch.object(
+        litellm.main.vertex_multimodal_embedding,
+        "_ensure_access_token",
+        side_effect=mock_auth_token,
+    ):
         for idx, encoded_image in enumerate(encoded_images):
             mock_response.json.return_value = {
                 "predictions": [{"imageEmbedding": mock_image_embeddings[idx]}]
@@ -1378,7 +1387,13 @@ def test_vertex_embeddings_distances(
         "predictions": [{"imageEmbedding": mock_text_embedding}]
     }
     text_mock_response.status_code = 200
-    with patch.object(vertex_client, "post", return_value=text_mock_response):
+    with patch.object(
+        vertex_client, "post", return_value=text_mock_response
+    ), patch.object(
+        litellm.main.vertex_multimodal_embedding,
+        "_ensure_access_token",
+        side_effect=mock_auth_token,
+    ):
         text_response = litellm.embedding(
             model="vertex_ai/multimodalembedding@001",
             input=[input_string],
