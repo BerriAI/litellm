@@ -86,12 +86,12 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
     ) -> TranscriptionResponse:
         data = {"model": model, "file": audio_file, **optional_params}
 
-        if "response_format" not in data or (
-            data["response_format"] == "text" or data["response_format"] == "json"
-        ):
-            data["response_format"] = (
-                "verbose_json"  # ensures 'duration' is received - used for cost calculation
-            )
+        # if "response_format" not in data or (
+        #     data["response_format"] == "text" or data["response_format"] == "json"
+        # ):
+        #     data["response_format"] = (
+        #         "verbose_json"  # ensures 'duration' is received - used for cost calculation
+        #     )
 
         if atranscription is True:
             return self.async_audio_transcriptions(  # type: ignore
