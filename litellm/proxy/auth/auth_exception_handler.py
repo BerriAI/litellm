@@ -9,7 +9,12 @@ from fastapi import HTTPException, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import (
+    DB_CONNECTION_ERROR_TYPES,
+    ProxyErrorTypes,
+    ProxyException,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.auth_utils import _get_request_ip_address
 from litellm.types.services import ServiceTypes
 
@@ -52,7 +57,10 @@ class UserAPIKeyAuthExceptionHandler:
             proxy_logging_obj,
         )
 
-        if UserAPIKeyAuthExceptionHandler.should_allow_request_on_db_unavailable():
+        if (
+            UserAPIKeyAuthExceptionHandler.should_allow_request_on_db_unavailable()
+            and UserAPIKeyAuthExceptionHandler.is_database_connection_error(e)
+        ):
             # log this as a DB failure on prometheus
             proxy_logging_obj.service_logging_obj.service_failure_hook(
                 service=ServiceTypes.DB,
@@ -128,3 +136,14 @@ class UserAPIKeyAuthExceptionHandler:
         if general_settings.get("allow_requests_on_db_unavailable", False) is True:
             return True
         return False
+
+    @staticmethod
+    def is_database_connection_error(e: Exception) -> bool:
+        """
+        Returns True if the exception is from a database outage / connection error
+        """
+        import prisma
+
+        return isinstance(e, DB_CONNECTION_ERROR_TYPES) or isinstance(
+            e, prisma.errors.PrismaError
+        )
