@@ -1788,9 +1788,6 @@ class ProxyConfig:
                             reset_color_code,
                             cache_password,
                         )
-                    if cache_type == "redis-semantic":
-                        # by default this should always be async
-                        cache_params.update({"redis_semantic_cache_use_async": True})
 
                     # users can pass os.environ/ variables on the proxy - we should read them from the env
                     for key, value in cache_params.items():
@@ -6181,18 +6178,18 @@ async def model_info_v1(  # noqa: PLR0915
     )
 
     if len(all_models_str) > 0:
-        model_names = all_models_str
-        llm_model_list = llm_router.get_model_list()
+        _relevant_models = []
+        for model in all_models_str:
+            router_models = llm_router.get_model_list(model_name=model)
+            if router_models is not None:
+                _relevant_models.extend(router_models)
         if llm_model_list is not None:
-            _relevant_models = [
-                m for m in llm_model_list if m["model_name"] in model_names
-            ]
             all_models = copy.deepcopy(_relevant_models)  # type: ignore
         else:
             all_models = []
 
-    for model in all_models:
-        model = _get_proxy_model_info(model=model)
+    for in_place_model in all_models:
+        in_place_model = _get_proxy_model_info(model=in_place_model)
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}

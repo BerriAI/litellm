@@ -32,7 +32,9 @@ from .llms.openai import (
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
+    FileSearchTool,
     OpenAIChatCompletionChunk,
+    WebSearchOptions,
 )
 from .rerank import RerankResponse
 
@@ -97,6 +99,13 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_pdf_input: Optional[bool]
     supports_native_streaming: Optional[bool]
     supports_parallel_function_calling: Optional[bool]
+    supports_web_search: Optional[bool]
+
+
+class SearchContextCostPerQuery(TypedDict, total=False):
+    search_context_size_low: float
+    search_context_size_medium: float
+    search_context_size_high: float
 
 
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
@@ -135,6 +144,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_second: Optional[float]  # for OpenAI Speech models
+    search_context_cost_per_query: Optional[
+        SearchContextCostPerQuery
+    ]  # Cost for using web search tool
 
     litellm_provider: Required[str]
     mode: Required[
@@ -585,6 +597,11 @@ class Message(OpenAIObject):
             # delete audio from self
             # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
             del self.audio
+
+        if annotations is None:
+            # ensure default response matches OpenAI spec
+            # Some OpenAI compatible APIs raise an error if annotations are passed in
+            del self.annotations
 
         if reasoning_content is None:
             # ensure default response matches OpenAI spec
@@ -1612,6 +1629,19 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_end_user_id: Optional[str]
 
 
+class StandardBuiltInToolsParams(TypedDict, total=False):
+    """
+    Standard built-in OpenAItools parameters
+
+    This is used to calculate the cost of built-in tools, insert any standard built-in tools parameters here
+
+    OpenAI charges users based on the `web_search_options` parameter
+    """
+
+    web_search_options: Optional[WebSearchOptions]
+    file_search: Optional[FileSearchTool]
+
+
 class StandardLoggingPromptManagementMetadata(TypedDict):
     prompt_id: str
     prompt_variables: Optional[dict]
@@ -1729,6 +1759,7 @@ class StandardLoggingPayload(TypedDict):
     model_parameters: dict
     hidden_params: StandardLoggingHiddenParams
     guardrail_information: Optional[StandardLoggingGuardrailInformation]
+    standard_built_in_tools_params: Optional[StandardBuiltInToolsParams]
 
 
 from typing import AsyncIterator, Iterator
