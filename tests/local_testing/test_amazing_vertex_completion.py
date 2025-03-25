@@ -3327,3 +3327,28 @@ def test_signed_s3_url_with_format():
         json_str = json.dumps(mock_client.call_args.kwargs["json"])
         assert "image/jpeg" in json_str
         assert "image/png" not in json_str
+
+
+@pytest.mark.parametrize("provider", ["vertex_ai", "gemini"])
+def test_litellm_api_base(monkeypatch, provider):
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "api_base", "https://litellm.com")
+
+    load_vertex_ai_credentials()
+
+    with patch.object(client, "post", new=MagicMock()) as mock_client:
+        try:
+            response = completion(
+                model=f"{provider}/gemini-2.0-flash-001",
+                messages=[{"role": "user", "content": "Hello, world!"}],
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        assert mock_client.call_args.kwargs["url"].startswith("https://litellm.com")
