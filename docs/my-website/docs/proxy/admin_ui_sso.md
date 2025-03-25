@@ -147,6 +147,7 @@ Some SSO providers require a specific redirect url for login and logout. You can
 - Login: `<your-proxy-base-url>/sso/key/generate`
 - Logout: `<your-proxy-base-url>`
 
+Here's the env var to set the logout url on the proxy
 ```bash
 PROXY_LOGOUT_URL="https://www.google.com"
 ```
