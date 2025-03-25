@@ -1009,53 +1009,11 @@ async def get_key_object(
         )
 
         return _response
-    except DB_CONNECTION_ERROR_TYPES as e:
-        return await _handle_failed_db_connection_for_get_key_object(e=e)
     except Exception:
         traceback.print_exc()
         raise Exception(
             f"Key doesn't exist in db. key={hashed_token}. Create key via `/key/generate` call."
         )
-
-
-async def _handle_failed_db_connection_for_get_key_object(
-    e: Exception,
-) -> UserAPIKeyAuth:
-    """
-    Handles httpx.ConnectError when reading a Virtual Key from LiteLLM DB
-
-    Use this if you don't want failed DB queries to block LLM API reqiests
-
-    Returns:
-        - UserAPIKeyAuth: If general_settings.allow_requests_on_db_unavailable is True
-
-    Raises:
-        - Orignal Exception in all other cases
-    """
-    from litellm.proxy.proxy_server import (
-        general_settings,
-        litellm_proxy_admin_name,
-        proxy_logging_obj,
-    )
-
-    # If this flag is on, requests failing to connect to the DB will be allowed
-    if general_settings.get("allow_requests_on_db_unavailable", False) is True:
-        # log this as a DB failure on prometheus
-        proxy_logging_obj.service_logging_obj.service_failure_hook(
-            service=ServiceTypes.DB,
-            call_type="get_key_object",
-            error=e,
-            duration=0.0,
-        )
-
-        return UserAPIKeyAuth(
-            key_name="failed-to-connect-to-db",
-            token="failed-to-connect-to-db",
-            user_id=litellm_proxy_admin_name,
-        )
-    else:
-        # raise the original exception, the wrapper on `get_key_object` handles logging db failure to prometheus
-        raise e
 
 
 @log_db_metrics
