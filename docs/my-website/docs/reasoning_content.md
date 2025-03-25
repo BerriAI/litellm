@@ -3,11 +3,20 @@ import TabItem from '@theme/TabItem';
 
 # 'Thinking' / 'Reasoning Content'
 
+:::info
+
+Requires LiteLLM v1.63.0+
+
+:::
+
 Supported Providers:
 - Deepseek (`deepseek/`)
 - Anthropic API (`anthropic/`)
 - Bedrock (Anthropic + Deepseek) (`bedrock/`)
 - Vertex AI (Anthropic) (`vertexai/`)
+- OpenRouter (`openrouter/`)
+
+LiteLLM will standardize the `reasoning_content` in the response and `thinking_blocks` in the assistant message.
 
 ```python
 "message": {

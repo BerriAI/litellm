@@ -6,6 +6,9 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, 
 from httpx._models import Headers, Response
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    get_str_from_messages,
+)
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_ollama_image,
     custom_prompt,
@@ -302,6 +305,8 @@ class OllamaConfig(BaseConfig):
         custom_prompt_dict = (
             litellm_params.get("custom_prompt_dict") or litellm.custom_prompt_dict
         )
+
+        text_completion_request = litellm_params.get("text_completion")
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
             model_prompt_details = custom_prompt_dict[model]
@@ -311,7 +316,9 @@ class OllamaConfig(BaseConfig):
                 final_prompt_value=model_prompt_details["final_prompt_value"],
                 messages=messages,
             )
-        else:
+        elif text_completion_request:  # handle `/completions` requests
+            ollama_prompt = get_str_from_messages(messages=messages)
+        else:  # handle `/chat/completions` requests
             modified_prompt = ollama_pt(model=model, messages=messages)
             if isinstance(modified_prompt, dict):
                 ollama_prompt, images = (
@@ -356,6 +363,7 @@ class OllamaConfig(BaseConfig):
         api_base: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         """

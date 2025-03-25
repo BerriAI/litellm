@@ -1,6 +1,6 @@
 import io
 import json
-from typing import TYPE_CHECKING, Any, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Tuple, Union
 
 import httpx  # type: ignore
 
@@ -11,13 +11,22 @@ import litellm.types.utils
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
+from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     _get_httpx_client,
     get_async_httpx_client,
 )
+from litellm.responses.streaming_iterator import (
+    BaseResponsesAPIStreamingIterator,
+    MockResponsesAPIStreamingIterator,
+    ResponsesAPIStreamingIterator,
+    SyncResponsesAPIStreamingIterator,
+)
+from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIResponse
 from litellm.types.rerank import OptionalRerankParams, RerankResponse
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import EmbeddingResponse, FileTypes, TranscriptionResponse
 from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
 
@@ -234,6 +243,7 @@ class BaseLLMHTTPHandler:
             model=model,
             optional_params=optional_params,
             stream=stream,
+            litellm_params=litellm_params,
         )
 
         data = provider_config.transform_request(
@@ -604,6 +614,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             model=model,
             optional_params=optional_params,
+            litellm_params=litellm_params,
         )
 
         data = provider_config.transform_embedding_request(
@@ -899,6 +910,7 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         atranscription: bool = False,
         headers: dict = {},
+        litellm_params: dict = {},
     ) -> TranscriptionResponse:
         provider_config = ProviderConfigManager.get_provider_audio_transcription_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
@@ -922,6 +934,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             model=model,
             optional_params=optional_params,
+            litellm_params=litellm_params,
         )
 
         # Handle the audio file based on type
@@ -952,8 +965,281 @@ class BaseLLMHTTPHandler:
             return returned_response
         return model_response
 
+    def response_api_handler(
+        self,
+        model: str,
+        input: Union[str, ResponseInputParam],
+        responses_api_provider_config: BaseResponsesAPIConfig,
+        response_api_optional_request_params: Dict,
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+        fake_stream: bool = False,
+    ) -> Union[
+        ResponsesAPIResponse,
+        BaseResponsesAPIStreamingIterator,
+        Coroutine[
+            Any, Any, Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]
+        ],
+    ]:
+        """
+        Handles responses API requests.
+        When _is_async=True, returns a coroutine instead of making the call directly.
+        """
+        if _is_async:
+            # Return the async coroutine if called with _is_async=True
+            return self.async_response_api_handler(
+                model=model,
+                input=input,
+                responses_api_provider_config=responses_api_provider_config,
+                response_api_optional_request_params=response_api_optional_request_params,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+                timeout=timeout,
+                client=client if isinstance(client, AsyncHTTPHandler) else None,
+                fake_stream=fake_stream,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = responses_api_provider_config.validate_environment(
+            api_key=litellm_params.api_key,
+            headers=response_api_optional_request_params.get("extra_headers", {}) or {},
+            model=model,
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = responses_api_provider_config.get_complete_url(
+            api_base=litellm_params.api_base,
+            model=model,
+        )
+
+        data = responses_api_provider_config.transform_responses_api_request(
+            model=model,
+            input=input,
+            response_api_optional_request_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=input,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        # Check if streaming is requested
+        stream = response_api_optional_request_params.get("stream", False)
+
+        try:
+            if stream:
+                # For streaming, use stream=True in the request
+                if fake_stream is True:
+                    stream, data = self._prepare_fake_stream_request(
+                        stream=stream,
+                        data=data,
+                        fake_stream=fake_stream,
+                    )
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=json.dumps(data),
+                    timeout=timeout
+                    or response_api_optional_request_params.get("timeout"),
+                    stream=stream,
+                )
+                if fake_stream is True:
+                    return MockResponsesAPIStreamingIterator(
+                        response=response,
+                        model=model,
+                        logging_obj=logging_obj,
+                        responses_api_provider_config=responses_api_provider_config,
+                    )
+
+                return SyncResponsesAPIStreamingIterator(
+                    response=response,
+                    model=model,
+                    logging_obj=logging_obj,
+                    responses_api_provider_config=responses_api_provider_config,
+                )
+            else:
+                # For non-streaming requests
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=json.dumps(data),
+                    timeout=timeout
+                    or response_api_optional_request_params.get("timeout"),
+                )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=responses_api_provider_config,
+            )
+
+        return responses_api_provider_config.transform_response_api_response(
+            model=model,
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_response_api_handler(
+        self,
+        model: str,
+        input: Union[str, ResponseInputParam],
+        responses_api_provider_config: BaseResponsesAPIConfig,
+        response_api_optional_request_params: Dict,
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        fake_stream: bool = False,
+    ) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
+        """
+        Async version of the responses API handler.
+        Uses async HTTP client to make requests.
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = responses_api_provider_config.validate_environment(
+            api_key=litellm_params.api_key,
+            headers=response_api_optional_request_params.get("extra_headers", {}) or {},
+            model=model,
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = responses_api_provider_config.get_complete_url(
+            api_base=litellm_params.api_base,
+            model=model,
+        )
+
+        data = responses_api_provider_config.transform_responses_api_request(
+            model=model,
+            input=input,
+            response_api_optional_request_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=input,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+        # Check if streaming is requested
+        stream = response_api_optional_request_params.get("stream", False)
+
+        try:
+            if stream:
+                # For streaming, we need to use stream=True in the request
+                if fake_stream is True:
+                    stream, data = self._prepare_fake_stream_request(
+                        stream=stream,
+                        data=data,
+                        fake_stream=fake_stream,
+                    )
+
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=json.dumps(data),
+                    timeout=timeout
+                    or response_api_optional_request_params.get("timeout"),
+                    stream=stream,
+                )
+
+                if fake_stream is True:
+                    return MockResponsesAPIStreamingIterator(
+                        response=response,
+                        model=model,
+                        logging_obj=logging_obj,
+                        responses_api_provider_config=responses_api_provider_config,
+                    )
+
+                # Return the streaming iterator
+                return ResponsesAPIStreamingIterator(
+                    response=response,
+                    model=model,
+                    logging_obj=logging_obj,
+                    responses_api_provider_config=responses_api_provider_config,
+                )
+            else:
+                # For non-streaming, proceed as before
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=json.dumps(data),
+                    timeout=timeout
+                    or response_api_optional_request_params.get("timeout"),
+                )
+
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=responses_api_provider_config,
+            )
+
+        return responses_api_provider_config.transform_response_api_response(
+            model=model,
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    def _prepare_fake_stream_request(
+        self,
+        stream: bool,
+        data: dict,
+        fake_stream: bool,
+    ) -> Tuple[bool, dict]:
+        """
+        Handles preparing a request when `fake_stream` is True.
+        """
+        if fake_stream is True:
+            stream = False
+            data.pop("stream", None)
+            return stream, data
+        return stream, data
+
     def _handle_error(
-        self, e: Exception, provider_config: Union[BaseConfig, BaseRerankConfig]
+        self,
+        e: Exception,
+        provider_config: Union[BaseConfig, BaseRerankConfig, BaseResponsesAPIConfig],
     ):
         status_code = getattr(e, "status_code", 500)
         error_headers = getattr(e, "headers", None)

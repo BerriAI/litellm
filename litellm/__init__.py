@@ -2,18 +2,20 @@
 import warnings
 
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
-### INIT VARIABLES #########
+### INIT VARIABLES ##########
 import threading
 import os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
+from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
 from litellm.types.utils import (
     ImageObject,
     BudgetConfig,
     all_litellm_params,
     all_litellm_params as _litellm_completion_params,
+    CredentialItem,
 )  # maintain backwards compatibility for root param
 from litellm._logging import (
     set_verbose,
@@ -120,6 +122,9 @@ langsmith_batch_size: Optional[int] = None
 prometheus_initialize_budget_metrics: Optional[bool] = False
 argilla_batch_size: Optional[int] = None
 datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged payload
+gcs_pub_sub_use_v1: Optional[bool] = (
+    False  # if you want to use v1 gcs pubsub logged payload
+)
 argilla_transformation_object: Optional[Dict[str, Any]] = None
 _async_input_callback: List[Union[str, Callable, CustomLogger]] = (
     []
@@ -180,6 +185,7 @@ cloudflare_api_key: Optional[str] = None
 baseten_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
+snowflake_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
@@ -189,15 +195,17 @@ ssl_verify: Union[str, bool] = True
 ssl_certificate: Optional[str] = None
 disable_streaming_logging: bool = False
 disable_add_transform_inline_image_block: bool = False
-in_memory_llm_clients_cache: InMemoryCache = InMemoryCache()
+in_memory_llm_clients_cache: LLMClientCache = LLMClientCache()
 safe_memory_mode: bool = False
 enable_azure_ad_token_refresh: Optional[bool] = False
 ### DEFAULT AZURE API VERSION ###
-AZURE_DEFAULT_API_VERSION = "2024-08-01-preview"  # this is updated to the latest
+AZURE_DEFAULT_API_VERSION = "2025-02-01-preview"  # this is updated to the latest
 ### DEFAULT WATSONX API VERSION ###
 WATSONX_DEFAULT_API_VERSION = "2024-03-13"
 ### COHERE EMBEDDINGS DEFAULT TYPE ###
 COHERE_DEFAULT_EMBEDDING_INPUT_TYPE: COHERE_EMBEDDING_INPUT_TYPES = "search_document"
+### CREDENTIALS ###
+credential_list: List[CredentialItem] = []
 ### GUARDRAILS ###
 llamaguard_model_name: Optional[str] = None
 openai_moderations_model_name: Optional[str] = None
@@ -412,6 +420,7 @@ cerebras_models: List = []
 galadriel_models: List = []
 sambanova_models: List = []
 assemblyai_models: List = []
+snowflake_models: List = []
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -565,6 +574,8 @@ def add_known_models():
             assemblyai_models.append(key)
         elif value.get("litellm_provider") == "jina_ai":
             jina_ai_models.append(key)
+        elif value.get("litellm_provider") == "snowflake":
+            snowflake_models.append(key)
 
 
 add_known_models()
@@ -593,6 +604,7 @@ petals_models = [
 ollama_models = ["llama2"]
 
 maritalk_models = ["maritalk"]
+
 
 model_list = (
     open_ai_chat_completion_models
@@ -638,6 +650,7 @@ model_list = (
     + azure_text_models
     + assemblyai_models
     + jina_ai_models
+    + snowflake_models
 )
 
 model_list_set = set(model_list)
@@ -693,6 +706,7 @@ models_by_provider: dict = {
     "sambanova": sambanova_models,
     "assemblyai": assemblyai_models,
     "jina_ai": jina_ai_models,
+    "snowflake": snowflake_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -745,6 +759,7 @@ from .utils import (
     create_pretrained_tokenizer,
     create_tokenizer,
     supports_function_calling,
+    supports_web_search,
     supports_response_schema,
     supports_parallel_function_calling,
     supports_vision,
@@ -809,6 +824,7 @@ from .llms.databricks.embed.transformation import DatabricksEmbeddingConfig
 from .llms.predibase.chat.transformation import PredibaseConfig
 from .llms.replicate.chat.transformation import ReplicateConfig
 from .llms.cohere.completion.transformation import CohereTextConfig as CohereConfig
+from .llms.snowflake.chat.transformation import SnowflakeConfig
 from .llms.cohere.rerank.transformation import CohereRerankConfig
 from .llms.cohere.rerank_v2.transformation import CohereRerankV2Config
 from .llms.azure_ai.rerank.transformation import AzureAIRerankConfig
@@ -922,10 +938,13 @@ from .llms.groq.chat.transformation import GroqChatConfig
 from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
 from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from .llms.mistral.mistral_chat_transformation import MistralConfig
+from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from .llms.openai.chat.o_series_transformation import (
     OpenAIOSeriesConfig as OpenAIO1Config,  # maintain backwards compatibility
     OpenAIOSeriesConfig,
 )
+
+from .llms.snowflake.chat.transformation import SnowflakeConfig
 
 openaiOSeriesConfig = OpenAIOSeriesConfig()
 from .llms.openai.chat.gpt_transformation import (
@@ -1011,6 +1030,7 @@ from .batches.main import *
 from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *
+from .responses.main import *
 from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
 from .files.main import *
