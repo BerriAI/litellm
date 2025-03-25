@@ -22,10 +22,16 @@ MINIMUM_PROMPT_CACHE_TOKEN_COUNT = (
     1024  # minimum number of tokens to cache a prompt by Anthropic
 )
 DEFAULT_TRIM_RATIO = 0.75  # default ratio of tokens to trim from the end of a prompt
+HOURS_IN_A_DAY = 24
+DAYS_IN_A_WEEK = 7
+DAYS_IN_A_MONTH = 28
+DAYS_IN_A_YEAR = 365
 #### TOKEN COUNTING ####
 FUNCTION_DEFINITION_TOKEN_COUNT = 9
 SYSTEM_MESSAGE_TOKEN_COUNT = 4
 TOOL_CHOICE_OBJECT_TOKEN_COUNT = 4
+DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT = 10
+DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT = 20
 #### RELIABILITY ####
 REPEATED_STREAMING_CHUNK_LIMIT = 100  # catch if model starts looping the same chunk while streaming. Uses high default to prevent false positives.
 DEFAULT_MAX_LRU_CACHE_SIZE = 16
@@ -34,6 +40,8 @@ MAX_RETRY_DELAY = 8.0
 JITTER = 0.75
 DEFAULT_IN_MEMORY_TTL = 5  # default time to live for the in-memory cache
 DEFAULT_POLLING_INTERVAL = 0.03  # default polling interval for the scheduler
+REDIS_SOCKET_TIMEOUT = 0.1
+REDIS_CONNECTION_POOL_TIMEOUT = 5
 #### Networking settings ####
 request_timeout: float = 6000  # time in seconds
 STREAM_SSE_DONE_STRING: str = "[DONE]"
