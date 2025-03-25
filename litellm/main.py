@@ -3661,6 +3661,8 @@ def embedding(  # noqa: PLR0915
                 api_key or get_secret_str("GEMINI_API_KEY") or litellm.api_key
             )
 
+            api_base = api_base or litellm.api_base or get_secret_str("GEMINI_API_BASE")
+
             response = google_batch_embeddings.batch_embeddings(  # type: ignore
                 model=model,
                 input=input,
@@ -3675,6 +3677,8 @@ def embedding(  # noqa: PLR0915
                 print_verbose=print_verbose,
                 custom_llm_provider="gemini",
                 api_key=gemini_api_key,
+                api_base=api_base,
+                client=client,
             )
 
         elif custom_llm_provider == "vertex_ai":
@@ -3699,6 +3703,13 @@ def embedding(  # noqa: PLR0915
                 or get_secret_str("VERTEX_CREDENTIALS")
             )
 
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("VERTEXAI_API_BASE")
+                or get_secret_str("VERTEX_API_BASE")
+            )
+
             if (
                 "image" in optional_params
                 or "video" in optional_params
@@ -3719,6 +3730,8 @@ def embedding(  # noqa: PLR0915
                     aembedding=aembedding,
                     print_verbose=print_verbose,
                     custom_llm_provider="vertex_ai",
+                    client=client,
+                    api_base=api_base,
                 )
             else:
                 response = vertex_embedding.embedding(
@@ -3736,6 +3749,8 @@ def embedding(  # noqa: PLR0915
                     aembedding=aembedding,
                     print_verbose=print_verbose,
                     api_key=api_key,
+                    api_base=api_base,
+                    client=client,
                 )
         elif custom_llm_provider == "oobabooga":
             response = oobabooga.embedding(

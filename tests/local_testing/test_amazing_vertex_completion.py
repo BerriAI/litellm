@@ -3330,7 +3330,8 @@ def test_signed_s3_url_with_format():
 
 
 @pytest.mark.parametrize("provider", ["vertex_ai", "gemini"])
-def test_litellm_api_base(monkeypatch, provider):
+@pytest.mark.parametrize("route", ["completion", "embedding"])
+def test_litellm_api_base(monkeypatch, provider, route):
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
@@ -3343,12 +3344,20 @@ def test_litellm_api_base(monkeypatch, provider):
 
     with patch.object(client, "post", new=MagicMock()) as mock_client:
         try:
-            response = completion(
-                model=f"{provider}/gemini-2.0-flash-001",
-                messages=[{"role": "user", "content": "Hello, world!"}],
-                client=client,
-            )
+            if route == "completion":
+                response = completion(
+                    model=f"{provider}/gemini-2.0-flash-001",
+                    messages=[{"role": "user", "content": "Hello, world!"}],
+                    client=client,
+                )
+            elif route == "embedding":
+                response = embedding(
+                    model=f"{provider}/gemini-2.0-flash-001",
+                    input=["Hello, world!"],
+                    client=client,
+                )
         except Exception as e:
             print(e)
 
+        mock_client.assert_called()
         assert mock_client.call_args.kwargs["url"].startswith("https://litellm.com")
