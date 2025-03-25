@@ -86,6 +86,7 @@ class VertexImageGeneration(VertexLLM):
 
         # url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:predict"
 
+        auth_header: Optional[str] = None
         auth_header, _ = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -191,6 +192,7 @@ class VertexImageGeneration(VertexLLM):
         } \
         "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/publishers/google/models/imagegeneration:predict"
         """
+        auth_header: Optional[str] = None
         auth_header, _ = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
