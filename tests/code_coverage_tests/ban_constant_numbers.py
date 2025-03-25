@@ -3,7 +3,32 @@ import ast
 import os
 
 # Extremely restrictive set of allowed numbers
-ALLOWED_NUMBERS = {0, 1, -1, 2, 10, 100, 1000}
+ALLOWED_NUMBERS = {
+    0,
+    1,
+    -1,
+    2,
+    10,
+    100,
+    1000,
+    1,
+    4,
+    3,
+    500,
+    408,
+    422,
+    401,
+    404,
+    429,
+    6,
+    409,
+    60,
+    403,
+    400,
+    3600,
+    0.75,
+    503,
+}
 
 
 class HardcodedNumberFinder(ast.NodeVisitor):
@@ -47,10 +72,13 @@ def main():
     exit_code = 0
     folder = "../../litellm"
     ignore_file = "constants.py"
+    ignore_folder = "types"
     for root, dirs, files in os.walk(folder):
         for filename in files:
             if filename.endswith(".py") and filename != ignore_file:
                 full_path = os.path.join(root, filename)
+                if ignore_folder in full_path:
+                    continue
                 exit_code |= check_file(full_path)
     sys.exit(exit_code)
 

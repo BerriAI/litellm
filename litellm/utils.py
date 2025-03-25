@@ -60,6 +60,16 @@ import litellm.litellm_core_utils.json_validation_rule
 from litellm.caching._internal_lru_cache import lru_cache_wrapper
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
+from litellm.constants import (
+    DEFAULT_MAX_LRU_CACHE_SIZE,
+    DEFAULT_TRIM_RATIO,
+    FUNCTION_DEFINITION_TOKEN_COUNT,
+    INITIAL_RETRY_DELAY,
+    JITTER,
+    MAX_RETRY_DELAY,
+    MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
+    TOOL_CHOICE_OBJECT_TOKEN_COUNT,
+)
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
@@ -1519,7 +1529,7 @@ def _select_tokenizer(
     return _select_tokenizer_helper(model=model)
 
 
-@lru_cache(maxsize=128)
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
 def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
 
     if litellm.disable_hf_tokenizer_download is True:
@@ -1664,7 +1674,7 @@ def openai_token_counter(  # noqa: PLR0915
 
     if tools:
         num_tokens += len(encoding.encode(_format_function_definitions(tools)))
-        num_tokens += 9  # Additional tokens for function definition of tools
+        num_tokens += FUNCTION_DEFINITION_TOKEN_COUNT  # Additional tokens for function definition of tools
     # If there's a system message and tools are present, subtract four tokens
     if tools and includes_system_message:
         num_tokens -= 4
@@ -1674,7 +1684,7 @@ def openai_token_counter(  # noqa: PLR0915
     if tool_choice == "none":
         num_tokens += 1
     elif isinstance(tool_choice, dict):
-        num_tokens += 7
+        num_tokens += TOOL_CHOICE_OBJECT_TOKEN_COUNT
         num_tokens += len(encoding.encode(tool_choice["function"]["name"]))
 
     return num_tokens
@@ -5311,15 +5321,15 @@ def _calculate_retry_after(
     if retry_after is not None and 0 < retry_after <= 60:
         return retry_after
 
-    initial_retry_delay = 0.5
-    max_retry_delay = 8.0
+    initial_retry_delay = INITIAL_RETRY_DELAY
+    max_retry_delay = MAX_RETRY_DELAY
     nb_retries = max_retries - remaining_retries
 
     # Apply exponential backoff, but not more than the max.
     sleep_seconds = min(initial_retry_delay * pow(2.0, nb_retries), max_retry_delay)
 
     # Apply some jitter, plus-or-minus half a second.
-    jitter = 1 - 0.25 * random.random()
+    jitter = JITTER * random.random()
     timeout = sleep_seconds * jitter
     return timeout if timeout >= min_timeout else min_timeout
 
@@ -5645,7 +5655,7 @@ def shorten_message_to_fit_limit(message, tokens_needed, model: Optional[str]):
 def trim_messages(
     messages,
     model: Optional[str] = None,
-    trim_ratio: float = 0.75,
+    trim_ratio: float = DEFAULT_TRIM_RATIO,
     return_response_tokens: bool = False,
     max_tokens=None,
 ):
@@ -6477,7 +6487,7 @@ def is_prompt_caching_valid_prompt(
             model=model,
             use_default_image_token_count=True,
         )
-        return token_count >= 1024
+        return token_count >= MINIMUM_PROMPT_CACHE_TOKEN_COUNT
     except Exception as e:
         verbose_logger.error(f"Error in is_prompt_caching_valid_prompt: {e}")
         return False

@@ -18,9 +18,22 @@ DEFAULT_IMAGE_HEIGHT = 300
 DEFAULT_MAX_TOKENS = 256  # used when providers need a default
 MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = 1024  # 1MB = 1024KB
 SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD = 1000  # Minimum number of requests to consider "reasonable traffic". Used for single-deployment cooldown logic.
+MINIMUM_PROMPT_CACHE_TOKEN_COUNT = (
+    1024  # minimum number of tokens to cache a prompt by Anthropic
+)
+DEFAULT_TRIM_RATIO = 0.75  # default ratio of tokens to trim from the end of a prompt
+#### TOKEN COUNTING ####
+FUNCTION_DEFINITION_TOKEN_COUNT = 9
+SYSTEM_MESSAGE_TOKEN_COUNT = 4
+TOOL_CHOICE_OBJECT_TOKEN_COUNT = 4
 #### RELIABILITY ####
 REPEATED_STREAMING_CHUNK_LIMIT = 100  # catch if model starts looping the same chunk while streaming. Uses high default to prevent false positives.
 DEFAULT_MAX_LRU_CACHE_SIZE = 16
+INITIAL_RETRY_DELAY = 0.5
+MAX_RETRY_DELAY = 8.0
+JITTER = 0.75
+DEFAULT_IN_MEMORY_TTL = 5  # default time to live for the in-memory cache
+DEFAULT_POLLING_INTERVAL = 0.03  # default polling interval for the scheduler
 #### Networking settings ####
 request_timeout: float = 6000  # time in seconds
 STREAM_SSE_DONE_STRING: str = "[DONE]"
