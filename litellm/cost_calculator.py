@@ -275,15 +275,13 @@ def cost_per_token(  # noqa: PLR0915
                 custom_llm_provider=custom_llm_provider,
                 prompt_characters=prompt_characters,
                 completion_characters=completion_characters,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
+                usage=usage_block,
             )
         elif cost_router == "cost_per_token":
             return google_cost_per_token(
                 model=model_without_prefix,
                 custom_llm_provider=custom_llm_provider,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
+                usage=usage_block,
             )
     elif custom_llm_provider == "anthropic":
         return anthropic_cost_per_token(model=model, usage=usage_block)
