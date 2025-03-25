@@ -1274,13 +1274,6 @@ class AWSEventStreamDecoder:
     def converse_chunk_parser(self, chunk_data: dict) -> ModelResponseStream:
         try:
             verbose_logger.debug("\n\nRaw Chunk: {}\n\n".format(chunk_data))
-            chunk_data["usage"] = {
-                "inputTokens": 3,
-                "outputTokens": 392,
-                "totalTokens": 2191,
-                "cacheReadInputTokens": 1796,
-                "cacheWriteInputTokens": 0,
-            }
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
             finish_reason = ""
