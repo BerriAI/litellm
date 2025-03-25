@@ -3,7 +3,6 @@ LiteLLM MCP Server Routes
 """
 
 import asyncio
-import logging
 from typing import Any, Dict, List, Union
 
 from anyio import BrokenResourceError
@@ -17,7 +16,7 @@ from litellm._logging import verbose_logger
 # "mcp" requires python 3.10 or higher, but several litellm users use python 3.8
 # We're making this conditional import to avoid breaking users who use python 3.8.
 try:
-    import mcp
+    from mcp.server import Server
 
     MCP_AVAILABLE = True
 except ImportError as e:
