@@ -26,7 +26,6 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
     _get_user_role,
-    _handle_failed_db_connection_for_get_key_object,
     _is_user_proxy_admin,
     _virtual_key_max_budget_check,
     _virtual_key_soft_budget_check,
@@ -38,6 +37,7 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
     is_valid_fallback_model,
 )
+from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_utils import (
     _get_request_ip_address,
     get_end_user_id_from_request_body,
@@ -675,9 +675,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         if (
             prisma_client is None
         ):  # if both master key + user key submitted, and user key != master key, and no db connected, raise an error
-            return await _handle_failed_db_connection_for_get_key_object(
-                e=Exception("No connected db.")
-            )
+            raise Exception("No connected db.")
 
         ## check for cache hit (In-Memory Cache)
         _user_role = None
@@ -1018,54 +1016,13 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         else:
             raise Exception()
     except Exception as e:
-        requester_ip = _get_request_ip_address(
+        return await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
+            e=e,
             request=request,
-            use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
-        )
-        verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {}\nRequester IP Address:{}".format(
-                str(e),
-                requester_ip,
-            ),
-            extra={"requester_ip": requester_ip},
-        )
-
-        # Log this exception to OTEL, Datadog etc
-        user_api_key_dict = UserAPIKeyAuth(
+            request_data=request_data,
+            route=route,
             parent_otel_span=parent_otel_span,
             api_key=api_key,
-        )
-        asyncio.create_task(
-            proxy_logging_obj.post_call_failure_hook(
-                request_data=request_data,
-                original_exception=e,
-                user_api_key_dict=user_api_key_dict,
-                error_type=ProxyErrorTypes.auth_error,
-                route=route,
-            )
-        )
-
-        if isinstance(e, litellm.BudgetExceededError):
-            raise ProxyException(
-                message=e.message,
-                type=ProxyErrorTypes.budget_exceeded,
-                param=None,
-                code=400,
-            )
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_401_UNAUTHORIZED),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_401_UNAUTHORIZED,
         )
 
 
