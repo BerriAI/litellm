@@ -24,9 +24,9 @@ const BudgetDurationDropdown: React.FC<BudgetDurationDropdownProps> = ({
       className={className}
       placeholder="n/a"
     >
-      <Option value="24h">daily</Option>
-      <Option value="7d">weekly</Option>
-      <Option value="30d">monthly</Option>
+      <Option value="1d">daily</Option>
+      <Option value="1w">weekly</Option>
+      <Option value="1mo">monthly</Option>
     </Select>
   );
 };
@@ -35,9 +35,9 @@ export const getBudgetDurationLabel = (value: string | null | undefined): string
   if (!value) return "Not set";
   
   const budgetDurationMap: Record<string, string> = {
-    "24h": "daily",
-    "7d": "weekly",
-    "30d": "monthly"
+    "1d": "daily",
+    "1w": "weekly",
+    "1mo": "monthly"
   };
   
   return budgetDurationMap[value] || value;

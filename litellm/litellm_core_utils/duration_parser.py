@@ -73,8 +73,6 @@ def duration_in_seconds(duration: str) -> int:
         target_year = current_time.year + (current_time.month + value) // 12
         target_month = (current_time.month + value - 1) % 12 + 1
 
-        print(f"target_year: {target_year}, target_month: {target_month}")
-
         target = datetime(
             year=target_year,
             month=target_month,

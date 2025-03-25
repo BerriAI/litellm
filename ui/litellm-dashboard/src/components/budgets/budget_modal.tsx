@@ -121,9 +121,9 @@ const BudgetModal: React.FC<BudgetModalProps> = ({
                 name="budget_duration"
               >
                 <Select defaultValue={null} placeholder="n/a">
-                  <Select.Option value="24h">daily</Select.Option>
-                  <Select.Option value="7d">weekly</Select.Option>
-                  <Select.Option value="30d">monthly</Select.Option>
+                  <Select.Option value="1d">daily</Select.Option>
+                  <Select.Option value="1w">weekly</Select.Option>
+                  <Select.Option value="1mo">monthly</Select.Option>
                 </Select>
               </Form.Item>
             </AccordionBody>
