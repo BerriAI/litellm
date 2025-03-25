@@ -1739,7 +1739,9 @@ class PrometheusLogger(CustomLogger):
     @staticmethod
     def initialize_budget_metrics_cron_job(scheduler: AsyncIOScheduler):
         """
-        Initialize budget metrics as a cron job
+        Initialize budget metrics as a cron job. This job runs every `PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES` minutes.
+
+        It emits the current remaining budget metrics for all Keys and Teams.
         """
         from litellm.constants import PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES
         from litellm.integrations.custom_logger import CustomLogger
