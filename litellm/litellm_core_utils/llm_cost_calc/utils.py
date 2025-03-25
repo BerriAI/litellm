@@ -154,8 +154,10 @@ def generic_cost_per_token(
             or 0
         )
         text_tokens = (
-            cast(Optional[int], getattr(usage.prompt_tokens_details, "text_tokens", 0))
-            or 0
+            cast(
+                Optional[int], getattr(usage.prompt_tokens_details, "text_tokens", None)
+            )
+            or usage.prompt_tokens  # default to prompt tokens, if this field is not set
         )
         audio_tokens = (
             cast(Optional[int], getattr(usage.prompt_tokens_details, "audio_tokens", 0))
