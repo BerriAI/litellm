@@ -1742,7 +1742,7 @@ class PrometheusLogger(CustomLogger):
             scheduler.add_job(
                 prometheus_logger._initialize_remaining_budget_metrics,
                 "interval",
-                seconds=PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES,
+                minutes=PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES,
             )
 
 

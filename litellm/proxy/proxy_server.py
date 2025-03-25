@@ -116,10 +116,7 @@ import litellm
 from litellm import Router
 from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
-from litellm.constants import (
-    LITELLM_PROXY_ADMIN_NAME,
-    PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES,
-)
+from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.core_helpers import (
