@@ -683,37 +683,25 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             api_key = hash_token(token=api_key)
 
         if valid_token is None:
-            try:
-                valid_token = await get_key_object(
-                    hashed_token=api_key,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                )
-                # update end-user params on valid token
-                # These can change per request - it's important to update them here
-                valid_token.end_user_id = end_user_params.get("end_user_id")
-                valid_token.end_user_tpm_limit = end_user_params.get(
-                    "end_user_tpm_limit"
-                )
-                valid_token.end_user_rpm_limit = end_user_params.get(
-                    "end_user_rpm_limit"
-                )
-                valid_token.allowed_model_region = end_user_params.get(
-                    "allowed_model_region"
-                )
-                # update key budget with temp budget increase
-                valid_token = _update_key_budget_with_temp_budget_increase(
-                    valid_token
-                )  # updating it here, allows all downstream reporting / checks to use the updated budget
-            except Exception:
-                verbose_logger.info(
-                    "litellm.proxy.auth.user_api_key_auth.py::user_api_key_auth() - Unable to find token={} in cache or `LiteLLM_VerificationTokenTable`. Defaulting 'valid_token' to None'".format(
-                        api_key
-                    )
-                )
-                valid_token = None
+            valid_token = await get_key_object(
+                hashed_token=api_key,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            # update end-user params on valid token
+            # These can change per request - it's important to update them here
+            valid_token.end_user_id = end_user_params.get("end_user_id")
+            valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
+            valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
+            valid_token.allowed_model_region = end_user_params.get(
+                "allowed_model_region"
+            )
+            # update key budget with temp budget increase
+            valid_token = _update_key_budget_with_temp_budget_increase(
+                valid_token
+            )  # updating it here, allows all downstream reporting / checks to use the updated budget
 
         if valid_token is None:
             raise Exception(

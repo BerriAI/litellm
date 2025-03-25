@@ -2141,6 +2141,13 @@ class ProxyErrorTypes(str, enum.Enum):
             return cls.user_model_access_denied
 
 
+DB_CONNECTION_ERROR_TYPES = (
+    httpx.ConnectError,
+    httpx.ReadError,
+    httpx.ReadTimeout,
+)
+
+
 class SSOUserDefinedValues(TypedDict):
     models: List[str]
     user_id: str
