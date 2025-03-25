@@ -100,7 +100,7 @@ _async_success_callback: List[Union[str, Callable, CustomLogger]] = (
 )  # internal variable - async custom callbacks are routed here.
 _async_failure_callback: List[Union[str, Callable, CustomLogger]] = (
     []
-)  # internal variable - async custom callbacks are routed here.
+)  # internal variable - async custom callbacks are routed here
 pre_call_rules: List[Callable] = []
 post_call_rules: List[Callable] = []
 turn_off_message_logging: Optional[bool] = False
