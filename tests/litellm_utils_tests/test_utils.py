@@ -477,6 +477,25 @@ def test_supports_function_calling(model, expected_bool):
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.parametrize(
+    "model, expected_bool",
+    [
+        ("gpt-4o-mini-search-preview", True),
+        ("openai/gpt-4o-mini-search-preview", True),
+        ("gpt-4o-search-preview", True),
+        ("openai/gpt-4o-search-preview", True),
+        ("groq/deepseek-r1-distill-llama-70b", False),
+        ("groq/llama-3.3-70b-versatile", False),
+        ("codestral/codestral-latest", False),
+    ],
+)
+def test_supports_web_search(model, expected_bool):
+    try:
+        assert litellm.supports_web_search(model=model) == expected_bool
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_get_max_token_unit_test():
     """
     More complete testing in `test_completion_cost.py`

@@ -79,6 +79,7 @@ Inherits from `StandardLoggingUserAPIKeyMetadata` and adds:
 | `response_cost` | `Optional[str]` | Optional response cost |
 | `additional_headers` | `Optional[StandardLoggingAdditionalHeaders]` | Additional headers |
 | `batch_models` | `Optional[List[str]]` | Only set for Batches API. Lists the models used for cost calculation |
+| `litellm_model_name` | `Optional[str]` | Model name sent in request |
 
 ## StandardLoggingModelInformation
 

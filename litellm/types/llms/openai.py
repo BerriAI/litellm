@@ -382,6 +382,53 @@ class ChatCompletionThinkingBlock(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
+class WebSearchOptionsUserLocationApproximate(TypedDict, total=False):
+    city: str
+    """Free text input for the city of the user, e.g. `San Francisco`."""
+
+    country: str
+    """
+    The two-letter [ISO country code](https://en.wikipedia.org/wiki/ISO_3166-1) of
+    the user, e.g. `US`.
+    """
+
+    region: str
+    """Free text input for the region of the user, e.g. `California`."""
+
+    timezone: str
+    """
+    The [IANA timezone](https://timeapi.io/documentation/iana-timezones) of the
+    user, e.g. `America/Los_Angeles`.
+    """
+
+
+class WebSearchOptionsUserLocation(TypedDict, total=False):
+    approximate: Required[WebSearchOptionsUserLocationApproximate]
+    """Approximate location parameters for the search."""
+
+    type: Required[Literal["approximate"]]
+    """The type of location approximation. Always `approximate`."""
+
+
+class WebSearchOptions(TypedDict, total=False):
+    search_context_size: Literal["low", "medium", "high"]
+    """
+    High level guidance for the amount of context window space to use for the
+    search. One of `low`, `medium`, or `high`. `medium` is the default.
+    """
+
+    user_location: Optional[WebSearchOptionsUserLocation]
+    """Approximate location parameters for the search."""
+
+
+class FileSearchTool(TypedDict, total=False):
+    type: Literal["file_search"]
+    """The type of tool being defined: `file_search`"""
+
+    vector_store_ids: Optional[List[str]]
+    """The IDs of the vector stores to search."""
+
+
 class ChatCompletionAnnotationURLCitation(TypedDict, total=False):
     end_index: int
     """The index of the last character of the URL citation in the message."""
