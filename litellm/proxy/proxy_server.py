@@ -116,7 +116,10 @@ import litellm
 from litellm import Router
 from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
-from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.constants import (
+    LITELLM_PROXY_ADMIN_NAME,
+    PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES,
+)
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.core_helpers import (
@@ -3345,6 +3348,26 @@ class ProxyStartupEvent:
                     timezone=ZoneInfo("America/Los_Angeles"),  # Pacific Time
                 )
                 await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
+
+        if litellm.prometheus_initialize_budget_metrics is True:
+            from litellm.integrations.custom_logger import CustomLogger
+            from litellm.integrations.prometheus import PrometheusLogger
+
+            prometheus_loggers: List[CustomLogger] = (
+                litellm.logging_callback_manager.get_custom_loggers_for_type(
+                    callback_type=PrometheusLogger
+                )
+            )
+            if len(prometheus_loggers) > 0:
+                prometheus_logger = cast(PrometheusLogger, prometheus_loggers[0])
+                verbose_proxy_logger.debug(
+                    "Initializing remaining budget metrics as a cron job"
+                )
+                scheduler.add_job(
+                    prometheus_logger._initialize_remaining_budget_metrics,
+                    "interval",
+                    seconds=PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES,
+                )
 
         scheduler.start()
 

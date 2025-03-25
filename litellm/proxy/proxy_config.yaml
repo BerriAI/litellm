@@ -6,7 +6,9 @@ model_list:
       api_version: "2023-05-15"
       api_key: os.environ/AZURE_API_KEY
 
-
+litellm_settings:
+  prometheus_initialize_budget_metrics: true
+  callbacks: ["prometheus"]
 
 mcp_tools:
   - name: "get_current_time"
