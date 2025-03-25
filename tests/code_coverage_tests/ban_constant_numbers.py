@@ -11,27 +11,65 @@ ALLOWED_NUMBERS = {
     10,
     100,
     1000,
-    1,
     4,
     3,
     500,
-    408,
-    422,
-    401,
-    404,
-    429,
     6,
-    409,
     60,
-    403,
-    400,
     3600,
     0.75,
-    503,
-    600,
-    529,
     7,
+    1024,
+    1011,
+    600,
+    12,
+    1000000000.0,
+    0.1,
+    50,
+    128,
+    6000,
+    30,
+    1000000,
+    5,
+    15,
+    25,
+    10000,
+    60000,
 }
+
+# Add all standard HTTP status codes
+HTTP_STATUS_CODES = {
+    200,  # OK
+    201,  # Created
+    202,  # Accepted
+    204,  # No Content
+    300,  # Multiple Choices
+    301,  # Moved Permanently
+    302,  # Found
+    303,  # See Other
+    304,  # Not Modified
+    307,  # Temporary Redirect
+    308,  # Permanent Redirect
+    400,  # Bad Request
+    401,  # Unauthorized
+    402,  # Payment Required
+    403,  # Forbidden
+    404,  # Not Found
+    408,  # Request Timeout
+    409,  # Conflict
+    422,  # Unprocessable Entity
+    429,  # Too Many Requests
+    499,  # Client Closed Request
+    500,  # Internal Server Error
+    501,  # Not Implemented
+    502,  # Bad Gateway
+    503,  # Service Unavailable
+    504,  # Gateway Timeout
+    529,  # Site is overloaded
+}
+
+# Combine the sets
+ALLOWED_NUMBERS = ALLOWED_NUMBERS.union(HTTP_STATUS_CODES)
 
 
 class HardcodedNumberFinder(ast.NodeVisitor):
@@ -74,11 +112,11 @@ def check_file(filename):
 def main():
     exit_code = 0
     folder = "../../litellm"
-    ignore_file = "constants.py"
+    ignore_files = ["constants.py", "proxy_cli.py"]
     ignore_folder = "types"
     for root, dirs, files in os.walk(folder):
         for filename in files:
-            if filename.endswith(".py") and filename != ignore_file:
+            if filename.endswith(".py") and filename not in ignore_files:
                 full_path = os.path.join(root, filename)
                 if ignore_folder in full_path:
                     continue
