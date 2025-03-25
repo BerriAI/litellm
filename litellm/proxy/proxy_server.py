@@ -3350,24 +3350,9 @@ class ProxyStartupEvent:
                 await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
 
         if litellm.prometheus_initialize_budget_metrics is True:
-            from litellm.integrations.custom_logger import CustomLogger
             from litellm.integrations.prometheus import PrometheusLogger
 
-            prometheus_loggers: List[CustomLogger] = (
-                litellm.logging_callback_manager.get_custom_loggers_for_type(
-                    callback_type=PrometheusLogger
-                )
-            )
-            if len(prometheus_loggers) > 0:
-                prometheus_logger = cast(PrometheusLogger, prometheus_loggers[0])
-                verbose_proxy_logger.debug(
-                    "Initializing remaining budget metrics as a cron job"
-                )
-                scheduler.add_job(
-                    prometheus_logger._initialize_remaining_budget_metrics,
-                    "interval",
-                    seconds=PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES,
-                )
+            PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
 
         scheduler.start()
 
