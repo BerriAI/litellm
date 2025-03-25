@@ -18,9 +18,13 @@ MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = 1024  # 1MB = 1024KB
 SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD = 1000  # Minimum number of requests to consider "reasonable traffic". Used for single-deployment cooldown logic.
 #### RELIABILITY ####
 REPEATED_STREAMING_CHUNK_LIMIT = 100  # catch if model starts looping the same chunk while streaming. Uses high default to prevent false positives.
+DEFAULT_MAX_LRU_CACHE_SIZE = 16
 #### Networking settings ####
 request_timeout: float = 6000  # time in seconds
 STREAM_SSE_DONE_STRING: str = "[DONE]"
+### SPEND TRACKING ###
+DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND = 0.001400  # price per second for a100 80GB
+
 
 LITELLM_CHAT_PROVIDERS = [
     "openai",

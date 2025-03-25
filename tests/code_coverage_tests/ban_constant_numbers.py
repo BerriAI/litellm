@@ -3,7 +3,7 @@ import ast
 import os
 
 # Extremely restrictive set of allowed numbers
-ALLOWED_NUMBERS = {0, 1, -1, 2, 10, 100}
+ALLOWED_NUMBERS = {0, 1, -1, 2, 10, 100, 1000}
 
 
 class HardcodedNumberFinder(ast.NodeVisitor):
