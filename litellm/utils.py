@@ -6403,6 +6403,8 @@ class ProviderConfigManager:
             return litellm.FireworksAIConfig()
         elif LlmProviders.OPENAI == provider:
             return litellm.OpenAIGPTConfig()
+        elif LlmProviders.GEMINI == provider:
+            return litellm.GeminiModelInfo()
         elif LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyChatConfig()
         elif LlmProviders.TOPAZ == provider:

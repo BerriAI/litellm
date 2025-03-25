@@ -303,7 +303,15 @@ def test_aget_valid_models():
     os.environ = old_environ
 
 
-def test_get_valid_models_with_check_provider_endpoint():
+def test_get_valid_models_with_custom_llm_provider():
+    from litellm.utils import ProviderConfigManager
+    from litellm.types.utils import LlmProviders
+
+    provider_config = ProviderConfigManager.get_provider_model_info(
+        model=None,
+        provider=LlmProviders("gemini"),
+    )
+    assert provider_config is not None
     valid_models = get_valid_models(
         check_provider_endpoint=True, custom_llm_provider="gemini"
     )
