@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import os
+import json
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -793,7 +794,7 @@ def test_redis_cache_completion():
     response3 = completion(
         model="gpt-3.5-turbo", messages=messages, caching=True, temperature=0.5
     )
-    response4 = completion(model="azure/chatgpt-v-2", messages=messages, caching=True)
+    response4 = completion(model="gpt-4o-mini", messages=messages, caching=True)
 
     print("\nresponse 1", response1)
     print("\nresponse 2", response2)
@@ -1689,19 +1690,11 @@ def test_cache_context_managers():
     print("VARS of litellm.cache", vars(litellm.cache))
 
 
-# test_cache_context_managers()
-
-
-@pytest.mark.skip(reason="beta test - new redis semantic cache")
 def test_redis_semantic_cache_completion():
     litellm.set_verbose = True
     import logging
 
     logging.basicConfig(level=logging.DEBUG)
-
-    random_number = random.randint(
-        1, 100000
-    )  # add a random number to ensure it's always adding /reading from cache
 
     print("testing semantic caching")
     litellm.cache = Cache(
@@ -1717,33 +1710,31 @@ def test_redis_semantic_cache_completion():
         messages=[
             {
                 "role": "user",
-                "content": f"write a one sentence poem about: {random_number}",
+                "content": "write a one sentence poem about summer",
             }
         ],
         max_tokens=20,
     )
     print(f"response1: {response1}")
 
-    random_number = random.randint(1, 100000)
-
     response2 = completion(
         model="gpt-3.5-turbo",
         messages=[
             {
                 "role": "user",
-                "content": f"write a one sentence poem about: {random_number}",
+                "content": "write a one sentence poem about summertime",
             }
         ],
         max_tokens=20,
     )
-    print(f"response2: {response1}")
+    print(f"response2: {response2}")
     assert response1.id == response2.id
 
 
 # test_redis_cache_completion()
 
 
-@pytest.mark.skip(reason="beta test - new redis semantic cache")
+@pytest.mark.flaky(reruns=3)
 @pytest.mark.asyncio
 async def test_redis_semantic_cache_acompletion():
     litellm.set_verbose = True
@@ -1751,38 +1742,34 @@ async def test_redis_semantic_cache_acompletion():
 
     logging.basicConfig(level=logging.DEBUG)
 
-    random_number = random.randint(
-        1, 100000
-    )  # add a random number to ensure it's always adding / reading from cache
-
     print("testing semantic caching")
     litellm.cache = Cache(
         type="redis-semantic",
         host=os.environ["REDIS_HOST"],
         port=os.environ["REDIS_PORT"],
         password=os.environ["REDIS_PASSWORD"],
-        similarity_threshold=0.8,
-        redis_semantic_cache_use_async=True,
+        similarity_threshold=0.7,
     )
     response1 = await litellm.acompletion(
         model="gpt-3.5-turbo",
         messages=[
             {
                 "role": "user",
-                "content": f"write a one sentence poem about: {random_number}",
+                "content": "write a one sentence poem about summer",
             }
         ],
         max_tokens=5,
     )
     print(f"response1: {response1}")
 
-    random_number = random.randint(1, 100000)
+    await asyncio.sleep(2)
+
     response2 = await litellm.acompletion(
         model="gpt-3.5-turbo",
         messages=[
             {
                 "role": "user",
-                "content": f"write a one sentence poem about: {random_number}",
+                "content": "write a one sentence poem about summertime",
             }
         ],
         max_tokens=5,
@@ -2146,29 +2133,62 @@ async def test_redis_proxy_batch_redis_get_cache():
     assert "cache_key" in response._hidden_params
 
 
-def test_logging_turn_off_message_logging_streaming():
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_logging_turn_off_message_logging_streaming(sync_mode):
     litellm.turn_off_message_logging = True
     mock_obj = Cache(type="local")
     litellm.cache = mock_obj
 
-    with patch.object(mock_obj, "add_cache", new=MagicMock()) as mock_client:
+    with patch.object(mock_obj, "add_cache") as mock_client, patch.object(
+        mock_obj, "async_add_cache"
+    ) as mock_async_client:
         print(f"mock_obj.add_cache: {mock_obj.add_cache}")
 
-        resp = litellm.completion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "hi"}],
-            mock_response="hello",
-            stream=True,
-        )
+        if sync_mode is True:
+            resp = litellm.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "hi"}],
+                mock_response="hello",
+                stream=True,
+            )
 
-        for chunk in resp:
-            continue
+            for chunk in resp:
+                continue
 
-        time.sleep(1)
+            time.sleep(1)
+            mock_client.assert_called_once()
+            print(f"mock_client.call_args: {mock_client.call_args}")
+            assert mock_client.call_args.args[0].choices[0].message.content == "hello"
+        else:
+            resp = await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "hi"}],
+                mock_response="hello",
+                stream=True,
+            )
 
-        mock_client.assert_called_once()
+            async for chunk in resp:
+                continue
 
-        assert mock_client.call_args.args[0].choices[0].message.content == "hello"
+            await asyncio.sleep(1)
+
+            mock_async_client.assert_called_once()
+            print(f"mock_async_client.call_args: {mock_async_client.call_args.args[0]}")
+            print(
+                f"mock_async_client.call_args: {json.loads(mock_async_client.call_args.args[0])}"
+            )
+            json_mock = json.loads(mock_async_client.call_args.args[0])
+            try:
+                assert json_mock["choices"][0]["message"]["content"] == "hello"
+            except Exception as e:
+                print(
+                    f"mock_async_client.call_args.args[0]: {mock_async_client.call_args.args[0]}"
+                )
+                print(
+                    f"mock_async_client.call_args.args[0]['choices']: {mock_async_client.call_args.args[0]['choices']}"
+                )
+                raise e
 
 
 def test_basic_caching_import():

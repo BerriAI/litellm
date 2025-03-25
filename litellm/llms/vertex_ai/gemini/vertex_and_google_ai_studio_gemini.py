@@ -207,6 +207,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "extra_headers",
             "seed",
             "logprobs",
+            "top_logprobs" # Added this to list of supported openAI params
         ]
 
     def map_tool_choice_values(
@@ -365,6 +366,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["presence_penalty"] = value
             if param == "logprobs":
                 optional_params["responseLogprobs"] = value
+            if param == "top_logprobs":
+                optional_params["logprobs"] = value
             if (param == "tools" or param == "functions") and isinstance(value, list):
                 optional_params["tools"] = self._map_function(value=value)
                 optional_params["litellm_param_is_function_call"] = (
@@ -846,7 +849,7 @@ async def make_call(
             message=VertexGeminiConfig().translate_exception_str(exception_string),
             headers=e.response.headers,
         )
-    if response.status_code != 200:
+    if response.status_code != 200 and response.status_code != 201:
         raise VertexAIError(
             status_code=response.status_code,
             message=response.text,
@@ -884,7 +887,7 @@ def make_sync_call(
 
     response = client.post(api_base, headers=headers, data=data, stream=True)
 
-    if response.status_code != 200:
+    if response.status_code != 200 and response.status_code != 201:
         raise VertexAIError(
             status_code=response.status_code,
             message=str(response.read()),

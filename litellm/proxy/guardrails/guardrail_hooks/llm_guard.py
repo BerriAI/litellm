@@ -128,6 +128,7 @@ class LLMGuard(CustomLogger):
             "image_generation",
             "moderation",
             "audio_transcription",
+            "responses",
         ],
     ):
         """

@@ -79,7 +79,7 @@ class VertexAITextEmbeddingConfig(BaseModel):
     ):
         for param, value in non_default_params.items():
             if param == "dimensions":
-                optional_params["output_dimensionality"] = value
+                optional_params["outputDimensionality"] = value
 
         if "input_type" in kwargs:
             optional_params["task_type"] = kwargs.pop("input_type")

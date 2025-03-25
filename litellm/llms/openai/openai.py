@@ -1,4 +1,3 @@
-import hashlib
 import time
 import types
 from typing import (
@@ -33,7 +32,6 @@ from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
-from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -50,7 +48,11 @@ from litellm.utils import (
 from ...types.llms.openai import *
 from ..base import BaseLLM
 from .chat.o_series_transformation import OpenAIOSeriesConfig
-from .common_utils import OpenAIError, drop_params_from_unprocessable_entity_error
+from .common_utils import (
+    BaseOpenAILLM,
+    OpenAIError,
+    drop_params_from_unprocessable_entity_error,
+)
 
 openaiOSeriesConfig = OpenAIOSeriesConfig()
 
@@ -317,7 +319,7 @@ class OpenAIChatCompletionResponseIterator(BaseModelResponseIterator):
             raise e
 
 
-class OpenAIChatCompletion(BaseLLM):
+class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
     def __init__(self) -> None:
         super().__init__()
@@ -343,7 +345,8 @@ class OpenAIChatCompletion(BaseLLM):
         max_retries: Optional[int] = DEFAULT_MAX_RETRIES,
         organization: Optional[str] = None,
         client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
-    ):
+    ) -> Optional[Union[OpenAI, AsyncOpenAI]]:
+        client_initialization_params: Dict = locals()
         if client is None:
             if not isinstance(max_retries, int):
                 raise OpenAIError(
@@ -352,25 +355,21 @@ class OpenAIChatCompletion(BaseLLM):
                         max_retries
                     ),
                 )
-            # Creating a new OpenAI Client
-            # check in memory cache before creating a new one
-            # Convert the API key to bytes
-            hashed_api_key = None
-            if api_key is not None:
-                hash_object = hashlib.sha256(api_key.encode())
-                # Hexadecimal representation of the hash
-                hashed_api_key = hash_object.hexdigest()
+            cached_client = self.get_cached_openai_client(
+                client_initialization_params=client_initialization_params,
+                client_type="openai",
+            )
 
-            _cache_key = f"hashed_api_key={hashed_api_key},api_base={api_base},timeout={timeout},max_retries={max_retries},organization={organization},is_async={is_async}"
-
-            _cached_client = litellm.in_memory_llm_clients_cache.get_cache(_cache_key)
-            if _cached_client:
-                return _cached_client
+            if cached_client:
+                if isinstance(cached_client, OpenAI) or isinstance(
+                    cached_client, AsyncOpenAI
+                ):
+                    return cached_client
             if is_async:
                 _new_client: Union[OpenAI, AsyncOpenAI] = AsyncOpenAI(
                     api_key=api_key,
                     base_url=api_base,
-                    http_client=litellm.aclient_session,
+                    http_client=OpenAIChatCompletion._get_async_http_client(),
                     timeout=timeout,
                     max_retries=max_retries,
                     organization=organization,
@@ -379,17 +378,17 @@ class OpenAIChatCompletion(BaseLLM):
                 _new_client = OpenAI(
                     api_key=api_key,
                     base_url=api_base,
-                    http_client=litellm.client_session,
+                    http_client=OpenAIChatCompletion._get_sync_http_client(),
                     timeout=timeout,
                     max_retries=max_retries,
                     organization=organization,
                 )
 
             ## SAVE CACHE KEY
-            litellm.in_memory_llm_clients_cache.set_cache(
-                key=_cache_key,
-                value=_new_client,
-                ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+            self.set_cached_openai_client(
+                openai_client=_new_client,
+                client_initialization_params=client_initialization_params,
+                client_type="openai",
             )
             return _new_client
 
@@ -2650,7 +2649,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: Optional[str],
         instructions: Optional[str],
-        metadata: Optional[object],
+        metadata: Optional[Dict],
         model: Optional[str],
         stream: Optional[bool],
         tools: Optional[Iterable[AssistantToolParam]],
@@ -2689,12 +2688,12 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: Optional[str],
         instructions: Optional[str],
-        metadata: Optional[object],
+        metadata: Optional[Dict],
         model: Optional[str],
         tools: Optional[Iterable[AssistantToolParam]],
         event_handler: Optional[AssistantEventHandler],
     ) -> AsyncAssistantStreamManager[AsyncAssistantEventHandler]:
-        data = {
+        data: Dict[str, Any] = {
             "thread_id": thread_id,
             "assistant_id": assistant_id,
             "additional_instructions": additional_instructions,
@@ -2714,12 +2713,12 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: Optional[str],
         instructions: Optional[str],
-        metadata: Optional[object],
+        metadata: Optional[Dict],
         model: Optional[str],
         tools: Optional[Iterable[AssistantToolParam]],
         event_handler: Optional[AssistantEventHandler],
     ) -> AssistantStreamManager[AssistantEventHandler]:
-        data = {
+        data: Dict[str, Any] = {
             "thread_id": thread_id,
             "assistant_id": assistant_id,
             "additional_instructions": additional_instructions,
@@ -2741,7 +2740,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: Optional[str],
         instructions: Optional[str],
-        metadata: Optional[object],
+        metadata: Optional[Dict],
         model: Optional[str],
         stream: Optional[bool],
         tools: Optional[Iterable[AssistantToolParam]],
@@ -2763,7 +2762,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: Optional[str],
         instructions: Optional[str],
-        metadata: Optional[object],
+        metadata: Optional[Dict],
         model: Optional[str],
         stream: Optional[bool],
         tools: Optional[Iterable[AssistantToolParam]],
@@ -2786,7 +2785,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: Optional[str],
         instructions: Optional[str],
-        metadata: Optional[object],
+        metadata: Optional[Dict],
         model: Optional[str],
         stream: Optional[bool],
         tools: Optional[Iterable[AssistantToolParam]],
