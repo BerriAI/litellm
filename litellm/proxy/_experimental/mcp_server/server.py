@@ -22,6 +22,10 @@ try:
 except ImportError as e:
     verbose_logger.debug(f"MCP module not found: {e}")
     MCP_AVAILABLE = False
+    router = APIRouter(
+        prefix="/mcp",
+        tags=["mcp"],
+    )
 
 
 if MCP_AVAILABLE:
