@@ -4658,6 +4658,77 @@ def test_humanloop_completion(monkeypatch):
         messages=[{"role": "user", "content": "Tell me a joke."}],
     )
 
+def test_completion_novita_ai():
+    litellm.set_verbose = True
+    messages = [
+        {"role": "system", "content": "You're a good bot"},
+        {
+            "role": "user",
+            "content": "Hey",
+        },
+    ]
+    
+    from openai import OpenAI
+    openai_client = OpenAI(api_key="fake-key")
+    
+    with patch.object(
+        openai_client.chat.completions, "create", new=MagicMock()
+    ) as mock_call:
+        try:
+            completion(
+                model="novita/meta-llama/llama-3.3-70b-instruct",
+                messages=messages,
+                client=openai_client,
+                api_base="https://api.novita.ai/v3/openai",
+            )
+            
+            mock_call.assert_called_once()
+            
+            # Verify model is passed correctly
+            assert mock_call.call_args.kwargs["model"] == "meta-llama/llama-3.3-70b-instruct"
+            # Verify messages are passed correctly
+            assert mock_call.call_args.kwargs["messages"] == messages
+            
+        except Exception as e:
+            pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize(
+    "api_key", ["my-bad-api-key"]
+)
+def test_completion_novita_ai_dynamic_params(api_key):
+    try:
+        litellm.set_verbose = True
+        messages = [
+            {"role": "system", "content": "You're a good bot"},
+            {
+                "role": "user",
+                "content": "Hey",
+            },
+        ]
+        
+        from openai import OpenAI
+        openai_client = OpenAI(api_key="fake-key")
+        
+        with patch.object(
+            openai_client.chat.completions, "create", side_effect=Exception("Invalid API key")
+        ) as mock_call:
+            try:
+                completion(
+                    model="novita/meta-llama/llama-3.3-70b-instruct",
+                    messages=messages,
+                    api_key=api_key,
+                    client=openai_client,
+                    api_base="https://api.novita.ai/v3/openai",
+                )
+                pytest.fail(f"This call should have failed!")
+            except Exception as e:
+                # This should fail with the mocked exception
+                assert "Invalid API key" in str(e)
+                
+            mock_call.assert_called_once()
+    except Exception as e:
+        pytest.fail(f"Unexpected error: {e}")
 
 def test_deepseek_reasoning_content_completion():
     try:

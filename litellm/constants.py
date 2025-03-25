@@ -82,6 +82,7 @@ LITELLM_CHAT_PROVIDERS = [
     "hosted_vllm",
     "lm_studio",
     "galadriel",
+    "novita",
 ]
 
 
@@ -171,6 +172,7 @@ openai_compatible_providers: List = [
     "hosted_vllm",
     "lm_studio",
     "galadriel",
+    "novita",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
