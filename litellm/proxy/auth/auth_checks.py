@@ -987,33 +987,34 @@ async def get_key_object(
         )
 
     # else, check db
-    try:
-        _valid_token: Optional[BaseModel] = await prisma_client.get_data(
-            token=hashed_token,
-            table_name="combined_view",
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
+    _valid_token: Optional[BaseModel] = await prisma_client.get_data(
+        token=hashed_token,
+        table_name="combined_view",
+        parent_otel_span=parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    if _valid_token is None:
+        raise ProxyException(
+            message="Key doesn't exist in db. key={}. Create key via `/key/generate` call.".format(
+                hashed_token
+            ),
+            type=ProxyErrorTypes.token_not_found_in_db,
+            param="key",
+            code=status.HTTP_401_UNAUTHORIZED,
         )
 
-        if _valid_token is None:
-            raise Exception
+    _response = UserAPIKeyAuth(**_valid_token.model_dump(exclude_none=True))
 
-        _response = UserAPIKeyAuth(**_valid_token.model_dump(exclude_none=True))
+    # save the key object to cache
+    await _cache_key_object(
+        hashed_token=hashed_token,
+        user_api_key_obj=_response,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
-        # save the key object to cache
-        await _cache_key_object(
-            hashed_token=hashed_token,
-            user_api_key_obj=_response,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-
-        return _response
-    except Exception:
-        traceback.print_exc()
-        raise Exception(
-            f"Key doesn't exist in db. key={hashed_token}. Create key via `/key/generate` call."
-        )
+    return _response
 
 
 @log_db_metrics
