@@ -10,7 +10,7 @@ async def call_api_gateway(data):
     if "error" in api_response:
         return get_llm_formatted_error(api_response.get("error"))
 
-    response = extract_response_field(data, api_response)
+    response = extract_response_field(api_data, api_response)
     return get_llm_formatted_output(response)
 
 
@@ -39,9 +39,9 @@ def make_api_call(api_data):
         return {"error": str(e)}
 
 
-def extract_response_field(data, api_response):
+def extract_response_field(api_data, api_response):
     # return formatted response
-    output_schema = data.get("output_schema", {})
+    output_schema = api_data.get("output_schema", {})
     response_schema = output_schema.get("response")
 
     if response_schema in api_response:
