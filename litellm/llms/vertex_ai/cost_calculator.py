@@ -20,7 +20,7 @@ Vertex AI -> character based pricing
 Google AI Studio -> token based pricing
 """
 
-models_without_dynamic_pricing = ["gemini-1.0-pro", "gemini-pro"]
+models_without_dynamic_pricing = ["gemini-1.0-pro", "gemini-pro", "gemini-2"]
 
 
 def cost_router(
@@ -45,6 +45,8 @@ def cost_router(
     elif custom_llm_provider == "vertex_ai" and (
         call_type == "embedding" or call_type == "aembedding"
     ):
+        return "cost_per_token"
+    elif custom_llm_provider == "vertex_ai" and ("gemini-2" in model):
         return "cost_per_token"
     return "cost_per_character"
 
@@ -206,36 +208,26 @@ def cost_per_token(
     )
 
     ## CALCULATE INPUT COST
+    input_cost_per_token_above_128k_tokens = model_info.get(
+        "input_cost_per_token_above_128k_tokens"
+    )
     if (
         _is_above_128k(tokens=prompt_tokens)
-        and model not in models_without_dynamic_pricing
+        and input_cost_per_token_above_128k_tokens is not None
     ):
-        assert (
-            "input_cost_per_token_above_128k_tokens" in model_info
-            and model_info["input_cost_per_token_above_128k_tokens"] is not None
-        ), "model info for model={} does not have pricing for > 128k tokens\nmodel_info={}".format(
-            model, model_info
-        )
-        prompt_cost = (
-            prompt_tokens * model_info["input_cost_per_token_above_128k_tokens"]
-        )
+        prompt_cost = prompt_tokens * input_cost_per_token_above_128k_tokens
     else:
         prompt_cost = prompt_tokens * model_info["input_cost_per_token"]
 
     ## CALCULATE OUTPUT COST
+    output_cost_per_token_above_128k_tokens = model_info.get(
+        "output_cost_per_token_above_128k_tokens"
+    )
     if (
         _is_above_128k(tokens=completion_tokens)
-        and model not in models_without_dynamic_pricing
+        and output_cost_per_token_above_128k_tokens is not None
     ):
-        assert (
-            "output_cost_per_token_above_128k_tokens" in model_info
-            and model_info["output_cost_per_token_above_128k_tokens"] is not None
-        ), "model info for model={} does not have pricing for > 128k tokens\nmodel_info={}".format(
-            model, model_info
-        )
-        completion_cost = (
-            completion_tokens * model_info["output_cost_per_token_above_128k_tokens"]
-        )
+        completion_cost = completion_tokens * output_cost_per_token_above_128k_tokens
     else:
         completion_cost = completion_tokens * model_info["output_cost_per_token"]
 
