@@ -186,16 +186,19 @@ def test_document_inlining_example(disable_add_transform_inline_image_block):
                 disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
             )
     else:
-        completion = litellm.completion(
-            model="fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "this is a test request, write a short poem",
-                },
-            ],
-            disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
-        )
+        try:
+            completion = litellm.completion(
+                model="fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "this is a test request, write a short poem",
+                    },
+                ],
+                disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
+            )
+        except litellm.ServiceUnavailableError:
+            pytest.skip("ServiceUnavailableError")
         print(completion)
 
 
