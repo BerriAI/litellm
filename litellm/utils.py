@@ -5794,7 +5794,11 @@ def get_valid_models(
             if provider == "azure":
                 valid_models.append("Azure-LLM")
             elif provider_config is not None and check_provider_endpoint:
-                valid_models.extend(provider_config.get_models())
+                try:
+                    models = provider_config.get_models()
+                    valid_models.extend(models)
+                except Exception as e:
+                    verbose_logger.debug(f"Error getting valid models: {e}")
             else:
                 models_for_provider = litellm.models_by_provider.get(provider, [])
                 valid_models.extend(models_for_provider)
@@ -6409,6 +6413,8 @@ class ProviderConfigManager:
             return litellm.LiteLLMProxyChatConfig()
         elif LlmProviders.TOPAZ == provider:
             return litellm.TopazModelInfo()
+        elif LlmProviders.ANTHROPIC == provider:
+            return litellm.AnthropicModelInfo()
 
         return None
 
