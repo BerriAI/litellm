@@ -1,7 +1,7 @@
 # What is this?
 ## Helper utilities for cost_per_token()
 
-from typing import Optional, Tuple
+from typing import Optional, Tuple, cast
 
 import litellm
 from litellm import verbose_logger
@@ -143,26 +143,43 @@ def generic_cost_per_token(
     ### Cost of processing (non-cache hit + cache hit) + Cost of cache-writing (cache writing)
     prompt_cost = 0.0
     ### PROCESSING COST
-    non_cache_hit_tokens = usage.prompt_tokens
+    text_tokens = usage.prompt_tokens
     cache_hit_tokens = 0
-    if usage.prompt_tokens_details and usage.prompt_tokens_details.cached_tokens:
-        cache_hit_tokens = usage.prompt_tokens_details.cached_tokens
-        non_cache_hit_tokens = non_cache_hit_tokens - cache_hit_tokens
-
+    audio_tokens = 0
+    if usage.prompt_tokens_details:
+        cache_hit_tokens = (
+            cast(
+                Optional[int], getattr(usage.prompt_tokens_details, "cached_tokens", 0)
+            )
+            or 0
+        )
+        text_tokens = (
+            cast(Optional[int], getattr(usage.prompt_tokens_details, "text_tokens", 0))
+            or 0
+        )
+        audio_tokens = (
+            cast(Optional[int], getattr(usage.prompt_tokens_details, "audio_tokens", 0))
+            or 0
+        )
     prompt_base_cost = _get_prompt_token_base_cost(model_info=model_info, usage=usage)
 
-    prompt_cost = float(non_cache_hit_tokens) * prompt_base_cost
+    prompt_cost = float(text_tokens) * prompt_base_cost
 
     _cache_read_input_token_cost = model_info.get("cache_read_input_token_cost")
+
+    ### CACHE READ COST
     if (
         _cache_read_input_token_cost is not None
-        and usage.prompt_tokens_details
-        and usage.prompt_tokens_details.cached_tokens
+        and cache_hit_tokens is not None
+        and cache_hit_tokens > 0
     ):
-        prompt_cost += (
-            float(usage.prompt_tokens_details.cached_tokens)
-            * _cache_read_input_token_cost
-        )
+        prompt_cost += float(cache_hit_tokens) * _cache_read_input_token_cost
+
+    ### AUDIO COST
+
+    audio_token_cost = model_info.get("input_cost_per_audio_token")
+    if audio_token_cost is not None and audio_tokens is not None and audio_tokens > 0:
+        prompt_cost += float(audio_tokens) * audio_token_cost
 
     ### CACHE WRITING COST
     _cache_creation_input_token_cost = model_info.get("cache_creation_input_token_cost")
