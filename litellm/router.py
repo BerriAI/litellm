@@ -4495,11 +4495,11 @@ class Router:
         Each provider uses diff .env vars for pass-through endpoints, this helper uses the deployment credentials to set the .env vars for pass-through endpoints
         """
         if deployment.litellm_params.use_in_pass_through is True:
-            if custom_llm_provider == "vertex_ai":
-                from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
-                    vertex_pass_through_router,
-                )
+            from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+                passthrough_endpoint_router,
+            )
 
+            if custom_llm_provider == "vertex_ai":
                 if (
                     deployment.litellm_params.vertex_project is None
                     or deployment.litellm_params.vertex_location is None
@@ -4508,16 +4508,12 @@ class Router:
                     raise ValueError(
                         "vertex_project, vertex_location, and vertex_credentials must be set in litellm_params for pass-through endpoints"
                     )
-                vertex_pass_through_router.add_vertex_credentials(
+                passthrough_endpoint_router.add_vertex_credentials(
                     project_id=deployment.litellm_params.vertex_project,
                     location=deployment.litellm_params.vertex_location,
                     vertex_credentials=deployment.litellm_params.vertex_credentials,
                 )
             else:
-                from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-                    passthrough_endpoint_router,
-                )
-
                 passthrough_endpoint_router.set_pass_through_credentials(
                     custom_llm_provider=custom_llm_provider,
                     api_base=deployment.litellm_params.api_base,
@@ -4929,6 +4925,11 @@ class Router:
                 ):
                     model_group_info.supports_function_calling = True
                 if (
+                    model_info.get("supports_web_search", None) is not None
+                    and model_info["supports_web_search"] is True  # type: ignore
+                ):
+                    model_group_info.supports_web_search = True
+                if (
                     model_info.get("supported_openai_params", None) is not None
                     and model_info["supported_openai_params"] is not None
                 ):
@@ -5290,10 +5291,11 @@ class Router:
 
             if len(returned_models) == 0:  # check if wildcard route
                 potential_wildcard_models = self.pattern_router.route(model_name)
-                if potential_wildcard_models is not None:
-                    returned_models.extend(
-                        [DeploymentTypedDict(**m) for m in potential_wildcard_models]  # type: ignore
-                    )
+                if model_name is not None and potential_wildcard_models is not None:
+                    for m in potential_wildcard_models:
+                        deployment_typed_dict = DeploymentTypedDict(**m)  # type: ignore
+                        deployment_typed_dict["model_name"] = model_name
+                        returned_models.append(deployment_typed_dict)
 
             if model_name is None:
                 returned_models += self.model_list

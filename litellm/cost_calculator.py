@@ -9,6 +9,9 @@ from pydantic import BaseModel
 import litellm
 import litellm._logging
 from litellm import verbose_logger
+from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
+    StandardBuiltInToolCostTracking,
+)
 from litellm.litellm_core_utils.llm_cost_calc.utils import _generic_cost_per_character
 from litellm.llms.anthropic.cost_calculation import (
     cost_per_token as anthropic_cost_per_token,
@@ -57,6 +60,7 @@ from litellm.types.utils import (
     LlmProvidersSet,
     ModelInfo,
     PassthroughCallTypes,
+    StandardBuiltInToolsParams,
     Usage,
 )
 from litellm.utils import (
@@ -524,6 +528,7 @@ def completion_cost(  # noqa: PLR0915
     optional_params: Optional[dict] = None,
     custom_pricing: Optional[bool] = None,
     base_model: Optional[str] = None,
+    standard_built_in_tools_params: Optional[StandardBuiltInToolsParams] = None,
 ) -> float:
     """
     Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
@@ -802,10 +807,33 @@ def completion_cost(  # noqa: PLR0915
             rerank_billed_units=rerank_billed_units,
         )
         _final_cost = prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
+        _final_cost += StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+            model=model,
+            response_object=completion_response,
+            standard_built_in_tools_params=standard_built_in_tools_params,
+            custom_llm_provider=custom_llm_provider,
+        )
 
         return _final_cost
     except Exception as e:
         raise e
+
+
+def get_response_cost_from_hidden_params(
+    hidden_params: Union[dict, BaseModel]
+) -> Optional[float]:
+    if isinstance(hidden_params, BaseModel):
+        _hidden_params_dict = hidden_params.model_dump()
+    else:
+        _hidden_params_dict = hidden_params
+
+    additional_headers = _hidden_params_dict.get("additional_headers", {})
+    if additional_headers and "x-litellm-response-cost" in additional_headers:
+        response_cost = additional_headers["x-litellm-response-cost"]
+        if response_cost is None:
+            return None
+        return float(additional_headers["x-litellm-response-cost"])
+    return None
 
 
 def response_cost_calculator(
@@ -844,7 +872,8 @@ def response_cost_calculator(
     base_model: Optional[str] = None,
     custom_pricing: Optional[bool] = None,
     prompt: str = "",
-) -> Optional[float]:
+    standard_built_in_tools_params: Optional[StandardBuiltInToolsParams] = None,
+) -> float:
     """
     Returns
     - float or None: cost of response
@@ -856,6 +885,14 @@ def response_cost_calculator(
         else:
             if isinstance(response_object, BaseModel):
                 response_object._hidden_params["optional_params"] = optional_params
+
+                if hasattr(response_object, "_hidden_params"):
+                    provider_response_cost = get_response_cost_from_hidden_params(
+                        response_object._hidden_params
+                    )
+                    if provider_response_cost is not None:
+                        return provider_response_cost
+
             response_cost = completion_cost(
                 completion_response=response_object,
                 model=model,
@@ -865,6 +902,7 @@ def response_cost_calculator(
                 custom_pricing=custom_pricing,
                 base_model=base_model,
                 prompt=prompt,
+                standard_built_in_tools_params=standard_built_in_tools_params,
             )
         return response_cost
     except Exception as e:

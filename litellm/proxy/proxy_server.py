@@ -23,6 +23,7 @@ from typing import (
     get_origin,
     get_type_hints,
 )
+
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -32,9 +33,12 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.integrations.opentelemetry import OpenTelemetry
+
     Span = _Span
 else:
     Span = Any
+    OpenTelemetry = Any
 
 
 def showwarning(message, category, filename, lineno, file=None, line=None):
@@ -232,6 +236,9 @@ from litellm.proxy.openai_files_endpoints.files_endpoints import (
 )
 from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+    passthrough_endpoint_router,
+)
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     router as llm_passthrough_router,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
@@ -254,6 +261,7 @@ from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
+    ProxyUpdateSpend,
     _cache_user_row,
     _get_docs_url,
     _get_projected_spend_over_limit,
@@ -267,8 +275,6 @@ from litellm.proxy.utils import (
 from litellm.proxy.vertex_ai_endpoints.langfuse_endpoints import (
     router as langfuse_router,
 )
-from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import router as vertex_router
-from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import set_default_vertex_config
 from litellm.router import (
     AssistantsTypedDict,
     Deployment,
@@ -775,7 +781,7 @@ disable_spend_logs = False
 jwt_handler = JWTHandler()
 prompt_injection_detection_obj: Optional[_OPTIONAL_PromptInjectionDetection] = None
 store_model_in_db: bool = False
-open_telemetry_logger: Optional[Any] = None
+open_telemetry_logger: Optional[OpenTelemetry] = None
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj = ProxyLogging(
     user_api_key_cache=user_api_key_cache, premium_user=premium_user
@@ -924,6 +930,8 @@ async def update_database(  # noqa: PLR0915
         verbose_proxy_logger.debug(
             f"Enters prisma db call, response_cost: {response_cost}, token: {token}; user_id: {user_id}; team_id: {team_id}"
         )
+        if ProxyUpdateSpend.disable_spend_updates() is True:
+            return
         if token is not None and isinstance(token, str) and token.startswith("sk-"):
             hashed_token = hash_token(token=token)
         else:
@@ -1776,9 +1784,6 @@ class ProxyConfig:
                             reset_color_code,
                             cache_password,
                         )
-                    if cache_type == "redis-semantic":
-                        # by default this should always be async
-                        cache_params.update({"redis_semantic_cache_use_async": True})
 
                     # users can pass os.environ/ variables on the proxy - we should read them from the env
                     for key, value in cache_params.items():
@@ -2108,7 +2113,9 @@ class ProxyConfig:
 
         ## default config for vertex ai routes
         default_vertex_config = config.get("default_vertex_config", None)
-        set_default_vertex_config(config=default_vertex_config)
+        passthrough_endpoint_router.set_default_vertex_config(
+            config=default_vertex_config
+        )
 
         ## ROUTER SETTINGS (e.g. routing_strategy, ...)
         router_settings = config.get("router_settings", None)
@@ -3047,7 +3054,11 @@ async def async_data_generator(
 ):
     verbose_proxy_logger.debug("inside generator")
     try:
-        async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(user_api_key_dict=user_api_key_dict, response=response, request_data=request_data):
+        async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+            request_data=request_data,
+        ):
             verbose_proxy_logger.debug(
                 "async_data_generator: received streaming chunk - {}".format(chunk)
             )
@@ -3271,14 +3282,14 @@ class ProxyStartupEvent:
                 prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
             )
 
-        ### GET STORED CREDENTIALS ###
-        scheduler.add_job(
-            proxy_config.get_credentials,
-            "interval",
-            seconds=10,
-            args=[prisma_client],
-        )
-        await proxy_config.get_credentials(prisma_client=prisma_client)
+            ### GET STORED CREDENTIALS ###
+            scheduler.add_job(
+                proxy_config.get_credentials,
+                "interval",
+                seconds=10,
+                args=[prisma_client],
+            )
+            await proxy_config.get_credentials(prisma_client=prisma_client)
         if (
             proxy_logging_obj is not None
             and proxy_logging_obj.slack_alerting_instance.alerting is not None
@@ -6158,18 +6169,18 @@ async def model_info_v1(  # noqa: PLR0915
     )
 
     if len(all_models_str) > 0:
-        model_names = all_models_str
-        llm_model_list = llm_router.get_model_list()
+        _relevant_models = []
+        for model in all_models_str:
+            router_models = llm_router.get_model_list(model_name=model)
+            if router_models is not None:
+                _relevant_models.extend(router_models)
         if llm_model_list is not None:
-            _relevant_models = [
-                m for m in llm_model_list if m["model_name"] in model_names
-            ]
             all_models = copy.deepcopy(_relevant_models)  # type: ignore
         else:
             all_models = []
 
-    for model in all_models:
-        model = _get_proxy_model_info(model=model)
+    for in_place_model in all_models:
+        in_place_model = _get_proxy_model_info(model=in_place_model)
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}
@@ -8150,7 +8161,6 @@ app.include_router(batches_router)
 app.include_router(rerank_router)
 app.include_router(fine_tuning_router)
 app.include_router(credential_router)
-app.include_router(vertex_router)
 app.include_router(llm_passthrough_router)
 app.include_router(anthropic_router)
 app.include_router(langfuse_router)

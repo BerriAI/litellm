@@ -1975,6 +1975,60 @@ def supports_system_messages(model: str, custom_llm_provider: Optional[str]) -> 
     )
 
 
+def supports_web_search(model: str, custom_llm_provider: Optional[str] = None) -> bool:
+    """
+    Check if the given model supports web search and return a boolean value.
+
+    Parameters:
+    model (str): The model name to be checked.
+    custom_llm_provider (str): The provider to be checked.
+
+    Returns:
+    bool: True if the model supports web search, False otherwise.
+
+    Raises:
+    Exception: If the given model is not found in model_prices_and_context_window.json.
+    """
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_web_search",
+    )
+
+
+def supports_native_streaming(model: str, custom_llm_provider: Optional[str]) -> bool:
+    """
+    Check if the given model supports native streaming and return a boolean value.
+
+    Parameters:
+    model (str): The model name to be checked.
+    custom_llm_provider (str): The provider to be checked.
+
+    Returns:
+    bool: True if the model supports native streaming, False otherwise.
+
+    Raises:
+    Exception: If the given model is not found in model_prices_and_context_window.json.
+    """
+    try:
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+        model_info = _get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        supports_native_streaming = model_info.get("supports_native_streaming", True)
+        if supports_native_streaming is None:
+            supports_native_streaming = True
+        return supports_native_streaming
+    except Exception as e:
+        verbose_logger.debug(
+            f"Model not found or error in checking supports_native_streaming support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
+        )
+        return False
+
+
 def supports_response_schema(
     model: str, custom_llm_provider: Optional[str] = None
 ) -> bool:
@@ -4493,6 +4547,10 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_native_streaming=_model_info.get(
                     "supports_native_streaming", None
                 ),
+                supports_web_search=_model_info.get("supports_web_search", False),
+                search_context_cost_per_query=_model_info.get(
+                    "search_context_cost_per_query", None
+                ),
                 tpm=_model_info.get("tpm", None),
                 rpm=_model_info.get("rpm", None),
             )
@@ -4561,6 +4619,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             supports_audio_input: Optional[bool]
             supports_audio_output: Optional[bool]
             supports_pdf_input: Optional[bool]
+            supports_web_search: Optional[bool]
     Raises:
         Exception: If the model is not mapped yet.
 

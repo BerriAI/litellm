@@ -2,7 +2,7 @@
 import warnings
 
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
-### INIT VARIABLES #########
+### INIT VARIABLES ##########
 import threading
 import os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
@@ -761,6 +761,7 @@ from .utils import (
     create_pretrained_tokenizer,
     create_tokenizer,
     supports_function_calling,
+    supports_web_search,
     supports_response_schema,
     supports_parallel_function_calling,
     supports_vision,

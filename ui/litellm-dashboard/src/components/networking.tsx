@@ -3970,7 +3970,73 @@ export const uiSpendLogDetailsCall = async (
     return data;
   } catch (error) {
     console.error("Failed to fetch log details:", error);
+  throw error;
+  }
+};
+
+export const getInternalUserSettings = async (accessToken: string) => {
+  try {
+    // Construct base URL
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/get/internal_user_settings`
+      : `/get/internal_user_settings`;
+
+    console.log("Fetching SSO settings from:", url);
+    
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Fetched SSO settings:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch SSO settings:", error);
     throw error;
   }
 };
 
+
+export const updateInternalUserSettings = async (accessToken: string, settings: Record<string, any>) => {
+  try {
+    // Construct base URL
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/update/internal_user_settings`
+      : `/update/internal_user_settings`;
+
+    console.log("Updating internal user settings:", settings);
+    
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(settings),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Updated internal user settings:", data);
+    message.success("Internal user settings updated successfully");
+    return data;
+  } catch (error) {
+    console.error("Failed to update internal user settings:", error);
+    throw error;
+  }
+};

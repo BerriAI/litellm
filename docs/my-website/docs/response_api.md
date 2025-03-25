@@ -29,7 +29,7 @@ import litellm
 
 # Non-streaming response
 response = litellm.responses(
-    model="gpt-4o",
+    model="o1-pro",
     input="Tell me a three sentence bedtime story about a unicorn.",
     max_output_tokens=100
 )
@@ -43,7 +43,7 @@ import litellm
 
 # Streaming response
 response = litellm.responses(
-    model="gpt-4o",
+    model="o1-pro",
     input="Tell me a three sentence bedtime story about a unicorn.",
     stream=True
 )
@@ -58,9 +58,9 @@ for event in response:
 First, add this to your litellm proxy config.yaml:
 ```yaml
 model_list:
-  - model_name: gpt-4o
+  - model_name: o1-pro
     litellm_params:
-      model: openai/gpt-4o
+      model: openai/o1-pro
       api_key: os.environ/OPENAI_API_KEY
 ```
 
@@ -85,7 +85,7 @@ client = OpenAI(
 
 # Non-streaming response
 response = client.responses.create(
-    model="gpt-4o",
+    model="o1-pro",
     input="Tell me a three sentence bedtime story about a unicorn."
 )
 
@@ -104,7 +104,7 @@ client = OpenAI(
 
 # Streaming response
 response = client.responses.create(
-    model="gpt-4o",
+    model="o1-pro",
     input="Tell me a three sentence bedtime story about a unicorn.",
     stream=True
 )

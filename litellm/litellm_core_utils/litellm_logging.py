@@ -29,11 +29,15 @@ from litellm.batches.batch_utils import _handle_completed_batch
 from litellm.caching.caching import DualCache, InMemoryCache
 from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.cost_calculator import _select_model_name_for_cost_calc
+from litellm.integrations.arize.arize import ArizeLogger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.pagerduty.pagerduty import PagerDutyAlerting
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
+    StandardBuiltInToolCostTracking,
+)
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
@@ -59,6 +63,7 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     RawRequestTypedDict,
+    StandardBuiltInToolsParams,
     StandardCallbackDynamicParams,
     StandardLoggingAdditionalHeaders,
     StandardLoggingHiddenParams,
@@ -76,11 +81,11 @@ from litellm.types.utils import (
 from litellm.utils import _get_base_model_from_metadata, executor, print_verbose
 
 from ..integrations.argilla import ArgillaLogger
-from ..integrations.arize.arize import ArizeLogger
 from ..integrations.arize.arize_phoenix import ArizePhoenixLogger
 from ..integrations.athina import AthinaLogger
 from ..integrations.azure_storage.azure_storage import AzureBlobStorageLogger
 from ..integrations.braintrust_logging import BraintrustLogger
+from ..integrations.custom_prompt_management import CustomPromptManagement
 from ..integrations.datadog.datadog import DataDogLogger
 from ..integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
 from ..integrations.dynamodb import DyanmoDBLogger
@@ -110,7 +115,6 @@ from .exception_mapping_utils import _get_response_headers
 from .initialize_dynamic_callback_params import (
     initialize_standard_callback_dynamic_params as _initialize_standard_callback_dynamic_params,
 )
-from .logging_utils import _assemble_complete_response_from_streaming_chunks
 from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
 try:
@@ -264,7 +268,9 @@ class Logging(LiteLLMLoggingBaseClass):
         self.standard_callback_dynamic_params: StandardCallbackDynamicParams = (
             self.initialize_standard_callback_dynamic_params(kwargs)
         )
-
+        self.standard_built_in_tools_params: StandardBuiltInToolsParams = (
+            self.initialize_standard_built_in_tools_params(kwargs)
+        )
         ## TIME TO FIRST TOKEN LOGGING ##
         self.completion_start_time: Optional[datetime.datetime] = None
         self._llm_caching_handler: Optional[LLMCachingHandler] = None
@@ -369,6 +375,23 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         return _initialize_standard_callback_dynamic_params(kwargs)
 
+    def initialize_standard_built_in_tools_params(
+        self, kwargs: Optional[Dict] = None
+    ) -> StandardBuiltInToolsParams:
+        """
+        Initialize the standard built-in tools params from the kwargs
+
+        checks if web_search_options in kwargs or tools and sets the corresponding attribute in StandardBuiltInToolsParams
+        """
+        return StandardBuiltInToolsParams(
+            web_search_options=StandardBuiltInToolCostTracking._get_web_search_options(
+                kwargs or {}
+            ),
+            file_search=StandardBuiltInToolCostTracking._get_file_search_tool_call(
+                kwargs or {}
+            ),
+        )
+
     def update_environment_variables(
         self,
         litellm_params: Dict,
@@ -430,34 +453,58 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_variables: Optional[dict],
     ) -> Tuple[str, List[AllMessageValues], dict]:
 
-        for (
-            custom_logger_compatible_callback
-        ) in litellm._known_custom_logger_compatible_callbacks:
-            if model.startswith(custom_logger_compatible_callback):
+        custom_logger = self.get_custom_logger_for_prompt_management(model)
+        if custom_logger:
+            model, messages, non_default_params = (
+                custom_logger.get_chat_completion_prompt(
+                    model=model,
+                    messages=messages,
+                    non_default_params=non_default_params,
+                    prompt_id=prompt_id,
+                    prompt_variables=prompt_variables,
+                    dynamic_callback_params=self.standard_callback_dynamic_params,
+                )
+            )
+        self.messages = messages
+        return model, messages, non_default_params
+
+    def get_custom_logger_for_prompt_management(
+        self, model: str
+    ) -> Optional[CustomLogger]:
+        """
+        Get a custom logger for prompt management based on model name or available callbacks.
+
+        Args:
+            model: The model name to check for prompt management integration
+
+        Returns:
+            A CustomLogger instance if one is found, None otherwise
+        """
+        # First check if model starts with a known custom logger compatible callback
+        for callback_name in litellm._known_custom_logger_compatible_callbacks:
+            if model.startswith(callback_name):
                 custom_logger = _init_custom_logger_compatible_class(
-                    logging_integration=custom_logger_compatible_callback,
+                    logging_integration=callback_name,
                     internal_usage_cache=None,
                     llm_router=None,
                 )
+                if custom_logger is not None:
+                    self.model_call_details["prompt_integration"] = model.split("/")[0]
+                    return custom_logger
 
-                if custom_logger is None:
-                    continue
-                old_name = model
+        # Then check for any registered CustomPromptManagement loggers
+        prompt_management_loggers = (
+            litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=CustomPromptManagement
+            )
+        )
 
-                model, messages, non_default_params = (
-                    custom_logger.get_chat_completion_prompt(
-                        model=model,
-                        messages=messages,
-                        non_default_params=non_default_params,
-                        prompt_id=prompt_id,
-                        prompt_variables=prompt_variables,
-                        dynamic_callback_params=self.standard_callback_dynamic_params,
-                    )
-                )
-                self.model_call_details["prompt_integration"] = old_name.split("/")[0]
-        self.messages = messages
+        if prompt_management_loggers:
+            logger = prompt_management_loggers[0]
+            self.model_call_details["prompt_integration"] = logger.__class__.__name__
+            return logger
 
-        return model, messages, non_default_params
+        return None
 
     def _get_raw_request_body(self, data: Optional[Union[dict, str]]) -> dict:
         if data is None:
@@ -879,6 +926,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "optional_params": self.optional_params,
                 "custom_pricing": custom_pricing,
                 "prompt": prompt,
+                "standard_built_in_tools_params": self.standard_built_in_tools_params,
             }
         except Exception as e:  # error creating kwargs for cost calculation
             debug_info = StandardLoggingModelCostFailureDebugInformation(
@@ -1043,6 +1091,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             end_time=end_time,
                             logging_obj=self,
                             status="success",
+                            standard_built_in_tools_params=self.standard_built_in_tools_params,
                         )
                     )
                 elif isinstance(result, dict):  # pass-through endpoints
@@ -1055,6 +1104,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             end_time=end_time,
                             logging_obj=self,
                             status="success",
+                            standard_built_in_tools_params=self.standard_built_in_tools_params,
                         )
                     )
             elif standard_logging_object is not None:
@@ -1078,6 +1128,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     prompt="",
                     completion=getattr(result, "content", ""),
                     total_time=float_diff,
+                    standard_built_in_tools_params=self.standard_built_in_tools_params,
                 )
 
             return start_time, end_time, result
@@ -1131,6 +1182,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         end_time=end_time,
                         logging_obj=self,
                         status="success",
+                        standard_built_in_tools_params=self.standard_built_in_tools_params,
                     )
                 )
             callbacks = self.get_combined_callback_list(
@@ -1671,6 +1723,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     end_time=end_time,
                     logging_obj=self,
                     status="success",
+                    standard_built_in_tools_params=self.standard_built_in_tools_params,
                 )
             )
         callbacks = self.get_combined_callback_list(
@@ -1887,6 +1940,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 status="failure",
                 error_str=str(exception),
                 original_exception=exception,
+                standard_built_in_tools_params=self.standard_built_in_tools_params,
             )
         )
         return start_time, end_time
@@ -2351,18 +2405,6 @@ class Logging(LiteLLMLoggingBaseClass):
             return result
         elif isinstance(result, ResponseCompletedEvent):
             return result.response
-        elif isinstance(result, ModelResponseStream):
-            complete_streaming_response: Optional[
-                Union[ModelResponse, TextCompletionResponse]
-            ] = _assemble_complete_response_from_streaming_chunks(
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-                request_kwargs=self.model_call_details,
-                streaming_chunks=streaming_chunks,
-                is_async=is_async,
-            )
-            return complete_streaming_response
         return None
 
     def _handle_anthropic_messages_response_logging(self, result: Any) -> ModelResponse:
@@ -2671,13 +2713,13 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             )
             for callback in _in_memory_loggers:
                 if (
-                    isinstance(callback, OpenTelemetry)
+                    isinstance(callback, ArizeLogger)
                     and callback.callback_name == "arize"
                 ):
                     return callback  # type: ignore
-            _otel_logger = OpenTelemetry(config=otel_config, callback_name="arize")
-            _in_memory_loggers.append(_otel_logger)
-            return _otel_logger  # type: ignore
+            _arize_otel_logger = ArizeLogger(config=otel_config, callback_name="arize")
+            _in_memory_loggers.append(_arize_otel_logger)
+            return _arize_otel_logger  # type: ignore
         elif logging_integration == "arize_phoenix":
             from litellm.integrations.opentelemetry import (
                 OpenTelemetry,
@@ -2910,15 +2952,13 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
                 if isinstance(callback, OpenTelemetry):
                     return callback
         elif logging_integration == "arize":
-            from litellm.integrations.opentelemetry import OpenTelemetry
-
             if "ARIZE_SPACE_KEY" not in os.environ:
                 raise ValueError("ARIZE_SPACE_KEY not found in environment variables")
             if "ARIZE_API_KEY" not in os.environ:
                 raise ValueError("ARIZE_API_KEY not found in environment variables")
             for callback in _in_memory_loggers:
                 if (
-                    isinstance(callback, OpenTelemetry)
+                    isinstance(callback, ArizeLogger)
                     and callback.callback_name == "arize"
                 ):
                     return callback
@@ -3271,6 +3311,7 @@ class StandardLoggingPayloadSetup:
             additional_headers=None,
             litellm_overhead_time_ms=None,
             batch_models=None,
+            litellm_model_name=None,
         )
         if hidden_params is not None:
             for key in StandardLoggingHiddenParams.__annotations__.keys():
@@ -3356,6 +3397,7 @@ def get_standard_logging_object_payload(
     status: StandardLoggingPayloadStatus,
     error_str: Optional[str] = None,
     original_exception: Optional[Exception] = None,
+    standard_built_in_tools_params: Optional[StandardBuiltInToolsParams] = None,
 ) -> Optional[StandardLoggingPayload]:
     try:
         kwargs = kwargs or {}
@@ -3385,6 +3427,7 @@ def get_standard_logging_object_payload(
                         response_cost=None,
                         litellm_overhead_time_ms=None,
                         batch_models=None,
+                        litellm_model_name=None,
                     )
                 )
 
@@ -3530,6 +3573,7 @@ def get_standard_logging_object_payload(
             guardrail_information=metadata.get(
                 "standard_logging_guardrail_information", None
             ),
+            standard_built_in_tools_params=standard_built_in_tools_params,
         )
 
         emit_standard_logging_payload(payload)
@@ -3670,6 +3714,7 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         additional_headers=None,
         litellm_overhead_time_ms=None,
         batch_models=None,
+        litellm_model_name=None,
     )
 
     # Convert numeric values to appropriate types

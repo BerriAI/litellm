@@ -291,14 +291,15 @@ response = completion(
 )
 ```
 
-## Azure O1 Models
+## O-Series Models
 
-| Model Name          | Function Call                                      |
-|---------------------|----------------------------------------------------|
-| o1-mini | `response = completion(model="azure/<your deployment name>", messages=messages)` |
-| o1-preview | `response = completion(model="azure/<your deployment name>", messages=messages)` |
+Azure OpenAI O-Series models are supported on LiteLLM. 
 
-Set `litellm.enable_preview_features = True` to use Azure O1 Models with streaming support. 
+LiteLLM routes any deployment name with `o1` or `o3` in the model name, to the O-Series [transformation](https://github.com/BerriAI/litellm/blob/91ed05df2962b8eee8492374b048d27cc144d08c/litellm/llms/azure/chat/o1_transformation.py#L4) logic.
+
+To set this explicitly, set `model` to `azure/o_series/<your-deployment-name>`.
+
+**Automatic Routing**
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -306,60 +307,112 @@ Set `litellm.enable_preview_features = True` to use Azure O1 Models with streami
 ```python
 import litellm
 
-litellm.enable_preview_features = True # 👈 KEY CHANGE
-
-response = litellm.completion(
-    model="azure/<your deployment name>",
-    messages=[{"role": "user", "content": "What is the weather like in Boston?"}],
-    stream=True
-)
-
-for chunk in response:
-    print(chunk)
+litellm.completion(model="azure/my-o3-deployment", messages=[{"role": "user", "content": "Hello, world!"}]) # 👈 Note: 'o3' in the deployment name
 ```
 </TabItem>
-<TabItem value="proxy" label="Proxy">
+<TabItem value="proxy" label="PROXY">
 
-1. Setup config.yaml
 ```yaml
 model_list:
-  - model_name: o1-mini
+  - model_name: o3-mini
     litellm_params:
-      model: azure/o1-mini
-      api_base: "os.environ/AZURE_API_BASE"
-      api_key: "os.environ/AZURE_API_KEY"
-      api_version: "os.environ/AZURE_API_VERSION"
-
-litellm_settings:
-    enable_preview_features: true # 👈 KEY CHANGE
+      model: azure/o3-model
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
 ```
 
-2. Start proxy 
+</TabItem>
+</Tabs>
+
+**Explicit Routing**
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+
+litellm.completion(model="azure/o_series/my-random-deployment-name", messages=[{"role": "user", "content": "Hello, world!"}]) # 👈 Note: 'o_series/' in the deployment name
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: o3-mini
+    litellm_params:
+      model: azure/o_series/my-random-deployment-name
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+```
+</TabItem>
+</Tabs>
+
+
+## Azure Audio Model
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+os.environ["AZURE_API_KEY"] = ""
+os.environ["AZURE_API_BASE"] = ""
+os.environ["AZURE_API_VERSION"] = ""
+
+response = completion(
+    model="azure/azure-openai-4o-audio",
+    messages=[
+      {
+        "role": "user",
+        "content": "I want to try out speech to speech"
+      }
+    ],
+    modalities=["text","audio"],
+    audio={"voice": "alloy", "format": "wav"}
+)
+
+print(response)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: azure-openai-4o-audio
+    litellm_params:
+      model: azure/azure-openai-4o-audio
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: os.environ/AZURE_API_VERSION
+```
+
+2. Start proxy
 
 ```bash
 litellm --config /path/to/config.yaml
 ```
 
-3. Test it 
+3. Test it!
 
-```python
-import openai
-client = openai.OpenAI(
-    api_key="anything",
-    base_url="http://0.0.0.0:4000"
-)
 
-response = client.chat.completions.create(model="o1-mini", messages = [
-    {
-        "role": "user",
-        "content": "this is a test request, write a short poem"
-    }
-],
-stream=True)
-
-for chunk in response:
-    print(chunk)
+```bash
+curl http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "azure-openai-4o-audio",
+    "messages": [{"role": "user", "content": "I want to try out speech to speech"}],
+    "modalities": ["text","audio"],
+    "audio": {"voice": "alloy", "format": "wav"}
+  }'
 ```
+
+
 </TabItem>
 </Tabs>
 
@@ -948,62 +1001,9 @@ Expected Response:
 {"data":[{"id":"batch_R3V...}
 ```
 
-## O-Series Models
 
-Azure OpenAI O-Series models are supported on LiteLLM. 
 
-LiteLLM routes any deployment name with `o1` or `o3` in the model name, to the O-Series [transformation](https://github.com/BerriAI/litellm/blob/91ed05df2962b8eee8492374b048d27cc144d08c/litellm/llms/azure/chat/o1_transformation.py#L4) logic.
 
-To set this explicitly, set `model` to `azure/o_series/<your-deployment-name>`.
-
-**Automatic Routing**
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-import litellm
-
-litellm.completion(model="azure/my-o3-deployment", messages=[{"role": "user", "content": "Hello, world!"}]) # 👈 Note: 'o3' in the deployment name
-```
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
-```yaml
-model_list:
-  - model_name: o3-mini
-    litellm_params:
-      model: azure/o3-model
-      api_base: os.environ/AZURE_API_BASE
-      api_key: os.environ/AZURE_API_KEY
-```
-
-</TabItem>
-</Tabs>
-
-**Explicit Routing**
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-import litellm
-
-litellm.completion(model="azure/o_series/my-random-deployment-name", messages=[{"role": "user", "content": "Hello, world!"}]) # 👈 Note: 'o_series/' in the deployment name
-```
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
-```yaml
-model_list:
-  - model_name: o3-mini
-    litellm_params:
-      model: azure/o_series/my-random-deployment-name
-      api_base: os.environ/AZURE_API_BASE
-      api_key: os.environ/AZURE_API_KEY
-```
-</TabItem>
-</Tabs>
 
 
 

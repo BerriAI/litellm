@@ -24,7 +24,6 @@ class RouteChecks:
         route: str,
         request: Request,
         valid_token: UserAPIKeyAuth,
-        api_key: str,
         request_data: dict,
     ):
         """

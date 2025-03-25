@@ -470,7 +470,7 @@ async def update_team(
 
     if existing_team_row is None:
         raise HTTPException(
-            status_code=400,
+            status_code=404,
             detail={"error": f"Team not found, passed team_id={data.team_id}"},
         )
 
@@ -1137,14 +1137,16 @@ async def delete_team(
     team_rows: List[LiteLLM_TeamTable] = []
     for team_id in data.team_ids:
         try:
-            team_row_base: BaseModel = (
+            team_row_base: Optional[BaseModel] = (
                 await prisma_client.db.litellm_teamtable.find_unique(
                     where={"team_id": team_id}
                 )
             )
+            if team_row_base is None:
+                raise Exception
         except Exception:
             raise HTTPException(
-                status_code=400,
+                status_code=404,
                 detail={"error": f"Team not found, passed team_id={team_id}"},
             )
         team_row_pydantic = LiteLLM_TeamTable(**team_row_base.model_dump())

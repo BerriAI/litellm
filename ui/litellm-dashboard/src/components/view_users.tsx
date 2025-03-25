@@ -49,6 +49,7 @@ import { columns } from "./view_users/columns";
 import { UserDataTable } from "./view_users/table";
 import { UserInfo } from "./view_users/types";
 import BulkCreateUsers from "./bulk_create_users_button";
+import SSOSettings from "./SSOSettings";
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -106,6 +107,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   >({});
   const defaultPageSize = 25;
   const [searchTerm, setSearchTerm] = useState("");
+  const [activeTab, setActiveTab] = useState("users");
 
   // check if window is not undefined
   if (typeof window !== "undefined") {
@@ -285,56 +287,71 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         </div>
       </div>
       
-      <div className="bg-white rounded-lg shadow">
-        <div className="border-b px-6 py-4">
-          <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
-            <div className="flex items-center space-x-4">
-              <span className="text-sm text-gray-700">
-                Showing{" "}
-                {userListResponse && userListResponse.users && userListResponse.users.length > 0
-                  ? (userListResponse.page - 1) * userListResponse.page_size + 1
-                  : 0}{" "}
-                -{" "}
-                {userListResponse && userListResponse.users
-                  ? Math.min(
-                      userListResponse.page * userListResponse.page_size,
-                      userListResponse.total
-                    )
-                  : 0}{" "}
-                of {userListResponse ? userListResponse.total : 0} results
-              </span>
-              <div className="flex items-center space-x-2">
-                <button
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  disabled={!userListResponse || currentPage <= 1}
-                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Previous
-                </button>
-                <span className="text-sm text-gray-700">
-                  Page {userListResponse ? userListResponse.page : "-"} of{" "}
-                  {userListResponse ? userListResponse.total_pages : "-"}
-                </span>
-                <button
-                  onClick={() => setCurrentPage((p) => p + 1)}
-                  disabled={
-                    !userListResponse ||
-                    currentPage >= userListResponse.total_pages
-                  }
-                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Next
-                </button>
+      <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "users" : "settings")}>
+        <TabList className="mb-4">
+          <Tab>Users</Tab>
+          <Tab>Default User Settings</Tab>
+        </TabList>
+        
+        <TabPanels>
+          <TabPanel>
+            <div className="bg-white rounded-lg shadow">
+              <div className="border-b px-6 py-4">
+                <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
+                  <div className="flex items-center space-x-4">
+                    <span className="text-sm text-gray-700">
+                      Showing{" "}
+                      {userListResponse && userListResponse.users && userListResponse.users.length > 0
+                        ? (userListResponse.page - 1) * userListResponse.page_size + 1
+                        : 0}{" "}
+                      -{" "}
+                      {userListResponse && userListResponse.users
+                        ? Math.min(
+                            userListResponse.page * userListResponse.page_size,
+                            userListResponse.total
+                          )
+                        : 0}{" "}
+                      of {userListResponse ? userListResponse.total : 0} results
+                    </span>
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                        disabled={!userListResponse || currentPage <= 1}
+                        className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Previous
+                      </button>
+                      <span className="text-sm text-gray-700">
+                        Page {userListResponse ? userListResponse.page : "-"} of{" "}
+                        {userListResponse ? userListResponse.total_pages : "-"}
+                      </span>
+                      <button
+                        onClick={() => setCurrentPage((p) => p + 1)}
+                        disabled={
+                          !userListResponse ||
+                          currentPage >= userListResponse.total_pages
+                        }
+                        className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                </div>
               </div>
+              <UserDataTable
+                data={userData || []}
+                columns={tableColumns}
+                isLoading={!userData}
+              />
             </div>
-          </div>
-        </div>
-        <UserDataTable
-          data={userData || []}
-          columns={tableColumns}
-          isLoading={!userData}
-        />
-      </div>
+          </TabPanel>
+          
+          <TabPanel>
+            <SSOSettings accessToken={accessToken} possibleUIRoles={possibleUIRoles} userID={userID} userRole={userRole}/>
+          </TabPanel>
+        </TabPanels>
+      </TabGroup>
 
       {/* Existing Modals */}
       <EditUserModal
