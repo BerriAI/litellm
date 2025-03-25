@@ -19,7 +19,6 @@ class OpenAIGPTAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             "prompt",
             "response_format",
             "temperature",
-            "timestamp_granularities",
             "include",
         ]
 
