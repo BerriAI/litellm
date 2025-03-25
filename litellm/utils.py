@@ -5744,13 +5744,15 @@ def trim_messages(
         return messages
 
 
-def get_valid_models(check_provider_endpoint: bool = False) -> List[str]:
+def get_valid_models(
+    check_provider_endpoint: bool = False, custom_llm_provider: Optional[str] = None
+) -> List[str]:
     """
     Returns a list of valid LLMs based on the set environment variables
 
     Args:
         check_provider_endpoint: If True, will check the provider's endpoint for valid models.
-
+        custom_llm_provider: If provided, will only check the provider's endpoint for valid models.
     Returns:
         A list of valid LLMs
     """
@@ -5762,6 +5764,9 @@ def get_valid_models(check_provider_endpoint: bool = False) -> List[str]:
         valid_models = []
 
         for provider in litellm.provider_list:
+            if custom_llm_provider and provider != custom_llm_provider:
+                continue
+
             # edge case litellm has together_ai as a provider, it should be togetherai
             env_provider_1 = provider.replace("_", "")
             env_provider_2 = provider
@@ -5782,6 +5787,9 @@ def get_valid_models(check_provider_endpoint: bool = False) -> List[str]:
                 model=None,
                 provider=LlmProviders(provider),
             )
+
+            if custom_llm_provider and provider != custom_llm_provider:
+                continue
 
             if provider == "azure":
                 valid_models.append("Azure-LLM")

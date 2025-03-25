@@ -303,6 +303,14 @@ def test_aget_valid_models():
     os.environ = old_environ
 
 
+def test_get_valid_models_with_check_provider_endpoint():
+    valid_models = get_valid_models(
+        check_provider_endpoint=True, custom_llm_provider="gemini"
+    )
+    print(valid_models)
+    assert len(valid_models) > 0
+
+
 # test_get_valid_models()
 
 
