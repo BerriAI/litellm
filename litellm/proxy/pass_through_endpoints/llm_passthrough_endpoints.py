@@ -542,13 +542,10 @@ async def vertex_proxy_route(
             user_api_key_dict,
             stream=is_streaming_request,  # type: ignore
         )
-    except Exception as e:
+    except ProxyException as e:
         if headers_passed_through:
-            raise Exception(
-                f"No credentials found on proxy for this request. Headers were passed through directly but request failed with error: {str(e)}"
-            )
-        else:
-            raise e
+            e.message = f"No credentials found on proxy for project_name={vertex_project} + location={vertex_location}, check `/model/info` for allowed project + region combinations with `use_in_pass_through: true`. Headers were passed through directly but request failed with error: {e.message}"
+        raise e
 
     return received_value
 

@@ -10,10 +10,12 @@ Use this is you want to write code to run a custom guardrail
 
 ### 1. Write a `CustomGuardrail` Class
 
-A CustomGuardrail has 3 methods to enforce guardrails 
+A CustomGuardrail has 4 methods to enforce guardrails 
 - `async_pre_call_hook` - (Optional) modify input or reject request before making LLM API call
 - `async_moderation_hook` - (Optional) reject request, runs while making LLM API call (help to lower latency)
 - `async_post_call_success_hook`- (Optional) apply guardrail on input/output, runs after making LLM API call
+- `async_post_call_streaming_iterator_hook` - (Optional) pass the entire stream to the guardrail
+
 
 **[See detailed spec of methods here](#customguardrail-methods)**
 
@@ -128,6 +130,23 @@ class myCustomGuardrail(CustomGuardrail):
                     ):
                         raise ValueError("Guardrail failed Coffee Detected")
 
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_data: dict,
+    ) -> AsyncGenerator[ModelResponseStream, None]:
+        """
+        Passes the entire stream to the guardrail
+
+        This is useful for guardrails that need to see the entire response, such as PII masking.
+
+        See Aim guardrail implementation for an example - https://github.com/BerriAI/litellm/blob/d0e022cfacb8e9ebc5409bb652059b6fd97b45c0/litellm/proxy/guardrails/guardrail_hooks/aim.py#L168
+
+        Triggered by mode: 'post_call'
+        """
+        async for item in response:
+            yield item
 
 ```
 
