@@ -109,12 +109,13 @@ def analyze_results(vertex_times):
 
 
 @pytest.mark.asyncio
-async def test_embedding_performance():
+async def test_embedding_performance(monkeypatch):
     """
     Run load test on vertex AI embeddings to ensure vertex median response time is less than 300ms
 
     20 RPS for 20 seconds
     """
+    monkeypatch.setattr(litellm, "api_base", None)
     duration_seconds = 20
     requests_per_second = 20
     vertex_times = await run_load_test(duration_seconds, requests_per_second)
