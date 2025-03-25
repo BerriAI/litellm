@@ -418,6 +418,29 @@ class AmazonNovaCanvasTextToImageRequest(
     imageGenerationConfig: AmazonNovaCanvasImageGenerationConfig
 
 
+class AmazonNovaCanvasColorGuidedGenerationParams(TypedDict, total=False):
+    """
+    Params for Amazon Nova Canvas Color Guided Generation API
+    """
+
+    colors: List[str]
+    referenceImage: str
+    text: str
+    negativeText: str
+
+
+class AmazonNovaCanvasColorGuidedRequest(AmazonNovaCanvasRequestBase, TypedDict, total=False):
+    """
+    Request for Amazon Nova Canvas Color Guided Generation API
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+    """
+
+    taskType: Literal["COLOR_GUIDED_GENERATION"]
+    colorGuidedGenerationParams: AmazonNovaCanvasColorGuidedGenerationParams
+    imageGenerationConfig: AmazonNovaCanvasImageGenerationConfig
+
+
 class AmazonNovaCanvasTextToImageResponse(TypedDict, total=False):
     """
     Response for Amazon Nova Canvas Text to Image API
