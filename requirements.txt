@@ -16,6 +16,7 @@ mangum==0.17.0 # for aws lambda functions
 pynacl==1.5.0 # for encrypting keys
 google-cloud-aiplatform==1.47.0 # for vertex ai calls
 anthropic[vertex]==0.21.3
+mcp==1.5.0    # for MCP server
 google-generativeai==0.5.0 # for vertex ai calls
 async_generator==1.10.0 # for async ollama calls
 langfuse==2.45.0 # for langfuse self-hosted logging
@@ -48,8 +49,7 @@ jinja2==3.1.6 # for prompt templates
 aiohttp==3.10.2 # for network calls
 aioboto3==12.3.0 # for async sagemaker calls
 tenacity==8.2.3  # for retrying requests, when litellm.num_retries set
-pydantic==2.10.0 # proxy + openai req.
+pydantic==2.10.2 # proxy + openai req.
 jsonschema==4.22.0 # validating json schema
 websockets==13.1.0 # for realtime API
-mcp==1.5.0    # for MCP server
 ####
