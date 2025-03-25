@@ -189,6 +189,8 @@ Currently implemented for:
 - Fireworks AI (if FIREWORKS_AI_API_KEY is set)
 - LiteLLM Proxy (if LITELLM_PROXY_API_KEY is set)
 - Gemini (if GEMINI_API_KEY is set)
+- XAI (if XAI_API_KEY is set)   
+- Anthropic (if ANTHROPIC_API_KEY is set)
 
 You can also specify a custom provider to check:
 

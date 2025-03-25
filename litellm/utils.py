@@ -6415,6 +6415,8 @@ class ProviderConfigManager:
             return litellm.TopazModelInfo()
         elif LlmProviders.ANTHROPIC == provider:
             return litellm.AnthropicModelInfo()
+        elif LlmProviders.XAI == provider:
+            return litellm.XAIModelInfo()
 
         return None
 
