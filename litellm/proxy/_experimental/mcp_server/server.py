@@ -30,8 +30,8 @@ router = APIRouter(
     prefix="/mcp",
     tags=["mcp"],
 )
-server = Server("litellm-mcp-server")
-sse = SseServerTransport("/mcp/sse/messages")
+server: Server = Server("litellm-mcp-server")
+sse: SseServerTransport = SseServerTransport("/mcp/sse/messages")
 
 ########################################################
 ############### MCP Server Routes #######################

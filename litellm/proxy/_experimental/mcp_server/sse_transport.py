@@ -73,6 +73,8 @@ class SseServerTransport:
         self._read_stream_writers[session_id] = read_stream_writer
         verbose_logger.debug(f"Created new session with ID: {session_id}")
 
+        sse_stream_writer: MemoryObjectSendStream[dict[str, Any]]
+        sse_stream_reader: MemoryObjectReceiveStream[dict[str, Any]]
         sse_stream_writer, sse_stream_reader = anyio.create_memory_object_stream(
             0, dict[str, Any]
         )
