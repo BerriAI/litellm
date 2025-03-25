@@ -46,9 +46,10 @@ def check_file(filename):
 def main():
     exit_code = 0
     folder = "../../litellm"
+    ignore_file = "constants.py"
     for root, dirs, files in os.walk(folder):
         for filename in files:
-            if filename.endswith(".py"):
+            if filename.endswith(".py") and filename != ignore_file:
                 full_path = os.path.join(root, filename)
                 exit_code |= check_file(full_path)
     sys.exit(exit_code)

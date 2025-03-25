@@ -7,6 +7,7 @@ DEFAULT_MAX_RETRIES = 2
 DEFAULT_FAILURE_THRESHOLD_PERCENT = (
     0.5  # default cooldown a deployment if 50% of requests fail in a given minute
 )
+DEFAULT_ALLOWED_FAILS = 3
 DEFAULT_REDIS_SYNC_INTERVAL = 1
 DEFAULT_COOLDOWN_TIME_SECONDS = 5
 DEFAULT_REPLICATE_POLLING_RETRIES = 5
@@ -14,6 +15,7 @@ DEFAULT_REPLICATE_POLLING_DELAY_SECONDS = 1
 DEFAULT_IMAGE_TOKEN_COUNT = 250
 DEFAULT_IMAGE_WIDTH = 300
 DEFAULT_IMAGE_HEIGHT = 300
+DEFAULT_MAX_TOKENS = 256  # used when providers need a default
 MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = 1024  # 1MB = 1024KB
 SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD = 1000  # Minimum number of requests to consider "reasonable traffic". Used for single-deployment cooldown logic.
 #### RELIABILITY ####
@@ -423,6 +425,9 @@ AZURE_STORAGE_MSFT_VERSION = "2019-07-07"
 ########################################################################################
 MAX_SPENDLOG_ROWS_TO_QUERY = (
     1_000_000  # if spendLogs has more than 1M rows, do not query the DB
+)
+DEFAULT_SOFT_BUDGET = (
+    50.0  # by default all litellm proxy keys have a soft budget of 50.0
 )
 # makes it clear this is a rate limit error for a litellm virtual key
 RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY = "LiteLLM Virtual Key user_api_key_hash"

@@ -1,33 +1,3 @@
-ERROR in ../../litellm/cost_calculator.py: Hardcoded numbers detected:
-  Line 97: 1000
-  Line 326: 1000
-  Line 345: 1000
-  Line 361: 0.0014
-  Line 368: 1000
-  Line 455: 16
-ERROR in ../../litellm/constants.py: Hardcoded numbers detected:
-  Line 3: 5
-  Line 4: 512
-  Line 5: 5
-  Line 8: 0.5
-  Line 11: 5
-  Line 12: 5
-  Line 14: 250
-  Line 15: 300
-  Line 16: 300
-  Line 17: 1024
-  Line 18: 1000
-  Line 22: 6000
-  Line 392: 16384
-  Line 412: 60
-  Line 421: 1000000
-  Line 437: 3600
-  Line 438: 24
-  Line 440: 60
-ERROR in ../../litellm/__init__.py: Hardcoded numbers detected:
-  Line 155: 256
-  Line 248: 50.0
-  Line 300: 3
 ERROR in ../../litellm/utils.py: Hardcoded numbers detected:
   Line 1522: 128
   Line 1621: 4
@@ -44,7 +14,6 @@ ERROR in ../../litellm/utils.py: Hardcoded numbers detected:
   Line 2745: 500
   Line 3011: 500
   Line 3088: 500
-  Line 3823: 1000
   Line 3823: 6
   Line 5250: 408
   Line 5254: 409
@@ -65,7 +34,6 @@ ERROR in ../../litellm/utils.py: Hardcoded numbers detected:
   Line 6480: 1024
   Line 6508: 3600
   Line 6508: 60
-  Line 6508: 1000.0
 ERROR in ../../litellm/exceptions.py: Hardcoded numbers detected:
   Line 31: 401
   Line 77: 404
@@ -122,7 +90,6 @@ ERROR in ../../litellm/main.py: Hardcoded numbers detected:
   Line 4502: 600
   Line 4990: 600
   Line 5426: 3
-  Line 5561: 1000
   Line 5682: 500
   Line 5781: 500
 ERROR in ../../litellm/budget_manager.py: Hardcoded numbers detected:
@@ -335,7 +302,6 @@ ERROR in ../../litellm/proxy/proxy_server.py: Hardcoded numbers detected:
 ERROR in ../../litellm/proxy/utils.py: Hardcoded numbers detected:
   Line 255: 300
   Line 417: 400
-  Line 710: 1000
   Line 1164: 3
   Line 1371: 400
   Line 1555: 20
@@ -349,7 +315,6 @@ ERROR in ../../litellm/proxy/utils.py: Hardcoded numbers detected:
   Line 2180: 3
   Line 2283: 600
   Line 2369: 60
-  Line 2416: 1000
   Line 2438: 200
   Line 2508: 3
   Line 2516: 60
@@ -873,13 +838,10 @@ ERROR in ../../litellm/integrations/mlflow.py: Hardcoded numbers detected:
   Line 229: 1000000000.0
 ERROR in ../../litellm/integrations/helicone.py: Hardcoded numbers detected:
   Line 137: 200
-  Line 152: 1000
-  Line 156: 1000
   Line 179: 200
 ERROR in ../../litellm/integrations/langsmith.py: Hardcoded numbers detected:
   Line 398: 300
 ERROR in ../../litellm/integrations/galileo.py: Hardcoded numbers detected:
-  Line 99: 1000
   Line 116: 200
   Line 143: 200
 ERROR in ../../litellm/integrations/opentelemetry.py: Hardcoded numbers detected:
@@ -897,13 +859,10 @@ ERROR in ../../litellm/integrations/custom_logger.py: Hardcoded numbers detected
 ERROR in ../../litellm/integrations/weights_biases.py: Hardcoded numbers detected:
   Line 10: 3
   Line 10: 8
-  Line 69: 1000
-  Line 70: 1000
 ERROR in ../../litellm/integrations/literal_ai.py: Hardcoded numbers detected:
   Line 103: 300
   Line 169: 300
 ERROR in ../../litellm/integrations/prometheus.py: Hardcoded numbers detected:
-  Line 1032: 1000
   Line 1363: 50
   Line 1707: 3600
 ERROR in ../../litellm/integrations/argilla.py: Hardcoded numbers detected:
@@ -911,10 +870,8 @@ ERROR in ../../litellm/integrations/argilla.py: Hardcoded numbers detected:
   Line 377: 60000
   Line 381: 300
 ERROR in ../../litellm/integrations/athina.py: Hardcoded numbers detected:
-  Line 67: 1000
   Line 92: 200
 ERROR in ../../litellm/integrations/greenscale.py: Hardcoded numbers detected:
-  Line 35: 1000
   Line 62: 200
 ERROR in ../../litellm/integrations/pagerduty/pagerduty.py: Hardcoded numbers detected:
   Line 34: 60
@@ -943,11 +900,9 @@ ERROR in ../../litellm/integrations/datadog/datadog_llm_obs.py: Hardcoded number
   Line 159: 1000000000.0
   Line 160: 1000000000.0
 ERROR in ../../litellm/integrations/datadog/datadog.py: Hardcoded numbers detected:
-  Line 44: 1000
   Line 165: 413
   Line 170: 202
   Line 217: 202
-  Line 436: 1000
 ERROR in ../../litellm/integrations/SlackAlerting/utils.py: Hardcoded numbers detected:
   Line 80: 3
   Line 84: 3
@@ -1077,7 +1032,6 @@ ERROR in ../../litellm/litellm_core_utils/litellm_logging.py: Hardcoded numbers 
   Line 524: 4
   Line 526: 5
   Line 526: 4
-  Line 878: 1000
   Line 2451: 4
   Line 2452: 4
   Line 3595: 4
@@ -1115,8 +1069,6 @@ ERROR in ../../litellm/litellm_core_utils/streaming_handler.py: Hardcoded number
   Line 562: 5
   Line 1173: 30
   Line 1185: 30
-ERROR in ../../litellm/litellm_core_utils/logging_utils.py: Hardcoded numbers detected:
-  Line 113: 1000
 ERROR in ../../litellm/litellm_core_utils/exception_mapping_utils.py: Hardcoded numbers detected:
   Line 373: 500
   Line 382: 400
@@ -1249,14 +1201,10 @@ ERROR in ../../litellm/litellm_core_utils/exception_mapping_utils.py: Hardcoded 
   Line 2137: 504
 ERROR in ../../litellm/litellm_core_utils/llm_response_utils/convert_dict_to_response.py: Hardcoded numbers detected:
   Line 406: 422
-  Line 549: 1000
-  Line 592: 1000
 ERROR in ../../litellm/litellm_core_utils/llm_response_utils/response_metadata.py: Hardcoded numbers detected:
-  Line 77: 1000
   Line 86: 4
 ERROR in ../../litellm/litellm_core_utils/llm_cost_calc/tool_call_cost_tracking.py: Hardcoded numbers detected:
   Line 135: 2.5
-  Line 135: 1000
 ERROR in ../../litellm/litellm_core_utils/llm_cost_calc/utils.py: Hardcoded numbers detected:
   Line 13: 128000
 ERROR in ../../litellm/litellm_core_utils/prompt_templates/image_handling.py: Hardcoded numbers detected:
@@ -1304,7 +1252,6 @@ ERROR in ../../litellm/llms/topaz/image_variations/transformation.py: Hardcoded 
   Line 103: 3
   Line 108: 4
   Line 113: 3
-  Line 190: 1000
 ERROR in ../../litellm/llms/codestral/completion/handler.py: Hardcoded numbers detected:
   Line 63: 200
   Line 144: 200
@@ -1341,8 +1288,6 @@ ERROR in ../../litellm/llms/azure/azure.py: Hardcoded numbers detected:
   Line 987: 200
   Line 1126: 422
   Line 1182: 500
-ERROR in ../../litellm/llms/azure/cost_calculation.py: Hardcoded numbers detected:
-  Line 59: 1000
 ERROR in ../../litellm/llms/azure/audio_transcriptions.py: Hardcoded numbers detected:
   Line 65: 500
   Line 129: 500
@@ -1664,9 +1609,6 @@ ERROR in ../../litellm/llms/openai/openai.py: Hardcoded numbers detected:
   Line 1358: 500
   Line 2018: 20
   Line 2083: 20
-ERROR in ../../litellm/llms/openai/common_utils.py: Hardcoded numbers detected:
-  Line 197: 1000
-  Line 206: 1000
 ERROR in ../../litellm/llms/openai/chat/o_series_transformation.py: Hardcoded numbers detected:
   Line 125: 400
 ERROR in ../../litellm/llms/openai/chat/gpt_transformation.py: Hardcoded numbers detected:
@@ -1706,8 +1648,6 @@ ERROR in ../../litellm/llms/sagemaker/completion/handler.py: Hardcoded numbers d
   Line 648: 500
   Line 667: 500
   Line 673: 422
-ERROR in ../../litellm/llms/custom_httpx/httpx_handler.py: Hardcoded numbers detected:
-  Line 16: 1000
 ERROR in ../../litellm/llms/custom_httpx/aiohttp_handler.py: Hardcoded numbers detected:
   Line 31: 600
   Line 93: 422
@@ -1719,9 +1659,7 @@ ERROR in ../../litellm/llms/custom_httpx/http_handler.py: Hardcoded numbers dete
   Line 34: 3600
   Line 51: 4
   Line 55: 4
-  Line 96: 1000
   Line 234: 3
-  Line 472: 1000
   Line 704: 600.0
   Line 704: 5.0
   Line 739: 600.0
@@ -1778,16 +1716,12 @@ ERROR in ../../litellm/caching/in_memory_cache.py: Hardcoded numbers detected:
   Line 80: 1024
 ERROR in ../../litellm/caching/redis_cache.py: Hardcoded numbers detected:
   Line 57: 5.0
-ERROR in ../../litellm/caching/caching_handler.py: Hardcoded numbers detected:
-  Line 425: 1000
 ERROR in ../../litellm/router_strategy/lowest_cost.py: Hardcoded numbers detected:
   Line 286: 5.0
   Line 291: 5.0
 ERROR in ../../litellm/router_strategy/lowest_latency.py: Hardcoded numbers detected:
   Line 23: 60
   Line 23: 60
-  Line 225: 1000.0
-  Line 229: 1000.0
 ERROR in ../../litellm/router_strategy/lowest_tpm_rpm.py: Hardcoded numbers detected:
   Line 16: 60
   Line 23: 60
