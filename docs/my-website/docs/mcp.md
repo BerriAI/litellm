@@ -274,13 +274,6 @@ async with stdio_client(server_params) as (read, write):
 
 ## Advanced Usage
 
-:::info
-
-**This feature is not live as yet** this is a beta interface. Expect this to be live on litellm `v1.63.15` and above.
-
-:::
-
-
 ### Expose MCP tools on LiteLLM Proxy Server
 
 This allows you to define tools that can be called by any MCP compatible client. Define your mcp_tools with LiteLLM and all your clients can list and call available tools.
