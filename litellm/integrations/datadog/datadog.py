@@ -41,7 +41,7 @@ from litellm.types.utils import StandardLoggingPayload
 from ..additional_logging_utils import AdditionalLoggingUtils
 
 # max number of logs DD API can accept
-DD_MAX_BATCH_SIZE = 1000
+
 
 # specify what ServiceTypes are logged as success events to DD. (We don't want to spam DD traces with large number of service types)
 DD_LOGGED_SUCCESS_SERVICE_TYPES = [

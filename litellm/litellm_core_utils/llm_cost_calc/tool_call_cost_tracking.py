@@ -5,6 +5,7 @@ Helper utilities for tracking the cost of built-in tools.
 from typing import Any, Dict, List, Optional
 
 import litellm
+from litellm.constants import OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
 from litellm.types.llms.openai import FileSearchTool, WebSearchOptions
 from litellm.types.utils import (
     ModelInfo,
@@ -132,7 +133,7 @@ class StandardBuiltInToolCostTracking:
         """
         if file_search is None:
             return 0.0
-        return 2.5 / 1000
+        return OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
 
     @staticmethod
     def chat_completion_response_includes_annotations(

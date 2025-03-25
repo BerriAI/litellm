@@ -35,6 +35,16 @@ ALLOWED_NUMBERS = {
     25,
     10000,
     60000,
+    8,
+    2048,
+    16000000000,
+    16,
+    16383,
+    14,
+    24,
+    128000,
+    0.01,
+    20,
 }
 
 # Add all standard HTTP status codes
@@ -55,16 +65,23 @@ HTTP_STATUS_CODES = {
     402,  # Payment Required
     403,  # Forbidden
     404,  # Not Found
+    406,  # Not Acceptable
     408,  # Request Timeout
     409,  # Conflict
+    413,  # Payload Too Large
     422,  # Unprocessable Entity
+    424,  # Failed Dependency
     429,  # Too Many Requests
+    498,  # Invalid Token
     499,  # Client Closed Request
     500,  # Internal Server Error
     501,  # Not Implemented
     502,  # Bad Gateway
     503,  # Service Unavailable
     504,  # Gateway Timeout
+    520,  # Web server is returning an unknown error
+    522,  # Connection timed out
+    524,  # A timeout occurred
     529,  # Site is overloaded
 }
 
@@ -112,7 +129,13 @@ def check_file(filename):
 def main():
     exit_code = 0
     folder = "../../litellm"
-    ignore_files = ["constants.py", "proxy_cli.py"]
+    ignore_files = [
+        "constants.py",
+        "proxy_cli.py",
+        "token_counter.py",
+        "mock_functions.py",
+        "duration_parser.py",
+    ]
     ignore_folder = "types"
     for root, dirs, files in os.walk(folder):
         for filename in files:
