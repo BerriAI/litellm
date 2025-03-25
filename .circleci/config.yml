@@ -587,6 +587,11 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
+            # Output all installed packages and versions
+            echo "=== Installed Python Packages ==="
+            pip freeze > pip_packages.txt
+            cat pip_packages.txt
+            echo "================================"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
