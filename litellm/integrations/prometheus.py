@@ -374,8 +374,6 @@ class PrometheusLogger(CustomLogger):
                     label_name="litellm_requests_metric"
                 ),
             )
-            self._initialize_prometheus_startup_metrics()
-
         except Exception as e:
             print_verbose(f"Got exception on init prometheus client {str(e)}")
             raise e
@@ -1335,24 +1333,6 @@ class PrometheusLogger(CustomLogger):
             return max_budget
 
         return max_budget - spend
-
-    def _initialize_prometheus_startup_metrics(self):
-        """
-        Initialize prometheus startup metrics
-
-        Helper to create tasks for initializing metrics that are required on startup - eg. remaining budget metrics
-        """
-        if litellm.prometheus_initialize_budget_metrics is not True:
-            verbose_logger.debug("Prometheus: skipping budget metrics initialization")
-            return
-
-        try:
-            if asyncio.get_running_loop():
-                asyncio.create_task(self._initialize_remaining_budget_metrics())
-        except RuntimeError as e:  # no running event loop
-            verbose_logger.exception(
-                f"No running event loop - skipping budget metrics initialization: {str(e)}"
-            )
 
     async def _initialize_budget_metrics(
         self,
