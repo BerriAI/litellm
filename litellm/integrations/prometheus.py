@@ -1,7 +1,6 @@
 # used for /metrics endpoint on LiteLLM Proxy
 #### What this does ####
 #    On success, log events to Prometheus
-import asyncio
 import sys
 from datetime import datetime, timedelta
 from typing import (
