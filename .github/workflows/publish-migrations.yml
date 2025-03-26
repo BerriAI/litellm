@@ -46,8 +46,13 @@ jobs:
           # Create migrations directory if it doesn't exist
           mkdir -p deploy/migrations
           
+          # Create migration_lock.toml if it doesn't exist
+          if [ ! -f "deploy/migrations/migration_lock.toml" ]; then
+            echo 'provider = "postgresql"' > deploy/migrations/migration_lock.toml
+          fi
+          
           # Check if migrations exist
-          if [ -z "$(ls -A deploy/migrations 2>/dev/null)" ]; then
+          if [ -z "$(ls -A deploy/migrations/2* 2>/dev/null)" ]; then
             echo "No existing migrations found, creating baseline..."
             VERSION=$(date +%Y%m%d%H%M%S)
             
@@ -61,7 +66,6 @@ jobs:
               --script > deploy/migrations/${VERSION}_initial/migration.sql
               
             echo "Initial migration generated at $(date -u)" > deploy/migrations/${VERSION}_initial/README.md
-            exit 0
           fi
 
       - name: Compare and Generate Migration
