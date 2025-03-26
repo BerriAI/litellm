@@ -569,6 +569,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or "https://api.galadriel.com/v1"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("GALADRIEL_API_KEY")
+    elif custom_llm_provider == "novita":
+        api_base = (
+            api_base
+            or get_secret("NOVITA_API_BASE")
+            or "https://api.novita.ai/v3/openai"
+        )  # type: ignore
+        dynamic_api_key = api_key or get_secret_str("NOVITA_API_KEY")
     elif custom_llm_provider == "snowflake":
         api_base = (
             api_base

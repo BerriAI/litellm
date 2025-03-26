@@ -2317,6 +2317,9 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         elif value.get("litellm_provider") == "bedrock":
             if key not in litellm.bedrock_models:
                 litellm.bedrock_models.append(key)
+        elif value.get("litellm_provider") == "novita":
+            if key not in litellm.novita_models:
+                litellm.novita_models.append(key)
     return model_cost
 
 
@@ -5073,6 +5076,11 @@ def validate_environment(  # noqa: PLR0915
             else:
                 missing_keys.append("CLOUDFLARE_API_KEY")
                 missing_keys.append("CLOUDFLARE_API_BASE")
+        elif custom_llm_provider == "novita":
+            if "NOVITA_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("NOVITA_API_KEY")
     else:
         ## openai - chatcompletion + text completion
         if (
@@ -5155,6 +5163,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("NLP_CLOUD_API_KEY")
+        elif model in litellm.novita_models:
+            if "NOVITA_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("NOVITA_API_KEY")
 
     if api_key is not None:
         new_missing_keys = []
@@ -6281,6 +6294,8 @@ class ProviderConfigManager:
             return litellm.TritonConfig()
         elif litellm.LlmProviders.PETALS == provider:
             return litellm.PetalsConfig()
+        elif litellm.LlmProviders.NOVITA == provider:
+            return litellm.NovitaConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
