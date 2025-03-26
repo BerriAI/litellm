@@ -313,3 +313,24 @@ model LiteLLM_AuditLog {
   before_value       Json?       // value of the row 
   updated_values     Json?       // value of the row after change
 }
+
+// Daily spend aggregation per user
+model LiteLLM_DailyUserSpend {
+  id                String   @id @default(uuid())
+  date              DateTime
+  user              String   // matches user field in SpendLogs
+  spend             Float    @default(0.0)
+  total_tokens      Int      @default(0)
+  prompt_tokens     Int      @default(0)
+  completion_tokens Int      @default(0)
+  model_groups      Json     @default("{}") // Map of model_group to spend/tokens
+  team_id           String?
+  end_user          String?
+  request_count     Int      @default(0)
+
+  @@unique([date, user]) // Ensure one record per day per user
+  @@index([date])
+  @@index([user])
+  @@index([team_id])
+  @@index([end_user])
+}
