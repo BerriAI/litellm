@@ -161,22 +161,23 @@ jobs:
 
       - name: Create Pull Request
         if: success()
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Install GitHub CLI
-          type -p curl >/dev/null || (sudo apt update && sudo apt install curl -y)
-          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
-          && sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
-          && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
-          && sudo apt update \
-          && sudo apt install gh -y
-
-          # Create PR using gh cli
-          gh auth login --with-token <<< "$GITHUB_TOKEN"
-          
-          gh pr create \
-            --title "Update Prisma Migrations" \
-            --body "Auto-generated migration based on schema.prisma changes." \
-            --base litellm_dev_03_25_2025_p3 \
-            --head feat/prisma-migration-${VERSION} 
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: update prisma migrations"
+          title: "Update Prisma Migrations"
+          body: |
+            Auto-generated migration based on schema.prisma changes.
+            
+            Generated files:
+            - deploy/migrations/${VERSION}_schema_update/migration.sql
+            - deploy/migrations/${VERSION}_schema_update/README.md
+          branch: feat/prisma-migration-${{ env.VERSION }}
+          base: litellm_dev_03_25_2025_p3
+          delete-branch: true
+          committer: GitHub <noreply@github.com>
+          author: GitHub <noreply@github.com>
+          signoff: false
+          labels: |
+            automated pr
+            migrations 
