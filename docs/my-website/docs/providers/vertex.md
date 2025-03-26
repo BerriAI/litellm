@@ -1369,6 +1369,71 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 </Tabs>
 
 
+## Gemini Pro
+| Model Name       | Function Call                        |
+|------------------|--------------------------------------|
+| gemini-pro   | `completion('gemini-pro', messages)`, `completion('vertex_ai/gemini-pro', messages)` |
+
+## Fine-tuned Models
+
+Call fine-tuned Vertex AI Gemini models through LiteLLM. If you want to use LiteLLM to call a model in the `/gemini` request/response format, you can do so by setting `model="vertex_ai/gemini/{MODEL_ID}"`. This tells litellm that the request/response format follows the `gemini` model family format. 
+
+| Property | Details |
+|----------|---------|
+| Provider Route | `vertex_ai/gemini/{MODEL_ID}` |
+| Vertex Documentation | [Vertex AI - Fine-tuned Gemini Models](https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini-use-supervised-tuning#test_the_tuned_model_with_a_prompt)|
+| Supported Operations | `/chat/completions`, `/completions`, `/embeddings`, `/images` |
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers
+import litellm
+import os
+
+## set ENV variables
+os.environ["VERTEXAI_PROJECT"] = "hardy-device-38811"
+os.environ["VERTEXAI_LOCATION"] = "us-central1"
+
+response = litellm.completion(
+  model="vertex_ai/gemini/<your-finetuned-model>",  # e.g. vertex_ai/4965075652664360960
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Add Vertex Credentials to your env 
+
+```bash
+!gcloud auth application-default login
+```
+
+2. Setup config.yaml 
+
+```yaml
+- model_name: finetuned-gemini
+  litellm_params:
+    model: vertex_ai/gemini/<ENDPOINT_ID>
+    vertex_project: <PROJECT_ID>
+    vertex_location: <LOCATION>
+```
+
+3. Test it! 
+
+```bash
+curl --location 'https://0.0.0.0:4000/v1/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: <LITELLM_KEY>' \
+--data '{"model": "finetuned-gemini" ,"messages":[{"role": "user", "content":[{"type": "text", "text": "hi"}]}]}'
+```
+
+</TabItem>
+</Tabs>
+
+
+
 ## Model Garden
 
 :::tip
@@ -1476,67 +1541,6 @@ response = completion(
 
 </TabItem>
 
-</Tabs>
-
-
-## Gemini Pro
-| Model Name       | Function Call                        |
-|------------------|--------------------------------------|
-| gemini-pro   | `completion('gemini-pro', messages)`, `completion('vertex_ai/gemini-pro', messages)` |
-
-## Fine-tuned Models
-
-Fine tuned models on vertex have a numerical model/endpoint id. 
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-from litellm import completion
-import os
-
-## set ENV variables
-os.environ["VERTEXAI_PROJECT"] = "hardy-device-38811"
-os.environ["VERTEXAI_LOCATION"] = "us-central1"
-
-response = completion(
-  model="vertex_ai/<your-finetuned-model>",  # e.g. vertex_ai/4965075652664360960
-  messages=[{ "content": "Hello, how are you?","role": "user"}],
-  base_model="vertex_ai/gemini-1.5-pro" # the base model - used for routing
-)
-```
-
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
-1. Add Vertex Credentials to your env 
-
-```bash
-!gcloud auth application-default login
-```
-
-2. Setup config.yaml 
-
-```yaml
-- model_name: finetuned-gemini
-  litellm_params:
-    model: vertex_ai/<ENDPOINT_ID>
-    vertex_project: <PROJECT_ID>
-    vertex_location: <LOCATION>
-  model_info:
-    base_model: vertex_ai/gemini-1.5-pro # IMPORTANT
-```
-
-3. Test it! 
-
-```bash
-curl --location 'https://0.0.0.0:4000/v1/chat/completions' \
---header 'Content-Type: application/json' \
---header 'Authorization: <LITELLM_KEY>' \
---data '{"model": "finetuned-gemini" ,"messages":[{"role": "user", "content":[{"type": "text", "text": "hi"}]}]}'
-```
-
-</TabItem>
 </Tabs>
 
 
