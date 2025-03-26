@@ -242,7 +242,6 @@ jobs:
 
     steps:
       - checkout
-      - setup_google_dns
       - run:
           name: Show git commit hash
           command: |
