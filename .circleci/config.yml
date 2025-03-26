@@ -9,7 +9,11 @@ commands:
       - run:
           name: "Configure Google DNS"
           command: |
-            echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
+            # Backup original resolv.conf
+            sudo cp /etc/resolv.conf /etc/resolv.conf.backup
+            # Add both local and Google DNS servers
+            echo "nameserver 127.0.0.11" | sudo tee /etc/resolv.conf
+            echo "nameserver 8.8.8.8" | sudo tee -a /etc/resolv.conf
             echo "nameserver 8.8.4.4" | sudo tee -a /etc/resolv.conf
 
 jobs:
@@ -243,6 +247,12 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - run:
+          name: DNS lookup for Redis host
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y dnsutils
+            dig redis-19899.c239.us-east-1-2.ec2.redns.redis-cloud.com +short
       - run:
           name: Show git commit hash
           command: |
@@ -630,7 +640,6 @@ jobs:
 
     steps:
       - checkout
-      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |

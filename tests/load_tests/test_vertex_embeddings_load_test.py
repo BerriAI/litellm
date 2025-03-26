@@ -59,7 +59,7 @@ def load_vertex_ai_credentials():
 
 async def create_async_vertex_embedding_task():
     load_vertex_ai_credentials()
-    base_url = "https://exampleopenaiendpoint-production.up.railway.app/v1/projects/pathrise-convert-1606954137718/locations/us-central1/publishers/google/models/embedding-gecko-001:predict"
+    base_url = "https://exampleopenaiendpoint-production.up.railway.app/v1/projects/pathrise-convert-1606954137718/locations/us-central1/publishers/google/models/textembedding-gecko@001"
     embedding_args = {
         "model": "vertex_ai/textembedding-gecko",
         "input": "This is a test sentence for embedding.",
@@ -109,12 +109,13 @@ def analyze_results(vertex_times):
 
 
 @pytest.mark.asyncio
-async def test_embedding_performance():
+async def test_embedding_performance(monkeypatch):
     """
     Run load test on vertex AI embeddings to ensure vertex median response time is less than 300ms
 
     20 RPS for 20 seconds
     """
+    monkeypatch.setattr(litellm, "api_base", None)
     duration_seconds = 20
     requests_per_second = 20
     vertex_times = await run_load_test(duration_seconds, requests_per_second)
