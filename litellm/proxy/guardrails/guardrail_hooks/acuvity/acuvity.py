@@ -1,6 +1,6 @@
 import os
 from enum import Enum
-from typing import List, Literal, Optional, Union
+from typing import List, Literal, Optional, Tuple, Union
 
 from fastapi import HTTPException
 
@@ -94,6 +94,8 @@ class AcuvityGuardrail(CustomGuardrail):
         try:
             self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
             self.api_key = api_key or os.environ.get("ACUVITY_TOKEN")
+            if self.api_key is None:
+                raise ValueError("API key must be provided either as an argument or through the ACUVITY_TOKEN environment variable.")
             self.api_base = api_base or get_apex_url_from_token(self.api_key)
 
             if kwargs.get("event_hook") == "pre_call":
@@ -186,6 +188,11 @@ class AcuvityGuardrail(CustomGuardrail):
         if _messages:
             msgs = [message.get("content") for message in _messages if message.get("content") is not None]
 
+            if self.api_base is None:
+                raise ValueError("API base URL cannot be None")
+            if self.api_key is None:
+                raise ValueError("API key cannot be None")
+
             verbose_proxy_logger.debug("Acuvity pre_call data: %s", msgs)
             resp = await self.post_acuvity_scan(self.api_base, self.api_key ,msgs, HookEventType.BEFORE_REQUEST, list(self.pre_guard_config.redaction_keys))
 
@@ -235,6 +242,7 @@ class AcuvityGuardrail(CustomGuardrail):
             "image_generation",
             "moderation",
             "audio_transcription",
+            "responses",
         ],
     ):
         """
@@ -244,6 +252,11 @@ class AcuvityGuardrail(CustomGuardrail):
         if _messages:
             msgs = [message.get("content") for message in _messages if message.get("content") is not None]
 
+            if self.api_base is None:
+                raise ValueError("API base URL cannot be None")
+            if self.api_key is None:
+                raise ValueError("API key cannot be None")
+
             verbose_proxy_logger.debug("Acuvity during_call data: %s", msgs)
             resp = await self.post_acuvity_scan(self.api_base, self.api_key ,msgs, HookEventType.BEFORE_REQUEST, list(self.during_guard_config.redaction_keys))
 
@@ -252,7 +265,7 @@ class AcuvityGuardrail(CustomGuardrail):
             response_helper = ResponseHelper()
 
             if resp.get('extractions'):
-                    for index, extraction in enumerate(resp.get('extractions')):
+                    for index, extraction in enumerate(resp.get('extractions') or []):
                         extraction_obj = Extraction(**extraction)
                         current_results, _ = self.evaluate_all_guardrails(
                                                 extraction_obj,
@@ -269,7 +282,6 @@ class AcuvityGuardrail(CustomGuardrail):
                                 "guard": guard_results
                             }
                         )
-        pass
 
     @log_guardrail_information
     async def async_post_call_success_hook(
@@ -292,6 +304,11 @@ class AcuvityGuardrail(CustomGuardrail):
         _messages = self._extract_response_messages(response)
         redacted = False
         if _messages:
+            if self.api_base is None:
+                raise ValueError("API base URL cannot be None")
+            if self.api_key is None:
+                raise ValueError("API key cannot be None")
+
             verbose_proxy_logger.debug("Acuvity post_call data: %s", _messages)
             resp = await self.post_acuvity_scan(self.api_base,self.api_key , [_messages] , HookEventType.AFTER_REQUEST, list(self.post_guard_config.redaction_keys))
 
@@ -324,7 +341,8 @@ class AcuvityGuardrail(CustomGuardrail):
                         "guard": guard_results
                     }
                 )
-            verbose_proxy_logger.info(
+            if isinstance(response, ModelResponse):
+                verbose_proxy_logger.info(
                     f"Acuvity post call processed message: {response.choices[0]}, redaction applied {redacted}"
                 )
         return response
@@ -366,7 +384,7 @@ class AcuvityGuardrail(CustomGuardrail):
         extraction: Extraction,
         config: Config,
         response_helper: ResponseHelper
-    ) -> Set[GuardName]:
+    ) -> Tuple[Set[GuardName], Set[str]]:
         """
         Evaluate all guardrails for a given extraction
         """
