@@ -2,12 +2,14 @@ from typing import List
 
 from litellm.types.llms.openai import OpenAIAudioTranscriptionOptionalParams
 
-from ...base_llm.audio_transcription.transformation import BaseAudioTranscriptionConfig
+from ...openai.transcriptions.whisper_transformation import (
+    OpenAIWhisperAudioTranscriptionConfig,
+)
 from ..common_utils import FireworksAIMixin
 
 
 class FireworksAIAudioTranscriptionConfig(
-    FireworksAIMixin, BaseAudioTranscriptionConfig
+    FireworksAIMixin, OpenAIWhisperAudioTranscriptionConfig
 ):
     def get_supported_openai_params(
         self, model: str
