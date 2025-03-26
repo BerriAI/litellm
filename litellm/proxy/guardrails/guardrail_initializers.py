@@ -173,6 +173,7 @@ def initialize_guardrails_ai(litellm_params, guardrail):
 
     return _guardrails_ai_callback
 
+
 def initialize_pangea(litellm_params, guardrail):
     from litellm.proxy.guardrails.guardrail_hooks.pangea import PangeaHandler
 
@@ -187,3 +188,26 @@ def initialize_pangea(litellm_params, guardrail):
     litellm.logging_callback_manager.add_litellm_callback(_pangea_callback)
 
     return _pangea_callback
+
+
+def initialize_lasso(litellm_params, guardrail):
+    from litellm.proxy.guardrails.guardrail_hooks.lasso import LassoGuardrail
+
+    # Only initialize Lasso guardrail for pre_call mode
+    if litellm_params["mode"] == GuardrailEventHooks.pre_call.value:
+        _lasso_callback = LassoGuardrail(
+            lasso_api_key=litellm_params.get("api_key"),
+            api_base=litellm_params.get("api_base"),
+            user_id=litellm_params.get("user_id"),
+            conversation_id=litellm_params.get("conversation_id"),
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=litellm_params["mode"],
+            default_on=litellm_params["default_on"],
+        )
+        litellm.logging_callback_manager.add_litellm_callback(_lasso_callback)
+    else:
+        # Raise an error if any mode other than pre_call is attempted
+        raise ValueError(
+            f"Lasso guardrail only supports 'pre_call' mode. Got '{litellm_params['mode']}' instead. "
+            "Please update your configuration to use 'pre_call' mode for Lasso guardrail."
+        )
