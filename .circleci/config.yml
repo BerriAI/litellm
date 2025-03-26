@@ -2552,7 +2552,8 @@ workflows:
             branches:
               only:
                 - main
-                - /litellm_.*/
+                - /litellm_stability_.*/
+                - litellm_stable_release_branch
       - litellm_assistants_api_testing:
           filters:
             branches:
