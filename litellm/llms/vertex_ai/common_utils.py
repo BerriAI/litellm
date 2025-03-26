@@ -75,8 +75,8 @@ def _get_vertex_url(
 ) -> Tuple[str, str]:
     url: Optional[str] = None
     endpoint: Optional[str] = None
-    if litellm.VertexGeminiConfig._is_model_gemini_gemini_spec_model(model):
-        model = litellm.VertexGeminiConfig._get_model_name_from_gemini_spec_model(model)
+
+    model = litellm.VertexGeminiConfig.get_model_for_vertex_ai_url(model=model)
     if mode == "chat":
         ### SET RUNTIME ENDPOINT ###
         endpoint = "generateContent"
