@@ -249,7 +249,10 @@ jobs:
       - setup_google_dns
       - run:
           name: DNS lookup for Redis host
-          command: dig redis-19899.c239.us-east-1-2.ec2.redns.redis-cloud.com +short
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y dnsutils
+            dig redis-19899.c239.us-east-1-2.ec2.redns.redis-cloud.com +short
       - run:
           name: Show git commit hash
           command: |
