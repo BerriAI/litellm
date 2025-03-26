@@ -518,6 +518,16 @@ class Logging(LiteLLMLoggingBaseClass):
                 }
         return data
 
+    def _get_masked_api_base(self, api_base: str) -> str:
+        if "key=" in api_base:
+            # Find the position of "key=" in the string
+            key_index = api_base.find("key=") + 4
+            # Mask the last 5 characters after "key="
+            masked_api_base = api_base[:key_index] + "*" * 5 + api_base[-4:]
+        else:
+            masked_api_base = api_base
+        return str(masked_api_base)
+
     def _pre_call(self, input, api_key, model=None, additional_args={}):
         """
         Common helper function across the sync + async pre-call function
@@ -531,6 +541,9 @@ class Logging(LiteLLMLoggingBaseClass):
             model
         ):  # if model name was changes pre-call, overwrite the initial model call name with the new one
             self.model_call_details["model"] = model
+        self.model_call_details["litellm_params"]["api_base"] = (
+            self._get_masked_api_base(additional_args.get("api_base", ""))
+        )
 
     def pre_call(self, input, api_key, model=None, additional_args={}):  # noqa: PLR0915
 
@@ -714,15 +727,6 @@ class Logging(LiteLLMLoggingBaseClass):
                     headers = {}
                 data = additional_args.get("complete_input_dict", {})
                 api_base = str(additional_args.get("api_base", ""))
-                if "key=" in api_base:
-                    # Find the position of "key=" in the string
-                    key_index = api_base.find("key=") + 4
-                    # Mask the last 5 characters after "key="
-                    masked_api_base = api_base[:key_index] + "*" * 5 + api_base[-4:]
-                else:
-                    masked_api_base = api_base
-                self.model_call_details["litellm_params"]["api_base"] = masked_api_base
-
                 curl_command = self._get_request_curl_command(
                     api_base=api_base,
                     headers=headers,
@@ -737,11 +741,12 @@ class Logging(LiteLLMLoggingBaseClass):
     def _get_request_curl_command(
         self, api_base: str, headers: Optional[dict], additional_args: dict, data: dict
     ) -> str:
+        masked_api_base = self._get_masked_api_base(api_base)
         if headers is None:
             headers = {}
         curl_command = "\n\nPOST Request Sent from LiteLLM:\n"
         curl_command += "curl -X POST \\\n"
-        curl_command += f"{api_base} \\\n"
+        curl_command += f"{masked_api_base} \\\n"
         masked_headers = self._get_masked_headers(headers)
         formatted_headers = " ".join(
             [f"-H '{k}: {v}'" for k, v in masked_headers.items()]

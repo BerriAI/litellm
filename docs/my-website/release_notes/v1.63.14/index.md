@@ -24,6 +24,7 @@ This release brings:
 - LLM Translation Improvements (MCP Support and Bedrock Application Profiles)
 - Perf improvements for Usage-based Routing
 - Streaming guardrail support via websockets
+- Azure OpenAI client perf fix (from previous release)
 
 ## Docker Run LiteLLM Proxy
 
@@ -31,7 +32,7 @@ This release brings:
 docker run
 -e STORE_MODEL_IN_DB=True
 -p 4000:4000
-ghcr.io/berriai/litellm:main-v1.63.14-stable
+ghcr.io/berriai/litellm:main-v1.63.14-stable.patch1
 ```
 
 ## Demo Instance
