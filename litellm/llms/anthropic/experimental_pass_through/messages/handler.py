@@ -19,6 +19,9 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
 )
+from litellm.types.llms.anthropic_messages.anthropic_response import (
+    AnthropicMessagesResponse,
+)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ProviderSpecificHeader
 from litellm.utils import ProviderConfigManager, client
@@ -67,7 +70,7 @@ async def anthropic_messages(
     client: Optional[AsyncHTTPHandler] = None,
     custom_llm_provider: Optional[str] = None,
     **kwargs,
-) -> Union[Dict[str, Any], AsyncIterator]:
+) -> Union[AnthropicMessagesResponse, AsyncIterator]:
     """
     Makes Anthropic `/v1/messages` API calls In the Anthropic API Spec
     """
