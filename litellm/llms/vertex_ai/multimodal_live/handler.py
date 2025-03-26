@@ -60,7 +60,6 @@ class GeminiLive(VertexLLM):
         except ImportError:
             raise ImportError("Websockets package not installed. Please install it with `pip install websockets`")
 
-        print("TESTING 123")
         if api_base is None:
             raise ValueError("api_base is required for Gemini calls")
 
@@ -80,8 +79,6 @@ class GeminiLive(VertexLLM):
                 vertex_credentials = json.load(f)
         except Exception as e:
             raise Exception(f"Failed to load credentials: {str(e)}")
-
-        print(f"vertex credentials: {vertex_credentials}")
 
         _auth_header, vertex_project = await self._ensure_access_token_async(
             credentials=vertex_credentials,
