@@ -1403,7 +1403,7 @@ os.environ["VERTEXAI_PROJECT"] = "hardy-device-38811"
 os.environ["VERTEXAI_LOCATION"] = "us-central1"
 
 response = litellm.completion(
-  model="vertex_ai/gemini/<your-finetuned-model>",  # e.g. vertex_ai/4965075652664360960
+  model="vertex_ai/gemini/<your-finetuned-model>",  # e.g. vertex_ai/gemini/4965075652664360960
   messages=[{ "content": "Hello, how are you?","role": "user"}],
 )
 ```
