@@ -11,7 +11,6 @@ Run checks for:
 import asyncio
 import re
 import time
-import traceback
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, cast
 
 from fastapi import Request, status
@@ -23,7 +22,6 @@ from litellm.caching.caching import DualCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.proxy._types import (
-    DB_CONNECTION_ERROR_TYPES,
     RBAC_ROLES,
     CallInfo,
     LiteLLM_EndUserTable,
@@ -45,7 +43,6 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.router import Router
-from litellm.types.services import ServiceTypes
 
 from .auth_checks_organization import organization_role_based_access_check
 
