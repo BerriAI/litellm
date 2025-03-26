@@ -4,7 +4,7 @@ orbs:
   node: circleci/node@5.1.0  # Add this line to declare the node orb
 
 commands:
-  c:
+  setup_google_dns:
     steps:
       - run:
           name: "Configure Google DNS"
