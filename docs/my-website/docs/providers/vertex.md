@@ -1385,7 +1385,7 @@ Call fine-tuned Vertex AI Gemini models through LiteLLM. If you want to use Lite
 | Supported Operations | `/chat/completions`, `/completions`, `/embeddings`, `/images` |
 
 <Tabs>
-<TabItem value="sdk" label="SDK">
+<TabItem value="sdk" label="LiteLLM Python SDK">
 
 ```python showLineNumbers
 import litellm
@@ -1402,7 +1402,7 @@ response = litellm.completion(
 ```
 
 </TabItem>
-<TabItem value="proxy" label="PROXY">
+<TabItem value="proxy" label="LiteLLM Proxy">
 
 1. Add Vertex Credentials to your env 
 
@@ -1412,7 +1412,7 @@ response = litellm.completion(
 
 2. Setup config.yaml 
 
-```yaml
+```yaml showLineNumbers
 - model_name: finetuned-gemini
   litellm_params:
     model: vertex_ai/gemini/<ENDPOINT_ID>
@@ -1422,12 +1422,38 @@ response = litellm.completion(
 
 3. Test it! 
 
-```bash
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python showLineNumbers
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="your-litellm-key",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="finetuned-gemini",
+    messages=[
+        {"role": "user", "content": "hi"}
+    ]
+)
+print(response)
+```
+
+</TabItem>
+<TabItem value="curl" label="curl">
+
+```bash showLineNumbers
 curl --location 'https://0.0.0.0:4000/v1/chat/completions' \
 --header 'Content-Type: application/json' \
 --header 'Authorization: <LITELLM_KEY>' \
 --data '{"model": "finetuned-gemini" ,"messages":[{"role": "user", "content":[{"type": "text", "text": "hi"}]}]}'
 ```
+
+</TabItem>
+</Tabs>
 
 </TabItem>
 </Tabs>
