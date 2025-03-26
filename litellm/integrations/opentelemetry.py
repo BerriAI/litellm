@@ -420,7 +420,7 @@ class OpenTelemetry(CustomLogger):
                 if not function:
                     continue
 
-                prefix = f"{SpanAttributes.LLM_REQUEST_FUNCTIONS}.{i}"
+                prefix = f"{SpanAttributes.LLM_REQUEST_FUNCTIONS.value}.{i}"
                 self.safe_set_attribute(
                     span=span,
                     key=f"{prefix}.name",
@@ -476,7 +476,7 @@ class OpenTelemetry(CustomLogger):
                 _value = _function.get(key)
                 if _value:
                     kv_pairs[
-                        f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.function_call.{key}"
+                        f"{SpanAttributes.LLM_COMPLETIONS.value}.{idx}.function_call.{key}"
                     ] = _value
 
         return kv_pairs
@@ -637,7 +637,7 @@ class OpenTelemetry(CustomLogger):
                     if prompt.get("role"):
                         self.safe_set_attribute(
                             span=span,
-                            key=f"{SpanAttributes.LLM_PROMPTS}.{idx}.role",
+                            key=f"{SpanAttributes.LLM_PROMPTS.value}.{idx}.role",
                             value=prompt.get("role"),
                         )
 
@@ -646,7 +646,7 @@ class OpenTelemetry(CustomLogger):
                             prompt["content"] = str(prompt.get("content"))
                         self.safe_set_attribute(
                             span=span,
-                            key=f"{SpanAttributes.LLM_PROMPTS}.{idx}.content",
+                            key=f"{SpanAttributes.LLM_PROMPTS.value}.{idx}.content",
                             value=prompt.get("content"),
                         )
             #############################################
@@ -658,14 +658,14 @@ class OpenTelemetry(CustomLogger):
                         if choice.get("finish_reason"):
                             self.safe_set_attribute(
                                 span=span,
-                                key=f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.finish_reason",
+                                key=f"{SpanAttributes.LLM_COMPLETIONS.value}.{idx}.finish_reason",
                                 value=choice.get("finish_reason"),
                             )
                         if choice.get("message"):
                             if choice.get("message").get("role"):
                                 self.safe_set_attribute(
                                     span=span,
-                                    key=f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.role",
+                                    key=f"{SpanAttributes.LLM_COMPLETIONS.value}.{idx}.role",
                                     value=choice.get("message").get("role"),
                                 )
                             if choice.get("message").get("content"):
@@ -677,7 +677,7 @@ class OpenTelemetry(CustomLogger):
                                     )
                                 self.safe_set_attribute(
                                     span=span,
-                                    key=f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.content",
+                                    key=f"{SpanAttributes.LLM_COMPLETIONS.value}.{idx}.content",
                                     value=choice.get("message").get("content"),
                                 )
 
