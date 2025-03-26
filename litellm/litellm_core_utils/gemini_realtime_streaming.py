@@ -9,7 +9,6 @@ from litellm.litellm_core_utils.realtime_streaming import (
     RealTimeStreaming,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-import litellm
 
 class GeminiRealTimeStreaming(RealTimeStreaming):
     def __init__(
@@ -64,7 +63,7 @@ class GeminiRealTimeStreaming(RealTimeStreaming):
                 await self.websocket.close(code=e.code, reason=f"Backend connection closed during setup: {e.reason}")
             return False
         except json.JSONDecodeError as e:
-            print(f"Failed to decode JSON during setup: {e} - Message: {message_str}")
+            print(f"Failed to decode JSON during setup: {e}")
             await self.websocket.close(code=1011, reason="Invalid JSON received during setup")
             await self.backend_ws.close(code=1011, reason="Invalid JSON received during setup")
             return False
@@ -75,32 +74,6 @@ class GeminiRealTimeStreaming(RealTimeStreaming):
             if not self.backend_ws.closed:
                 await self.backend_ws.close(code=1011, reason=f"Unexpected setup error: {e}")
             return False
-
-    def store_message(self, message: Union[str, bytes]):
-        """Store received message in list"""
-        if isinstance(message, bytes):
-            try:
-                message = message.decode("utf-8")
-            except UnicodeDecodeError:
-                print("Warning: Could not decode backend message as UTF-8. Storing as bytes representation.")
-                message = repr(message)
-        self.messages.append(message)
-
-    def store_input(self, message: str):
-        """Store input message sent from client to backend"""
-        try:
-            parsed_message = json.loads(message)
-            self.input_message = parsed_message
-            if self.logging_obj:
-                self.logging_obj.pre_call(input=self.input_message, api_key="")
-        except json.JSONDecodeError:
-            print(f"Warning: Could not decode client message as JSON for logging: {message}")
-            self.input_message = {"raw_message": message}
-            if self.logging_obj:
-                self.logging_obj.pre_call(input=self.input_message, api_key="")
-        except Exception as e:
-            print(f"Error storing input message: {e}")
-            self.input_message = {"error": str(e), "raw_message": message}
 
     async def backend_to_client_send_messages(self):
         """Forwards messages received from Gemini backend to the client."""
