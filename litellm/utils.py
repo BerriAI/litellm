@@ -2847,18 +2847,12 @@ def get_optional_params(  # noqa: PLR0915
     additional_drop_params=None,
     messages: Optional[List[AllMessageValues]] = None,
     thinking: Optional[AnthropicThinkingParam] = None,
-    base_model: Optional[str] = None,
     **kwargs,
 ):
     # retrieve all parameters passed to the function
     passed_params = locals().copy()
     special_params = passed_params.pop("kwargs")
 
-    # Use `base_model` for paramter mapping if passed in by user
-    model = LitellmCoreRequestUtils.select_model_for_request_transformation(
-        model=model,
-        base_model=base_model,
-    )
     for k, v in special_params.items():
         if k.startswith("aws_") and (
             custom_llm_provider != "bedrock" and custom_llm_provider != "sagemaker"
