@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.llm_request_utils import LitellmCoreRequestUtils
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
     convert_to_gemini_tool_call_invoke,
@@ -284,6 +285,11 @@ def _transform_request_body(
     Common transformation logic across sync + async Gemini /generateContent calls.
     """
     # Separate system prompt from rest of message
+    model = LitellmCoreRequestUtils.select_model_for_request_transformation(
+        model=model,
+        litellm_params=litellm_params,
+    )
+
     supports_system_message = get_supports_system_message(
         model=model, custom_llm_provider=custom_llm_provider
     )
