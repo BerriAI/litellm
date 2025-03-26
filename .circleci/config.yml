@@ -3,6 +3,14 @@ orbs:
   codecov: codecov/codecov@4.0.1
   node: circleci/node@5.1.0  # Add this line to declare the node orb
 
+commands:
+  setup_google_dns:
+    steps:
+      - run:
+          name: "Configure Google DNS"
+          command: |
+            echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
+            echo "nameserver 8.8.4.4" | sudo tee -a /etc/resolv.conf
 
 jobs:
   local_testing:
@@ -577,6 +585,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
