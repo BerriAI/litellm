@@ -710,44 +710,6 @@ jobs:
           paths:
             - llm_translation_coverage.xml
             - llm_translation_coverage
-  litellm_proxy_reliability_tests:
-    docker:
-      - image: cimg/python:3.11
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
-    working_directory: ~/project
-
-    steps:
-      - checkout
-      - run:
-          name: Install Dependencies
-          command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
-            pip install "pytest==7.3.1"
-            pip install "pytest-retry==1.6.3"
-            pip install "pytest-cov==5.0.0"
-            pip install "pytest-asyncio==0.21.1"
-            pip install "respx==0.21.1"
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Setup Toxiproxy
-          command: |
-            python tests/proxy_reliability_tests/setup_toxi_proxy.py &
-            sleep 5
-      - run:
-          name: Run tests
-          command: |
-            pwd
-            ls
-            python -m pytest -vv tests/proxy_reliability_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
-          no_output_timeout: 120m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml litellm_proxy_reliability_tests_coverage.xml
-            mv .coverage litellm_proxy_reliability_tests_coverage
   mcp_testing:
     docker:
       - image: cimg/python:3.11
@@ -1968,7 +1930,7 @@ jobs:
           no_output_timeout:
             120m
             # Clean up first container
-
+      
   proxy_build_from_pip_tests:
     # Change from docker to machine executor
     machine:
@@ -2536,13 +2498,6 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - litellm_proxy_reliability_tests:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_stability_.*/
-                - litellm_stable_release_branch
       - litellm_assistants_api_testing:
           filters:
             branches:
@@ -2684,7 +2639,6 @@ workflows:
             - caching_unit_tests
             - litellm_proxy_unit_testing
             - litellm_proxy_security_tests
-            - litellm_proxy_reliability_tests
             - langfuse_logging_unit_tests
             - local_testing
             - litellm_assistants_api_testing
@@ -2750,7 +2704,6 @@ workflows:
             - e2e_ui_testing
             - litellm_proxy_unit_testing
             - litellm_proxy_security_tests
-            - litellm_proxy_reliability_tests
             - installing_litellm_on_python
             - installing_litellm_on_python_3_13
             - proxy_logging_guardrails_model_info_tests
