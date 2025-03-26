@@ -996,7 +996,7 @@ async def get_key_object(
 
     if _valid_token is None:
         raise ProxyException(
-            message="Key doesn't exist in db. key={}. Create key via `/key/generate` call.".format(
+            message="Invalid proxy server token passed. key={}, not found in db. Create key via `/key/generate` call.".format(
                 hashed_token
             ),
             type=ProxyErrorTypes.token_not_found_in_db,
