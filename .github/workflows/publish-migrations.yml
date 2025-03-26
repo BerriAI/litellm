@@ -164,7 +164,7 @@ jobs:
         if: success()
         uses: peter-evans/create-pull-request@v5
         with:
-          token: ${{ secrets.GHCR_TOKEN }}
+          token: ${{ secrets.PAT_TOKEN_2 }}
           commit-message: "chore: update prisma migrations"
           title: "Update Prisma Migrations"
           body: |
