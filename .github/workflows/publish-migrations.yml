@@ -1,0 +1,103 @@
+name: Publish Prisma Migrations
+
+on:
+  push:
+    paths:
+      - 'schema.prisma'  # Check root schema.prisma
+    branches:
+      - main
+
+jobs:
+  publish-migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_DB: temp_db
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install Dependencies
+        run: |
+          pip install prisma
+          pip install python-dotenv
+
+      - name: Compare and Generate Migration
+        env:
+          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/temp_db"
+          DIRECT_URL: "postgresql://postgres:postgres@localhost:5432/temp_db"
+        run: |
+          # Create temporary migration workspace
+          mkdir -p temp_migrations
+          
+          # Copy existing migrations to temp workspace
+          cp -r deploy/migrations/* temp_migrations/
+          
+          # Generate new migration by comparing against existing state
+          VERSION=$(date +%Y%m%d%H%M%S)
+          
+          # Use prisma migrate diff to generate the migration
+          prisma migrate diff \
+            --from-migrations temp_migrations \
+            --to-schema-datamodel schema.prisma \
+            --script > temp_migrations/migration_${VERSION}.sql
+          
+          # Check if there are actual changes
+          if [ -s temp_migrations/migration_${VERSION}.sql ]; then
+            echo "Changes detected, creating new migration"
+            
+            # Create new migration directory
+            mkdir -p deploy/migrations/${VERSION}_schema_update
+            
+            # Move the migration file
+            mv temp_migrations/migration_${VERSION}.sql deploy/migrations/${VERSION}_schema_update/migration.sql
+            
+            # Create README with timestamp
+            echo "Migration generated at $(date -u)" > deploy/migrations/${VERSION}_schema_update/README.md
+          else
+            echo "No schema changes detected"
+            exit 0
+          fi
+
+      - name: Verify Migration
+        if: success()
+        env:
+          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/temp_db"
+          DIRECT_URL: "postgresql://postgres:postgres@localhost:5432/temp_db"
+        run: |
+          # Apply all migrations in order to verify
+          for migration in deploy/migrations/*/migration.sql; do
+            echo "Applying migration: $migration"
+            psql $DATABASE_URL -f $migration
+          done
+
+      - name: Create Pull Request
+        if: success()
+        uses: peter-evans/create-pull-request@v5
+        with:
+          commit-message: "chore: update prisma migrations"
+          title: "Update Prisma Migrations"
+          body: |
+            Auto-generated migration based on schema.prisma changes.
+            
+            Generated files:
+            - deploy/migrations/${VERSION}_schema_update/migration.sql
+            - deploy/migrations/${VERSION}_schema_update/README.md
+          branch: feat/prisma-migration-${{ env.VERSION }}
+          base: main 
