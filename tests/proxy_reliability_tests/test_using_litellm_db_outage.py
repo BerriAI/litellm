@@ -4,7 +4,6 @@ import subprocess
 import sys
 import time
 import traceback
-
 import pytest
 
 sys.path.insert(
@@ -29,6 +28,10 @@ def test_litellm_proxy_server_config_no_general_settings():
         subprocess.run(["pip", "install", "litellm[extra_proxy]"])
         filepath = os.path.dirname(os.path.abspath(__file__))
         config_fp = f"{filepath}/test_configs/test_config.yaml"
+
+        # Set DATABASE_URL environment variable
+        os.environ["DATABASE_URL"] = os.getenv("TOXI_PROXY_DATABASE_URL")
+
         server_process = subprocess.Popen(
             [
                 "python",
