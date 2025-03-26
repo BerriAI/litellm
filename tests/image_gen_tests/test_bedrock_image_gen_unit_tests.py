@@ -6,7 +6,13 @@ import traceback
 from dotenv import load_dotenv
 from openai.types.image import Image
 
-from litellm.llms.bedrock.image.amazon_nova_canvas_transformation import AmazonNovaCanvasConfig
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
+
+from litellm.llms.bedrock.image.amazon_nova_canvas_transformation import (
+    AmazonNovaCanvasConfig,
+)
 
 logging.basicConfig(level=logging.DEBUG)
 load_dotenv()
@@ -54,6 +60,7 @@ from litellm.llms.bedrock.image.image_handler import (
 def test_is_stability_3_model(model, expected):
     result = AmazonStability3Config._is_stability_3_model(model)
     assert result == expected
+
 
 @pytest.mark.parametrize(
     "model,expected",
@@ -221,7 +228,7 @@ def test_transform_response_dict_to_openai_response_nova_canvas():
 
 def test_amazon_nova_canvas_get_supported_openai_params():
     result = AmazonNovaCanvasConfig.get_supported_openai_params()
-    assert result == ["size"]
+    assert result == ["n", "size", "quality"]
 
 
 def test_get_request_body_nova_canvas_default():
@@ -257,7 +264,11 @@ def test_get_request_body_nova_canvas_text_image():
 def test_get_request_body_nova_canvas_color_guided_generation():
     handler = BedrockImageGeneration()
     prompt = "A beautiful sunset"
-    optional_params = {"cfg_scale": 7, "taskType": "COLOR_GUIDED_GENERATION", "colorGuidedGenerationParams": {"colors": ["#FF0000"]}}
+    optional_params = {
+        "cfg_scale": 7,
+        "taskType": "COLOR_GUIDED_GENERATION",
+        "colorGuidedGenerationParams": {"colors": ["#FF0000"]},
+    }
     model = "amazon.nova-canvas-v1"
 
     result = handler._get_request_body(
@@ -276,8 +287,7 @@ def test_transform_request_body_with_invalid_task_type():
 
     with pytest.raises(NotImplementedError) as exc_info:
         AmazonNovaCanvasConfig.transform_request_body(
-            text=text,
-            optional_params=optional_params
+            text=text, optional_params=optional_params
         )
     assert "Task type INVALID_TASK is not supported" in str(exc_info.value)
 
