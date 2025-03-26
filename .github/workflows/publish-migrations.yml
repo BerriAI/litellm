@@ -38,7 +38,34 @@ jobs:
           pip install prisma
           pip install python-dotenv
 
+      - name: Generate Initial Migration if None Exists
+        env:
+          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/temp_db"
+          DIRECT_URL: "postgresql://postgres:postgres@localhost:5432/temp_db"
+        run: |
+          # Create migrations directory if it doesn't exist
+          mkdir -p deploy/migrations
+          
+          # Check if migrations exist
+          if [ -z "$(ls -A deploy/migrations 2>/dev/null)" ]; then
+            echo "No existing migrations found, creating baseline..."
+            VERSION=$(date +%Y%m%d%H%M%S)
+            
+            # Create baseline directory
+            mkdir -p deploy/migrations/${VERSION}_initial
+            
+            # Generate baseline migration
+            prisma migrate diff \
+              --from-empty \
+              --to-schema-datamodel schema.prisma \
+              --script > deploy/migrations/${VERSION}_initial/migration.sql
+              
+            echo "Initial migration generated at $(date -u)" > deploy/migrations/${VERSION}_initial/README.md
+            exit 0
+          fi
+
       - name: Compare and Generate Migration
+        if: success()
         env:
           DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/temp_db"
           DIRECT_URL: "postgresql://postgres:postgres@localhost:5432/temp_db"
@@ -46,13 +73,12 @@ jobs:
           # Create temporary migration workspace
           mkdir -p temp_migrations
           
-          # Copy existing migrations to temp workspace
-          cp -r deploy/migrations/* temp_migrations/
+          # Copy existing migrations (will not fail if directory is empty)
+          cp -r deploy/migrations/* temp_migrations/ 2>/dev/null || true
           
-          # Generate new migration by comparing against existing state
           VERSION=$(date +%Y%m%d%H%M%S)
           
-          # Use prisma migrate diff to generate the migration
+          # Generate diff against existing migrations or empty state
           prisma migrate diff \
             --from-migrations temp_migrations \
             --to-schema-datamodel schema.prisma \
@@ -61,14 +87,8 @@ jobs:
           # Check if there are actual changes
           if [ -s temp_migrations/migration_${VERSION}.sql ]; then
             echo "Changes detected, creating new migration"
-            
-            # Create new migration directory
             mkdir -p deploy/migrations/${VERSION}_schema_update
-            
-            # Move the migration file
             mv temp_migrations/migration_${VERSION}.sql deploy/migrations/${VERSION}_schema_update/migration.sql
-            
-            # Create README with timestamp
             echo "Migration generated at $(date -u)" > deploy/migrations/${VERSION}_schema_update/README.md
           else
             echo "No schema changes detected"
