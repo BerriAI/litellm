@@ -204,3 +204,27 @@ def test_o3_reasoning_effort():
         reasoning_effort="high",
     )
     assert resp.choices[0].message.content is not None
+
+
+@pytest.mark.parametrize("model", ["o1-preview", "o1-mini", "o1", "o3-mini"])
+def test_streaming_response(model):
+    """Test that streaming response is returned correctly"""
+    from litellm import completion
+
+    response = completion(
+        model=model,
+        messages=[
+            {"role": "system", "content": "Be a good bot!"},
+            {"role": "user", "content": "Hello!"},
+        ],
+        stream=True,
+    )
+
+    assert response is not None
+
+    chunks = []
+    for chunk in response:
+        chunks.append(chunk)
+
+    resp = litellm.stream_chunk_builder(chunks=chunks)
+    print(resp)

@@ -29,3 +29,7 @@ class TopazModelInfo(BaseLLMModelInfo):
         return (
             api_base or get_secret_str("TOPAZ_API_BASE") or "https://api.topazlabs.com"
         )
+
+    @staticmethod
+    def get_base_model(model: str) -> str:
+        return model

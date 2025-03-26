@@ -3,6 +3,7 @@ from typing import AsyncIterator, Iterator, List, Optional, Union
 
 import httpx
 
+import litellm
 from litellm import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.utils import GenericStreamingChunk as GChunk
@@ -78,7 +79,11 @@ class AWSEventStreamDecoder:
                 message = self._parse_message_from_event(event)
                 if message:
                     # remove data: prefix and "\n\n" at the end
-                    message = message.replace("data:", "").replace("\n\n", "")
+                    message = (
+                        litellm.CustomStreamWrapper._strip_sse_data_from_chunk(message)
+                        or ""
+                    )
+                    message = message.replace("\n\n", "")
 
                     # Accumulate JSON data
                     accumulated_json += message
@@ -127,7 +132,11 @@ class AWSEventStreamDecoder:
                 if message:
                     verbose_logger.debug("sagemaker  parsed chunk bytes %s", message)
                     # remove data: prefix and "\n\n" at the end
-                    message = message.replace("data:", "").replace("\n\n", "")
+                    message = (
+                        litellm.CustomStreamWrapper._strip_sse_data_from_chunk(message)
+                        or ""
+                    )
+                    message = message.replace("\n\n", "")
 
                     # Accumulate JSON data
                     accumulated_json += message

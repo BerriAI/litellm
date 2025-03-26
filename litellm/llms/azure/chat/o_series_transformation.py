@@ -35,11 +35,16 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         if stream is not True:
             return False
 
+        if (
+            model and "o3" in model
+        ):  # o3 models support streaming - https://github.com/BerriAI/litellm/issues/8274
+            return False
+
         if model is not None:
             try:
                 model_info = get_model_info(
                     model=model, custom_llm_provider=custom_llm_provider
-                )
+                )  # allow user to override default with model_info={"supports_native_streaming": true}
 
                 if (
                     model_info.get("supports_native_streaming") is True

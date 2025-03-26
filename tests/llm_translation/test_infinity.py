@@ -69,7 +69,7 @@ async def test_infinity_rerank():
         _url = mock_post.call_args.kwargs["url"]
         print("Arguments passed to API=", args_to_api)
         print("url = ", _url)
-        assert _url == "https://api.infinity.ai/v1/rerank"
+        assert _url == "https://api.infinity.ai/rerank"
 
         request_data = json.loads(args_to_api)
         assert request_data["query"] == expected_payload["query"]
@@ -84,6 +84,39 @@ async def test_infinity_rerank():
             response.meta["tokens"]["output_tokens"] == 50
         )  # total_tokens - prompt_tokens
 
+        assert_response_shape(response, custom_llm_provider="infinity")
+
+
+@pytest.mark.asyncio()
+async def test_infinity_rerank_with_return_documents():
+    mock_response = AsyncMock()
+
+    mock_response = AsyncMock()
+
+    def return_val():
+        return {
+            "id": "cmpl-mockid",
+            "results": [{"index": 0, "relevance_score": 0.95, "document": "hello"}],
+            "usage": {"prompt_tokens": 100, "total_tokens": 150},
+        }
+
+    mock_response.json = return_val
+    mock_response.headers = {"key": "value"}
+    mock_response.status_code = 200
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
+        response = await litellm.arerank(
+            model="infinity/rerank-model",
+            query="hello",
+            documents=["hello", "world"],
+            top_n=3,
+            return_documents=True,
+            api_base="https://api.infinity.ai",
+        )
+        assert response.results[0]["document"] == {"text": "hello"}
         assert_response_shape(response, custom_llm_provider="infinity")
 
 
@@ -133,7 +166,7 @@ async def test_infinity_rerank_with_env(monkeypatch):
         _url = mock_post.call_args.kwargs["url"]
         print("Arguments passed to API=", args_to_api)
         print("url = ", _url)
-        assert _url == "https://env.infinity.ai/v1/rerank"
+        assert _url == "https://env.infinity.ai/rerank"
 
         request_data = json.loads(args_to_api)
         assert request_data["query"] == expected_payload["query"]

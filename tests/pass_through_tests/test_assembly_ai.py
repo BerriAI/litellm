@@ -1,5 +1,5 @@
 """
-This test ensures that the proxy can passthrough anthropic requests
+This test ensures that the proxy can passthrough requests to assemblyai
 """
 
 import pytest

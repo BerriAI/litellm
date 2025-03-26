@@ -1,7 +1,6 @@
 import asyncio
 import copy
 import hashlib
-import importlib
 import json
 import os
 import smtplib
@@ -13,13 +12,13 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union, overload
 
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
     CommonProxyErrors,
     ProxyErrorTypes,
     ProxyException,
 )
+from litellm.types.guardrails import GuardrailEventHooks
 
 try:
     import backoff
@@ -33,7 +32,13 @@ from fastapi import HTTPException, status
 import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
-from litellm import EmbeddingResponse, ImageResponse, ModelResponse, Router
+from litellm import (
+    EmbeddingResponse,
+    ImageResponse,
+    ModelResponse,
+    ModelResponseStream,
+    Router,
+)
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
@@ -49,7 +54,6 @@ from litellm.proxy._types import (
     CallInfo,
     LiteLLM_VerificationTokenView,
     Member,
-    ResetTeamBudgetRequest,
     UserAPIKeyAuth,
 )
 from litellm.proxy.db.create_views import (
@@ -540,6 +544,7 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal[
             "completion",
+            "responses",
             "embeddings",
             "image_generation",
             "moderation",
@@ -787,13 +792,17 @@ class ProxyLogging:
                 else:
                     _callback = callback  # type: ignore
                 if _callback is not None and isinstance(_callback, CustomLogger):
-                    await _callback.async_post_call_failure_hook(
-                        request_data=request_data,
-                        user_api_key_dict=user_api_key_dict,
-                        original_exception=original_exception,
+                    asyncio.create_task(
+                        _callback.async_post_call_failure_hook(
+                            request_data=request_data,
+                            user_api_key_dict=user_api_key_dict,
+                            original_exception=original_exception,
+                        )
                     )
             except Exception as e:
-                raise e
+                verbose_proxy_logger.exception(
+                    f"[Non-Blocking] Error in post_call_failure_hook: {e}"
+                )
         return
 
     def _is_proxy_only_error(
@@ -960,7 +969,9 @@ class ProxyLogging:
 
     async def async_post_call_streaming_hook(
         self,
-        response: Union[ModelResponse, EmbeddingResponse, ImageResponse],
+        response: Union[
+            ModelResponse, EmbeddingResponse, ImageResponse, ModelResponseStream
+        ],
         user_api_key_dict: UserAPIKeyAuth,
     ):
         """
@@ -970,7 +981,7 @@ class ProxyLogging:
         1. /chat/completions
         """
         response_str: Optional[str] = None
-        if isinstance(response, ModelResponse):
+        if isinstance(response, (ModelResponse, ModelResponseStream)):
             response_str = litellm.get_response_string(response_obj=response)
         if response_str is not None:
             for callback in litellm.callbacks:
@@ -988,6 +999,40 @@ class ProxyLogging:
                         )
                 except Exception as e:
                     raise e
+        return response
+
+    def async_post_call_streaming_iterator_hook(
+        self,
+        response,
+        user_api_key_dict: UserAPIKeyAuth,
+        request_data: dict,
+    ):
+        """
+        Allow user to modify outgoing streaming data -> Given a whole response iterator.
+        This hook is best used when you need to modify multiple chunks of the response at once.
+
+        Covers:
+        1. /chat/completions
+        """
+        for callback in litellm.callbacks:
+            _callback: Optional[CustomLogger] = None
+            if isinstance(callback, str):
+                _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                    callback
+                )
+            else:
+                _callback = callback  # type: ignore
+            if _callback is not None and isinstance(_callback, CustomLogger):
+                if not isinstance(
+                    _callback, CustomGuardrail
+                ) or _callback.should_run_guardrail(
+                    data=request_data, event_type=GuardrailEventHooks.post_call
+                ):
+                    response = _callback.async_post_call_streaming_iterator_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        response=response,
+                        request_data=request_data,
+                    )
         return response
 
     async def post_call_streaming_hook(
@@ -1415,7 +1460,8 @@ class PrismaClient:
                     if key_val is None:
                         key_val = {"user_id": user_id}
                     response = await self.db.litellm_usertable.find_unique(  # type: ignore
-                        where=key_val  # type: ignore
+                        where=key_val,  # type: ignore
+                        include={"organization_memberships": True},
                     )
                 elif query_type == "find_all" and key_val is not None:
                     response = await self.db.litellm_usertable.find_many(
@@ -1700,13 +1746,7 @@ class PrismaClient:
                 verbose_proxy_logger.info("Data Inserted into User Table")
                 return new_user_row
             elif table_name == "team":
-                db_data = self.jsonify_object(data=data)
-                if db_data.get("members_with_roles", None) is not None and isinstance(
-                    db_data["members_with_roles"], list
-                ):
-                    db_data["members_with_roles"] = json.dumps(
-                        db_data["members_with_roles"]
-                    )
+                db_data = self.jsonify_team_object(db_data=data)
                 new_team_row = await self.db.litellm_teamtable.upsert(
                     where={"team_id": data["team_id"]},
                     data={
@@ -1977,8 +2017,8 @@ class PrismaClient:
                 batcher = self.db.batch_()
                 for idx, team in enumerate(data_list):
                     try:
-                        data_json = self.jsonify_object(
-                            data=team.model_dump(exclude_none=True)
+                        data_json = self.jsonify_team_object(
+                            db_data=team.model_dump(exclude_none=True)
                         )
                     except Exception:
                         data_json = self.jsonify_object(
@@ -2223,51 +2263,6 @@ class PrismaClient:
         )
 
 
-### CUSTOM FILE ###
-def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
-    module_name = value
-    instance_name = None
-    try:
-        # Split the path by dots to separate module from instance
-        parts = value.split(".")
-
-        # The module path is all but the last part, and the instance_name is the last part
-        module_name = ".".join(parts[:-1])
-        instance_name = parts[-1]
-
-        # If config_file_path is provided, use it to determine the module spec and load the module
-        if config_file_path is not None:
-            directory = os.path.dirname(config_file_path)
-            module_file_path = os.path.join(directory, *module_name.split("."))
-            module_file_path += ".py"
-
-            spec = importlib.util.spec_from_file_location(module_name, module_file_path)  # type: ignore
-            if spec is None:
-                raise ImportError(
-                    f"Could not find a module specification for {module_file_path}"
-                )
-            module = importlib.util.module_from_spec(spec)  # type: ignore
-            spec.loader.exec_module(module)  # type: ignore
-        else:
-            # Dynamically import the module
-            module = importlib.import_module(module_name)
-
-        # Get the instance from the module
-        instance = getattr(module, instance_name)
-
-        return instance
-    except ImportError as e:
-        # Re-raise the exception with a user-friendly message
-        if instance_name and module_name:
-            raise ImportError(
-                f"Could not import {instance_name} from {module_name}"
-            ) from e
-        else:
-            raise e
-    except Exception as e:
-        raise e
-
-
 ### HELPER FUNCTIONS ###
 async def _cache_user_row(user_id: str, cache: DualCache, db: PrismaClient):
     """
@@ -2321,12 +2316,6 @@ async def send_email(receiver_email, subject, html):
     if smtp_host is None:
         raise ValueError("Trying to use SMTP, but SMTP_HOST is not set")
 
-    if smtp_username is None:
-        raise ValueError("Trying to use SMTP, but SMTP_USERNAME is not set")
-
-    if smtp_password is None:
-        raise ValueError("Trying to use SMTP, but SMTP_PASSWORD is not set")
-
     # Attach the body to the email
     email_message.attach(MIMEText(html, "html"))
 
@@ -2336,8 +2325,9 @@ async def send_email(receiver_email, subject, html):
             if os.getenv("SMTP_TLS", "True") != "False":
                 server.starttls()
 
-            # Login to your email account
-            server.login(smtp_username, smtp_password)  # type: ignore
+            # Login to your email account only if smtp_username and smtp_password are provided
+            if smtp_username and smtp_password:
+                server.login(smtp_username, smtp_password)  # type: ignore
 
             # Send the email
             server.send_message(email_message)
@@ -2365,73 +2355,6 @@ def _hash_token_if_needed(token: str) -> str:
         return hash_token(token=token)
     else:
         return token
-
-
-async def reset_budget(prisma_client: PrismaClient):
-    """
-    Gets all the non-expired keys for a db, which need spend to be reset
-
-    Resets their spend
-
-    Updates db
-    """
-    if prisma_client is not None:
-        ### RESET KEY BUDGET ###
-        now = datetime.utcnow()
-        keys_to_reset = await prisma_client.get_data(
-            table_name="key", query_type="find_all", expires=now, reset_at=now
-        )
-
-        if keys_to_reset is not None and len(keys_to_reset) > 0:
-            for key in keys_to_reset:
-                key.spend = 0.0
-                duration_s = duration_in_seconds(duration=key.budget_duration)
-                key.budget_reset_at = now + timedelta(seconds=duration_s)
-
-            await prisma_client.update_data(
-                query_type="update_many", data_list=keys_to_reset, table_name="key"
-            )
-
-        ### RESET USER BUDGET ###
-        now = datetime.utcnow()
-        users_to_reset = await prisma_client.get_data(
-            table_name="user", query_type="find_all", reset_at=now
-        )
-
-        if users_to_reset is not None and len(users_to_reset) > 0:
-            for user in users_to_reset:
-                user.spend = 0.0
-                duration_s = duration_in_seconds(duration=user.budget_duration)
-                user.budget_reset_at = now + timedelta(seconds=duration_s)
-
-            await prisma_client.update_data(
-                query_type="update_many", data_list=users_to_reset, table_name="user"
-            )
-
-        ## Reset Team Budget
-        now = datetime.utcnow()
-        teams_to_reset = await prisma_client.get_data(
-            table_name="team",
-            query_type="find_all",
-            reset_at=now,
-        )
-
-        if teams_to_reset is not None and len(teams_to_reset) > 0:
-            team_reset_requests = []
-            for team in teams_to_reset:
-                duration_s = duration_in_seconds(duration=team.budget_duration)
-                reset_team_budget_request = ResetTeamBudgetRequest(
-                    team_id=team.team_id,
-                    spend=0.0,
-                    budget_reset_at=now + timedelta(seconds=duration_s),
-                    updated_at=now,
-                )
-                team_reset_requests.append(reset_team_budget_request)
-            await prisma_client.update_data(
-                query_type="update_many",
-                data_list=team_reset_requests,
-                table_name="team",
-            )
 
 
 class ProxyUpdateSpend:
@@ -2552,6 +2475,18 @@ class ProxyUpdateSpend:
             _raise_failed_update_spend_exception(
                 e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
             )
+
+    @staticmethod
+    def disable_spend_updates() -> bool:
+        """
+        returns True if should not update spend in db
+        Skips writing spend logs and updates to key, team, user spend to DB
+        """
+        from litellm.proxy.proxy_server import general_settings
+
+        if general_settings.get("disable_spend_updates") is True:
+            return True
+        return False
 
 
 async def update_spend(  # noqa: PLR0915

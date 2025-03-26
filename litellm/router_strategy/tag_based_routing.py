@@ -19,6 +19,30 @@ else:
     LitellmRouter = Any
 
 
+def is_valid_deployment_tag(
+    deployment_tags: List[str], request_tags: List[str]
+) -> bool:
+    """
+    Check if a tag is valid
+    """
+
+    if any(tag in deployment_tags for tag in request_tags):
+        verbose_logger.debug(
+            "adding deployment with tags: %s, request tags: %s",
+            deployment_tags,
+            request_tags,
+        )
+        return True
+    elif "default" in deployment_tags:
+        verbose_logger.debug(
+            "adding default deployment with tags: %s, request tags: %s",
+            deployment_tags,
+            request_tags,
+        )
+        return True
+    return False
+
+
 async def get_deployments_for_tag(
     llm_router_instance: LitellmRouter,
     model: str,  # used to raise the correct error
@@ -71,19 +95,7 @@ async def get_deployments_for_tag(
                 if deployment_tags is None:
                     continue
 
-                if set(request_tags).issubset(set(deployment_tags)):
-                    verbose_logger.debug(
-                        "adding deployment with tags: %s, request tags: %s",
-                        deployment_tags,
-                        request_tags,
-                    )
-                    new_healthy_deployments.append(deployment)
-                elif "default" in deployment_tags:
-                    verbose_logger.debug(
-                        "adding default deployment with tags: %s, request tags: %s",
-                        deployment_tags,
-                        request_tags,
-                    )
+                if is_valid_deployment_tag(deployment_tags, request_tags):
                     new_healthy_deployments.append(deployment)
 
             if len(new_healthy_deployments) == 0:

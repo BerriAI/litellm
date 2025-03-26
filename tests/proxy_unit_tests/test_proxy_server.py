@@ -1232,6 +1232,7 @@ async def test_create_team_member_add_team_admin(
         except HTTPException as e:
             if user_role == "user":
                 assert e.status_code == 403
+                return
             else:
                 raise e
 

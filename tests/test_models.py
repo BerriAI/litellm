@@ -47,6 +47,7 @@ async def get_models(session, key):
 
         if status != 200:
             raise Exception(f"Request did not return a 200 status code: {status}")
+        return await response.json()
 
 
 @pytest.mark.asyncio
@@ -96,6 +97,24 @@ async def get_model_info(session, key, litellm_model_id=None):
         url = f"http://0.0.0.0:4000/model/info?litellm_model_id={litellm_model_id}"
     else:
         url = "http://0.0.0.0:4000/model/info"
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+
+    async with session.get(url, headers=headers) as response:
+        status = response.status
+        response_text = await response.text()
+        print(response_text)
+        print()
+
+        if status != 200:
+            raise Exception(f"Request did not return a 200 status code: {status}")
+        return await response.json()
+
+
+async def get_model_group_info(session, key):
+    url = "http://0.0.0.0:4000/model_group/info"
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
@@ -394,3 +413,31 @@ async def test_add_model_run_health():
 
         # cleanup
         await delete_model(session=session, model_id=model_id)
+
+
+@pytest.mark.asyncio
+async def test_model_group_info_e2e():
+    """
+    Test /model/group/info endpoint
+    """
+    async with aiohttp.ClientSession() as session:
+        models = await get_models(session=session, key="sk-1234")
+        print(models)
+
+        expected_models = [
+            "anthropic/claude-3-5-haiku-20241022",
+            "anthropic/claude-3-opus-20240229",
+        ]
+
+        model_group_info = await get_model_group_info(session=session, key="sk-1234")
+        print(model_group_info)
+
+        has_anthropic_claude_3_5_haiku = False
+        has_anthropic_claude_3_opus = False
+        for model in model_group_info["data"]:
+            if model["model_group"] == "anthropic/claude-3-5-haiku-20241022":
+                has_anthropic_claude_3_5_haiku = True
+            if model["model_group"] == "anthropic/claude-3-opus-20240229":
+                has_anthropic_claude_3_opus = True
+
+        assert has_anthropic_claude_3_5_haiku and has_anthropic_claude_3_opus

@@ -14,7 +14,7 @@ Features:
 - **Security**
     - ✅ [SSO for Admin UI](./ui.md#✨-enterprise-features)
     - ✅ [Audit Logs with retention policy](#audit-logs)
-    - ✅ [JWT-Auth](../docs/proxy/token_auth.md)
+    - ✅ [JWT-Auth](./token_auth.md)
     - ✅ [Control available public, private routes (Restrict certain endpoints on proxy)](#control-available-public-private-routes)
     - ✅ [Control available public, private routes](#control-available-public-private-routes)
     - ✅ [Secret Managers - AWS Key Manager, Google Secret Manager, Azure Key, Hashicorp Vault](../secret)
@@ -40,8 +40,8 @@ Features:
 - **Control Guardrails per API Key**
 - **Custom Branding**
     - ✅ [Custom Branding + Routes on Swagger Docs](#swagger-docs---custom-routes--branding)
-    - ✅ [Public Model Hub](../docs/proxy/enterprise.md#public-model-hub)
-    - ✅ [Custom Email Branding](../docs/proxy/email.md#customizing-email-branding)
+    - ✅ [Public Model Hub](#public-model-hub)
+    - ✅ [Custom Email Branding](./email.md#customizing-email-branding)
 
 ## Audit Logs
 

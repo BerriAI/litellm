@@ -251,15 +251,18 @@ GEMINI_1_5_ACCEPTED_FILE_TYPES: Set[FileType] = {
     # Image
     FileType.PNG,
     FileType.JPEG,
+    FileType.WEBP,
     # Audio
     FileType.AAC,
     FileType.FLAC,
     FileType.MP3,
     FileType.MPA,
+    FileType.MPEG,
     FileType.MPGA,
     FileType.OPUS,
     FileType.PCM,
     FileType.WAV,
+    FileType.WEBM,
     # Video
     FileType.FLV,
     FileType.MOV,
@@ -272,6 +275,7 @@ GEMINI_1_5_ACCEPTED_FILE_TYPES: Set[FileType] = {
     FileType.THREE_GPP,
     # PDF
     FileType.PDF,
+    FileType.TXT,
 }
 
 

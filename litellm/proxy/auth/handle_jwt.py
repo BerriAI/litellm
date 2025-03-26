@@ -30,8 +30,10 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
+    ScopeMapping,
     Span,
 )
+from litellm.proxy.auth.auth_checks import can_team_access_model
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 from .auth_checks import (
@@ -153,7 +155,10 @@ class JWTHandler:
         return False
 
     def get_team_ids_from_jwt(self, token: dict) -> List[str]:
-        if self.litellm_jwtauth.team_ids_jwt_field is not None:
+        if (
+            self.litellm_jwtauth.team_ids_jwt_field is not None
+            and token.get(self.litellm_jwtauth.team_ids_jwt_field) is not None
+        ):
             return token[self.litellm_jwtauth.team_ids_jwt_field]
         return []
 
@@ -318,7 +323,7 @@ class JWTHandler:
             org_id = default_value
         return org_id
 
-    def get_scopes(self, token: dict) -> list:
+    def get_scopes(self, token: dict) -> List[str]:
         try:
             if isinstance(token["scope"], str):
                 # Assuming the scopes are stored in 'scope' claim and are space-separated
@@ -340,32 +345,38 @@ class JWTHandler:
         if keys_url is None:
             raise Exception("Missing JWT Public Key URL from environment.")
 
-        cached_keys = await self.user_api_key_cache.async_get_cache(
-            "litellm_jwt_auth_keys"
-        )
-        if cached_keys is None:
-            response = await self.http_handler.get(keys_url)
+        keys_url_list = [url.strip() for url in keys_url.split(",")]
 
-            response_json = response.json()
-            if "keys" in response_json:
-                keys: JWKKeyValue = response.json()["keys"]
+        for key_url in keys_url_list:
+
+            cache_key = f"litellm_jwt_auth_keys_{key_url}"
+
+            cached_keys = await self.user_api_key_cache.async_get_cache(cache_key)
+
+            if cached_keys is None:
+                response = await self.http_handler.get(key_url)
+
+                response_json = response.json()
+                if "keys" in response_json:
+                    keys: JWKKeyValue = response.json()["keys"]
+                else:
+                    keys = response_json
+
+                await self.user_api_key_cache.async_set_cache(
+                    key=cache_key,
+                    value=keys,
+                    ttl=self.litellm_jwtauth.public_key_ttl,  # cache for 10 mins
+                )
             else:
-                keys = response_json
+                keys = cached_keys
 
-            await self.user_api_key_cache.async_set_cache(
-                key="litellm_jwt_auth_keys",
-                value=keys,
-                ttl=self.litellm_jwtauth.public_key_ttl,  # cache for 10 mins
-            )
-        else:
-            keys = cached_keys
+            public_key = self.parse_keys(keys=keys, kid=kid)
+            if public_key is not None:
+                return cast(dict, public_key)
 
-        public_key = self.parse_keys(keys=keys, kid=kid)
-        if public_key is None:
-            raise Exception(
-                f"No matching public key found. kid={kid}, keys_url={keys_url}, cached_keys={cached_keys}, len(keys)={len(keys)}"
-            )
-        return cast(dict, public_key)
+        raise Exception(
+            f"No matching public key found. keys={keys_url_list}, kid={kid}"
+        )
 
     def parse_keys(self, keys: JWKKeyValue, kid: Optional[str]) -> Optional[JWTKeyItem]:
         public_key: Optional[JWTKeyItem] = None
@@ -544,6 +555,40 @@ class JWTAuthManager:
         return True
 
     @staticmethod
+    def check_scope_based_access(
+        scope_mappings: List[ScopeMapping],
+        scopes: List[str],
+        request_data: dict,
+        general_settings: dict,
+    ) -> None:
+        """
+        Check if scope allows access to the requested model
+        """
+        if not scope_mappings:
+            return None
+
+        allowed_models = []
+        for sm in scope_mappings:
+            if sm.scope in scopes and sm.models:
+                allowed_models.extend(sm.models)
+
+        requested_model = request_data.get("model")
+
+        if not requested_model:
+            return None
+
+        if requested_model not in allowed_models:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "model={} not allowed. Allowed_models={}".format(
+                        requested_model, allowed_models
+                    )
+                },
+            )
+        return None
+
+    @staticmethod
     async def check_rbac_role(
         jwt_handler: JWTHandler,
         jwt_valid_token: dict,
@@ -636,6 +681,7 @@ class JWTAuthManager:
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
+                team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
             )
 
         return individual_team_id, team_object
@@ -663,6 +709,11 @@ class JWTAuthManager:
         """Find first team with access to the requested model"""
 
         if not team_ids:
+            if jwt_handler.litellm_jwtauth.enforce_team_based_model_access:
+                raise HTTPException(
+                    status_code=403,
+                    detail="No teams found in token. `enforce_team_based_model_access` is set to True. Token must belong to a team.",
+                )
             return None, None
 
         for team_id in team_ids:
@@ -679,8 +730,12 @@ class JWTAuthManager:
                     team_models = team_object.models
                     if isinstance(team_models, list) and (
                         not requested_model
-                        or requested_model in team_models
-                        or "*" in team_models
+                        or can_team_access_model(
+                            model=requested_model,
+                            team_object=team_object,
+                            llm_router=None,
+                            team_model_aliases=None,
+                        )
                     ):
                         is_allowed = allowed_routes_check(
                             user_role=LitellmUserRoles.TEAM,
@@ -695,7 +750,7 @@ class JWTAuthManager:
         if requested_model:
             raise HTTPException(
                 status_code=403,
-                detail=f"No team has access to the requested model: {requested_model}. Checked teams={team_ids}",
+                detail=f"No team has access to the requested model: {requested_model}. Checked teams={team_ids}. Check `/models` to see all available models.",
             )
 
         return None, None
@@ -818,6 +873,14 @@ class JWTAuthManager:
         """Main authentication and authorization builder"""
         jwt_valid_token: dict = await jwt_handler.auth_jwt(token=api_key)
 
+        # Check custom validate
+        if jwt_handler.litellm_jwtauth.custom_validate:
+            if not jwt_handler.litellm_jwtauth.custom_validate(jwt_valid_token):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Invalid JWT token",
+                )
+
         # Check RBAC
         rbac_role = jwt_handler.get_rbac_role(token=jwt_valid_token)
         await JWTAuthManager.check_rbac_role(
@@ -828,6 +891,19 @@ class JWTAuthManager:
             route,
             rbac_role,
         )
+
+        # Check Scope Based Access
+        scopes = jwt_handler.get_scopes(token=jwt_valid_token)
+        if (
+            jwt_handler.litellm_jwtauth.enforce_scope_based_access
+            and jwt_handler.litellm_jwtauth.scope_mappings
+        ):
+            JWTAuthManager.check_scope_based_access(
+                scope_mappings=jwt_handler.litellm_jwtauth.scope_mappings,
+                scopes=scopes,
+                request_data=request_data,
+                general_settings=general_settings,
+            )
 
         object_id = jwt_handler.get_object_id(token=jwt_valid_token, default_value=None)
 

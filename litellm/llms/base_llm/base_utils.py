@@ -9,6 +9,7 @@ from typing import List, Optional, Type, Union
 from openai.lib import _parsing, _pydantic
 from pydantic import BaseModel
 
+from litellm._logging import verbose_logger
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ProviderSpecificModelInfo
 
@@ -32,6 +33,17 @@ class BaseLLMModelInfo(ABC):
     @staticmethod
     @abstractmethod
     def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def get_base_model(model: str) -> Optional[str]:
+        """
+        Returns the base model name from the given model name.
+
+        Some providers like bedrock - can receive model=`invoke/anthropic.claude-3-opus-20240229-v1:0` or `converse/anthropic.claude-3-opus-20240229-v1:0`
+            This function will return `anthropic.claude-3-opus-20240229-v1:0`
+        """
         pass
 
 
@@ -121,6 +133,9 @@ def map_developer_role_to_system_role(
     new_messages: List[AllMessageValues] = []
     for m in messages:
         if m["role"] == "developer":
+            verbose_logger.debug(
+                "Translating developer role to system role for non-OpenAI providers."
+            )  # ensure user knows what's happening with their input.
             new_messages.append({"role": "system", "content": m["content"]})
         else:
             new_messages.append(m)

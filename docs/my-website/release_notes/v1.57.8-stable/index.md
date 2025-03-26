@@ -18,13 +18,6 @@ hide_table_of_contents: false
 `alerting`, `prometheus`, `secret management`, `management endpoints`, `ui`, `prompt management`, `finetuning`, `batch`
 
 
-:::note
-
-v1.57.8-stable, is currently being tested. It will be released on 2025-01-12. 
-
-:::
-
-
 ## New / Updated Models
 
 1. Mistral large pricing - https://github.com/BerriAI/litellm/pull/7452
