@@ -1097,10 +1097,7 @@ def completion(  # type: ignore # noqa: PLR0915
             logit_bias=logit_bias,
             user=user,
             # params to identify the model
-            model=LitellmCoreRequestUtils.select_model_for_request_transformation(
-                model=model,
-                base_model=base_model,
-            ),
+            model=model,
             custom_llm_provider=custom_llm_provider,
             response_format=response_format,
             seed=seed,

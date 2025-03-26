@@ -3380,8 +3380,7 @@ def test_gemini_fine_tuned_model_request_consistency():
     with patch.object(client, "post", new=MagicMock()) as mock_post_1:
         try:
             response_1 = completion(
-                model="vertex_ai/ft-uuid",
-                base_model="vertex_ai/gemini-2.0-flash-001",
+                model="vertex_ai/gemini/ft-uuid",
                 messages=messages,
                 tools=tools,
                 tool_choice="auto",
