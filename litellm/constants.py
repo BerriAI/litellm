@@ -414,7 +414,7 @@ RESPONSE_FORMAT_TOOL_NAME = "json_tool_call"  # default tool name used when conv
 
 ########################### Logging Callback Constants ###########################
 AZURE_STORAGE_MSFT_VERSION = "2019-07-07"
-
+PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES = 5
 ########################### LiteLLM Proxy Specific Constants ###########################
 ########################################################################################
 MAX_SPENDLOG_ROWS_TO_QUERY = (

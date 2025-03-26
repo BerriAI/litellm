@@ -1,10 +1,19 @@
 # used for /metrics endpoint on LiteLLM Proxy
 #### What this does ####
 #    On success, log events to Prometheus
-import asyncio
 import sys
 from datetime import datetime, timedelta
-from typing import Any, Awaitable, Callable, List, Literal, Optional, Tuple, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    cast,
+)
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -13,6 +22,11 @@ from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
 from litellm.types.integrations.prometheus import *
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_end_user_id_for_cost_tracking
+
+if TYPE_CHECKING:
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+else:
+    AsyncIOScheduler = Any
 
 
 class PrometheusLogger(CustomLogger):
@@ -359,8 +373,6 @@ class PrometheusLogger(CustomLogger):
                     label_name="litellm_requests_metric"
                 ),
             )
-            self._initialize_prometheus_startup_metrics()
-
         except Exception as e:
             print_verbose(f"Got exception on init prometheus client {str(e)}")
             raise e
@@ -1321,24 +1333,6 @@ class PrometheusLogger(CustomLogger):
 
         return max_budget - spend
 
-    def _initialize_prometheus_startup_metrics(self):
-        """
-        Initialize prometheus startup metrics
-
-        Helper to create tasks for initializing metrics that are required on startup - eg. remaining budget metrics
-        """
-        if litellm.prometheus_initialize_budget_metrics is not True:
-            verbose_logger.debug("Prometheus: skipping budget metrics initialization")
-            return
-
-        try:
-            if asyncio.get_running_loop():
-                asyncio.create_task(self._initialize_remaining_budget_metrics())
-        except RuntimeError as e:  # no running event loop
-            verbose_logger.exception(
-                f"No running event loop - skipping budget metrics initialization: {str(e)}"
-            )
-
     async def _initialize_budget_metrics(
         self,
         data_fetch_function: Callable[..., Awaitable[Tuple[List[Any], Optional[int]]]],
@@ -1720,6 +1714,35 @@ class PrometheusLogger(CustomLogger):
         if isinstance(start_time, datetime) and isinstance(end_time, datetime):
             return (end_time - start_time).total_seconds()
         return None
+
+    @staticmethod
+    def initialize_budget_metrics_cron_job(scheduler: AsyncIOScheduler):
+        """
+        Initialize budget metrics as a cron job. This job runs every `PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES` minutes.
+
+        It emits the current remaining budget metrics for all Keys and Teams.
+        """
+        from litellm.constants import PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES
+        from litellm.integrations.custom_logger import CustomLogger
+        from litellm.integrations.prometheus import PrometheusLogger
+
+        prometheus_loggers: List[CustomLogger] = (
+            litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=PrometheusLogger
+            )
+        )
+        verbose_logger.debug("found %s prometheus loggers", len(prometheus_loggers))
+        if len(prometheus_loggers) > 0:
+            prometheus_logger = cast(PrometheusLogger, prometheus_loggers[0])
+            verbose_logger.debug(
+                "Initializing remaining budget metrics as a cron job executing every %s minutes"
+                % PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES
+            )
+            scheduler.add_job(
+                prometheus_logger._initialize_remaining_budget_metrics,
+                "interval",
+                minutes=PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES,
+            )
 
 
 def prometheus_label_factory(
