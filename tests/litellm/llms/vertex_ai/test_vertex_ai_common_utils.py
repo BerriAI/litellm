@@ -41,3 +41,21 @@ async def test_get_vertex_location_from_url():
     url = "https://invalid-url.com"
     location = get_vertex_location_from_url(url)
     assert location is None
+
+
+@pytest.mark.asyncio
+async def test_get_supports_system_message():
+    """Test get_supports_system_message with different models"""
+    from litellm.llms.vertex_ai.common_utils import get_supports_system_message
+
+    # fine-tuned vertex gemini models will specifiy they are in the /gemini spec format
+    result = get_supports_system_message(
+        model="gemini/1234567890", custom_llm_provider="vertex_ai"
+    )
+    assert result == True
+
+    # non-fine-tuned vertex gemini models will not specifiy they are in the /gemini spec format
+    result = get_supports_system_message(
+        model="random-model-name", custom_llm_provider="vertex_ai"
+    )
+    assert result == False
