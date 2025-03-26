@@ -1176,6 +1176,20 @@
         "output_cost_per_pixel": 0.0,
         "litellm_provider": "openai"
     },
+    "gpt-4o-transcribe": {
+        "mode": "audio_transcription",
+        "input_cost_per_token": 0.0000025,
+        "input_cost_per_audio_token": 0.000006,
+        "output_cost_per_token": 0.00001, 
+        "litellm_provider": "openai"
+    }, 
+    "gpt-4o-mini-transcribe": {
+        "mode": "audio_transcription",
+        "input_cost_per_token": 0.00000125,
+        "input_cost_per_audio_token": 0.000003,
+        "output_cost_per_token": 0.000005, 
+        "litellm_provider": "openai"
+    }, 
     "whisper-1": {
         "mode": "audio_transcription",
         "input_cost_per_second": 0.0001,
