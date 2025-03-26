@@ -675,7 +675,12 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         if (
             prisma_client is None
         ):  # if both master key + user key submitted, and user key != master key, and no db connected, raise an error
-            raise Exception("No connected db.")
+            raise ProxyException(
+                message="No connected db.",
+                type=ProxyErrorTypes.no_db_connection,
+                code=400,
+                param=None,
+            )
 
         ## check for cache hit (In-Memory Cache)
         _user_role = None
@@ -1001,8 +1006,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 route=route,
                 start_time=start_time,
             )
-        else:
-            raise Exception()
     except Exception as e:
         return await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
             e=e,

@@ -144,6 +144,10 @@ class UserAPIKeyAuthExceptionHandler:
         """
         import prisma
 
-        return isinstance(e, DB_CONNECTION_ERROR_TYPES) or isinstance(
-            e, prisma.errors.PrismaError
-        )
+        if isinstance(e, DB_CONNECTION_ERROR_TYPES):
+            return True
+        if isinstance(e, prisma.errors.PrismaError):
+            return True
+        if isinstance(e, ProxyException) and e.type == ProxyErrorTypes.no_db_connection:
+            return True
+        return False
