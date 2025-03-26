@@ -19,18 +19,20 @@ import time
 import pytest
 import requests
 
+TEST_MASTER_KEY = "sk-1234"
+
 
 def test_litellm_proxy_server_config_no_general_settings():
     # Install the litellm[proxy] package
     # Start the server
     try:
         subprocess.run(["pip", "install", "litellm[proxy]"])
-        subprocess.run(["pip", "install", "litellm[extra_proxy]"])
         filepath = os.path.dirname(os.path.abspath(__file__))
         config_fp = f"{filepath}/test_configs/test_config.yaml"
 
         # Set DATABASE_URL environment variable
         os.environ["DATABASE_URL"] = os.getenv("TOXI_PROXY_DATABASE_URL")
+        os.environ["LITELLM_MASTER_KEY"] = TEST_MASTER_KEY
 
         server_process = subprocess.Popen(
             [
@@ -72,6 +74,3 @@ def test_litellm_proxy_server_config_no_general_settings():
         # Shut down the server
         server_process.terminate()
         server_process.wait()
-
-    # Additional assertions can be added here
-    assert True
