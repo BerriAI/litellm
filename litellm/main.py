@@ -4732,6 +4732,7 @@ def image_generation(  # noqa: PLR0915
                 vertex_location=vertex_ai_location,
                 vertex_credentials=vertex_credentials,
                 aimg_generation=aimg_generation,
+                api_base=api_base,
                 client=client,
             )
         elif (
