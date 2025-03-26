@@ -4700,7 +4700,7 @@
         "supports_response_schema": true,
         "supports_audio_output": true,
         "supports_tool_choice": true,
-        "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-2.0-flash-lite",
+        "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-2.0-flash-lite"
     },
     "gemini/gemini-2.0-flash-001": {
         "max_tokens": 8192,
