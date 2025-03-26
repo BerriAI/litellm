@@ -1,8 +1,5 @@
 from typing import List
 
-from litellm.llms.base_llm.audio_transcription.transformation import (
-    BaseAudioTranscriptionConfig,
-)
 from litellm.types.llms.openai import OpenAIAudioTranscriptionOptionalParams
 from litellm.types.utils import FileTypes
 
