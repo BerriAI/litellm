@@ -16,19 +16,28 @@ class GeminiRealTimeStreaming(RealTimeStreaming):
         model: str,  # Add model and config
         config: dict,
         logging_obj: Optional[LiteLLMLogging] = None,
+        vertex_location: str = "us-central1",
+        vertex_project: str = "your-vertex-project-id",
     ):
         super().__init__(websocket, backend_ws, logging_obj)
         self.model = model
         self.config = config
+        self.vertex_location = vertex_location
+        self.vertex_project = vertex_project
 
     async def send_setup_message(self):
         """Sends the initial setup message required by the Gemini API."""
+
+        model = f"projects/{self.vertex_project}/locations/{self.vertex_location}/publishers/google/models/{self.model}"
+
+        print(f"model name: {model}")
         setup_message = {
             "setup": {
-                "model": self.model,
+                "model": model,
                 "generation_config": self.config,
             }
         }
+        print(f"setup_message: {setup_message}")
         await self.backend_ws.send(json.dumps(setup_message))
 
     async def backend_to_client_send_messages(self):

@@ -114,27 +114,34 @@ async def _arealtime(
             client=None,
             timeout=timeout,
         )
-    elif _custom_llm_provider == "gemini" or _custom_llm_provider == "vertex_ai_beta" or _custom_llm_provider == "vertex_ai":  # Add the Gemini case
+    elif _custom_llm_provider == "vertex_ai_beta" or _custom_llm_provider == "vertex_ai":  # Add the Gemini case
         api_base = (
             dynamic_api_base
             or litellm_params.api_base
             or litellm.api_base
-            # default base for vertex
-            or get_secret_str("GEMINI_API_BASE") or "https://us-central1-aiplatform.googleapis.com"
+            or get_secret_str("GEMINI_API_BASE")
+            # default base for vertexs
+            or "https://us-central1-aiplatform.googleapis.com"
         )
-        await gemini_realtime.async_realtime(
-            model=model,
-            websocket=websocket,
-            api_base=api_base,
-            client=None,
-            timeout=timeout,
-            logging_obj=litellm_logging_obj,
-            vertex_location="us-central1",  # Add default vertex location
-            optional_params={},  # Add empty optional params
-            custom_llm_provider=_custom_llm_provider,  # Add custom llm provider
-        )
+
+        try: 
+            await gemini_realtime.async_realtime(
+                model=model,
+                websocket=websocket,
+                api_base=api_base,
+                timeout=timeout,
+                optional_params={},
+                logging_obj=litellm_logging_obj,
+                vertex_location=litellm_params.vertex_location,  # Add default vertex location
+                vertex_credentials_path=str(litellm_params.vertex_credentials),  # Add default vertex credentials
+                vertex_project=litellm_params.vertex_project,  # Add default vertex project
+                custom_llm_provider=_custom_llm_provider,  # Add custom llm provider
+            )
+        except Exception as e:
+            raise ValueError(f"Failed to connect to Gemini realtime API: {e}")
     else:
         raise ValueError(f"Unsupported model: {model}")
+
 
 async def _realtime_health_check(
     model: str,
