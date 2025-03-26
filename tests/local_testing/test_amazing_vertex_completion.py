@@ -31,6 +31,7 @@ from litellm import (
     completion,
     completion_cost,
     embedding,
+    image_generation,
 )
 from litellm.llms.vertex_ai.gemini.transformation import (
     _gemini_convert_messages_with_history,
@@ -3327,3 +3328,46 @@ def test_signed_s3_url_with_format():
         json_str = json.dumps(mock_client.call_args.kwargs["json"])
         assert "image/jpeg" in json_str
         assert "image/png" not in json_str
+
+
+@pytest.mark.parametrize("provider", ["vertex_ai", "gemini"])
+@pytest.mark.parametrize("route", ["completion", "embedding", "image_generation"])
+def test_litellm_api_base(monkeypatch, provider, route):
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "api_base", "https://litellm.com")
+
+    load_vertex_ai_credentials()
+
+    if route == "image_generation" and provider == "gemini":
+        pytest.skip("Gemini does not support image generation")
+
+    with patch.object(client, "post", new=MagicMock()) as mock_client:
+        try:
+            if route == "completion":
+                response = completion(
+                    model=f"{provider}/gemini-2.0-flash-001",
+                    messages=[{"role": "user", "content": "Hello, world!"}],
+                    client=client,
+                )
+            elif route == "embedding":
+                response = embedding(
+                    model=f"{provider}/gemini-2.0-flash-001",
+                    input=["Hello, world!"],
+                    client=client,
+                )
+            elif route == "image_generation":
+                response = image_generation(
+                    model=f"{provider}/gemini-2.0-flash-001",
+                    prompt="Hello, world!",
+                    client=client,
+                )
+        except Exception as e:
+            print(e)
+
+        mock_client.assert_called()
+        assert mock_client.call_args.kwargs["url"].startswith("https://litellm.com")

@@ -55,7 +55,9 @@ def get_supports_response_schema(
 
 from typing import Literal, Optional
 
-all_gemini_url_modes = Literal["chat", "embedding", "batch_embedding"]
+all_gemini_url_modes = Literal[
+    "chat", "embedding", "batch_embedding", "image_generation"
+]
 
 
 def _get_vertex_url(
@@ -91,7 +93,11 @@ def _get_vertex_url(
         if model.isdigit():
             # https://us-central1-aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/us-central1/endpoints/$ENDPOINT_ID:predict
             url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
-
+    elif mode == "image_generation":
+        endpoint = "predict"
+        url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+        if model.isdigit():
+            url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
     if not url or not endpoint:
         raise ValueError(f"Unable to get vertex url/endpoint for mode: {mode}")
     return url, endpoint
@@ -126,6 +132,10 @@ def _get_gemini_url(
         endpoint = "batchEmbedContents"
         url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
             _gemini_model_name, endpoint, gemini_api_key
+        )
+    elif mode == "image_generation":
+        raise ValueError(
+            "LiteLLM's `gemini/` route does not support image generation yet. Let us know if you need this feature by opening an issue at https://github.com/BerriAI/litellm/issues"
         )
 
     return url, endpoint

@@ -15,9 +15,11 @@ from pydantic import BaseModel
 from litellm.cost_calculator import response_cost_calculator
 
 
-def test_cost_calculator():
+def test_cost_calculator_with_response_cost_in_additional_headers():
     class MockResponse(BaseModel):
-        _hidden_params = {"additional_headers": {"x-litellm-response-cost": 1000}}
+        _hidden_params = {
+            "additional_headers": {"llm_provider-x-litellm-response-cost": 1000}
+        }
 
     result = response_cost_calculator(
         response_object=MockResponse(),
