@@ -319,7 +319,7 @@ model LiteLLM_AuditLog {
 model LiteLLM_DailyUserSpend {
   id                  String   @id @default(uuid())
   user_id             String
-  date                DateTime
+  date                String
   api_key             String   // Hashed API Token
   model               String   // The specific model used
   model_group         String?  // public model_name / model_group

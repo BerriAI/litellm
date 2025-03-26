@@ -318,11 +318,11 @@ model LiteLLM_AuditLog {
 model LiteLLM_DailyUserSpend {
   id                  String   @id @default(uuid())
   user_id             String
-  date                DateTime
-  api_key             String   // Hashed API Token
-  model               String   // The specific model used
-  model_group         String?  // public model_name / model_group
-  custom_llm_provider String?  // The LLM provider (e.g., "openai", "anthropic")
+  date                String
+  api_key             String   
+  model               String   
+  model_group         String?  
+  custom_llm_provider String?  
   prompt_tokens       Int      @default(0)
   completion_tokens   Int      @default(0)
   spend               Float    @default(0.0)

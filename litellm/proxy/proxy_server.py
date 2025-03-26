@@ -558,6 +558,7 @@ async def proxy_startup_event(app: FastAPI):
             proxy_batch_write_at=proxy_batch_write_at,
             proxy_logging_obj=proxy_logging_obj,
         )
+
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
 
@@ -914,6 +915,8 @@ def _set_spend_logs_payload(
         prisma_client.spend_log_transactions.append(payload)
     elif prisma_client is not None:
         prisma_client.spend_log_transactions.append(payload)
+
+    prisma_client.add_spend_log_transaction_to_daily_user_transaction(payload.copy())
     return prisma_client
 
 
