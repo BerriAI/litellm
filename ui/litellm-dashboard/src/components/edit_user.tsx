@@ -119,7 +119,7 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, possibleUIRoles,
               label="User Budget (USD)"
               name="max_budget"
               tooltip="(float) - Maximum budget of this user"
-              help="Ignored if the key has a team_id; team budget applies there."
+              help="Maximum budget of this user."
             >
               <InputNumber min={0} step={1} />
             </Form.Item>

@@ -14,7 +14,7 @@ import time
 import traceback
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, cast
 
-from fastapi import status
+from fastapi import Request, status
 from pydantic import BaseModel
 
 import litellm
@@ -38,6 +38,7 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
     RoleBasedPermissions,
+    SpecialModelNames,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -73,6 +74,7 @@ async def common_checks(
     llm_router: Optional[Router],
     proxy_logging_obj: ProxyLogging,
     valid_token: Optional[UserAPIKeyAuth],
+    request: Request,
 ) -> bool:
     """
     Common checks across jwt + key-based auth.
@@ -97,12 +99,19 @@ async def common_checks(
         )
 
     # 2. If team can call model
-    _team_model_access_check(
-        team_object=team_object,
-        model=_model,
-        llm_router=llm_router,
-        team_model_aliases=valid_token.team_model_aliases if valid_token else None,
-    )
+    if _model and team_object:
+        if not await can_team_access_model(
+            model=_model,
+            team_object=team_object,
+            llm_router=llm_router,
+            team_model_aliases=valid_token.team_model_aliases if valid_token else None,
+        ):
+            raise ProxyException(
+                message=f"Team not allowed to access model. Team={team_object.team_id}, Model={_model}. Allowed team models = {team_object.models}",
+                type=ProxyErrorTypes.team_model_access_denied,
+                param="model",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
 
     ## 2.1 If user can call model (if personal key)
     if team_object is None and user_object is not None:
@@ -190,7 +199,132 @@ async def common_checks(
         user_object=user_object, route=route, request_body=request_body
     )
 
+    token_team = getattr(valid_token, "team_id", None)
+    token_type: Literal["ui", "api"] = (
+        "ui" if token_team is not None and token_team == "litellm-dashboard" else "api"
+    )
+    _is_route_allowed = _is_allowed_route(
+        route=route,
+        token_type=token_type,
+        user_obj=user_object,
+        request=request,
+        request_data=request_body,
+        valid_token=valid_token,
+    )
+
     return True
+
+
+def _is_ui_route(
+    route: str,
+    user_obj: Optional[LiteLLM_UserTable] = None,
+) -> bool:
+    """
+    - Check if the route is a UI used route
+    """
+    # this token is only used for managing the ui
+    allowed_routes = LiteLLMRoutes.ui_routes.value
+    # check if the current route startswith any of the allowed routes
+    if (
+        route is not None
+        and isinstance(route, str)
+        and any(route.startswith(allowed_route) for allowed_route in allowed_routes)
+    ):
+        # Do something if the current route starts with any of the allowed routes
+        return True
+    elif any(
+        RouteChecks._route_matches_pattern(route=route, pattern=allowed_route)
+        for allowed_route in allowed_routes
+    ):
+        return True
+    return False
+
+
+def _get_user_role(
+    user_obj: Optional[LiteLLM_UserTable],
+) -> Optional[LitellmUserRoles]:
+    if user_obj is None:
+        return None
+
+    _user = user_obj
+
+    _user_role = _user.user_role
+    try:
+        role = LitellmUserRoles(_user_role)
+    except ValueError:
+        return LitellmUserRoles.INTERNAL_USER
+
+    return role
+
+
+def _is_api_route_allowed(
+    route: str,
+    request: Request,
+    request_data: dict,
+    valid_token: Optional[UserAPIKeyAuth],
+    user_obj: Optional[LiteLLM_UserTable] = None,
+) -> bool:
+    """
+    - Route b/w api token check and normal token check
+    """
+    _user_role = _get_user_role(user_obj=user_obj)
+
+    if valid_token is None:
+        raise Exception("Invalid proxy server token passed. valid_token=None.")
+
+    if not _is_user_proxy_admin(user_obj=user_obj):  # if non-admin
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=_user_role,
+            route=route,
+            request=request,
+            request_data=request_data,
+            valid_token=valid_token,
+        )
+    return True
+
+
+def _is_user_proxy_admin(user_obj: Optional[LiteLLM_UserTable]):
+    if user_obj is None:
+        return False
+
+    if (
+        user_obj.user_role is not None
+        and user_obj.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        return True
+
+    if (
+        user_obj.user_role is not None
+        and user_obj.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        return True
+
+    return False
+
+
+def _is_allowed_route(
+    route: str,
+    token_type: Literal["ui", "api"],
+    request: Request,
+    request_data: dict,
+    valid_token: Optional[UserAPIKeyAuth],
+    user_obj: Optional[LiteLLM_UserTable] = None,
+) -> bool:
+    """
+    - Route b/w ui token check and normal token check
+    """
+
+    if token_type == "ui" and _is_ui_route(route=route, user_obj=user_obj):
+        return True
+    else:
+        return _is_api_route_allowed(
+            route=route,
+            request=request,
+            request_data=request_data,
+            valid_token=valid_token,
+            user_obj=user_obj,
+        )
 
 
 def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
@@ -970,9 +1104,17 @@ async def _can_object_call_model(
     llm_router: Optional[Router],
     models: List[str],
     team_model_aliases: Optional[Dict[str, str]] = None,
+    object_type: Literal["user", "team", "key"] = "user",
 ) -> Literal[True]:
     """
     Checks if token can call a given model
+
+    Args:
+        - model: str
+        - llm_router: Optional[Router]
+        - models: List[str]
+        - team_model_aliases: Optional[Dict[str, str]]
+        - object_type: Literal["user", "team", "key"]. We use the object type to raise the correct exception type
 
     Returns:
         - True: if token allowed to call model
@@ -1017,10 +1159,15 @@ async def _can_object_call_model(
     if (len(filtered_models) == 0 and len(models) == 0) or "*" in filtered_models:
         all_model_access = True
 
+    if SpecialModelNames.all_proxy_models.value in filtered_models:
+        all_model_access = True
+
     if model is not None and model not in filtered_models and all_model_access is False:
         raise ProxyException(
-            message=f"API Key not allowed to access model. This token can only access models={models}. Tried to access {model}",
-            type=ProxyErrorTypes.key_model_access_denied,
+            message=f"{object_type} not allowed to access model. This {object_type} can only access models={models}. Tried to access {model}",
+            type=ProxyErrorTypes.get_model_access_error_type_for_object(
+                object_type=object_type
+            ),
             param="model",
             code=status.HTTP_401_UNAUTHORIZED,
         )
@@ -1071,6 +1218,26 @@ async def can_key_call_model(
         llm_router=llm_router,
         models=valid_token.models,
         team_model_aliases=valid_token.team_model_aliases,
+        object_type="key",
+    )
+
+
+async def can_team_access_model(
+    model: str,
+    team_object: Optional[LiteLLM_TeamTable],
+    llm_router: Optional[Router],
+    team_model_aliases: Optional[Dict[str, str]] = None,
+) -> Literal[True]:
+    """
+    Returns True if the team can access a specific model.
+
+    """
+    return await _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=team_object.models if team_object else [],
+        team_model_aliases=team_model_aliases,
+        object_type="team",
     )
 
 
@@ -1083,10 +1250,19 @@ async def can_user_call_model(
     if user_object is None:
         return True
 
+    if SpecialModelNames.no_default_models.value in user_object.models:
+        raise ProxyException(
+            message=f"User not allowed to access model. No default model access, only team models allowed. Tried to access {model}",
+            type=ProxyErrorTypes.key_model_access_denied,
+            param="model",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
+
     return await _can_object_call_model(
         model=model,
         llm_router=llm_router,
         models=user_object.models,
+        object_type="user",
     )
 
 
@@ -1237,53 +1413,6 @@ async def _team_max_budget_check(
             max_budget=team_object.max_budget,
             message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {team_object.spend}, Max budget: {team_object.max_budget}",
         )
-
-
-def _team_model_access_check(
-    model: Optional[str],
-    team_object: Optional[LiteLLM_TeamTable],
-    llm_router: Optional[Router],
-    team_model_aliases: Optional[Dict[str, str]] = None,
-):
-    """
-    Access check for team models
-    Raises:
-        Exception if the team is not allowed to call the`model`
-    """
-    if (
-        model is not None
-        and team_object is not None
-        and team_object.models is not None
-        and len(team_object.models) > 0
-        and model not in team_object.models
-    ):
-        # this means the team has access to all models on the proxy
-        if "all-proxy-models" in team_object.models or "*" in team_object.models:
-            # this means the team has access to all models on the proxy
-            pass
-        # check if the team model is an access_group
-        elif (
-            model_in_access_group(
-                model=model, team_models=team_object.models, llm_router=llm_router
-            )
-            is True
-        ):
-            pass
-        elif model and "*" in model:
-            pass
-        elif _model_in_team_aliases(model=model, team_model_aliases=team_model_aliases):
-            pass
-        elif _model_matches_any_wildcard_pattern_in_list(
-            model=model, allowed_model_list=team_object.models
-        ):
-            pass
-        else:
-            raise ProxyException(
-                message=f"Team not allowed to access model. Team={team_object.team_id}, Model={model}. Allowed team models = {team_object.models}",
-                type=ProxyErrorTypes.team_model_access_denied,
-                param="model",
-                code=status.HTTP_401_UNAUTHORIZED,
-            )
 
 
 def is_model_allowed_by_pattern(model: str, allowed_model_pattern: str) -> bool:

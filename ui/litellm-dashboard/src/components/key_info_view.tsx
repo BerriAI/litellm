@@ -21,6 +21,7 @@ import { KeyResponse } from "./key_team_helpers/key_list";
 import { Form, Input, InputNumber, message, Select } from "antd";
 import { KeyEditView } from "./key_edit_view";
 import { RegenerateKeyModal } from "./regenerate_key_modal";
+import { rolesWithWriteAccess } from '../utils/roles';
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -128,24 +129,26 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
           <Title>{keyData.key_alias || "API Key"}</Title>
           <Text className="text-gray-500 font-mono">{keyData.token}</Text>
         </div>
-        <div className="flex gap-2">
-          <Button
-            icon={RefreshIcon}
-            variant="secondary"
-            onClick={() => setIsRegenerateModalOpen(true)}
-            className="flex items-center"
-          >
-            Regenerate Key
-          </Button>
-          <Button
-            icon={TrashIcon}
-            variant="secondary"
-            onClick={() => setIsDeleteModalOpen(true)}
-            className="flex items-center"
-          >
-            Delete Key
-          </Button>
-        </div>
+        {userRole && rolesWithWriteAccess.includes(userRole) && (
+          <div className="flex gap-2">
+            <Button
+              icon={RefreshIcon}
+              variant="secondary"
+              onClick={() => setIsRegenerateModalOpen(true)}
+              className="flex items-center"
+            >
+              Regenerate Key
+            </Button>
+            <Button
+              icon={TrashIcon}
+              variant="secondary"
+              onClick={() => setIsDeleteModalOpen(true)}
+              className="flex items-center"
+            >
+              Delete Key
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Add RegenerateKeyModal */}
@@ -246,7 +249,7 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
             <Card>
               <div className="flex justify-between items-center mb-4">
                 <Title>Key Settings</Title>
-                {!isEditing && (
+                {!isEditing && userRole && rolesWithWriteAccess.includes(userRole) && (
                   <Button variant="light" onClick={() => setIsEditing(true)}>
                     Edit Settings
                   </Button>
@@ -332,6 +335,9 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
                     <Text className="font-medium">Rate Limits</Text>
                     <Text>TPM: {keyData.tpm_limit !== null ? keyData.tpm_limit : "Unlimited"}</Text>
                     <Text>RPM: {keyData.rpm_limit !== null ? keyData.rpm_limit : "Unlimited"}</Text>
+                    <Text>Max Parallel Requests: {keyData.max_parallel_requests !== null ? keyData.max_parallel_requests : "Unlimited"}</Text>
+                    <Text>Model TPM Limits: {keyData.metadata?.model_tpm_limit ? JSON.stringify(keyData.metadata.model_tpm_limit) : "Unlimited"}</Text>
+                    <Text>Model RPM Limits: {keyData.metadata?.model_rpm_limit ? JSON.stringify(keyData.metadata.model_rpm_limit) : "Unlimited"}</Text>
                   </div>
 
                   <div>

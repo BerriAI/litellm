@@ -54,6 +54,7 @@ class RedisCache(BaseCache):
         redis_flush_size: Optional[int] = 100,
         namespace: Optional[str] = None,
         startup_nodes: Optional[List] = None,  # for redis-cluster
+        socket_timeout: Optional[float] = 5.0,  # default 5 second timeout
         **kwargs,
     ):
 
@@ -70,6 +71,9 @@ class RedisCache(BaseCache):
             redis_kwargs["password"] = password
         if startup_nodes is not None:
             redis_kwargs["startup_nodes"] = startup_nodes
+        if socket_timeout is not None:
+            redis_kwargs["socket_timeout"] = socket_timeout
+
         ### HEALTH MONITORING OBJECT ###
         if kwargs.get("service_logger_obj", None) is not None and isinstance(
             kwargs["service_logger_obj"], ServiceLogging
@@ -543,6 +547,7 @@ class RedisCache(BaseCache):
         _redis_client: Redis = self.init_async_client()  # type: ignore
         start_time = time.time()
         _used_ttl = self.get_ttl(ttl=ttl)
+        key = self.check_and_fix_namespace(key=key)
         try:
             result = await _redis_client.incrbyfloat(name=key, amount=value)
             if _used_ttl is not None:
@@ -555,6 +560,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
+
             asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
@@ -637,6 +643,23 @@ class RedisCache(BaseCache):
                 "litellm.caching.caching: get() - Got exception from REDIS: ", e
             )
 
+    def _run_redis_mget_operation(self, keys: List[str]) -> List[Any]:
+        """
+        Wrapper to call `mget` on the redis client
+
+        We use a wrapper so RedisCluster can override this method
+        """
+        return self.redis_client.mget(keys=keys)  # type: ignore
+
+    async def _async_run_redis_mget_operation(self, keys: List[str]) -> List[Any]:
+        """
+        Wrapper to call `mget` on the redis client
+
+        We use a wrapper so RedisCluster can override this method
+        """
+        async_redis_client = self.init_async_client()
+        return await async_redis_client.mget(keys=keys)  # type: ignore
+
     def batch_get_cache(
         self,
         key_list: Union[List[str], List[Optional[str]]],
@@ -661,7 +684,7 @@ class RedisCache(BaseCache):
                 cache_key = self.check_and_fix_namespace(key=cache_key or "")
                 _keys.append(cache_key)
             start_time = time.time()
-            results: List = self.redis_client.mget(keys=_keys)  # type: ignore
+            results: List = self._run_redis_mget_operation(keys=_keys)
             end_time = time.time()
             _duration = end_time - start_time
             self.service_logger_obj.service_success_hook(
@@ -757,7 +780,6 @@ class RedisCache(BaseCache):
         `.mget` does not support None keys. This will filter out None keys.
         """
         # typed as Any, redis python lib has incomplete type stubs for RedisCluster and does not include `mget`
-        _redis_client: Any = self.init_async_client()
         key_value_dict = {}
         start_time = time.time()
         _key_list = [key for key in key_list if key is not None]
@@ -766,7 +788,7 @@ class RedisCache(BaseCache):
             for cache_key in _key_list:
                 cache_key = self.check_and_fix_namespace(key=cache_key)
                 _keys.append(cache_key)
-            results = await _redis_client.mget(keys=_keys)
+            results = await self._async_run_redis_mget_operation(keys=_keys)
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time

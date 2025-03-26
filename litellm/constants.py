@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Literal
 
 ROUTER_MAX_FALLBACKS = 5
 DEFAULT_BATCH_SIZE = 512
@@ -7,17 +7,20 @@ DEFAULT_MAX_RETRIES = 2
 DEFAULT_FAILURE_THRESHOLD_PERCENT = (
     0.5  # default cooldown a deployment if 50% of requests fail in a given minute
 )
+DEFAULT_REDIS_SYNC_INTERVAL = 1
 DEFAULT_COOLDOWN_TIME_SECONDS = 5
 DEFAULT_REPLICATE_POLLING_RETRIES = 5
 DEFAULT_REPLICATE_POLLING_DELAY_SECONDS = 1
 DEFAULT_IMAGE_TOKEN_COUNT = 250
 DEFAULT_IMAGE_WIDTH = 300
 DEFAULT_IMAGE_HEIGHT = 300
+MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = 1024  # 1MB = 1024KB
 SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD = 1000  # Minimum number of requests to consider "reasonable traffic". Used for single-deployment cooldown logic.
 #### RELIABILITY ####
 REPEATED_STREAMING_CHUNK_LIMIT = 100  # catch if model starts looping the same chunk while streaming. Uses high default to prevent false positives.
 #### Networking settings ####
 request_timeout: float = 6000  # time in seconds
+STREAM_SSE_DONE_STRING: str = "[DONE]"
 
 LITELLM_CHAT_PROVIDERS = [
     "openai",
@@ -120,6 +123,7 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "top_logprobs",
     "reasoning_effort",
     "extra_headers",
+    "thinking",
 ]
 
 openai_compatible_endpoints: List = [
@@ -319,6 +323,17 @@ baseten_models: List = [
     "31dxrj3",
 ]  # FALCON 7B  # WizardLM  # Mosaic ML
 
+BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
+    "cohere",
+    "anthropic",
+    "mistral",
+    "amazon",
+    "meta",
+    "llama",
+    "ai21",
+    "nova",
+    "deepseek_r1",
+]
 
 open_ai_embedding_models: List = ["text-embedding-ada-002"]
 cohere_embedding_models: List = [

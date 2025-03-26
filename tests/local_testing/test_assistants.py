@@ -233,7 +233,10 @@ async def test_aarun_thread_litellm(sync_mode, provider, is_streaming):
             assistants = await litellm.aget_assistants(custom_llm_provider=provider)
 
         ## get the first assistant ###
-        assistant_id = assistants.data[0].id
+        try:
+            assistant_id = assistants.data[0].id
+        except IndexError:
+            pytest.skip("No assistants found")
 
         new_thread = test_create_thread_litellm(sync_mode=sync_mode, provider=provider)
 

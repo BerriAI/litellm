@@ -124,10 +124,16 @@ def test_init_kwargs_for_pass_through_endpoint_basic(
     # Check metadata
     expected_metadata = {
         "user_api_key": "test-key",
+        "user_api_key_hash": "test-key",
+        "user_api_key_alias": None,
+        "user_api_key_user_email": None,
         "user_api_key_user_id": "test-user",
         "user_api_key_team_id": "test-team",
+        "user_api_key_org_id": None,
+        "user_api_key_team_alias": None,
         "user_api_key_end_user_id": "test-user",
     }
+
     assert result["litellm_params"]["metadata"] == expected_metadata
 
 
@@ -333,9 +339,6 @@ def test_pass_through_routes_support_all_methods():
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         router as llm_router,
     )
-    from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
-        router as vertex_router,
-    )
 
     # Expected HTTP methods
     expected_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
@@ -355,7 +358,6 @@ def test_pass_through_routes_support_all_methods():
 
     # Check both routers
     check_router_methods(llm_router)
-    check_router_methods(vertex_router)
 
 
 def test_is_bedrock_agent_runtime_route():

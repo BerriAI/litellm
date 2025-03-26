@@ -68,6 +68,7 @@ interface RedisDetails {
   redis_port?: string;
   redis_version?: string;
   startup_nodes?: string;
+  namespace?: string;
 }
 
 // Add new interface for Error Details
@@ -75,7 +76,7 @@ interface ErrorDetails {
   message: string;
   traceback: string;
   litellm_params?: any;
-  redis_cache_params?: any;
+  health_check_cache_params?: any;
 }
 
 // Update HealthCheckDetails component to handle errors
@@ -96,23 +97,23 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
           message: errorMessage?.message || 'Unknown error',
           traceback: errorMessage?.traceback || 'No traceback available',
           litellm_params: errorMessage?.litellm_cache_params || {},
-          redis_cache_params: errorMessage?.redis_cache_params || {}
+          health_check_cache_params: errorMessage?.health_check_cache_params || {}
         };
         
         parsedLitellmParams = deepParse(errorDetails.litellm_params) || {};
-        parsedRedisParams = deepParse(errorDetails.redis_cache_params) || {};
+        parsedRedisParams = deepParse(errorDetails.health_check_cache_params) || {};
       } catch (e) {
         console.warn("Error parsing error details:", e);
         errorDetails = {
           message: String(response.error.message || 'Unknown error'),
           traceback: 'Error parsing details',
           litellm_params: {},
-          redis_cache_params: {}
+          health_check_cache_params: {}
         };
       }
     } else {
       parsedLitellmParams = deepParse(response?.litellm_cache_params) || {};
-      parsedRedisParams = deepParse(response?.redis_cache_params) || {};
+      parsedRedisParams = deepParse(response?.health_check_cache_params) || {};
     }
   } catch (e) {
     console.warn("Error in response parsing:", e);
@@ -126,11 +127,13 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
     redis_host: parsedRedisParams?.redis_client?.connection_pool?.connection_kwargs?.host ||
                 parsedRedisParams?.redis_async_client?.connection_pool?.connection_kwargs?.host ||
                 parsedRedisParams?.connection_kwargs?.host ||
+                parsedRedisParams?.host ||
                 "N/A",
     
     redis_port: parsedRedisParams?.redis_client?.connection_pool?.connection_kwargs?.port ||
                 parsedRedisParams?.redis_async_client?.connection_pool?.connection_kwargs?.port ||
                 parsedRedisParams?.connection_kwargs?.port ||
+                parsedRedisParams?.port ||
                 "N/A",
     
     redis_version: parsedRedisParams?.redis_version || "N/A",
@@ -148,7 +151,9 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
       } catch (e) {
         return "N/A";
       }
-    })()
+    })(),
+
+    namespace: parsedRedisParams?.namespace || "N/A",
   };
 
   return (
@@ -229,6 +234,10 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
                         label="Startup Nodes"
                         value={redisDetails.startup_nodes || "N/A"}
                       />
+                      <TableClickableErrorField
+                        label="Namespace"
+                        value={redisDetails.namespace || "N/A"}
+                      />
                     </>
                   )}
                 </tbody>
@@ -244,7 +253,7 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
                     const data = {
                       ...response,
                       litellm_cache_params: parsedLitellmParams,
-                      redis_cache_params: parsedRedisParams
+                      health_check_cache_params: parsedRedisParams
                     };
                     // First parse any string JSON values
                     const prettyData = JSON.parse(JSON.stringify(data, (key, value) => {

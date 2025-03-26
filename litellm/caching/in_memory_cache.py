@@ -9,9 +9,13 @@ Has 4 methods:
 """
 
 import json
+import sys
 import time
-from typing import List, Optional
+from typing import Any, List, Optional
 
+from pydantic import BaseModel
+
+from ..constants import MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
 from .base_cache import BaseCache
 
 
@@ -22,6 +26,7 @@ class InMemoryCache(BaseCache):
         default_ttl: Optional[
             int
         ] = 600,  # default ttl is 10 minutes. At maximum litellm rate limiting logic requires objects to be in memory for 1 minute
+        max_size_per_item: Optional[int] = 1024,  # 1MB = 1024KB
     ):
         """
         max_size_in_memory [int]: Maximum number of items in cache. done to prevent memory leaks. Use 200 items as a default
@@ -30,10 +35,52 @@ class InMemoryCache(BaseCache):
             max_size_in_memory or 200
         )  # set an upper bound of 200 items in-memory
         self.default_ttl = default_ttl or 600
+        self.max_size_per_item = (
+            max_size_per_item or MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
+        )  # 1MB = 1024KB
 
         # in-memory cache
         self.cache_dict: dict = {}
         self.ttl_dict: dict = {}
+
+    def check_value_size(self, value: Any):
+        """
+        Check if value size exceeds max_size_per_item (1MB)
+        Returns True if value size is acceptable, False otherwise
+        """
+        try:
+            # Fast path for common primitive types that are typically small
+            if (
+                isinstance(value, (bool, int, float, str))
+                and len(str(value)) < self.max_size_per_item * 512
+            ):  # Conservative estimate
+                return True
+
+            # Direct size check for bytes objects
+            if isinstance(value, bytes):
+                return sys.getsizeof(value) / 1024 <= self.max_size_per_item
+
+            # Handle special types without full conversion when possible
+            if hasattr(value, "__sizeof__"):  # Use __sizeof__ if available
+                size = value.__sizeof__() / 1024
+                return size <= self.max_size_per_item
+
+            # Fallback for complex types
+            if isinstance(value, BaseModel) and hasattr(
+                value, "model_dump"
+            ):  # Pydantic v2
+                value = value.model_dump()
+            elif hasattr(value, "isoformat"):  # datetime objects
+                return True  # datetime strings are always small
+
+            # Only convert to JSON if absolutely necessary
+            if not isinstance(value, (str, bytes)):
+                value = json.dumps(value, default=str)
+
+            return sys.getsizeof(value) / 1024 <= self.max_size_per_item
+
+        except Exception:
+            return False
 
     def evict_cache(self):
         """
@@ -61,6 +108,8 @@ class InMemoryCache(BaseCache):
         if len(self.cache_dict) >= self.max_size_in_memory:
             # only evict when cache is full
             self.evict_cache()
+        if not self.check_value_size(value):
+            return
 
         self.cache_dict[key] = value
         if "ttl" in kwargs and kwargs["ttl"] is not None:

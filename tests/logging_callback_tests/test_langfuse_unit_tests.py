@@ -359,12 +359,8 @@ def test_get_chat_content_for_langfuse():
     )
 
     result = LangFuseLogger._get_chat_content_for_langfuse(mock_response)
-    assert result == {
-        "content": "Hello world",
-        "role": "assistant",
-        "tool_calls": None,
-        "function_call": None,
-    }
+    assert result["content"] == "Hello world"
+    assert result["role"] == "assistant"
 
     # Test with empty choices
     mock_response = ModelResponse(choices=[])

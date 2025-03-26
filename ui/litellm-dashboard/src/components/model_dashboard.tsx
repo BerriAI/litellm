@@ -16,13 +16,14 @@ import {
   AccordionHeader,
   AccordionBody,
 } from "@tremor/react";
-
+import { CredentialItem, credentialListCall, CredentialsResponse } from "./networking";
 
 import ConditionalPublicModelName from "./add_model/conditional_public_model_name";
 import LiteLLMModelNameField from "./add_model/litellm_model_name";
 import AdvancedSettings from "./add_model/advanced_settings";
 import ProviderSpecificFields from "./add_model/provider_specific_fields";
 import { handleAddModelSubmit } from "./add_model/handle_add_model_submit";
+import CredentialsPanel from "@/components/model_add/credentials";
 import { getDisplayModelName } from "./view_model/model_name_display";
 import EditModelModal, { handleEditModelSubmit } from "./edit_model/edit_model_modal";
 import {
@@ -108,6 +109,8 @@ import TeamInfoView from "./team/team_info";
 import { Providers, provider_map, providerLogoMap, getProviderLogoAndName, getPlaceholder, getProviderModels } from "./provider_info_helpers";
 import ModelInfoView from "./model_info_view";
 import AddModelTab from "./add_model/add_model_tab";
+import { ModelDataTable } from "./model_dashboard/table";
+import { columns } from "./model_dashboard/columns";
 
 interface ModelDashboardProps {
   accessToken: string | null;
@@ -231,6 +234,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
 
   const [allEndUsers, setAllEndUsers] = useState<any[]>([]);
+
+  const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([]);
 
   // Add state for advanced settings visibility
   const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
@@ -368,6 +373,16 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       
     } catch (error) {
       console.error("Failed to fetch model metrics", error);
+    }
+  };
+
+  const fetchCredentials = async (accessToken: string) => {
+    try {
+      const response: CredentialsResponse = await credentialListCall(accessToken);
+      console.log(`credentials: ${JSON.stringify(response)}`);
+      setCredentialsList(response.credentials);
+    } catch (error) {
+      console.error('Error fetching credentials:', error);
     }
   };
 
@@ -733,20 +748,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   }
   // when users click request access show pop up to allow them to request access
 
-  // sort modelData.data by provider alphabetically, check if provider exists and is not null / undefined
-  if (modelData.data && modelData.data.length > 0) {
-    modelData.data.sort((a: any, b: any) => {
-      if (a.provider && b.provider) {
-        return a.provider.localeCompare(b.provider);
-      } else if (a.provider && !b.provider) {
-        return -1;
-      } else if (!a.provider && b.provider) {
-        return 1;
-      } else {
-        return 0;
-      }
-    });
-  }
   if (userRole && userRole == "Admin Viewer") {
     const { Title, Paragraph } = Typography;
     return (
@@ -1039,6 +1040,18 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           userRole={userRole}
           setEditModalVisible={setEditModalVisible}
           setSelectedModel={setSelectedModel}
+          onModelUpdate={(updatedModel) => {
+            // Update the model in the modelData.data array
+            const updatedModelData = {
+              ...modelData,
+              data: modelData.data.map((model: any) => 
+                model.model_info.id === updatedModel.model_info.id ? updatedModel : model
+              )
+            };
+            setModelData(updatedModelData);
+            // Trigger a refresh to update UI
+            handleRefreshClick();
+          }}
         />
       ) : (
         <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
@@ -1046,11 +1059,13 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             <div className="flex">
               <Tab>All Models</Tab>
               <Tab>Add Model</Tab>
+              <Tab>LLM Credentials</Tab>
               <Tab>
                 <pre>/health Models</pre>
               </Tab>
               <Tab>Model Analytics</Tab>
               <Tab>Model Retry Settings</Tab>
+              
             </div>
 
             <div className="flex items-center space-x-2">
@@ -1097,416 +1112,24 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     ))}
                   </Select>
                 </div>
-                <Card>
-                  <Table style={{ maxWidth: "1500px", width: "100%" }}>
-                    <TableHead>
-                      <TableRow>
-                        <TableHeaderCell
-                          style={{
-                            maxWidth: "100px",
-                            whiteSpace: "normal",
-                            wordBreak: "break-word",
-                            fontSize: "11px",
-                          }}
-                        >
-                          Model ID
-                        </TableHeaderCell>
-                        <TableHeaderCell
-                          style={{
-                            maxWidth: "150px",
-                            whiteSpace: "normal",
-                            wordBreak: "break-word",
-                            fontSize: "11px",
-                          }}
-                        >
-                          Public Model Name
-                        </TableHeaderCell>
-                        <TableHeaderCell
-                          style={{
-                            maxWidth: "100px",
-                            whiteSpace: "normal",
-                            wordBreak: "break-word",
-                            fontSize: "11px",
-                          }}
-                        >
-                          Provider
-                        </TableHeaderCell>
-                        <TableHeaderCell
-                          style={{
-                            maxWidth: "150px",
-                            whiteSpace: "normal",
-                            wordBreak: "break-word",
-                            fontSize: "11px",
-                          }}
-                        >
-                          LiteLLM Model
-                        </TableHeaderCell>
-                        {userRole === "Admin" && (
-                          <TableHeaderCell
-                            style={{
-                              maxWidth: "150px",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                              fontSize: "11px",
-                            }}
-                          >
-                            API Base
-                          </TableHeaderCell>
-                        )}
-                        <TableHeaderCell
-                          style={{
-                            maxWidth: "85px",
-                            whiteSpace: "normal",
-                            wordBreak: "break-word",
-                            fontSize: "11px",
-                          }}
-                        >
-                          Input Price{" "}
-                          <p style={{ fontSize: "10px", color: "gray" }}>
-                            /1M Tokens ($)
-                          </p>
-                        </TableHeaderCell>
-                        <TableHeaderCell
-                          style={{
-                            maxWidth: "85px",
-                            whiteSpace: "normal",
-                            wordBreak: "break-word",
-                            fontSize: "11px",
-                          }}
-                        >
-                          Output Price{" "}
-                          <p style={{ fontSize: "10px", color: "gray" }}>
-                            /1M Tokens ($)
-                          </p>
-                        </TableHeaderCell>
-
-                        <TableHeaderCell
-                          style={{
-                            maxWidth: "100px",
-                            whiteSpace: "normal",
-                            wordBreak: "break-word",
-                            fontSize: "11px",
-                          }}
-                        >
-                          {premiumUser ? (
-                            "Created At"
-                          ) : (
-                            <a
-                              href="https://forms.gle/W3U4PZpJGFHWtHyA9"
-                              target="_blank"
-                              style={{ color: "#72bcd4" }}
-                            >
-                              {" "}
-                              ✨ Created At
-                            </a>
-                          )}
-                        </TableHeaderCell>
-                        <TableHeaderCell
-                          style={{
-                            maxWidth: "100px",
-                            whiteSpace: "normal",
-                            wordBreak: "break-word",
-                            fontSize: "11px",
-                          }}
-                        >
-                          {premiumUser ? (
-                            "Created By"
-                          ) : (
-                            <a
-                              href="https://forms.gle/W3U4PZpJGFHWtHyA9"
-                              target="_blank"
-                              style={{ color: "#72bcd4" }}
-                            >
-                              {" "}
-                              ✨ Created By
-                            </a>
-                          )}
-                        </TableHeaderCell>
-                        <TableHeaderCell
-                          style={{
-                            maxWidth: "100px",
-                            whiteSpace: "normal",
-                            wordBreak: "break-word",
-                            fontSize: "11px",
-                          }}
-                        >
-                          Team ID
-                        </TableHeaderCell>
-                        <TableHeaderCell
-                          style={{
-                            maxWidth: "50px",
-                            whiteSpace: "normal",
-                            wordBreak: "break-word",
-                            fontSize: "11px",
-                          }}
-                        >
-                          Status
-                        </TableHeaderCell>
-                        <TableHeaderCell></TableHeaderCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {modelData.data
-                        .filter(
-                          (model: any) =>
-                            selectedModelGroup === "all" ||
-                            model.model_name === selectedModelGroup ||
-                            selectedModelGroup === null ||
-                            selectedModelGroup === undefined ||
-                            selectedModelGroup === ""
-                        )
-                        .map((model: any, index: number) => (
-                          <TableRow
-                            key={index}
-                            style={{ maxHeight: "1px", minHeight: "1px" }}
-                          >
-                            <TableCell
-                              style={{
-                                maxWidth: "100px",
-                                whiteSpace: "normal",
-                                wordBreak: "break-word",
-                              }}
-                            >
-                              <div className="overflow-hidden">
-                                <Tooltip title={model.model_info.id}>
-                                  <Button 
-                                    size="xs"
-                                    variant="light"
-                                    className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-                                    onClick={() => setSelectedModelId(model.model_info.id)}
-                                  >
-                                    {model.model_info.id.slice(0, 7)}...
-                                  </Button>
-                                </Tooltip>
-                              </div>
-                            </TableCell>
-                            <TableCell
-                              style={{
-                                maxWidth: "100px",
-                                whiteSpace: "normal",
-                                wordBreak: "break-word",
-                              }}
-                            >
-                              <p className="text-xs">{getDisplayModelName(model) || "-"}</p>
-                            </TableCell>
-                            <TableCell
-                              style={{
-                                maxWidth: "100px",
-                                whiteSpace: "normal",
-                                wordBreak: "break-word",
-                              }}
-                            >
-                              <div className="flex items-center space-x-2">
-                                {model.provider && (
-                                  <img
-                                    src={getProviderLogoAndName(model.provider).logo}
-                                    alt={`${model.provider} logo`}
-                                    className="w-4 h-4"
-                                    onError={(e) => {
-                                      // Create a div with provider initial as fallback
-                                      const target = e.target as HTMLImageElement;
-                                      const parent = target.parentElement;
-                                      if (parent) {
-                                        const fallbackDiv = document.createElement('div');
-                                        fallbackDiv.className = 'w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs';
-                                        fallbackDiv.textContent = model.provider?.charAt(0) || '-';
-                                        parent.replaceChild(fallbackDiv, target);
-                                      }
-                                    }}
-                                  />
-                                )}
-                                <p className="text-xs">{model.provider || "-"}</p>
-                              </div>
-                            </TableCell>
-                            
-                            <TableCell
-                              style={{
-                                maxWidth: "100px",
-                                whiteSpace: "normal",
-                                wordBreak: "break-word",
-                              }}
-                            >
-                              <Tooltip title={model && model.litellm_model_name}>
-                                  <pre
-                                    style={{
-                                      maxWidth: "150px",
-                                      whiteSpace: "normal",
-                                      wordBreak: "break-word",
-                                    }}
-                                    className="text-xs"
-                                    title={
-                                      model && model.litellm_model_name
-                                        ? model.litellm_model_name
-                                        : ""
-                                    }
-                                  >
-                                    {model && model.litellm_model_name
-                                      ? model.litellm_model_name.slice(0, 20) + (model.litellm_model_name.length > 20 ? "..." : "")
-                                      : "-"}
-                                  </pre>
-                                </Tooltip>
-                              
-                            </TableCell>
-                            {userRole === "Admin" && (
-                              <TableCell
-                                style={{
-                                  maxWidth: "150px",
-                                  whiteSpace: "normal",
-                                  wordBreak: "break-word",
-                                }}
-                              >
-                                <Tooltip title={model && model.api_base}>
-                                  <pre
-                                    style={{
-                                      maxWidth: "150px",
-                                      whiteSpace: "normal",
-                                      wordBreak: "break-word",
-                                    }}
-                                    className="text-xs"
-                                    title={
-                                      model && model.api_base
-                                        ? model.api_base
-                                        : ""
-                                    }
-                                  >
-                                    {model && model.api_base
-                                      ? model.api_base.slice(0, 20)
-                                      : "-"}
-                                  </pre>
-                                </Tooltip>
-                              </TableCell>
-                            )}
-                            <TableCell
-                              style={{
-                                maxWidth: "80px",
-                                whiteSpace: "normal",
-                                wordBreak: "break-word",
-                              }}
-                            >
-                              <pre className="text-xs">
-                                {model.input_cost
-                                  ? model.input_cost
-                                  : model.litellm_params.input_cost_per_token != null && model.litellm_params.input_cost_per_token != undefined
-                                    ? (
-                                        Number(
-                                          model.litellm_params
-                                            .input_cost_per_token
-                                        ) * 1000000
-                                      ).toFixed(2)
-                                    : null}
-                              </pre>
-                            </TableCell>
-                            <TableCell
-                              style={{
-                                maxWidth: "80px",
-                                whiteSpace: "normal",
-                                wordBreak: "break-word",
-                              }}
-                            >
-                              <pre className="text-xs">
-                                {model.output_cost
-                                  ? model.output_cost
-                                  : model.litellm_params.output_cost_per_token
-                                    ? (
-                                        Number(
-                                          model.litellm_params
-                                            .output_cost_per_token
-                                        ) * 1000000
-                                      ).toFixed(2)
-                                    : null}
-                              </pre>
-                            </TableCell>
-                            <TableCell>
-                              <p className="text-xs">
-                                {premiumUser
-                                  ? formatCreatedAt(
-                                      model.model_info.created_at
-                                    ) || "-"
-                                  : "-"}
-                              </p>
-                            </TableCell>
-                            <TableCell>
-                              <p className="text-xs">
-                                {premiumUser
-                                  ? model.model_info.created_by || "-"
-                                  : "-"}
-                              </p>
-                            </TableCell>
-                            <TableCell
-                              style={{
-                                maxWidth: "100px",
-                                whiteSpace: "normal",
-                                wordBreak: "break-word",
-                              }}
-                            >
-                              <div className="overflow-hidden">
-                              {model.model_info.team_id ? (
-                              <Tooltip title={model.model_info.team_id}>
-                                <Button 
-                                  size="xs"
-                                  variant="light"
-                                  className="font-mono text-purple-500 bg-purple-50 hover:bg-purple-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-                                  onClick={() => {
-                                    setSelectedTeamId(model.model_info.team_id);
-                                  }}
-                                >
-                                  {model.model_info.team_id.slice(0, 7)}...
-                                </Button>
-                              </Tooltip>
-                              ) : (
-                                "-"
-                              )}
-
-                              
-                              </div>
-                            </TableCell>
-                            <TableCell
-                              style={{
-                                maxWidth: "100px",
-                                whiteSpace: "normal",
-                                wordBreak: "break-word",
-                              }}
-                            >
-                              {model.model_info.db_model ? (
-                                <Badge size="xs" className="text-white">
-                                  <p className="text-xs">DB Model</p>
-                                </Badge>
-                              ) : (
-                                <Badge size="xs" className="text-black">
-                                  <p className="text-xs">Config Model</p>
-                                </Badge>
-                              )}
-                            </TableCell>
-                            <TableCell
-                              style={{
-                                maxWidth: "150px",
-                                whiteSpace: "normal",
-                                wordBreak: "break-word",
-                              }}
-                            >
-                              <Grid numItems={2}>
-                                <Col>
-                                  <Icon
-                                    icon={PencilAltIcon}
-                                    size="sm"
-                                    onClick={() => handleEditClick(model)}
-                                  />
-                                </Col>
-
-                                <Col>
-                                  <DeleteModelButton
-                                    modelID={model.model_info.id}
-                                    accessToken={accessToken}
-                                    callback={handleRefreshClick}
-                                  />
-                                </Col>
-                              </Grid>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                    </TableBody>
-                  </Table>
-                </Card>
+                  <ModelDataTable
+                    columns={columns(
+                      premiumUser,
+                      setSelectedModelId,
+                      setSelectedTeamId,
+                      getDisplayModelName,
+                      handleEditClick,
+                      handleRefreshClick,
+                      setEditModel
+                    )}
+                    data={modelData.data.filter(
+                      (model: any) =>
+                        selectedModelGroup === "all" ||
+                        model.model_name === selectedModelGroup ||
+                        !selectedModelGroup
+                    )}
+                    isLoading={false} // Add loading state if needed
+                  />
               </Grid>
               <EditModelModal
                 visible={editModalVisible}
@@ -1528,7 +1151,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 showAdvancedSettings={showAdvancedSettings}
                 setShowAdvancedSettings={setShowAdvancedSettings}
                 teams={teams}
+                credentials={credentialsList}
+                accessToken={accessToken}
               />
+            </TabPanel>
+            <TabPanel>
+              <CredentialsPanel accessToken={accessToken} uploadProps={uploadProps} credentialList={credentialsList} fetchCredentials={fetchCredentials} />
             </TabPanel>
             <TabPanel>
               <Card>
@@ -1618,7 +1246,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     <TabGroup>
                       <TabList variant="line" defaultValue="1">
                         <Tab value="1">Avg. Latency per Token</Tab>
-                        <Tab value="2">✨ Time to first token</Tab>
+                        <Tab value="2">Time to first token</Tab>
                       </TabList>
                       <TabPanels>
                         <TabPanel>
@@ -1885,6 +1513,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 Save
               </Button>
             </TabPanel>
+            
           </TabPanels>
         </TabGroup>
       )}

@@ -23,7 +23,8 @@ def safe_dumps(data: Any, max_depth: int = 10) -> str:
         if isinstance(obj, dict):
             result = {}
             for k, v in obj.items():
-                result[k] = _serialize(v, seen, depth + 1)
+                if isinstance(k, (str)):
+                    result[k] = _serialize(v, seen, depth + 1)
             seen.remove(id(obj))
             return result
         elif isinstance(obj, list):

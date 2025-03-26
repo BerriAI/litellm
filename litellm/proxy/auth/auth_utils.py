@@ -321,6 +321,7 @@ async def check_if_request_size_is_safe(request: Request) -> bool:
     from litellm.proxy.proxy_server import general_settings, premium_user
 
     max_request_size_mb = general_settings.get("max_request_size_mb", None)
+
     if max_request_size_mb is not None:
         # Check if premium user
         if premium_user is not True:
