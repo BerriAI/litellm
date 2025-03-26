@@ -1376,7 +1376,8 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 ## Fine-tuned Models
 
-Call fine-tuned Vertex AI Gemini models through LiteLLM. If you want to use LiteLLM to call a model in the `/gemini` request/response format, you can do so by setting `model="vertex_ai/gemini/{MODEL_ID}"`. This tells litellm that the request/response format follows the `gemini` model family format. 
+You can call fine-tuned Vertex AI Gemini models through LiteLLM
+```
 
 | Property | Details |
 |----------|---------|
@@ -1384,10 +1385,16 @@ Call fine-tuned Vertex AI Gemini models through LiteLLM. If you want to use Lite
 | Vertex Documentation | [Vertex AI - Fine-tuned Gemini Models](https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini-use-supervised-tuning#test_the_tuned_model_with_a_prompt)|
 | Supported Operations | `/chat/completions`, `/completions`, `/embeddings`, `/images` |
 
+To use a model that follows the `/gemini` request/response format, simply set the model parameter as 
+
+```python title="Model parameter for calling fine-tuned gemini models"
+model="vertex_ai/gemini/<your-finetuned-model>"
+```
+
 <Tabs>
 <TabItem value="sdk" label="LiteLLM Python SDK">
 
-```python showLineNumbers
+```python showLineNumbers title="Example"
 import litellm
 import os
 
@@ -1406,13 +1413,13 @@ response = litellm.completion(
 
 1. Add Vertex Credentials to your env 
 
-```bash
+```bash title="Authenticate to Vertex AI"
 !gcloud auth application-default login
 ```
 
 2. Setup config.yaml 
 
-```yaml showLineNumbers
+```yaml showLineNumbers title="Add to litellm config"
 - model_name: finetuned-gemini
   litellm_params:
     model: vertex_ai/gemini/<ENDPOINT_ID>
@@ -1425,7 +1432,7 @@ response = litellm.completion(
 <Tabs>
 <TabItem value="openai" label="OpenAI Python SDK">
 
-```python showLineNumbers
+```python showLineNumbers title="Example request"
 from openai import OpenAI
 
 client = OpenAI(
@@ -1445,7 +1452,7 @@ print(response)
 </TabItem>
 <TabItem value="curl" label="curl">
 
-```bash showLineNumbers
+```bash showLineNumbers title="Example request"
 curl --location 'https://0.0.0.0:4000/v1/chat/completions' \
 --header 'Content-Type: application/json' \
 --header 'Authorization: <LITELLM_KEY>' \
