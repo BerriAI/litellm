@@ -59,9 +59,7 @@ from litellm.litellm_core_utils.health_check_utils import (
     _filter_model_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.llm_request_utils import (
-    pick_cheapest_chat_models_from_llm_provider,
-)
+from litellm.litellm_core_utils.llm_request_utils import LitellmCoreRequestUtils
 from litellm.litellm_core_utils.mock_functions import (
     mock_embedding,
     mock_image_generation,
@@ -5424,8 +5422,10 @@ async def ahealth_check_wildcard_models(
 ) -> dict:
 
     # this is a wildcard model, we need to pick a random model from the provider
-    cheapest_models = pick_cheapest_chat_models_from_llm_provider(
-        custom_llm_provider=custom_llm_provider, n=3
+    cheapest_models = (
+        LitellmCoreRequestUtils.pick_cheapest_chat_models_from_llm_provider(
+            custom_llm_provider=custom_llm_provider, n=3
+        )
     )
     if len(cheapest_models) == 0:
         raise Exception(
