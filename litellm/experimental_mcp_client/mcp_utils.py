@@ -77,13 +77,17 @@ def fetch_mcp_servers() -> List[Dict[str, Any]]:
         print(f"Error fetching MCP servers: {e}")
         return []
 
-def update_mcp_servers_file(output_file: str = "mcp_servers.json") -> None:
+def update_mcp_servers_file(output_file: str = None) -> None:
     """
     Updates the MCP servers JSON file with the latest configurations.
     
     Args:
-        output_file (str): Path to the output JSON file
+        output_file (str): Path to the output JSON file. Defaults to the root directory of the repository.
     """
+    # Determine the root directory of the repository
+    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
+    output_file = output_file or os.path.join(root_dir, "mcp_servers.json")
+    
     servers = fetch_mcp_servers()
     
     if servers:
@@ -94,7 +98,5 @@ def update_mcp_servers_file(output_file: str = "mcp_servers.json") -> None:
         print("No server configurations were fetched. File not updated.")
 
 if __name__ == "__main__":
-    # Update the MCP servers file in the project root
-    root_dir = os.path.dirname(os.path.dirname(__file__))
-    output_path = os.path.join(root_dir, "mcp_servers.json")
-    update_mcp_servers_file(output_path)
+    # Update the MCP servers file in the root directory of the repository
+    update_mcp_servers_file()
