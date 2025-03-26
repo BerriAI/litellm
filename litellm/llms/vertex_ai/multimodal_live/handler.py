@@ -5,6 +5,7 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 import json
 from typing import Any, Optional
+import os
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ....litellm_core_utils.gemini_realtime_streaming import GeminiRealTimeStreaming
@@ -59,7 +60,6 @@ class GeminiLive(VertexLLM):
             import websockets
         except ImportError:
             raise ImportError("Websockets package not installed. Please install it with `pip install websockets`")
-
         if api_base is None:
             raise ValueError("api_base is required for Gemini calls")
 
@@ -98,7 +98,7 @@ class GeminiLive(VertexLLM):
                 url,
                 extra_headers=headers,
             ) as backend_ws:
-                await self._send_setup_message(backend_ws, model, config)
+                # await self._send_setup_message(backend_ws, model, config)
                 realtime_streaming = GeminiRealTimeStreaming(
                     websocket, backend_ws, model, config, logging_obj, vertex_location, vertex_project)
                 await realtime_streaming.bidirectional_forward()
