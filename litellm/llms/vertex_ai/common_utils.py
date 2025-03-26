@@ -3,6 +3,7 @@ from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
 
+import litellm
 from litellm import supports_response_schema, supports_system_messages, verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.vertex_ai import PartType
@@ -28,6 +29,10 @@ def get_supports_system_message(
         supports_system_message = supports_system_messages(
             model=model, custom_llm_provider=_custom_llm_provider
         )
+
+        # Vertex Models called in the `/gemini` request/response format also support system messages
+        if litellm.VertexGeminiConfig._is_model_gemini_spec_model(model):
+            supports_system_message = True
     except Exception as e:
         verbose_logger.warning(
             "Unable to identify if system message supported. Defaulting to 'False'. Received error message - {}\nAdd it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json".format(
@@ -70,6 +75,8 @@ def _get_vertex_url(
 ) -> Tuple[str, str]:
     url: Optional[str] = None
     endpoint: Optional[str] = None
+
+    model = litellm.VertexGeminiConfig.get_model_for_vertex_ai_url(model=model)
     if mode == "chat":
         ### SET RUNTIME ENDPOINT ###
         endpoint = "generateContent"
