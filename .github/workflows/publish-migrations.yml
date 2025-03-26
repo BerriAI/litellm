@@ -7,6 +7,11 @@ on:
     branches:
       - litellm_dev_03_25_2025_p3
 
+# Add these permissions
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   publish-migrations:
     runs-on: ubuntu-latest
