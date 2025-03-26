@@ -10,7 +10,10 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.types.llms.openai import Batch, CreateBatchRequest
-from litellm.types.llms.vertex_ai import VertexAIBatchPredictionJob
+from litellm.types.llms.vertex_ai import (
+    VERTEX_CREDENTIALS_TYPES,
+    VertexAIBatchPredictionJob,
+)
 
 from .transformation import VertexAIBatchTransformation
 
@@ -25,7 +28,7 @@ class VertexAIBatchPrediction(VertexLLM):
         _is_async: bool,
         create_batch_data: CreateBatchRequest,
         api_base: Optional[str],
-        vertex_credentials: Optional[str],
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
         vertex_project: Optional[str],
         vertex_location: Optional[str],
         timeout: Union[float, httpx.Timeout],
@@ -130,7 +133,7 @@ class VertexAIBatchPrediction(VertexLLM):
         _is_async: bool,
         batch_id: str,
         api_base: Optional[str],
-        vertex_credentials: Optional[str],
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
         vertex_project: Optional[str],
         vertex_location: Optional[str],
         timeout: Union[float, httpx.Timeout],

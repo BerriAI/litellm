@@ -3,7 +3,7 @@ import React from "react";
 export enum Providers {
     OpenAI = "OpenAI",
     Azure = "Azure",
-    Azure_AI_Studio = "Azure AI Studio",
+    Azure_AI_Studio = "Azure AI Foundry (Studio)",
     Anthropic = "Anthropic",
     Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
     Google_AI_Studio = "Google AI Studio",
@@ -60,6 +60,13 @@ export const providerLogoMap: Record<string, string> = {
 export const getProviderLogoAndName = (providerValue: string): { logo: string, displayName: string } => {
     if (!providerValue) {
         return { logo: "", displayName: "-" };
+    }
+
+    // Handle special case for "gemini" provider value
+    if (providerValue.toLowerCase() === "gemini") {
+        const displayName = Providers.Google_AI_Studio;
+        const logo = providerLogoMap[displayName];
+        return { logo, displayName };
     }
 
     // Find the enum key by matching provider_map values

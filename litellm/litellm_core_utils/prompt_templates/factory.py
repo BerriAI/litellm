@@ -2151,6 +2151,10 @@ from email.message import Message
 
 import httpx
 
+from litellm.types.llms.bedrock import (
+    BedrockConverseReasoningContentBlock,
+    BedrockConverseReasoningTextBlock,
+)
 from litellm.types.llms.bedrock import ContentBlock as BedrockContentBlock
 from litellm.types.llms.bedrock import DocumentBlock as BedrockDocumentBlock
 from litellm.types.llms.bedrock import ImageBlock as BedrockImageBlock
@@ -2963,6 +2967,28 @@ class BedrockConverseMessagesProcessor:
 
         return contents
 
+    @staticmethod
+    def translate_thinking_blocks_to_reasoning_content_blocks(
+        thinking_blocks: List[ChatCompletionThinkingBlock],
+    ) -> List[BedrockContentBlock]:
+        reasoning_content_blocks: List[BedrockContentBlock] = []
+        for thinking_block in thinking_blocks:
+            reasoning_text = thinking_block.get("thinking")
+            reasoning_signature = thinking_block.get("signature_delta")
+            text_block = BedrockConverseReasoningTextBlock(
+                text=reasoning_text or "",
+            )
+            if reasoning_signature is not None:
+                text_block["signature"] = reasoning_signature
+            reasoning_content_block = BedrockConverseReasoningContentBlock(
+                reasoningText=text_block,
+            )
+            bedrock_content_block = BedrockContentBlock(
+                reasoningContent=reasoning_content_block
+            )
+            reasoning_content_blocks.append(bedrock_content_block)
+        return reasoning_content_blocks
+
 
 def _bedrock_converse_messages_pt(  # noqa: PLR0915
     messages: List,
@@ -3109,11 +3135,23 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
         assistant_content: List[BedrockContentBlock] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
+
             assistant_message_block = get_assistant_message_block_or_continue_message(
                 message=messages[msg_i],
                 assistant_continue_message=assistant_continue_message,
             )
             _assistant_content = assistant_message_block.get("content", None)
+            thinking_blocks = cast(
+                Optional[List[ChatCompletionThinkingBlock]],
+                assistant_message_block.get("thinking_blocks"),
+            )
+
+            if thinking_blocks is not None:
+                assistant_content.extend(
+                    BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
+                        thinking_blocks
+                    )
+                )
 
             if _assistant_content is not None and isinstance(_assistant_content, list):
                 assistants_parts: List[BedrockContentBlock] = []

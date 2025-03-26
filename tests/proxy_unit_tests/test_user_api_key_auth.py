@@ -930,3 +930,20 @@ def test_can_rbac_role_call_model_no_role_permissions():
         general_settings={"role_permissions": []},
         model="anthropic-claude",
     )
+
+
+@pytest.mark.parametrize(
+    "route, request_data, expected_model",
+    [
+        ("/v1/chat/completions", {"model": "gpt-4"}, "gpt-4"),
+        ("/v1/completions", {"model": "gpt-4"}, "gpt-4"),
+        ("/v1/chat/completions", {}, None),
+        ("/v1/completions", {}, None),
+        ("/openai/deployments/gpt-4", {}, "gpt-4"),
+        ("/openai/deployments/gpt-4", {"model": "gpt-4o"}, "gpt-4o"),
+    ],
+)
+def test_get_model_from_request(route, request_data, expected_model):
+    from litellm.proxy.auth.user_api_key_auth import get_model_from_request
+
+    assert get_model_from_request(request_data, route) == expected_model

@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
 import os
 import uuid
+import time
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -17,6 +18,7 @@ from litellm.utils import (
     CustomStreamWrapper,
     get_supported_openai_params,
     get_optional_params,
+    ProviderConfigManager,
 )
 from typing import Union
 
@@ -246,11 +248,93 @@ class BaseLLMChatTest(ABC):
             response_format=response_format,
         )
 
-        print(response)
+        print(f"response={response}")
 
         # OpenAI guarantees that the JSON schema is returned in the content
         # relevant issue: https://github.com/BerriAI/litellm/issues/6741
         assert response.choices[0].message.content is not None
+
+    @pytest.mark.parametrize(
+        "response_format",
+        [
+            {"type": "text"},
+        ],
+    )
+    @pytest.mark.flaky(retries=6, delay=1)
+    def test_response_format_type_text_with_tool_calls_no_tool_choice(
+        self, response_format
+    ):
+        base_completion_call_args = self.get_base_completion_call_args()
+        messages = [
+            {"role": "user", "content": "What's the weather like in Boston today?"},
+        ]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "description": "Get the current weather in a given location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The city and state, e.g. San Francisco, CA",
+                            },
+                            "unit": {
+                                "type": "string",
+                                "enum": ["celsius", "fahrenheit"],
+                            },
+                        },
+                        "required": ["location"],
+                    },
+                },
+            }
+        ]
+        try:
+            response = self.completion_function(
+                **base_completion_call_args,
+                messages=messages,
+                response_format=response_format,
+                tools=tools,
+                drop_params=True,
+            )
+        except litellm.ContextWindowExceededError:
+            pytest.skip("Model exceeded context window")
+        assert response is not None
+
+    def test_response_format_type_text(self):
+        """
+        Test that the response format type text does not lead to tool calls
+        """
+        from litellm import LlmProviders
+
+        base_completion_call_args = self.get_base_completion_call_args()
+        litellm.set_verbose = True
+
+        _, provider, _, _ = litellm.get_llm_provider(
+            model=base_completion_call_args["model"]
+        )
+
+        provider_config = ProviderConfigManager.get_provider_chat_config(
+            base_completion_call_args["model"], LlmProviders(provider)
+        )
+
+        print(f"provider_config={provider_config}")
+
+        translated_params = provider_config.map_openai_params(
+            non_default_params={"response_format": {"type": "text"}},
+            optional_params={},
+            model=base_completion_call_args["model"],
+            drop_params=False,
+        )
+
+        assert "tool_choice" not in translated_params
+        assert (
+            "tools" not in translated_params
+        ), f"Got tools={translated_params['tools']}, expected no tools"
+
+        print(f"translated_params={translated_params}")
 
     @pytest.mark.flaky(retries=6, delay=1)
     def test_json_response_pydantic_obj(self):
@@ -527,6 +611,46 @@ class BaseLLMChatTest(ABC):
 
         assert response is not None
 
+    def test_image_url_string(self):
+        litellm.set_verbose = True
+        from litellm.utils import supports_vision
+
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        image_url = "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+
+        base_completion_call_args = self.get_base_completion_call_args()
+        if not supports_vision(base_completion_call_args["model"], None):
+            pytest.skip("Model does not support image input")
+        elif "http://" in image_url and "fireworks_ai" in base_completion_call_args.get(
+            "model"
+        ):
+            pytest.skip("Model does not support http:// input")
+
+        image_url_param = image_url
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What's in this image?"},
+                    {
+                        "type": "image_url",
+                        "image_url": image_url_param,
+                    },
+                ],
+            }
+        ]
+
+        try:
+            response = self.completion_function(
+                **base_completion_call_args, messages=messages
+            )
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
+
+        assert response is not None
+
     @pytest.mark.flaky(retries=4, delay=1)
     def test_prompt_caching(self):
         litellm.set_verbose = True
@@ -600,6 +724,8 @@ class BaseLLMChatTest(ABC):
                 max_tokens=10,
             )
 
+            time.sleep(1)
+
             cached_cost = response._hidden_params["response_cost"]
 
             assert (
@@ -616,7 +742,9 @@ class BaseLLMChatTest(ABC):
             _usage_format_tests(response.usage)
 
             assert "prompt_tokens_details" in response.usage
-            assert response.usage.prompt_tokens_details.cached_tokens > 0
+            assert (
+                response.usage.prompt_tokens_details.cached_tokens > 0
+            ), f"cached_tokens={response.usage.prompt_tokens_details.cached_tokens} should be greater than 0. Got usage={response.usage}"
         except litellm.InternalServerError:
             pass
 

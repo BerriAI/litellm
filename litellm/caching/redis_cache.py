@@ -543,6 +543,7 @@ class RedisCache(BaseCache):
         _redis_client: Redis = self.init_async_client()  # type: ignore
         start_time = time.time()
         _used_ttl = self.get_ttl(ttl=ttl)
+        key = self.check_and_fix_namespace(key=key)
         try:
             result = await _redis_client.incrbyfloat(name=key, amount=value)
             if _used_ttl is not None:

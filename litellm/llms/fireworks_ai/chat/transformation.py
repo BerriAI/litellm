@@ -90,6 +90,11 @@ class FireworksAIConfig(OpenAIGPTConfig):
     ) -> dict:
 
         supported_openai_params = self.get_supported_openai_params(model=model)
+        is_tools_set = any(
+            param == "tools" and value is not None
+            for param, value in non_default_params.items()
+        )
+
         for param, value in non_default_params.items():
             if param == "tool_choice":
                 if value == "required":
@@ -98,18 +103,30 @@ class FireworksAIConfig(OpenAIGPTConfig):
                 else:
                     # pass through the value of tool choice
                     optional_params["tool_choice"] = value
-            elif (
-                param == "response_format" and value.get("type", None) == "json_schema"
-            ):
-                optional_params["response_format"] = {
-                    "type": "json_object",
-                    "schema": value["json_schema"]["schema"],
-                }
+            elif param == "response_format":
+
+                if (
+                    is_tools_set
+                ):  # fireworks ai doesn't support tools and response_format together
+                    optional_params = self._add_response_format_to_tools(
+                        optional_params=optional_params,
+                        value=value,
+                        is_response_format_supported=False,
+                        enforce_tool_choice=False,  # tools and response_format are both set, don't enforce tool_choice
+                    )
+                elif "json_schema" in value:
+                    optional_params["response_format"] = {
+                        "type": "json_object",
+                        "schema": value["json_schema"]["schema"],
+                    }
+                else:
+                    optional_params["response_format"] = value
             elif param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             elif param in supported_openai_params:
                 if value is not None:
                     optional_params[param] = value
+
         return optional_params
 
     def _add_transform_inline_image_block(

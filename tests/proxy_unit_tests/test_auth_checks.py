@@ -551,6 +551,30 @@ async def test_can_user_call_model():
 
 
 @pytest.mark.asyncio
+async def test_can_user_call_model_with_no_default_models():
+    from litellm.proxy.auth.auth_checks import can_user_call_model
+    from litellm.proxy._types import ProxyException, SpecialModelNames
+    from unittest.mock import MagicMock
+
+    args = {
+        "model": "anthropic-claude",
+        "llm_router": MagicMock(),
+        "user_object": LiteLLM_UserTable(
+            user_id="testuser21@mycompany.com",
+            max_budget=None,
+            spend=0.0042295,
+            model_max_budget={},
+            model_spend={},
+            user_email="testuser@mycompany.com",
+            models=[SpecialModelNames.no_default_models.value],
+        ),
+    }
+
+    with pytest.raises(ProxyException) as e:
+        await can_user_call_model(**args)
+
+
+@pytest.mark.asyncio
 async def test_get_fuzzy_user_object():
     from litellm.proxy.auth.auth_checks import _get_fuzzy_user_object
     from litellm.proxy.utils import PrismaClient

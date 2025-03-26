@@ -473,6 +473,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         tool_calls=tool_calls,
                         audio=choice["message"].get("audio", None),
                         provider_specific_fields=provider_specific_fields,
+                        reasoning_content=reasoning_content,
                     )
                     finish_reason = choice.get("finish_reason", None)
                 if finish_reason is None:

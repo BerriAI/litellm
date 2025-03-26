@@ -3,7 +3,7 @@
 import pytest
 import asyncio
 import aiohttp, openai
-from openai import OpenAI, AsyncOpenAI
+from openai import OpenAI, AsyncOpenAI, AzureOpenAI, AsyncAzureOpenAI
 from typing import Optional, List, Union
 import uuid
 
@@ -201,6 +201,14 @@ async def chat_completion_with_headers(session, key, model="gpt-4"):
         return raw_headers_json
 
 
+async def chat_completion_with_model_from_route(session, key, route):
+    url = "http://0.0.0.0:4000/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+
+
 async def completion(session, key):
     url = "http://0.0.0.0:4000/completions"
     headers = {
@@ -288,12 +296,19 @@ async def test_chat_completion():
     make chat completion call
     """
     async with aiohttp.ClientSession() as session:
-        key_gen = await generate_key(session=session)
-        key = key_gen["key"]
-        await chat_completion(session=session, key=key)
-        key_gen = await new_user(session=session)
-        key_2 = key_gen["key"]
-        await chat_completion(session=session, key=key_2)
+        key_gen = await generate_key(session=session, models=["gpt-3.5-turbo"])
+        azure_client = AsyncAzureOpenAI(
+            azure_endpoint="http://0.0.0.0:4000",
+            azure_deployment="random-model",
+            api_key=key_gen["key"],
+            api_version="2024-02-15-preview",
+        )
+        with pytest.raises(openai.AuthenticationError) as e:
+            response = await azure_client.chat.completions.create(
+                model="gpt-4",
+                messages=[{"role": "user", "content": "Hello!"}],
+            )
+        assert "API Key not allowed to access model." in str(e)
 
 
 @pytest.mark.asyncio

@@ -383,6 +383,7 @@ class ChatCompletionImageObject(TypedDict):
     type: Literal["image_url"]
     image_url: Union[str, ChatCompletionImageUrlObject]
 
+
 class ChatCompletionVideoUrlObject(TypedDict, total=False):
     url: Required[str]
     detail: str
@@ -595,6 +596,9 @@ class ChatCompletionResponseMessage(TypedDict, total=False):
     tool_calls: Optional[List[ChatCompletionToolCallChunk]]
     role: Literal["assistant"]
     function_call: Optional[ChatCompletionToolCallFunctionChunk]
+    provider_specific_fields: Optional[dict]
+    reasoning_content: Optional[str]
+    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]]
 
 
 class ChatCompletionUsageBlock(TypedDict):

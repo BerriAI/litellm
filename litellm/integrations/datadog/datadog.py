@@ -577,6 +577,4 @@ class DataDogLogger(
         start_time_utc: Optional[datetimeObj],
         end_time_utc: Optional[datetimeObj],
     ) -> Optional[dict]:
-        raise NotImplementedError(
-            "Datdog Integration for getting request/response payloads not implemented as yet"
-        )
+        pass

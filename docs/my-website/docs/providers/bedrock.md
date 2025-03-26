@@ -377,6 +377,121 @@ print(f"\nResponse: {resp}")
 ```
 
 
+## Usage - 'thinking' / 'reasoning content'
+
+This is currently only supported for Anthropic's Claude 3.7 Sonnet + Deepseek R1.
+
+Works on v1.61.20+.
+
+Returns 2 new fields in `message` and `delta` object:
+- `reasoning_content` - string - The reasoning content of the response
+- `thinking_blocks` - list of objects (Anthropic only) - The thinking blocks of the response
+
+Each object has the following fields:
+- `type` - Literal["thinking"] - The type of thinking block
+- `thinking` - string - The thinking of the response. Also returned in `reasoning_content`
+- `signature_delta` - string - A base64 encoded string, returned by Anthropic.
+
+The `signature_delta` is required by Anthropic on subsequent calls, if 'thinking' content is passed in (only required to use `thinking` with tool calling). [Learn more](https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking#understanding-thinking-blocks)
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+# set env
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+
+resp = completion(
+    model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    thinking={"type": "enabled", "budget_tokens": 1024},
+)
+
+print(resp)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: bedrock-claude-3-7
+    litellm_params:
+      model: bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0
+      thinking: {"type": "enabled", "budget_tokens": 1024} # 👈 EITHER HERE OR ON REQUEST
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "bedrock-claude-3-7",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "thinking": {"type": "enabled", "budget_tokens": 1024} # 👈 EITHER HERE OR ON CONFIG.YAML
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+
+**Expected Response**
+
+Same as [Anthropic API response](../providers/anthropic#usage---thinking--reasoning_content).
+
+```python
+{
+    "id": "chatcmpl-c661dfd7-7530-49c9-b0cc-d5018ba4727d",
+    "created": 1740640366,
+    "model": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    "object": "chat.completion",
+    "system_fingerprint": null,
+    "choices": [
+        {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+                "content": "The capital of France is Paris. It's not only the capital city but also the largest city in France, serving as the country's major cultural, economic, and political center.",
+                "role": "assistant",
+                "tool_calls": null,
+                "function_call": null,
+                "reasoning_content": "The capital of France is Paris. This is a straightforward factual question.",
+                "thinking_blocks": [
+                    {
+                        "type": "thinking",
+                        "thinking": "The capital of France is Paris. This is a straightforward factual question.",
+                        "signature_delta": "EqoBCkgIARABGAIiQL2UoU0b1OHYi+yCHpBY7U6FQW8/FcoLewocJQPa2HnmLM+NECy50y44F/kD4SULFXi57buI9fAvyBwtyjlOiO0SDE3+r3spdg6PLOo9PBoMma2ku5OTAoR46j9VIjDRlvNmBvff7YW4WI9oU8XagaOBSxLPxElrhyuxppEn7m6bfT40dqBSTDrfiw4FYB4qEPETTI6TA6wtjGAAqmFqKTo="
+                    }
+                ]
+            }
+        }
+    ],
+    "usage": {
+        "completion_tokens": 64,
+        "prompt_tokens": 42,
+        "total_tokens": 106,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+    }
+}
+```
+
+
 ## Usage - Bedrock Guardrails
 
 Example of using [Bedrock Guardrails with LiteLLM](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html)
