@@ -1181,30 +1181,35 @@
         "input_cost_per_token": 0.0000025,
         "input_cost_per_audio_token": 0.000006,
         "output_cost_per_token": 0.00001, 
-        "litellm_provider": "openai"
+        "litellm_provider": "openai",
+        "supported_endpoints": ["/audio/transcriptions"]
     }, 
     "gpt-4o-mini-transcribe": {
         "mode": "audio_transcription",
         "input_cost_per_token": 0.00000125,
         "input_cost_per_audio_token": 0.000003,
         "output_cost_per_token": 0.000005, 
-        "litellm_provider": "openai"
+        "litellm_provider": "openai",
+        "supported_endpoints": ["/audio/transcriptions"]
     }, 
     "whisper-1": {
         "mode": "audio_transcription",
         "input_cost_per_second": 0.0001,
         "output_cost_per_second": 0.0001, 
-        "litellm_provider": "openai"
+        "litellm_provider": "openai",
+        "supported_endpoints": ["/audio/transcriptions"]
     }, 
     "tts-1": {
         "mode": "audio_speech", 
         "input_cost_per_character": 0.000015,
-        "litellm_provider": "openai"
+        "litellm_provider": "openai",
+        "supported_endpoints": ["/audio/speech"]
     },
     "tts-1-hd": {
         "mode": "audio_speech", 
         "input_cost_per_character": 0.000030,
-        "litellm_provider": "openai"
+        "litellm_provider": "openai",
+        "supported_endpoints": ["/audio/speech"]
     },
     "azure/gpt-4o-mini-realtime-preview-2024-12-17": {
         "max_tokens": 4096,
