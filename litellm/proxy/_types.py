@@ -255,7 +255,9 @@ class LiteLLMRoutes(enum.Enum):
         "/realtime",
         "/v1/realtime",
         "/realtime?{model}",
-        "/v1/realtime?{model}",
+        "/v1/realtime?{model}",        
+        # Gemini Live
+        "/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent",
         # responses API
         "/responses",
         "/v1/responses",
