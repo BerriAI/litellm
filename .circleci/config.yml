@@ -1934,8 +1934,6 @@ jobs:
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
       - run:
           name: Run Docker container
-          # intentionally give bad redis credentials here
-          # the OTEL test - should get this as a trace
           command: |
             docker run -d \
               -p 4000:4000 \
