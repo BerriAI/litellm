@@ -164,6 +164,7 @@ jobs:
         if: success()
         uses: peter-evans/create-pull-request@v5
         with:
+          token: ${{ secrets.PAT_TOKEN }}
           commit-message: "chore: update prisma migrations"
           title: "Update Prisma Migrations"
           body: |
@@ -173,4 +174,5 @@ jobs:
             - deploy/migrations/${VERSION}_schema_update/migration.sql
             - deploy/migrations/${VERSION}_schema_update/README.md
           branch: feat/prisma-migration-${{ env.VERSION }}
-          base: litellm_dev_03_25_2025_p3 
+          base: litellm_dev_03_25_2025_p3
+          delete-branch: true 
