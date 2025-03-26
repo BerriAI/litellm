@@ -67,6 +67,9 @@ async def test_audio_output_from_model(stream):
     except litellm.Timeout as e:
         print(e)
         pytest.skip("Skipping test due to timeout")
+    except Exception as e:
+        if "openai-internal" in str(e):
+            pytest.skip("Skipping test due to openai-internal error")
 
     if stream is True:
         await check_streaming_response(completion)
@@ -86,7 +89,7 @@ async def test_audio_input_to_model(stream):
     audio_format = "pcm16"
     if stream is False:
         audio_format = "wav"
-    litellm.set_verbose = True
+    litellm._turn_on_debug()
     url = "https://openaiassets.blob.core.windows.net/$web/API/docs/audio/alloy.wav"
     response = requests.get(url)
     response.raise_for_status()
@@ -114,7 +117,9 @@ async def test_audio_input_to_model(stream):
     except litellm.Timeout as e:
         print(e)
         pytest.skip("Skipping test due to timeout")
-
+    except Exception as e:
+        if "openai-internal" in str(e):
+            pytest.skip("Skipping test due to openai-internal error")
     if stream is True:
         await check_streaming_response(completion)
     else:

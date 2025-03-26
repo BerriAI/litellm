@@ -1,7 +1,9 @@
 from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_router_logger
-from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
+from litellm.router_utils.cooldown_handlers import (
+    _async_get_cooldown_deployments_with_debug_info,
+)
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.router import RouterRateLimitError
 
@@ -75,7 +77,7 @@ async def async_raise_no_deployment_exception(
     _cooldown_time = litellm_router_instance.cooldown_cache.get_min_cooldown(
         model_ids=model_ids, parent_otel_span=parent_otel_span
     )
-    _cooldown_list = await _async_get_cooldown_deployments(
+    _cooldown_list = await _async_get_cooldown_deployments_with_debug_info(
         litellm_router_instance=litellm_router_instance,
         parent_otel_span=parent_otel_span,
     )

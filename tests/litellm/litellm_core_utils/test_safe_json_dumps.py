@@ -78,3 +78,63 @@ def test_unserializable_object():
     obj = TestClass()
     result = json.loads(safe_dumps(obj))
     assert result == "Unserializable Object"
+
+
+def test_non_standard_dict_keys():
+    try:
+        # Test handling of dictionaries with non-standard keys
+        class GCCollector:
+            def __str__(self):
+                return "GCCollector"
+
+        data = {GCCollector(): "value", "test": "test"}
+        json_dump = safe_dumps(data)
+        print(json_dump)
+        result = json.loads(json_dump)
+        assert result["test"] == "test"
+    except Exception as e:
+        print(e)
+        import traceback
+
+        traceback.print_exc()
+        raise e
+
+
+def test_non_standard_dict_keys_complex():
+    try:
+        # Test handling of dictionaries with non-standard keys
+        class GCCollector:
+            def __str__(self):
+                return "GCCollector"
+
+        data = [
+            {"test": "test"},
+            GCCollector(),
+            {
+                "bad_key": "bad_value",
+            },
+            {
+                GCCollector(): "value",
+            },
+            {
+                "bad_key": GCCollector(),
+            },
+            (GCCollector(), GCCollector()),
+        ]
+        json_dump = safe_dumps(data)
+        print(json_dump)
+        result = json.loads(json_dump)
+        print("result=", json.dumps(result, indent=4))
+        assert result[0]["test"] == "test"
+        assert result[1] == "GCCollector"
+        assert result[2]["bad_key"] == "bad_value"
+        assert result[3] == {}
+        assert result[4]["bad_key"] == "GCCollector"
+        assert result[5][0] == "GCCollector"
+        assert result[5][1] == "GCCollector"
+    except Exception as e:
+        print(e)
+        import traceback
+
+        traceback.print_exc()
+        raise e

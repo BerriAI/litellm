@@ -2,6 +2,7 @@ from typing import Any, List, Optional, cast
 
 from httpx import Response
 
+from litellm import verbose_logger
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _parse_content_for_reasoning,
 )
@@ -93,7 +94,12 @@ class AmazonDeepseekR1ResponseIterator(BaseModelResponseIterator):
         """
         try:
             typed_chunk = AmazonDeepSeekR1StreamingResponse(**chunk)  # type: ignore
-            if "</think>" in typed_chunk["generation"]:
+            generated_content = typed_chunk["generation"]
+            if generated_content == "</think>" and not self.has_finished_thinking:
+                verbose_logger.debug(
+                    "Deepseek r1: </think> received, setting has_finished_thinking to True"
+                )
+                generated_content = ""
                 self.has_finished_thinking = True
 
             prompt_token_count = typed_chunk.get("prompt_token_count") or 0
@@ -110,12 +116,12 @@ class AmazonDeepseekR1ResponseIterator(BaseModelResponseIterator):
                         finish_reason=typed_chunk["stop_reason"],
                         delta=Delta(
                             content=(
-                                typed_chunk["generation"]
+                                generated_content
                                 if self.has_finished_thinking
                                 else None
                             ),
                             reasoning_content=(
-                                typed_chunk["generation"]
+                                generated_content
                                 if not self.has_finished_thinking
                                 else None
                             ),
@@ -124,5 +130,6 @@ class AmazonDeepseekR1ResponseIterator(BaseModelResponseIterator):
                 ],
                 usage=usage,
             )
+
         except Exception as e:
             raise e
