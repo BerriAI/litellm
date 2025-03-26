@@ -3334,7 +3334,7 @@ def test_gemini_fine_tuned_model_request_consistency():
     """
     Assert the same transformation is applied to Fine tuned gemini 2.0 flash and gemini 2.0 flash
 
-    - Request 1: Fine tuned: vertex_ai/ft-uuid with base_model: vertex_ai/gemini-2.0-flash-001
+    - Request 1: Fine tuned: vertex_ai/gemini/ft-uuid
     - Request 2: vertex_ai/gemini-2.0-flash-001
     """
     litellm.set_verbose = True
