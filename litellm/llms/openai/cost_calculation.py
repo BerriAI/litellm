@@ -59,7 +59,7 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
 
     ## CALCULATE OUTPUT COST
     completion_cost: float = (
-        usage["completion_tokens"] * model_info["output_cost_per_token"]
+        usage.completion_tokens * model_info["output_cost_per_token"]
     )
     _output_cost_per_audio_token: Optional[float] = model_info.get(
         "output_cost_per_audio_token"
