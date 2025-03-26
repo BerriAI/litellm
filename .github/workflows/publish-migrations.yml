@@ -24,6 +24,21 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      
+      # Add shadow database service
+      postgres_shadow:
+        image: postgres:14
+        env:
+          POSTGRES_DB: shadow_db
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - uses: actions/checkout@v3
@@ -42,6 +57,7 @@ jobs:
         env:
           DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/temp_db"
           DIRECT_URL: "postgresql://postgres:postgres@localhost:5432/temp_db"
+          SHADOW_DATABASE_URL: "postgresql://postgres:postgres@localhost:5433/shadow_db"
         run: |
           # Create migrations directory if it doesn't exist
           mkdir -p deploy/migrations
@@ -63,6 +79,7 @@ jobs:
             prisma migrate diff \
               --from-empty \
               --to-schema-datamodel schema.prisma \
+              --shadow-database-url "${SHADOW_DATABASE_URL}" \
               --script > deploy/migrations/${VERSION}_initial/migration.sql
               
             echo "Initial migration generated at $(date -u)" > deploy/migrations/${VERSION}_initial/README.md
@@ -73,6 +90,7 @@ jobs:
         env:
           DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/temp_db"
           DIRECT_URL: "postgresql://postgres:postgres@localhost:5432/temp_db"
+          SHADOW_DATABASE_URL: "postgresql://postgres:postgres@localhost:5433/shadow_db"
         run: |
           # Create temporary migration workspace
           mkdir -p temp_migrations
@@ -86,6 +104,7 @@ jobs:
           prisma migrate diff \
             --from-migrations temp_migrations \
             --to-schema-datamodel schema.prisma \
+            --shadow-database-url "${SHADOW_DATABASE_URL}" \
             --script > temp_migrations/migration_${VERSION}.sql
           
           # Check if there are actual changes
@@ -104,11 +123,15 @@ jobs:
         env:
           DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/temp_db"
           DIRECT_URL: "postgresql://postgres:postgres@localhost:5432/temp_db"
+          SHADOW_DATABASE_URL: "postgresql://postgres:postgres@localhost:5433/shadow_db"
         run: |
+          # Create test database
+          psql "${SHADOW_DATABASE_URL}" -c 'CREATE DATABASE migration_test;'
+          
           # Apply all migrations in order to verify
           for migration in deploy/migrations/*/migration.sql; do
             echo "Applying migration: $migration"
-            psql $DATABASE_URL -f $migration
+            psql "${SHADOW_DATABASE_URL}" -f $migration
           done
 
       - name: Create Pull Request
