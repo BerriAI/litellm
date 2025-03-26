@@ -207,7 +207,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "extra_headers",
             "seed",
             "logprobs",
-            "top_logprobs" # Added this to list of supported openAI params
+            "top_logprobs",  # Added this to list of supported openAI params
         ]
 
     def map_tool_choice_values(
@@ -418,6 +418,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "europe-west8",
             "europe-west9",
         ]
+
+    @staticmethod
+    def _is_model_gemini_gemini_spec_model(model: Optional[str]) -> bool:
+        """
+        Returns true if user is trying to call custom model in `/gemini` request/response format
+        """
+        if model is None:
+            return False
+        if "gemini/" in model:
+            return True
+        return False
 
     def get_flagged_finish_reasons(self) -> Dict[str, str]:
         """
