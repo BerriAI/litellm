@@ -496,7 +496,7 @@ jobs:
       - run:
           name: Setup Toxiproxy
           command: |
-            python tests/proxy_reliability_tests/setup_toxiproxy.py
+            python tests/proxy_reliability_tests/setup_toxi_proxy.py
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
