@@ -479,7 +479,7 @@ router_settings:
 | PROXY_ADMIN_ID | Admin identifier for proxy server
 | PROXY_BASE_URL | Base URL for proxy service
 | PROXY_LOGOUT_URL | URL for logging out of the proxy service
-| PROXY_MASTER_KEY | Master key for proxy authentication
+| LITELLM_MASTER_KEY | Master key for proxy authentication
 | QDRANT_API_BASE | Base URL for Qdrant API
 | QDRANT_API_KEY | API key for Qdrant service
 | QDRANT_URL | Connection URL for Qdrant database
