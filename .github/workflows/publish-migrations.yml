@@ -3,6 +3,7 @@ name: Publish Prisma Migrations
 permissions:
   contents: write
   pull-requests: write
+  workflows: write
 
 on:
   push:
@@ -172,6 +173,15 @@ jobs:
                -H "Accept: application/vnd.github.v3+json" \
                https://api.github.com/repos/BerriAI/litellm
 
+      # Add this debug step before git push
+      - name: Debug Changed Files
+        run: |
+          echo "Files staged for commit:"
+          git diff --name-status --staged
+          
+          echo "\nAll changed files:"
+          git status
+
       - name: Create Pull Request
         if: success()
         uses: peter-evans/create-pull-request@v5
@@ -188,9 +198,5 @@ jobs:
           branch: feat/prisma-migration-${{ env.VERSION }}
           base: litellm_dev_03_25_2025_p3
           delete-branch: true
-          committer: GitHub <noreply@github.com>
-          author: GitHub <noreply@github.com>
-          signoff: false
-          labels: |
-            automated pr
-            migrations 
+          paths: |  # Explicitly specify which paths to include
+            deploy/migrations/**/* 
