@@ -31,3 +31,38 @@ def test_top_logprobs():
     )
     assert v["responseLogprobs"] is non_default_params["logprobs"]
     assert v["logprobs"] is non_default_params["top_logprobs"]
+
+
+def test_get_model_for_vertex_ai_url():
+    # Test case 1: Regular model name
+    model = "gemini-pro"
+    result = VertexGeminiConfig.get_model_for_vertex_ai_url(model)
+    assert result == "gemini-pro"
+
+    # Test case 2: Gemini spec model with UUID
+    model = "gemini/ft-uuid-123"
+    result = VertexGeminiConfig.get_model_for_vertex_ai_url(model)
+    assert result == "ft-uuid-123"
+
+
+def test_is_model_gemini_spec_model():
+    # Test case 1: None input
+    assert VertexGeminiConfig._is_model_gemini_spec_model(None) == False
+
+    # Test case 2: Regular model name
+    assert VertexGeminiConfig._is_model_gemini_spec_model("gemini-pro") == False
+
+    # Test case 3: Gemini spec model
+    assert VertexGeminiConfig._is_model_gemini_spec_model("gemini/custom-model") == True
+
+
+def test_get_model_name_from_gemini_spec_model():
+    # Test case 1: Regular model name
+    model = "gemini-pro"
+    result = VertexGeminiConfig._get_model_name_from_gemini_spec_model(model)
+    assert result == "gemini-pro"
+
+    # Test case 2: Gemini spec model
+    model = "gemini/ft-uuid-123"
+    result = VertexGeminiConfig._get_model_name_from_gemini_spec_model(model)
+    assert result == "ft-uuid-123"
