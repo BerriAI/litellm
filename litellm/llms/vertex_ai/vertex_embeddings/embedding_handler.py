@@ -111,7 +111,7 @@ class VertexEmbedding(VertexBase):
         )
 
         try:
-            response = client.post(api_base, headers=headers, json=vertex_request)  # type: ignore
+            response = client.post(url=api_base, headers=headers, json=vertex_request)  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
