@@ -420,7 +420,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         ]
 
     @staticmethod
-    def _is_model_gemini_gemini_spec_model(model: Optional[str]) -> bool:
+    def _is_model_gemini_spec_model(model: Optional[str]) -> bool:
         """
         Returns true if user is trying to call custom model in `/gemini` request/response format
         """
