@@ -434,12 +434,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         Returns:
             str: The model name to use in the request to Vertex AI
         """
-        if VertexGeminiConfig._is_model_gemini_gemini_spec_model(model):
+        if VertexGeminiConfig._is_model_gemini_spec_model(model):
             return VertexGeminiConfig._get_model_name_from_gemini_spec_model(model)
         return model
 
     @staticmethod
-    def _is_model_gemini_gemini_spec_model(model: Optional[str]) -> bool:
+    def _is_model_gemini_spec_model(model: Optional[str]) -> bool:
         """
         Returns true if user is trying to call custom model in `/gemini` request/response format
         """
