@@ -31,7 +31,7 @@ def get_supports_system_message(
         )
 
         # Vertex Models called in the `/gemini` request/response format also support system messages
-        if litellm.VertexGeminiConfig._is_model_gemini_gemini_spec_model(model):
+        if litellm.VertexGeminiConfig._is_model_gemini_spec_model(model):
             supports_system_message = True
     except Exception as e:
         verbose_logger.warning(

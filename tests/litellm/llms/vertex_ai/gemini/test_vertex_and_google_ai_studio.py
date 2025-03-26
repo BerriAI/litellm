@@ -45,18 +45,15 @@ def test_get_model_for_vertex_ai_url():
     assert result == "ft-uuid-123"
 
 
-def test_is_model_gemini_gemini_spec_model():
+def test_is_model_gemini_spec_model():
     # Test case 1: None input
-    assert VertexGeminiConfig._is_model_gemini_gemini_spec_model(None) == False
+    assert VertexGeminiConfig._is_model_gemini_spec_model(None) == False
 
     # Test case 2: Regular model name
-    assert VertexGeminiConfig._is_model_gemini_gemini_spec_model("gemini-pro") == False
+    assert VertexGeminiConfig._is_model_gemini_spec_model("gemini-pro") == False
 
     # Test case 3: Gemini spec model
-    assert (
-        VertexGeminiConfig._is_model_gemini_gemini_spec_model("gemini/custom-model")
-        == True
-    )
+    assert VertexGeminiConfig._is_model_gemini_spec_model("gemini/custom-model") == True
 
 
 def test_get_model_name_from_gemini_spec_model():
