@@ -60,15 +60,22 @@ while retry_count < max_retries and exit_code != 0:
     retry_count += 1
     verbose_proxy_logger.info(f"Attempt {retry_count}...")
 
-    # run prisma generate
-    verbose_proxy_logger.info("Running 'prisma generate'...")
-    result = subprocess.run(["prisma", "generate"], capture_output=True, text=True)
-    verbose_proxy_logger.info(f"'prisma generate' stdout: {result.stdout}")  # Log stdout
-    exit_code = result.returncode
+    # Run the Prisma generate command
+    skip_prisma_generate = os.getenv("LITELLM_MIGRATION_SKIP_PRISMA_GENERATE", "false")
+    if skip_prisma_generate.lower() == "true":
+        verbose_proxy_logger.info(
+            "Skipping 'prisma generate' because LITELLM_MIGRATION_SKIP_PRISMA_GENERATE is set to true."
+        )
+    else:
+        verbose_proxy_logger.info("Running 'prisma generate'...")
+        result = subprocess.run(["prisma", "generate"], capture_output=True, text=True)
+        verbose_proxy_logger.info(f"'prisma generate' stdout: {result.stdout}")  # Log stdout
+        exit_code = result.returncode
 
-    if exit_code != 0:
-        verbose_proxy_logger.info(f"'prisma generate' failed with exit code {exit_code}.")
-        verbose_proxy_logger.error(f"'prisma generate' stderr: {result.stderr}")  # Log stderr
+        if exit_code != 0:
+            verbose_proxy_logger.info(f"'prisma generate' failed with exit code {exit_code}.")
+            verbose_proxy_logger.error(f"'prisma generate' stderr: {result.stderr}")  # Log stderr
+            continue  # Skip to the next iteration to retry
 
     # Run the Prisma db push command
     verbose_proxy_logger.info("Running 'prisma db push --accept-data-loss'...")
