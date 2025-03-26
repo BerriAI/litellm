@@ -569,7 +569,7 @@ jobs:
             - litellm_proxy_unit_tests_coverage
   litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.13.1
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -577,10 +577,6 @@ jobs:
 
     steps:
       - checkout
-      - run: 
-          name: Set DNS
-          command: |
-            ssh remote-docker echo "nameserver x.x.x.x" | ssh remote-docker sudo tee 
       - run:
           name: Install Dependencies
           command: |
