@@ -1,8 +1,6 @@
 from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 
-import anthropic
-from pydantic import PropertyInfo
-from typing_extensions import Annotated, TypeAlias
+from typing_extensions import TypeAlias
 
 
 class AnthropicResponseTextBlock(TypedDict, total=False):
