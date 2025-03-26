@@ -197,8 +197,6 @@ jobs:
           branch: feat/prisma-migration-${{ env.VERSION }}
           base: litellm_dev_03_25_2025_p3
           delete-branch: true
-          paths: |  # Explicitly specify which paths to include
-            deploy/migrations/**/* 
 
       - name: Generate and Save Migrations
         run: |
