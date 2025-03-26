@@ -5,8 +5,10 @@ import io
 import os
 import random
 import secrets
+import signal
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import uuid
@@ -417,6 +419,14 @@ def cleanup_router_config_variables():
 
 
 async def proxy_shutdown_event():
+    """Cleanup tasks on proxy server shutdown"""
+    global is_shutting_down
+    is_shutting_down = True
+
+    if scheduler is not None:
+        scheduler.shutdown()
+        verbose_proxy_logger.info("Background scheduler shutdown complete")
+
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
     if prisma_client:
@@ -446,126 +456,162 @@ async def proxy_shutdown_event():
     ## RESET CUSTOM VARIABLES ##
     cleanup_router_config_variables()
 
+    verbose_proxy_logger.info(
+        f"Graceful shutdown initiated. Waiting up to {shutdown_timeout}s for requests to complete..."
+    )
+    # Get all running tasks except the current one
+    current_task = asyncio.current_task()
+    tasks = [task for task in asyncio.all_tasks() if task is not current_task]
+
+    try:
+        # Wait for tasks to complete with timeout
+        await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True), timeout=shutdown_timeout
+        )
+    except asyncio.TimeoutError:
+        # If timeout occurs, cancel remaining tasks
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+
+        # Wait for cancellation to complete
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def register_signal_handlers():
+    if threading.current_thread() is threading.main_thread():
+        # Register signal handlers
+        signal.signal(signal.SIGTERM, handle_shutdown)
+        signal.signal(signal.SIGINT, handle_shutdown)
+
 
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI):
+    """Handles startup and shutdown events for the proxy server"""
     global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check
     import json
 
-    init_verbose_loggers()
-    ### LOAD MASTER KEY ###
-    # check if master key set in environment - load from there
-    master_key = get_secret("LITELLM_MASTER_KEY", None)  # type: ignore
-    # check if DATABASE_URL in environment - load from there
-    if prisma_client is None:
-        _db_url: Optional[str] = get_secret("DATABASE_URL", None)  # type: ignore
-        prisma_client = await ProxyStartupEvent._setup_prisma_client(
-            database_url=_db_url,
+    register_signal_handlers()
+    # Set shutdown timeout from general_settings
+    global shutdown_timeout
+    if general_settings.get("graceful_shutdown_timeout"):
+        shutdown_timeout = general_settings["graceful_shutdown_timeout"]
+
+    try:
+        init_verbose_loggers()
+        ### LOAD MASTER KEY ###
+        # check if master key set in environment - load from there
+        master_key = get_secret("LITELLM_MASTER_KEY", None)  # type: ignore
+        # check if DATABASE_URL in environment - load from there
+        if prisma_client is None:
+            _db_url: Optional[str] = get_secret("DATABASE_URL", None)  # type: ignore
+            prisma_client = await ProxyStartupEvent._setup_prisma_client(
+                database_url=_db_url,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_cache=user_api_key_cache,
+            )
+
+        ## CHECK PREMIUM USER
+        verbose_proxy_logger.debug(
+            "litellm.proxy.proxy_server.py::startup() - CHECKING PREMIUM USER - {}".format(
+                premium_user
+            )
+        )
+        if premium_user is False:
+            premium_user = _license_check.is_premium()
+
+        ### LOAD CONFIG ###
+        worker_config: Optional[Union[str, dict]] = get_secret("WORKER_CONFIG")  # type: ignore
+        env_config_yaml: Optional[str] = get_secret_str("CONFIG_FILE_PATH")
+        verbose_proxy_logger.debug("worker_config: %s", worker_config)
+        # check if it's a valid file path
+        if env_config_yaml is not None:
+            if os.path.isfile(env_config_yaml) and proxy_config.is_yaml(
+                config_file_path=env_config_yaml
+            ):
+                (
+                    llm_router,
+                    llm_model_list,
+                    general_settings,
+                ) = await proxy_config.load_config(
+                    router=llm_router, config_file_path=env_config_yaml
+                )
+        elif worker_config is not None:
+            if (
+                isinstance(worker_config, str)
+                and os.path.isfile(worker_config)
+                and proxy_config.is_yaml(config_file_path=worker_config)
+            ):
+                (
+                    llm_router,
+                    llm_model_list,
+                    general_settings,
+                ) = await proxy_config.load_config(
+                    router=llm_router, config_file_path=worker_config
+                )
+            elif os.environ.get(
+                "LITELLM_CONFIG_BUCKET_NAME"
+            ) is not None and isinstance(worker_config, str):
+                (
+                    llm_router,
+                    llm_model_list,
+                    general_settings,
+                ) = await proxy_config.load_config(
+                    router=llm_router, config_file_path=worker_config
+                )
+            elif isinstance(worker_config, dict):
+                await initialize(**worker_config)
+            else:
+                # if not, assume it's a json string
+                worker_config = json.loads(worker_config)
+                if isinstance(worker_config, dict):
+                    await initialize(**worker_config)
+
+        ProxyStartupEvent._initialize_startup_logging(
+            llm_router=llm_router,
             proxy_logging_obj=proxy_logging_obj,
+            redis_usage_cache=redis_usage_cache,
+        )
+
+        ## JWT AUTH ##
+        ProxyStartupEvent._initialize_jwt_auth(
+            general_settings=general_settings,
+            prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
         )
 
-    ## CHECK PREMIUM USER
-    verbose_proxy_logger.debug(
-        "litellm.proxy.proxy_server.py::startup() - CHECKING PREMIUM USER - {}".format(
-            premium_user
-        )
-    )
-    if premium_user is False:
-        premium_user = _license_check.is_premium()
+        if use_background_health_checks:
+            asyncio.create_task(
+                _run_background_health_check()
+            )  # start the background health check coroutine.
 
-    ### LOAD CONFIG ###
-    worker_config: Optional[Union[str, dict]] = get_secret("WORKER_CONFIG")  # type: ignore
-    env_config_yaml: Optional[str] = get_secret_str("CONFIG_FILE_PATH")
-    verbose_proxy_logger.debug("worker_config: %s", worker_config)
-    # check if it's a valid file path
-    if env_config_yaml is not None:
-        if os.path.isfile(env_config_yaml) and proxy_config.is_yaml(
-            config_file_path=env_config_yaml
-        ):
-            (
-                llm_router,
-                llm_model_list,
-                general_settings,
-            ) = await proxy_config.load_config(
-                router=llm_router, config_file_path=env_config_yaml
+        if prompt_injection_detection_obj is not None:  # [TODO] - REFACTOR THIS
+            prompt_injection_detection_obj.update_environment(router=llm_router)
+
+        verbose_proxy_logger.debug("prisma_client: %s", prisma_client)
+        if prisma_client is not None and litellm.max_budget > 0:
+            ProxyStartupEvent._add_proxy_budget_to_db(
+                litellm_proxy_budget_name=litellm_proxy_admin_name
             )
-    elif worker_config is not None:
-        if (
-            isinstance(worker_config, str)
-            and os.path.isfile(worker_config)
-            and proxy_config.is_yaml(config_file_path=worker_config)
-        ):
-            (
-                llm_router,
-                llm_model_list,
-                general_settings,
-            ) = await proxy_config.load_config(
-                router=llm_router, config_file_path=worker_config
+
+        ### START BATCH WRITING DB + CHECKING NEW MODELS###
+        if prisma_client is not None:
+            await ProxyStartupEvent.initialize_scheduled_background_jobs(
+                general_settings=general_settings,
+                prisma_client=prisma_client,
+                proxy_budget_rescheduler_min_time=proxy_budget_rescheduler_min_time,
+                proxy_budget_rescheduler_max_time=proxy_budget_rescheduler_max_time,
+                proxy_batch_write_at=proxy_batch_write_at,
+                proxy_logging_obj=proxy_logging_obj,
             )
-        elif os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None and isinstance(
-            worker_config, str
-        ):
-            (
-                llm_router,
-                llm_model_list,
-                general_settings,
-            ) = await proxy_config.load_config(
-                router=llm_router, config_file_path=worker_config
-            )
-        elif isinstance(worker_config, dict):
-            await initialize(**worker_config)
-        else:
-            # if not, assume it's a json string
-            worker_config = json.loads(worker_config)
-            if isinstance(worker_config, dict):
-                await initialize(**worker_config)
+        ## [Optional] Initialize dd tracer
+        ProxyStartupEvent._init_dd_tracer()
 
-    ProxyStartupEvent._initialize_startup_logging(
-        llm_router=llm_router,
-        proxy_logging_obj=proxy_logging_obj,
-        redis_usage_cache=redis_usage_cache,
-    )
+        # End of startup event
+        yield
 
-    ## JWT AUTH ##
-    ProxyStartupEvent._initialize_jwt_auth(
-        general_settings=general_settings,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-    )
-
-    if use_background_health_checks:
-        asyncio.create_task(
-            _run_background_health_check()
-        )  # start the background health check coroutine.
-
-    if prompt_injection_detection_obj is not None:  # [TODO] - REFACTOR THIS
-        prompt_injection_detection_obj.update_environment(router=llm_router)
-
-    verbose_proxy_logger.debug("prisma_client: %s", prisma_client)
-    if prisma_client is not None and litellm.max_budget > 0:
-        ProxyStartupEvent._add_proxy_budget_to_db(
-            litellm_proxy_budget_name=litellm_proxy_admin_name
-        )
-
-    ### START BATCH WRITING DB + CHECKING NEW MODELS###
-    if prisma_client is not None:
-        await ProxyStartupEvent.initialize_scheduled_background_jobs(
-            general_settings=general_settings,
-            prisma_client=prisma_client,
-            proxy_budget_rescheduler_min_time=proxy_budget_rescheduler_min_time,
-            proxy_budget_rescheduler_max_time=proxy_budget_rescheduler_max_time,
-            proxy_batch_write_at=proxy_batch_write_at,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    ## [Optional] Initialize dd tracer
-    ProxyStartupEvent._init_dd_tracer()
-
-    # End of startup event
-    yield
-
-    # Shutdown event
-    await proxy_shutdown_event()
+    finally:
+        await proxy_shutdown_event()
 
 
 app = FastAPI(
@@ -749,7 +795,10 @@ experimental = False
 llm_router: Optional[Router] = None
 llm_model_list: Optional[list] = None
 general_settings: dict = {}
+scheduler: Optional[AsyncIOScheduler] = None
 callback_settings: dict = {}
+is_shutting_down = False
+shutdown_timeout = 60  # default 60s, configurable via general_settings
 log_file = "api_log.json"
 worker_config = None
 master_key: Optional[str] = None
@@ -1398,6 +1447,21 @@ class StreamingCallbackError(Exception):
     pass
 
 
+@app.middleware("http")
+async def shutdown_middleware(request: Request, call_next):
+    """Reject new requests if server is shutting down"""
+    if is_shutting_down:
+        raise HTTPException(status_code=503, detail="Server is shutting down")
+    return await call_next(request)
+
+
+def handle_shutdown(signum, frame):
+    """Handle shutdown signals"""
+    global is_shutting_down
+    is_shutting_down = True
+    verbose_proxy_logger.info(f"Received shutdown signal {signum}")
+
+
 class ProxyConfig:
     """
     Abstraction class on top of config loading/updating logic. Gives us one place to control all config updating logic.
@@ -1601,7 +1665,7 @@ class ProxyConfig:
             litellm.default_in_memory_ttl = cache_params["default_in_memory_ttl"]
 
         if "default_redis_ttl" in cache_params:
-            litellm.default_redis_ttl = cache_params["default_in_redis_ttl"]
+            litellm.default_redis_ttl = cache_params["default_redis_ttl"]
 
         litellm.cache = Cache(**cache_params)
 
@@ -3073,7 +3137,7 @@ async def async_data_generator(
             )
             ### CALL HOOKS ### - modify outgoing data
             chunk = await proxy_logging_obj.async_post_call_streaming_hook(
-                user_api_key_dict=user_api_key_dict, response=chunk
+                user_api_key_dict=user_api_key_dict, response=cast(ModelResponse, chunk)
             )
 
             if isinstance(chunk, BaseModel):
@@ -3234,6 +3298,45 @@ class ProxyStartupEvent:
         )
 
     @classmethod
+    async def _setup_prisma_client(
+        cls,
+        database_url: Optional[str],
+        proxy_logging_obj: ProxyLogging,
+        user_api_key_cache: DualCache,
+    ) -> Optional[PrismaClient]:
+        """
+        - Sets up prisma client
+        - Adds necessary views to proxy
+        """
+        prisma_client: Optional[PrismaClient] = None
+        if database_url is not None:
+            try:
+                prisma_client = PrismaClient(
+                    database_url=database_url, proxy_logging_obj=proxy_logging_obj
+                )
+            except Exception as e:
+                raise e
+
+            await prisma_client.connect()
+
+            ## Add necessary views to proxy ##
+            asyncio.create_task(
+                prisma_client.check_view_exists()
+            )  # check if all necessary views exist. Don't block execution
+
+            asyncio.create_task(
+                prisma_client._set_spend_logs_row_count_in_proxy_state()
+            )  # set the spend logs row count in proxy state. Don't block execution
+
+            # run a health check to ensure the DB is ready
+            if (
+                get_secret_bool("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", False)
+                is not True
+            ):
+                await prisma_client.health_check()
+        return prisma_client
+
+    @classmethod
     async def initialize_scheduled_background_jobs(
         cls,
         general_settings: dict,
@@ -3244,7 +3347,7 @@ class ProxyStartupEvent:
         proxy_logging_obj: ProxyLogging,
     ):
         """Initializes scheduled background jobs"""
-        global store_model_in_db
+        global store_model_in_db, scheduler
         scheduler = AsyncIOScheduler()
         interval = random.randint(
             proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time
@@ -3347,45 +3450,6 @@ class ProxyStartupEvent:
                 await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
 
         scheduler.start()
-
-    @classmethod
-    async def _setup_prisma_client(
-        cls,
-        database_url: Optional[str],
-        proxy_logging_obj: ProxyLogging,
-        user_api_key_cache: DualCache,
-    ) -> Optional[PrismaClient]:
-        """
-        - Sets up prisma client
-        - Adds necessary views to proxy
-        """
-        prisma_client: Optional[PrismaClient] = None
-        if database_url is not None:
-            try:
-                prisma_client = PrismaClient(
-                    database_url=database_url, proxy_logging_obj=proxy_logging_obj
-                )
-            except Exception as e:
-                raise e
-
-            await prisma_client.connect()
-
-            ## Add necessary views to proxy ##
-            asyncio.create_task(
-                prisma_client.check_view_exists()
-            )  # check if all necessary views exist. Don't block execution
-
-            asyncio.create_task(
-                prisma_client._set_spend_logs_row_count_in_proxy_state()
-            )  # set the spend logs row count in proxy state. Don't block execution
-
-            # run a health check to ensure the DB is ready
-            if (
-                get_secret_bool("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", False)
-                is not True
-            ):
-                await prisma_client.health_check()
-        return prisma_client
 
     @classmethod
     def _init_dd_tracer(cls):
