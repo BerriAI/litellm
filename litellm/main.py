@@ -955,7 +955,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 prompt_variables=prompt_variables,
             )
         )
-
     try:
         if base_url is not None:
             api_base = base_url
@@ -1659,7 +1658,7 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "custom_openai"
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
-            or custom_llm_provider == "nvidia_nim"
+            or custom_llm_provider == "nvidia"
             or custom_llm_provider == "cerebras"
             or custom_llm_provider == "sambanova"
             or custom_llm_provider == "volcengine"
@@ -3475,7 +3474,7 @@ def embedding(  # noqa: PLR0915
             model in litellm.open_ai_embedding_models
             or custom_llm_provider == "openai"
             or custom_llm_provider == "together_ai"
-            or custom_llm_provider == "nvidia_nim"
+            or custom_llm_provider in ("nvidia", "nvidia_nim")
             or custom_llm_provider == "litellm_proxy"
         ):
             api_base = (

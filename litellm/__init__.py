@@ -417,6 +417,7 @@ azure_models: List = []
 azure_text_models: List = []
 anyscale_models: List = []
 cerebras_models: List = []
+nvidia_models: List = []
 galadriel_models: List = []
 sambanova_models: List = []
 assemblyai_models: List = []
@@ -566,6 +567,8 @@ def add_known_models():
             anyscale_models.append(key)
         elif value.get("litellm_provider") == "cerebras":
             cerebras_models.append(key)
+        elif value.get("litellm_provider") == "nvidia":
+            nvidia_models.append(key)
         elif value.get("litellm_provider") == "galadriel":
             galadriel_models.append(key)
         elif value.get("litellm_provider") == "sambanova_models":
@@ -650,9 +653,9 @@ model_list = (
     + azure_text_models
     + assemblyai_models
     + jina_ai_models
+    + nvidia_models
     + snowflake_models
 )
-
 model_list_set = set(model_list)
 
 provider_list: List[Union[LlmProviders, str]] = list(LlmProviders)
@@ -702,6 +705,7 @@ models_by_provider: dict = {
     "azure_text": azure_text_models,
     "anyscale": anyscale_models,
     "cerebras": cerebras_models,
+    "nvidia": nvidia_models,
     "galadriel": galadriel_models,
     "sambanova": sambanova_models,
     "assemblyai": assemblyai_models,
@@ -854,12 +858,6 @@ from .llms.gemini.chat.transformation import (
 )
 
 
-from .llms.vertex_ai.vertex_embeddings.transformation import (
-    VertexAITextEmbeddingConfig,
-)
-
-vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
-
 from .llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
     VertexAIAnthropicConfig,
 )
@@ -958,11 +956,11 @@ from .llms.openai.chat.gpt_audio_transformation import (
 
 openAIGPTAudioConfig = OpenAIGPTAudioConfig()
 
-from .llms.nvidia_nim.chat import NvidiaNimConfig
-from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
+from .llms.nvidia.chat.transformation import NvidiaConfig
+from .llms.nvidia.embedding.transformation import NvidiaEmbeddingConfig
 
-nvidiaNimConfig = NvidiaNimConfig()
-nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
+nvidiaConfig = NvidiaConfig()
+nvidiaEmbeddingConfig = NvidiaEmbeddingConfig()
 
 from .llms.cerebras.chat import CerebrasConfig
 from .llms.sambanova.chat import SambanovaConfig
