@@ -59,29 +59,50 @@ jobs:
           DIRECT_URL: "postgresql://postgres:postgres@localhost:5432/temp_db"
           SHADOW_DATABASE_URL: "postgresql://postgres:postgres@localhost:5433/shadow_db"
         run: |
-          # Create migrations directory if it doesn't exist
           mkdir -p deploy/migrations
+          echo 'provider = "postgresql"' > deploy/migrations/migration_lock.toml
           
-          # Create migration_lock.toml if it doesn't exist
-          if [ ! -f "deploy/migrations/migration_lock.toml" ]; then
-            echo 'provider = "postgresql"' > deploy/migrations/migration_lock.toml
-          fi
-          
-          # Check if migrations exist
           if [ -z "$(ls -A deploy/migrations/2* 2>/dev/null)" ]; then
             echo "No existing migrations found, creating baseline..."
             VERSION=$(date +%Y%m%d%H%M%S)
-            
-            # Create baseline directory
             mkdir -p deploy/migrations/${VERSION}_initial
             
-            # Generate baseline migration
+            echo "Generating initial migration..."
+            # Save raw output for debugging
             prisma migrate diff \
               --from-empty \
               --to-schema-datamodel schema.prisma \
               --shadow-database-url "${SHADOW_DATABASE_URL}" \
-              --script > deploy/migrations/${VERSION}_initial/migration.sql
-              
+              --script > deploy/migrations/${VERSION}_initial/raw_migration.sql
+            
+            echo "Raw migration file content:"
+            cat deploy/migrations/${VERSION}_initial/raw_migration.sql
+            
+            echo "Cleaning migration file..."
+            # Clean the file
+            sed '/^Installing/d' deploy/migrations/${VERSION}_initial/raw_migration.sql > deploy/migrations/${VERSION}_initial/migration.sql
+            
+            # Verify the migration file
+            if [ ! -s deploy/migrations/${VERSION}_initial/migration.sql ]; then
+              echo "ERROR: Migration file is empty after cleaning"
+              echo "Original content was:"
+              cat deploy/migrations/${VERSION}_initial/raw_migration.sql
+              exit 1
+            fi
+            
+            echo "Final migration file content:"
+            cat deploy/migrations/${VERSION}_initial/migration.sql
+            
+            # Verify it starts with SQL
+            if ! head -n 1 deploy/migrations/${VERSION}_initial/migration.sql | grep -q "^--\|^CREATE\|^ALTER"; then
+              echo "ERROR: Migration file does not start with SQL command or comment"
+              echo "First line is:"
+              head -n 1 deploy/migrations/${VERSION}_initial/migration.sql
+              echo "Full content is:"
+              cat deploy/migrations/${VERSION}_initial/migration.sql
+              exit 1
+            fi
+            
             echo "Initial migration generated at $(date -u)" > deploy/migrations/${VERSION}_initial/README.md
           fi
 
