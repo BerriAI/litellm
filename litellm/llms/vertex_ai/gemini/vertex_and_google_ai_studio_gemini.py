@@ -420,6 +420,25 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         ]
 
     @staticmethod
+    def get_model_for_vertex_ai_url(model: str) -> str:
+        """
+        Returns the model name to use in the request to Vertex AI
+
+        Handles 2 cases:
+        1. User passed `model="vertex_ai/gemini/ft-uuid"`, we need to return `ft-uuid` for the request to Vertex AI
+        2. User passed `model="vertex_ai/gemini-2.0-flash-001"`, we need to return `gemini-2.0-flash-001` for the request to Vertex AI
+
+        Args:
+            model (str): The model name to use in the request to Vertex AI
+
+        Returns:
+            str: The model name to use in the request to Vertex AI
+        """
+        if VertexGeminiConfig._is_model_gemini_gemini_spec_model(model):
+            return VertexGeminiConfig._get_model_name_from_gemini_spec_model(model)
+        return model
+
+    @staticmethod
     def _is_model_gemini_gemini_spec_model(model: Optional[str]) -> bool:
         """
         Returns true if user is trying to call custom model in `/gemini` request/response format

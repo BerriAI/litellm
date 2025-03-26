@@ -3395,6 +3395,14 @@ def test_gemini_fine_tuned_model_request_consistency():
         first_request_body = mock_post_1.call_args.kwargs["json"]
         print("first_request_body", first_request_body)
 
+        # Validate correct `model` is added to the request to Vertex AI
+        print("final URL=", mock_post_1.call_args.kwargs["url"])
+        # Validate the request url
+        assert (
+            "publishers/google/models/ft-uuid:generateContent"
+            in mock_post_1.call_args.kwargs["url"]
+        )
+
     # Second request
     with patch.object(client, "post", new=MagicMock()) as mock_post_2:
         try:
