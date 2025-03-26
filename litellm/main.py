@@ -1100,6 +1100,7 @@ def completion(  # type: ignore # noqa: PLR0915
             user=user,
             # params to identify the model
             model=model,
+            base_model=base_model,
             custom_llm_provider=custom_llm_provider,
             response_format=response_format,
             seed=seed,
