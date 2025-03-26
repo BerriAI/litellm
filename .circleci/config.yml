@@ -577,6 +577,10 @@ jobs:
 
     steps:
       - checkout
+      - run: 
+          name: Set DNS
+          command: |
+            ssh remote-docker echo "nameserver x.x.x.x" | ssh remote-docker sudo tee 
       - run:
           name: Install Dependencies
           command: |
