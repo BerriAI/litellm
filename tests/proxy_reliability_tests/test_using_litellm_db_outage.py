@@ -28,7 +28,7 @@ def test_litellm_proxy_server_config_no_general_settings():
         subprocess.run(["pip", "install", "litellm[proxy]"])
         subprocess.run(["pip", "install", "litellm[extra_proxy]"])
         filepath = os.path.dirname(os.path.abspath(__file__))
-        config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
+        config_fp = f"{filepath}/test_configs/test_config.yaml"
         server_process = subprocess.Popen(
             [
                 "python",
