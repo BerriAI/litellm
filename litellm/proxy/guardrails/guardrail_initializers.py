@@ -46,11 +46,11 @@ def initialize_lakera(litellm_params, guardrail):
 
 
 def initialize_acuvity(litellm_params, guardrail):
-    from litellm.proxy.guardrails.guardrail_hooks.acuvity import AcuvityGuardrail
+    from litellm.proxy.guardrails.guardrail_hooks.acuvity.acuvity import AcuvityGuardrail
 
     _acuvity_callback = AcuvityGuardrail(
         api_base=litellm_params["api_base"],
-        api_key=litellm_params["api_key"],
+        api_key=litellm_params.get("api_key", None),
         event_hook=litellm_params["mode"],
         default_on=litellm_params["default_on"],
         vendor_params=litellm_params.get("vendor_params", None)

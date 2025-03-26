@@ -6,23 +6,10 @@ import TabItem from '@theme/TabItem';
 
 Use **Acuvity** to detect **PII**, **Prompt Injection**, and other security risks in requests and responses.
 
-## 1. Installation
-
-Since Acuvity is an optional dependency, install it using Poetry:
-
-```shell
-poetry install --extras "acuvity"
-```
-
-Alternatively, if you are using `pip`:
-
-```shell
-pip install acuvity
-```
-
-## 2. Setup LiteLLM Guardrails with Acuvity
+## 1. Setup LiteLLM Guardrails with Acuvity
 
 #### For more details on using Acuvity with guardrails, visit [Acuvity Documentation](https://docs.acuvity.ai).
+#### To Signup and get a api_key (ACUVITY_TOKEN) to use Acuvity Guardrails, visit [Acuvity Signup](https://console.acuvity.ai/signup)
 
 ### **Define Guardrails for Different Stages**
 
@@ -45,7 +32,7 @@ Acuvity provides robust security features that seamlessly integrate with LiteLLM
 By integrating Acuvity's security functions at these critical points, users can ensure end-to-end protection throughout the LLM API call lifecycle.
 
 
-## 3. Define Guardrails in Your LiteLLM `config.yaml`
+## 2. Define Guardrails in Your LiteLLM `config.yaml`
 
 ### **1. Pre-Call: Detect and Redact PII**
 
@@ -136,7 +123,10 @@ guardrails:
                 redact: true
 ```
 
-## 4. Start LiteLLM Gateway
+Under the `api_key`, insert the API key you created when you signed up on [Acuvity Signup](https://console.acuvity.ai/signup).
+You can also set `ACUVITY_TOKEN` as an environment variable.
+
+## 3. Start LiteLLM Gateway
 
 Start the LiteLLM gateway with Acuvity guardrails enabled:
 
@@ -144,7 +134,7 @@ Start the LiteLLM gateway with Acuvity guardrails enabled:
 litellm --config config.yaml --detailed_debug
 ```
 
-## 5. Test Requests
+## 4. Test Requests
 
 ### **Unsuccessful Request (Blocked Due to Prompt Injection Detection)**
 
