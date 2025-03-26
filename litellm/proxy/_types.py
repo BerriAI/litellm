@@ -2070,6 +2070,10 @@ class ProxyErrorTypes(str, enum.Enum):
     """
     Object was over budget
     """
+    no_db_connection = "no_db_connection"
+    """
+    No database connection
+    """
 
     token_not_found_in_db = "token_not_found_in_db"
     """
