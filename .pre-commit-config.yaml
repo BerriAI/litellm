@@ -15,7 +15,7 @@ repos:
         files: litellm/.*\.py
         exclude: ^litellm/__init__.py$
 -   repo: https://github.com/psf/black
-    rev: 24.2.0
+    rev: 24.4.2
     hooks:
     - id: black
 -   repo: https://github.com/pycqa/flake8
