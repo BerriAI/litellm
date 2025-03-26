@@ -79,7 +79,19 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "maritalk":
         return litellm.MaritalkConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "openai":
-        return litellm.OpenAIConfig().get_supported_openai_params(model=model)
+        if request_type == "transcription":
+            provider_config = (
+                litellm.ProviderConfigManager.get_provider_audio_transcription_config(
+                    model=model, provider=LlmProviders.OPENAI
+                )
+            )
+            if isinstance(provider_config, litellm.OpenAIGPTAudioTranscriptionConfig):
+                return provider_config.get_supported_openai_params(model=model)
+            else:
+                raise ValueError(
+                    f"Unsupported provider config: {provider_config} for model: {model}"
+                )
+            return litellm.OpenAIConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "azure":
         if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
             return litellm.AzureOpenAIO1Config().get_supported_openai_params(

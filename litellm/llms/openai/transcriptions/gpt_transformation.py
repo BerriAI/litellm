@@ -6,8 +6,10 @@ from litellm.llms.base_llm.audio_transcription.transformation import (
 from litellm.types.llms.openai import OpenAIAudioTranscriptionOptionalParams
 from litellm.types.utils import FileTypes
 
+from .whisper_transformation import OpenAIWhisperAudioTranscriptionConfig
 
-class OpenAIGPTAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
+
+class OpenAIGPTAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
     def get_supported_openai_params(
         self, model: str
     ) -> List[OpenAIAudioTranscriptionOptionalParams]:
