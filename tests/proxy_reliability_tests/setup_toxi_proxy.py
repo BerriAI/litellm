@@ -59,11 +59,11 @@ def setup_toxiproxy():
         [
             "./toxiproxy-cli",
             "create",
-            "postgres_proxy",
             "-l",
             "127.0.0.1:6666",
             "-u",
             "ep-dry-paper-a69g2y1q-pooler.us-west-2.aws.neon.tech:5432",
+            "postgres_proxy",
         ]
     )
 
