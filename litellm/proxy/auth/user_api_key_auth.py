@@ -39,7 +39,6 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_utils import (
-    _get_request_ip_address,
     get_end_user_id_from_request_body,
     get_request_route,
     is_pass_through_provider_route,
