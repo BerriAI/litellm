@@ -5,7 +5,7 @@ on:
     paths:
       - 'schema.prisma'  # Check root schema.prisma
     branches:
-      - main
+      - litellm_dev_03_25_2025_p3
 
 jobs:
   publish-migrations:
@@ -100,4 +100,4 @@ jobs:
             - deploy/migrations/${VERSION}_schema_update/migration.sql
             - deploy/migrations/${VERSION}_schema_update/README.md
           branch: feat/prisma-migration-${{ env.VERSION }}
-          base: main 
+          base: litellm_dev_03_25_2025_p3 
