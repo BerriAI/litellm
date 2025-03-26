@@ -313,3 +313,26 @@ model LiteLLM_AuditLog {
   before_value       Json?       // value of the row 
   updated_values     Json?       // value of the row after change
 }
+
+
+// Track daily user spend metrics per model and key
+model LiteLLM_DailyUserSpend {
+  id                  String   @id @default(uuid())
+  user_id             String
+  date                String
+  api_key             String   // Hashed API Token
+  model               String   // The specific model used
+  model_group         String?  // public model_name / model_group
+  custom_llm_provider String?  // The LLM provider (e.g., "openai", "anthropic")
+  prompt_tokens       Int      @default(0)
+  completion_tokens   Int      @default(0)
+  spend               Float    @default(0.0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@unique([user_id, date, api_key, model, custom_llm_provider])
+  @@index([date])
+  @@index([user_id])
+  @@index([api_key])
+  @@index([model])
+}
