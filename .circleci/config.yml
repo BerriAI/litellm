@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - checkout
-
+      - setup_google_dns
       - run:
           name: Show git commit hash
           command: |
@@ -142,7 +142,7 @@ jobs:
 
     steps:
       - checkout
-
+      - setup_google_dns
       - run:
           name: Show git commit hash
           command: |
@@ -242,7 +242,7 @@ jobs:
 
     steps:
       - checkout
-
+      - setup_google_dns
       - run:
           name: Show git commit hash
           command: |
@@ -342,6 +342,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -396,6 +397,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -437,6 +439,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Show git commit hash
           command: |
@@ -487,7 +490,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
-
+      - setup_google_dns
       - run:
           name: Show git commit hash
           command: |
@@ -627,6 +630,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -663,6 +667,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -705,6 +710,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -749,6 +755,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -791,6 +798,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -837,6 +845,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -881,6 +890,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -927,6 +937,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -969,6 +980,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -1011,6 +1023,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -1057,6 +1070,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -1089,6 +1103,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -1113,6 +1128,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       # Install Helm
       - run:
           name: Install Helm
@@ -1182,6 +1198,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -1218,6 +1235,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Python 3.9
           command: |
@@ -1292,6 +1310,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
@@ -1427,6 +1446,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
@@ -1551,6 +1571,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
@@ -1713,6 +1734,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
@@ -1824,6 +1846,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
@@ -1906,6 +1929,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       # Remove Docker CLI installation since it's already available in machine executor
       - run:
           name: Install Python 3.13
@@ -2003,6 +2027,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
@@ -2262,6 +2287,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Build UI
           command: |
@@ -2376,6 +2402,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Build Docker image
           command: |
@@ -2398,6 +2425,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Build Docker image
           command: |
