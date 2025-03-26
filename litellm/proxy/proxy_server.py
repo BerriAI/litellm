@@ -4416,7 +4416,6 @@ from litellm import _arealtime
 
 @app.websocket("/v1/realtime")
 @app.websocket("/realtime")
-@app.websocket("/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent")
 async def websocket_endpoint(
     websocket: WebSocket,
     model: str,
