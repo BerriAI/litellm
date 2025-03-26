@@ -313,7 +313,7 @@ model LiteLLM_AuditLog {
   before_value       Json?       // value of the row 
   updated_values     Json?       // value of the row after change
 }
-model LiteLLM_AuditLog_3 {
+model LiteLLM_AuditLog_4 {
   id                 String   @id @default(uuid())
   updated_at         DateTime @default(now())
   changed_by         String   @default("")   // user or system that performed the action

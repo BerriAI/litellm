@@ -159,6 +159,19 @@ jobs:
             psql "${SHADOW_DATABASE_URL}" -f $migration
           done
 
+      # Add this step before create-pull-request to debug permissions
+      - name: Check Token Permissions
+        run: |
+          echo "Checking token permissions..."
+          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+               -H "Accept: application/vnd.github.v3+json" \
+               https://api.github.com/repos/BerriAI/litellm/collaborators
+          
+          echo "\nChecking if token can create PRs..."
+          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+               -H "Accept: application/vnd.github.v3+json" \
+               https://api.github.com/repos/BerriAI/litellm
+
       - name: Create Pull Request
         if: success()
         uses: peter-evans/create-pull-request@v5
