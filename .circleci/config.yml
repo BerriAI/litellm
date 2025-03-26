@@ -4,7 +4,7 @@ orbs:
   node: circleci/node@5.1.0  # Add this line to declare the node orb
 
 commands:
-  setup_google_dns:
+  c:
     steps:
       - run:
           name: "Configure Google DNS"
@@ -247,6 +247,9 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - run:
+          name: DNS lookup for Redis host
+          command: dig redis-19899.c239.us-east-1-2.ec2.redns.redis-cloud.com +short
       - run:
           name: Show git commit hash
           command: |
