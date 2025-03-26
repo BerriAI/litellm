@@ -1,16 +1,15 @@
 name: Publish Prisma Migrations
 
+permissions:
+  contents: write
+  pull-requests: write
+
 on:
   push:
     paths:
       - 'schema.prisma'  # Check root schema.prisma
     branches:
       - litellm_dev_03_25_2025_p3
-
-# Add these permissions
-permissions:
-  contents: write
-  pull-requests: write
 
 jobs:
   publish-migrations:
@@ -164,7 +163,7 @@ jobs:
         if: success()
         uses: peter-evans/create-pull-request@v5
         with:
-          token: ${{ secrets.PAT_TOKEN_2 }}
+          token: ${{ secrets.GITHUB_TOKEN }}  # Use default GITHUB_TOKEN instead of PAT
           commit-message: "chore: update prisma migrations"
           title: "Update Prisma Migrations"
           body: |
@@ -175,4 +174,10 @@ jobs:
             - deploy/migrations/${VERSION}_schema_update/README.md
           branch: feat/prisma-migration-${{ env.VERSION }}
           base: litellm_dev_03_25_2025_p3
-          delete-branch: true 
+          delete-branch: true
+          committer: GitHub <noreply@github.com>
+          author: GitHub <noreply@github.com>
+          signoff: false
+          labels: |
+            automated pr
+            migrations 
