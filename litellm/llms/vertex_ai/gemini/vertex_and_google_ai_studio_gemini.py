@@ -420,7 +420,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         ]
 
     @staticmethod
-    def _is_model_gemini_spec_model(model: Optional[str]) -> bool:
+    def _is_model_gemini_gemini_spec_model(model: Optional[str]) -> bool:
         """
         Returns true if user is trying to call custom model in `/gemini` request/response format
         """
@@ -429,6 +429,19 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if "gemini/" in model:
             return True
         return False
+
+    @staticmethod
+    def _get_model_name_from_gemini_spec_model(model: str) -> str:
+        """
+        Returns the model name if model="vertex_ai/gemini/<unique_id>"
+
+        Example:
+        - model = "gemini/1234567890"
+        - returns "1234567890"
+        """
+        if "gemini/" in model:
+            return model.split("/")[-1]
+        return model
 
     def get_flagged_finish_reasons(self) -> Dict[str, str]:
         """

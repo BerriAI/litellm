@@ -31,7 +31,7 @@ def get_supports_system_message(
         )
 
         # Vertex Models called in the `/gemini` request/response format also support system messages
-        if litellm.VertexGeminiConfig._is_model_gemini_spec_model(model):
+        if litellm.VertexGeminiConfig._is_model_gemini_gemini_spec_model(model):
             supports_system_message = True
     except Exception as e:
         verbose_logger.warning(
@@ -75,6 +75,8 @@ def _get_vertex_url(
 ) -> Tuple[str, str]:
     url: Optional[str] = None
     endpoint: Optional[str] = None
+    if litellm.VertexGeminiConfig._is_model_gemini_gemini_spec_model(model):
+        model = litellm.VertexGeminiConfig._get_model_name_from_gemini_spec_model(model)
     if mode == "chat":
         ### SET RUNTIME ENDPOINT ###
         endpoint = "generateContent"
