@@ -1917,12 +1917,49 @@ model_list:
 
 </Tabs>
 
+Text to Image : 
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/images/generations' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer $LITELLM_VIRTUAL_KEY' \
+-d '{
+    "model": "amazon.nova-canvas-v1:0",
+    "prompt": "A cute baby sea otter"
+}'
+```
 
+Color Guided Generation:
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/images/generations' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer $LITELLM_VIRTUAL_KEY' \
+-d '{
+    "model": "amazon.nova-canvas-v1:0",
+    "prompt": "A cute baby sea otter",
+    "taskType": "COLOR_GUIDED_GENERATION",
+    "colorGuidedGenerationParams":{"colors":["#FFFFFF"]}
+}'
+```
+</TabItem>
+</Tabs>
+
+
+| Model Name              | Function Call                               |
+|-------------------------|---------------------------------------------|
+| Stable Diffusion 3 - v0 | `image_generation(model="bedrock/stability.stability.sd3-large-v1:0", prompt=prompt)` |
+| Stable Diffusion - v0   | `image_generation(model="bedrock/stability.stable-diffusion-xl-v0", prompt=prompt)` |
+| Stable Diffusion - v1   | `image_generation(model="bedrock/stability.stable-diffusion-xl-v1", prompt=prompt)` |
+| Amazon Nova Canvas - v0 | `image_generation(model="bedrock/amazon.nova-canvas-v1:0", prompt=prompt)` |
+  
+  
 ### Passing an external BedrockRuntime.Client as a parameter - Completion()
+  
+This is a deprecated flow. Boto3 is not async. And boto3.client does not let us make the http call through httpx. Pass in your aws params through the method above 👆. [See Auth Code](https://github.com/BerriAI/litellm/blob/55a20c7cce99a93d36a82bf3ae90ba3baf9a7f89/litellm/llms/bedrock_httpx.py#L284) [Add new auth flow](https://github.com/BerriAI/litellm/issues)
 
 :::warning
 
-This is a deprecated flow. Boto3 is not async. And boto3.client does not let us make the http call through httpx. Pass in your aws params through the method above 👆. [See Auth Code](https://github.com/BerriAI/litellm/blob/55a20c7cce99a93d36a82bf3ae90ba3baf9a7f89/litellm/llms/bedrock_httpx.py#L284) [Add new auth flow](https://github.com/BerriAI/litellm/issues)
+
+
 
 
 Experimental - 2024-Jun-23:
