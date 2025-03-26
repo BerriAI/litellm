@@ -84,7 +84,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
-from litellm.litellm_core_utils.llm_request_utils import LitellmCoreRequestUtils
+from litellm.litellm_core_utils.llm_request_utils import _ensure_extra_body_is_safe
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     LiteLLMResponseObjectHandler,
     _handle_invalid_parallel_tool_calls,
@@ -2852,7 +2852,6 @@ def get_optional_params(  # noqa: PLR0915
     # retrieve all parameters passed to the function
     passed_params = locals().copy()
     special_params = passed_params.pop("kwargs")
-
     for k, v in special_params.items():
         if k.startswith("aws_") and (
             custom_llm_provider != "bedrock" and custom_llm_provider != "sagemaker"
@@ -3734,10 +3733,8 @@ def get_optional_params(  # noqa: PLR0915
                 **extra_body,
             }
 
-            optional_params["extra_body"] = (
-                LitellmCoreRequestUtils._ensure_extra_body_is_safe(
-                    extra_body=optional_params["extra_body"]
-                )
+            optional_params["extra_body"] = _ensure_extra_body_is_safe(
+                extra_body=optional_params["extra_body"]
             )
     else:
         # if user passed in non-default kwargs for specific providers/models, pass them along
