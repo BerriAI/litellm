@@ -3,7 +3,6 @@ name: Publish Prisma Migrations
 permissions:
   contents: write
   pull-requests: write
-  workflows: write
 
 on:
   push:
@@ -200,3 +199,10 @@ jobs:
           delete-branch: true
           paths: |  # Explicitly specify which paths to include
             deploy/migrations/**/* 
+
+      - name: Generate and Save Migrations
+        run: |
+          # Only add migration files
+          git add deploy/migrations/
+          git status  # Debug what's being committed
+          git commit -m "chore: update prisma migrations" 
