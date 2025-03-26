@@ -91,7 +91,7 @@ def get_supported_openai_params(  # noqa: PLR0915
                 raise ValueError(
                     f"Unsupported provider config: {provider_config} for model: {model}"
                 )
-            return litellm.OpenAIConfig().get_supported_openai_params(model=model)
+        return litellm.OpenAIConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "azure":
         if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
             return litellm.AzureOpenAIO1Config().get_supported_openai_params(
