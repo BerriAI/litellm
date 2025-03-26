@@ -1377,7 +1377,6 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ## Fine-tuned Models
 
 You can call fine-tuned Vertex AI Gemini models through LiteLLM
-```
 
 | Property | Details |
 |----------|---------|
