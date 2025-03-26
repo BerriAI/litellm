@@ -1532,26 +1532,12 @@ def test_supports_vision_gemini():
 
 def test_pick_cheapest_chat_model_from_llm_provider():
     from litellm.litellm_core_utils.llm_request_utils import (
-        LitellmCoreRequestUtils,
+        pick_cheapest_chat_models_from_llm_provider,
     )
 
-    assert (
-        len(
-            LitellmCoreRequestUtils.pick_cheapest_chat_models_from_llm_provider(
-                "openai", n=3
-            )
-        )
-        == 3
-    )
+    assert len(pick_cheapest_chat_models_from_llm_provider("openai", n=3)) == 3
 
-    assert (
-        len(
-            LitellmCoreRequestUtils.pick_cheapest_chat_models_from_llm_provider(
-                "unknown", n=1
-            )
-        )
-        == 0
-    )
+    assert len(pick_cheapest_chat_models_from_llm_provider("unknown", n=1)) == 0
 
 
 def test_get_potential_model_names():
