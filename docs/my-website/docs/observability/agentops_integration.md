@@ -1,4 +1,4 @@
-# AgentOps - LLM Observability Platform
+# 🖇️ AgentOps - LLM Observability Platform
 
 :::tip
 
@@ -6,8 +6,6 @@ This is community maintained. Please make an issue if you run into a bug:
 https://github.com/BerriAI/litellm
 
 :::
-
-# 🖇️ Agentops - Trace and Debug LLM
 
 [AgentOps](https://docs.agentops.ai) is an observability platform that enables tracing and monitoring of LLM calls, providing detailed insights into your AI operations.
 
