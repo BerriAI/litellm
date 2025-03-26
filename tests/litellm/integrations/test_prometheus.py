@@ -38,7 +38,7 @@ def test_initialize_budget_metrics_cron_job():
     # Verify job properties
     job = jobs[0]
     assert (
-        job.trigger.interval.seconds
+        job.trigger.interval.minutes
         == PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES
     )
     assert job.func.__name__ == "_initialize_remaining_budget_metrics"
