@@ -48,7 +48,7 @@ class LassoGuardrail(CustomGuardrail):
         self.user_id = user_id or os.environ.get("LASSO_USER_ID")
         self.conversation_id = conversation_id or os.environ.get("LASSO_CONVERSATION_ID")
 
-        if not self.lasso_api_key:
+        if self.lasso_api_key is None:
             msg = (
                 "Couldn't get Lasso api key, either set the `LASSO_API_KEY` in the environment or "
                 "pass it as a parameter to the guardrail in the config file"
@@ -88,9 +88,16 @@ class LassoGuardrail(CustomGuardrail):
             # Instead of allowing the request to proceed, raise an exception
             raise LassoGuardrailAPIError(f"Failed to verify request safety with Lasso API: {str(e)}")
 
-    def _prepare_headers(self) -> Dict[str, str]:
+    def _prepare_headers(self) -> dict[str, str]:
         """Prepare headers for the Lasso API request."""
-        headers = {"lasso-api-key": self.lasso_api_key, "Content-Type": "application/json"}
+        if not self.lasso_api_key:
+            msg = (
+                "Couldn't get Lasso api key, either set the `LASSO_API_KEY` in the environment or "
+                "pass it as a parameter to the guardrail in the config file"
+            )
+            raise LassoGuardrailMissingSecrets(msg)
+
+        headers: dict[str, str] = {"lasso-api-key": self.lasso_api_key, "Content-Type": "application/json"}
 
         # Add optional headers if provided
         if self.user_id:
