@@ -1927,7 +1927,8 @@ jobs:
       - run:
           name: Setup Toxiproxy
           command: |
-            python tests/proxy_reliability_tests/setup_toxi_proxy.py
+            python tests/proxy_reliability_tests/setup_toxi_proxy.py &
+            sleep 5
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
