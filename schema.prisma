@@ -30,6 +30,18 @@ model LiteLLM_BudgetTable {
 }
 
 // Models on proxy
+model LiteLLM_CredentialsTable {
+  credential_id String @id @default(uuid())
+  credential_name String @unique
+  credential_values Json
+  credential_info Json? 
+  created_at    DateTime               @default(now()) @map("created_at")
+  created_by String
+  updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
+  updated_by String
+}
+
+// Models on proxy
 model LiteLLM_ProxyModelTable {
   model_id String @id @default(uuid())
   model_name String 

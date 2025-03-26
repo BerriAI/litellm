@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
+from openai.types.chat.chat_completion import ChatCompletion
 from openai.types.completion_usage import (
     CompletionTokensDetails,
     CompletionUsage,
@@ -18,16 +19,22 @@ from openai.types.moderation import (
     CategoryScores,
 )
 from openai.types.moderation_create_response import Moderation, ModerationCreateResponse
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Callable, Dict, Required, TypedDict, override
+
+import litellm
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
 from .guardrails import GuardrailEventHooks
 from .llms.openai import (
+    Batch,
+    ChatCompletionAnnotation,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
+    FileSearchTool,
     OpenAIChatCompletionChunk,
+    WebSearchOptions,
 )
 from .rerank import RerankResponse
 
@@ -92,6 +99,13 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_pdf_input: Optional[bool]
     supports_native_streaming: Optional[bool]
     supports_parallel_function_calling: Optional[bool]
+    supports_web_search: Optional[bool]
+
+
+class SearchContextCostPerQuery(TypedDict, total=False):
+    search_context_size_low: float
+    search_context_size_medium: float
+    search_context_size_high: float
 
 
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
@@ -114,6 +128,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_second: Optional[float]  # for OpenAI Speech models
+    input_cost_per_token_batches: Optional[float]
+    output_cost_per_token_batches: Optional[float]
     output_cost_per_token: Required[float]
     output_cost_per_character: Optional[float]  # only for vertex ai models
     output_cost_per_audio_token: Optional[float]
@@ -128,6 +144,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_second: Optional[float]  # for OpenAI Speech models
+    search_context_cost_per_query: Optional[
+        SearchContextCostPerQuery
+    ]  # Cost for using web search tool
 
     litellm_provider: Required[str]
     mode: Required[
@@ -182,7 +201,48 @@ class CallTypes(Enum):
     arealtime = "_arealtime"
     create_batch = "create_batch"
     acreate_batch = "acreate_batch"
+    aretrieve_batch = "aretrieve_batch"
+    retrieve_batch = "retrieve_batch"
     pass_through = "pass_through_endpoint"
+    anthropic_messages = "anthropic_messages"
+    get_assistants = "get_assistants"
+    aget_assistants = "aget_assistants"
+    create_assistants = "create_assistants"
+    acreate_assistants = "acreate_assistants"
+    delete_assistant = "delete_assistant"
+    adelete_assistant = "adelete_assistant"
+    acreate_thread = "acreate_thread"
+    create_thread = "create_thread"
+    aget_thread = "aget_thread"
+    get_thread = "get_thread"
+    a_add_message = "a_add_message"
+    add_message = "add_message"
+    aget_messages = "aget_messages"
+    get_messages = "get_messages"
+    arun_thread = "arun_thread"
+    run_thread = "run_thread"
+    arun_thread_stream = "arun_thread_stream"
+    run_thread_stream = "run_thread_stream"
+    afile_retrieve = "afile_retrieve"
+    file_retrieve = "file_retrieve"
+    afile_delete = "afile_delete"
+    file_delete = "file_delete"
+    afile_list = "afile_list"
+    file_list = "file_list"
+    acreate_file = "acreate_file"
+    create_file = "create_file"
+    afile_content = "afile_content"
+    file_content = "file_content"
+    create_fine_tuning_job = "create_fine_tuning_job"
+    acreate_fine_tuning_job = "acreate_fine_tuning_job"
+    acancel_fine_tuning_job = "acancel_fine_tuning_job"
+    cancel_fine_tuning_job = "cancel_fine_tuning_job"
+    alist_fine_tuning_jobs = "alist_fine_tuning_jobs"
+    list_fine_tuning_jobs = "list_fine_tuning_jobs"
+    aretrieve_fine_tuning_job = "aretrieve_fine_tuning_job"
+    retrieve_fine_tuning_job = "retrieve_fine_tuning_job"
+    responses = "responses"
+    aresponses = "aresponses"
 
 
 CallTypesLiteral = Literal[
@@ -206,6 +266,9 @@ CallTypesLiteral = Literal[
     "create_batch",
     "acreate_batch",
     "pass_through_endpoint",
+    "anthropic_messages",
+    "aretrieve_batch",
+    "retrieve_batch",
 ]
 
 
@@ -478,6 +541,7 @@ class Message(OpenAIObject):
     provider_specific_fields: Optional[Dict[str, Any]] = Field(
         default=None, exclude=True
     )
+    annotations: Optional[List[ChatCompletionAnnotation]] = None
 
     def __init__(
         self,
@@ -489,6 +553,7 @@ class Message(OpenAIObject):
         provider_specific_fields: Optional[Dict[str, Any]] = None,
         reasoning_content: Optional[str] = None,
         thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None,
+        annotations: Optional[List[ChatCompletionAnnotation]] = None,
         **params,
     ):
         init_values: Dict[str, Any] = {
@@ -517,6 +582,9 @@ class Message(OpenAIObject):
         if thinking_blocks is not None:
             init_values["thinking_blocks"] = thinking_blocks
 
+        if annotations is not None:
+            init_values["annotations"] = annotations
+
         if reasoning_content is not None:
             init_values["reasoning_content"] = reasoning_content
 
@@ -529,6 +597,11 @@ class Message(OpenAIObject):
             # delete audio from self
             # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
             del self.audio
+
+        if annotations is None:
+            # ensure default response matches OpenAI spec
+            # Some OpenAI compatible APIs raise an error if annotations are passed in
+            del self.annotations
 
         if reasoning_content is None:
             # ensure default response matches OpenAI spec
@@ -574,6 +647,7 @@ class Delta(OpenAIObject):
         audio: Optional[ChatCompletionAudioResponse] = None,
         reasoning_content: Optional[str] = None,
         thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None,
+        annotations: Optional[List[ChatCompletionAnnotation]] = None,
         **params,
     ):
         super(Delta, self).__init__(**params)
@@ -584,6 +658,7 @@ class Delta(OpenAIObject):
         self.function_call: Optional[Union[FunctionCall, Any]] = None
         self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None
         self.audio: Optional[ChatCompletionAudioResponse] = None
+        self.annotations: Optional[List[ChatCompletionAnnotation]] = None
 
         if reasoning_content is not None:
             self.reasoning_content = reasoning_content
@@ -596,6 +671,12 @@ class Delta(OpenAIObject):
         else:
             # ensure default response matches OpenAI spec
             del self.thinking_blocks
+
+        # Add annotations to the delta, ensure they are only on Delta if they exist (Match OpenAI spec)
+        if annotations is not None:
+            self.annotations = annotations
+        else:
+            del self.annotations
 
         if function_call is not None and isinstance(function_call, dict):
             self.function_call = FunctionCall(**function_call)
@@ -818,6 +899,9 @@ class StreamingChoices(OpenAIObject):
         enhancements=None,
         **params,
     ):
+        # Fix Perplexity return both delta and message cause OpenWebUI repect text
+        # https://github.com/BerriAI/litellm/issues/8455
+        params.pop("message", None)
         super(StreamingChoices, self).__init__(**params)
         if finish_reason:
             self.finish_reason = map_finish_reason(finish_reason)
@@ -825,6 +909,7 @@ class StreamingChoices(OpenAIObject):
             self.finish_reason = None
         self.index = index
         if delta is not None:
+
             if isinstance(delta, Delta):
                 self.delta = delta
             elif isinstance(delta, dict):
@@ -1544,6 +1629,19 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_end_user_id: Optional[str]
 
 
+class StandardBuiltInToolsParams(TypedDict, total=False):
+    """
+    Standard built-in OpenAItools parameters
+
+    This is used to calculate the cost of built-in tools, insert any standard built-in tools parameters here
+
+    OpenAI charges users based on the `web_search_options` parameter
+    """
+
+    web_search_options: Optional[WebSearchOptions]
+    file_search: Optional[FileSearchTool]
+
+
 class StandardLoggingPromptManagementMetadata(TypedDict):
     prompt_id: str
     prompt_variables: Optional[dict]
@@ -1572,12 +1670,16 @@ class StandardLoggingAdditionalHeaders(TypedDict, total=False):
 
 
 class StandardLoggingHiddenParams(TypedDict):
-    model_id: Optional[str]
+    model_id: Optional[
+        str
+    ]  # id of the model in the router, separates multiple models with the same name but different credentials
     cache_key: Optional[str]
     api_base: Optional[str]
     response_cost: Optional[str]
     litellm_overhead_time_ms: Optional[float]
     additional_headers: Optional[StandardLoggingAdditionalHeaders]
+    batch_models: Optional[List[str]]
+    litellm_model_name: Optional[str]  # the model name sent to the provider by litellm
 
 
 class StandardLoggingModelInformation(TypedDict):
@@ -1657,6 +1759,7 @@ class StandardLoggingPayload(TypedDict):
     model_parameters: dict
     hidden_params: StandardLoggingHiddenParams
     guardrail_information: Optional[StandardLoggingGuardrailInformation]
+    standard_built_in_tools_params: Optional[StandardBuiltInToolsParams]
 
 
 from typing import AsyncIterator, Iterator
@@ -1708,6 +1811,10 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
 
     # Humanloop dynamic params
     humanloop_api_key: Optional[str]
+
+    # Arize dynamic params
+    arize_api_key: Optional[str]
+    arize_space_key: Optional[str]
 
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
@@ -1798,6 +1905,8 @@ all_litellm_params = [
     "max_budget",
     "budget_duration",
     "use_in_pass_through",
+    "merge_reasoning_content_in_choices",
+    "litellm_credential_name",
 ] + list(StandardCallbackDynamicParams.__annotations__.keys())
 
 
@@ -1911,6 +2020,7 @@ class LlmProviders(str, Enum):
     HUMANLOOP = "humanloop"
     TOPAZ = "topaz"
     ASSEMBLYAI = "assemblyai"
+    SNOWFLAKE = "snowflake"
 
 
 # Create a set of all provider values for quick lookup
@@ -1963,3 +2073,55 @@ class ProviderSpecificHeader(TypedDict):
 class SelectTokenizerResponse(TypedDict):
     type: Literal["openai_tokenizer", "huggingface_tokenizer"]
     tokenizer: Any
+
+
+class LiteLLMBatch(Batch):
+    _hidden_params: dict = {}
+    usage: Optional[Usage] = None
+
+    def __contains__(self, key):
+        # Define custom behavior for the 'in' operator
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
+
+    def json(self, **kwargs):  # type: ignore
+        try:
+            return self.model_dump()  # noqa
+        except Exception:
+            # if using pydantic v1
+            return self.dict()
+
+
+class RawRequestTypedDict(TypedDict, total=False):
+    raw_request_api_base: Optional[str]
+    raw_request_body: Optional[dict]
+    raw_request_headers: Optional[dict]
+    error: Optional[str]
+
+
+class CredentialBase(BaseModel):
+    credential_name: str
+    credential_info: dict
+
+
+class CredentialItem(CredentialBase):
+    credential_values: dict
+
+
+class CreateCredentialItem(CredentialBase):
+    credential_values: Optional[dict] = None
+    model_id: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def check_credential_params(cls, values):
+        if not values.get("credential_values") and not values.get("model_id"):
+            raise ValueError("Either credential_values or model_id must be set")
+        return values

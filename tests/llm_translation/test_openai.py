@@ -3,6 +3,7 @@ import os
 import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
+from typing import Optional
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -17,6 +18,10 @@ import litellm
 from litellm import Choices, Message, ModelResponse
 from base_llm_unit_tests import BaseLLMChatTest
 import asyncio
+from litellm.types.llms.openai import (
+    ChatCompletionAnnotation,
+    ChatCompletionAnnotationURLCitation,
+)
 
 
 def test_openai_prediction_param():
@@ -360,3 +365,96 @@ def test_o1_parallel_tool_calls(model):
         parallel_tool_calls=True,
         drop_params=True,
     )
+
+
+def test_openai_chat_completion_streaming_handler_reasoning_content():
+    from litellm.llms.openai.chat.gpt_transformation import (
+        OpenAIChatCompletionStreamingHandler,
+    )
+    from unittest.mock import MagicMock
+
+    streaming_handler = OpenAIChatCompletionStreamingHandler(
+        streaming_response=MagicMock(),
+        sync_stream=True,
+    )
+    response = streaming_handler.chunk_parser(
+        chunk={
+            "id": "e89b6501-8ac2-464c-9550-7cd3daf94350",
+            "object": "chat.completion.chunk",
+            "created": 1741037890,
+            "model": "deepseek-reasoner",
+            "system_fingerprint": "fp_5417b77867_prod0225",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": None, "reasoning_content": "."},
+                    "logprobs": None,
+                    "finish_reason": None,
+                }
+            ],
+        }
+    )
+
+    assert response.choices[0].delta.reasoning_content == "."
+
+
+def validate_response_url_citation(url_citation: ChatCompletionAnnotationURLCitation):
+    assert "end_index" in url_citation
+    assert "start_index" in url_citation
+    assert "url" in url_citation
+
+
+def validate_web_search_annotations(annotations: ChatCompletionAnnotation):
+    """validates litellm response contains web search annotations"""
+    print("annotations: ", annotations)
+    assert annotations is not None
+    assert isinstance(annotations, list)
+    for annotation in annotations:
+        assert annotation["type"] == "url_citation"
+        url_citation: ChatCompletionAnnotationURLCitation = annotation["url_citation"]
+        validate_response_url_citation(url_citation)
+
+
+def test_openai_web_search():
+    """Makes a simple web search request and validates the response contains web search annotations and all expected fields are present"""
+    litellm._turn_on_debug()
+    response = litellm.completion(
+        model="openai/gpt-4o-search-preview",
+        messages=[
+            {
+                "role": "user",
+                "content": "What was a positive news story from today?",
+            }
+        ],
+    )
+    print("litellm response: ", response.model_dump_json(indent=4))
+    message = response.choices[0].message
+    annotations: ChatCompletionAnnotation = message.annotations
+    validate_web_search_annotations(annotations)
+
+
+def test_openai_web_search_streaming():
+    """Makes a simple web search request and validates the response contains web search annotations and all expected fields are present"""
+    # litellm._turn_on_debug()
+    test_openai_web_search: Optional[ChatCompletionAnnotation] = None
+    response = litellm.completion(
+        model="openai/gpt-4o-search-preview",
+        messages=[
+            {
+                "role": "user",
+                "content": "What was a positive news story from today?",
+            }
+        ],
+        stream=True,
+    )
+    for chunk in response:
+        print("litellm response chunk: ", chunk)
+        if (
+            hasattr(chunk.choices[0].delta, "annotations")
+            and chunk.choices[0].delta.annotations is not None
+        ):
+            test_openai_web_search = chunk.choices[0].delta.annotations
+
+    # Assert this request has at-least one web search annotation
+    assert test_openai_web_search is not None
+    validate_web_search_annotations(test_openai_web_search)

@@ -66,6 +66,7 @@ from litellm.litellm_core_utils.core_helpers import (
     map_finish_reason,
     process_response_headers,
 )
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.default_encoding import encoding
 from litellm.litellm_core_utils.exception_mapping_utils import (
     _get_response_headers,
@@ -141,6 +142,7 @@ from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
     CostPerToken,
+    CredentialItem,
     CustomHuggingfaceTokenizer,
     Delta,
     Embedding,
@@ -156,6 +158,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     ProviderField,
     ProviderSpecificModelInfo,
+    RawRequestTypedDict,
     SelectTokenizerResponse,
     StreamingChoices,
     TextChoices,
@@ -191,6 +194,9 @@ from typing import (
 from openai import OpenAIError as OriginalError
 
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.llms.base_llm.anthropic_messages.transformation import (
+    BaseAnthropicMessagesConfig,
+)
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
@@ -205,6 +211,7 @@ from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
 )
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
+from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 
 from ._logging import _is_debugging_on, verbose_logger
 from .caching.caching import (
@@ -451,6 +458,27 @@ def get_applied_guardrails(kwargs: Dict[str, Any]) -> List[str]:
     return applied_guardrails
 
 
+def load_credentials_from_list(kwargs: dict):
+    """
+    Updates kwargs with the credentials if credential_name in kwarg
+    """
+    credential_name = kwargs.get("litellm_credential_name")
+    if credential_name and litellm.credential_list:
+        credential_accessor = CredentialAccessor.get_credential_values(credential_name)
+        for key, value in credential_accessor.items():
+            if key not in kwargs:
+                kwargs[key] = value
+
+
+def get_dynamic_callbacks(
+    dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]]
+) -> List:
+    returned_callbacks = litellm.callbacks.copy()
+    if dynamic_callbacks:
+        returned_callbacks.extend(dynamic_callbacks)  # type: ignore
+    return returned_callbacks
+
+
 def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
@@ -475,12 +503,18 @@ def function_setup(  # noqa: PLR0915
         ## LOGGING SETUP
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
-        if len(litellm.callbacks) > 0:
-            for callback in litellm.callbacks:
+        ## DYNAMIC CALLBACKS ##
+        dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = (
+            kwargs.pop("callbacks", None)
+        )
+        all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
+
+        if len(all_callbacks) > 0:
+            for callback in all_callbacks:
                 # check if callback is a string - e.g. "lago", "openmeter"
                 if isinstance(callback, str):
                     callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
-                        callback, internal_usage_cache=None, llm_router=None
+                        callback, internal_usage_cache=None, llm_router=None  # type: ignore
                     )
                     if callback is None or any(
                         isinstance(cb, type(callback))
@@ -696,6 +730,11 @@ def function_setup(  # noqa: PLR0915
             call_type == CallTypes.aspeech.value or call_type == CallTypes.speech.value
         ):
             messages = kwargs.get("input", "speech")
+        elif (
+            call_type == CallTypes.aresponses.value
+            or call_type == CallTypes.responses.value
+        ):
+            messages = args[0] if len(args) > 0 else kwargs["input"]
         else:
             messages = "default-message-value"
         stream = True if "stream" in kwargs and kwargs["stream"] is True else False
@@ -964,6 +1003,8 @@ def client(original_function):  # noqa: PLR0915
                 logging_obj, kwargs = function_setup(
                     original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
+            ## LOAD CREDENTIALS
+            load_credentials_from_list(kwargs)
             kwargs["litellm_logging_obj"] = logging_obj
             _llm_caching_handler: LLMCachingHandler = LLMCachingHandler(
                 original_function=original_function,
@@ -1033,6 +1074,7 @@ def client(original_function):  # noqa: PLR0915
                 )
 
                 if caching_handler_response.cached_result is not None:
+                    verbose_logger.debug("Cache hit!")
                     return caching_handler_response.cached_result
 
             # CHECK MAX TOKENS
@@ -1219,6 +1261,8 @@ def client(original_function):  # noqa: PLR0915
                     original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
             kwargs["litellm_logging_obj"] = logging_obj
+            ## LOAD CREDENTIALS
+            load_credentials_from_list(kwargs)
             logging_obj._llm_caching_handler = _llm_caching_handler
             # [OPTIONAL] CHECK BUDGET
             if litellm.max_budget:
@@ -1931,6 +1975,60 @@ def supports_system_messages(model: str, custom_llm_provider: Optional[str]) -> 
     )
 
 
+def supports_web_search(model: str, custom_llm_provider: Optional[str] = None) -> bool:
+    """
+    Check if the given model supports web search and return a boolean value.
+
+    Parameters:
+    model (str): The model name to be checked.
+    custom_llm_provider (str): The provider to be checked.
+
+    Returns:
+    bool: True if the model supports web search, False otherwise.
+
+    Raises:
+    Exception: If the given model is not found in model_prices_and_context_window.json.
+    """
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_web_search",
+    )
+
+
+def supports_native_streaming(model: str, custom_llm_provider: Optional[str]) -> bool:
+    """
+    Check if the given model supports native streaming and return a boolean value.
+
+    Parameters:
+    model (str): The model name to be checked.
+    custom_llm_provider (str): The provider to be checked.
+
+    Returns:
+    bool: True if the model supports native streaming, False otherwise.
+
+    Raises:
+    Exception: If the given model is not found in model_prices_and_context_window.json.
+    """
+    try:
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+        model_info = _get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        supports_native_streaming = model_info.get("supports_native_streaming", True)
+        if supports_native_streaming is None:
+            supports_native_streaming = True
+        return supports_native_streaming
+    except Exception as e:
+        verbose_logger.debug(
+            f"Model not found or error in checking supports_native_streaming support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
+        )
+        return False
+
+
 def supports_response_schema(
     model: str, custom_llm_provider: Optional[str] = None
 ) -> bool:
@@ -2407,7 +2505,11 @@ def get_optional_params_image_gen(
         config_class = (
             litellm.AmazonStability3Config
             if litellm.AmazonStability3Config._is_stability_3_model(model=model)
-            else litellm.AmazonStabilityConfig
+            else (
+                litellm.AmazonNovaCanvasConfig
+                if litellm.AmazonNovaCanvasConfig._is_nova_model(model=model)
+                else litellm.AmazonStabilityConfig
+            )
         )
         supported_params = config_class.get_supported_openai_params(model=model)
         _check_valid_arg(supported_params=supported_params)
@@ -3902,8 +4004,10 @@ def _count_characters(text: str) -> int:
     return len(filtered_text)
 
 
-def get_response_string(response_obj: ModelResponse) -> str:
-    _choices: List[Union[Choices, StreamingChoices]] = response_obj.choices
+def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream]) -> str:
+    _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
+        response_obj.choices
+    )
 
     response_str = ""
     for choice in _choices:
@@ -4388,6 +4492,12 @@ def _get_model_info_helper(  # noqa: PLR0915
                 input_cost_per_audio_token=_model_info.get(
                     "input_cost_per_audio_token", None
                 ),
+                input_cost_per_token_batches=_model_info.get(
+                    "input_cost_per_token_batches"
+                ),
+                output_cost_per_token_batches=_model_info.get(
+                    "output_cost_per_token_batches"
+                ),
                 output_cost_per_token=_output_cost_per_token,
                 output_cost_per_audio_token=_model_info.get(
                     "output_cost_per_audio_token", None
@@ -4433,6 +4543,10 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ),
                 supports_native_streaming=_model_info.get(
                     "supports_native_streaming", None
+                ),
+                supports_web_search=_model_info.get("supports_web_search", False),
+                search_context_cost_per_query=_model_info.get(
+                    "search_context_cost_per_query", None
                 ),
                 tpm=_model_info.get("tpm", None),
                 rpm=_model_info.get("rpm", None),
@@ -4502,6 +4616,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             supports_audio_input: Optional[bool]
             supports_audio_output: Optional[bool]
             supports_pdf_input: Optional[bool]
+            supports_web_search: Optional[bool]
     Raises:
         Exception: If the model is not mapped yet.
 
@@ -5077,7 +5192,7 @@ def prompt_token_calculator(model, messages):
         from anthropic import AI_PROMPT, HUMAN_PROMPT, Anthropic
 
         anthropic_obj = Anthropic()
-        num_tokens = anthropic_obj.count_tokens(text)
+        num_tokens = anthropic_obj.count_tokens(text)  # type: ignore
     else:
         num_tokens = len(encoding.encode(text))
     return num_tokens
@@ -6056,6 +6171,8 @@ class ProviderConfigManager:
             return litellm.CohereChatConfig()
         elif litellm.LlmProviders.COHERE == provider:
             return litellm.CohereConfig()
+        elif litellm.LlmProviders.SNOWFLAKE == provider:
+            return litellm.SnowflakeConfig()
         elif litellm.LlmProviders.CLARIFAI == provider:
             return litellm.ClarifaiConfig()
         elif litellm.LlmProviders.ANTHROPIC == provider:
@@ -6230,6 +6347,15 @@ class ProviderConfigManager:
         return litellm.CohereRerankConfig()
 
     @staticmethod
+    def get_provider_anthropic_messages_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseAnthropicMessagesConfig]:
+        if litellm.LlmProviders.ANTHROPIC == provider:
+            return litellm.AnthropicMessagesConfig()
+        return None
+
+    @staticmethod
     def get_provider_audio_transcription_config(
         model: str,
         provider: LlmProviders,
@@ -6238,6 +6364,15 @@ class ProviderConfigManager:
             return litellm.FireworksAIAudioTranscriptionConfig()
         elif litellm.LlmProviders.DEEPGRAM == provider:
             return litellm.DeepgramAudioTranscriptionConfig()
+        return None
+
+    @staticmethod
+    def get_provider_responses_api_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseResponsesAPIConfig]:
+        if litellm.LlmProviders.OPENAI == provider:
+            return litellm.OpenAIResponsesAPIConfig()
         return None
 
     @staticmethod
@@ -6449,3 +6584,48 @@ def add_openai_metadata(metadata: dict) -> dict:
     }
 
     return visible_metadata.copy()
+
+
+def return_raw_request(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict:
+    """
+    Return the json str of the request
+
+    This is currently in BETA, and tested for `/chat/completions` -> `litellm.completion` calls.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    litellm_logging_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        litellm_call_id="1234",
+        start_time=datetime.now(),
+        function_id="1234",
+        log_raw_request_response=True,
+    )
+
+    llm_api_endpoint = getattr(litellm, endpoint.value)
+
+    received_exception = ""
+
+    try:
+        llm_api_endpoint(
+            **kwargs,
+            litellm_logging_obj=litellm_logging_obj,
+            api_key="my-fake-api-key",  # 👈 ensure the request fails
+        )
+    except Exception as e:
+        received_exception = str(e)
+
+    raw_request_typed_dict = litellm_logging_obj.model_call_details.get(
+        "raw_request_typed_dict"
+    )
+    if raw_request_typed_dict:
+        return cast(RawRequestTypedDict, raw_request_typed_dict)
+    else:
+        return RawRequestTypedDict(
+            error=received_exception,
+        )

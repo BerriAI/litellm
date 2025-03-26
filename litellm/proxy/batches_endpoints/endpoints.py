@@ -2,10 +2,10 @@
 
 #                          /v1/batches Endpoints
 
-import asyncio
 
 ######################################################################
-from typing import Dict, Optional
+import asyncio
+from typing import Dict, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 
@@ -18,6 +18,7 @@ from litellm.batches.main import (
 )
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
@@ -69,7 +70,6 @@ async def create_batch(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
-        get_custom_headers,
         llm_router,
         proxy_config,
         proxy_logging_obj,
@@ -137,7 +137,7 @@ async def create_batch(
         api_base = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
-            get_custom_headers(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
@@ -199,8 +199,10 @@ async def retrieve_batch(
     ```
     """
     from litellm.proxy.proxy_server import (
-        get_custom_headers,
+        add_litellm_data_to_request,
+        general_settings,
         llm_router,
+        proxy_config,
         proxy_logging_obj,
         version,
     )
@@ -212,6 +214,23 @@ async def retrieve_batch(
             batch_id=batch_id,
         )
 
+        data = cast(dict, _retrieve_batch_request)
+
+        # setup logging
+        data["litellm_call_id"] = request.headers.get(
+            "x-litellm-call-id", str(uuid.uuid4())
+        )
+
+        # Include original request and headers in the data
+        data = await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
+        )
+
         if litellm.enable_loadbalancing_on_batch_endpoints is True:
             if llm_router is None:
                 raise HTTPException(
@@ -221,7 +240,7 @@ async def retrieve_batch(
                     },
                 )
 
-            response = await llm_router.aretrieve_batch(**_retrieve_batch_request)  # type: ignore
+            response = await llm_router.aretrieve_batch(**data)  # type: ignore
         else:
             custom_llm_provider = (
                 provider
@@ -229,7 +248,7 @@ async def retrieve_batch(
                 or "openai"
             )
             response = await litellm.aretrieve_batch(
-                custom_llm_provider=custom_llm_provider, **_retrieve_batch_request  # type: ignore
+                custom_llm_provider=custom_llm_provider, **data  # type: ignore
             )
 
         ### ALERTING ###
@@ -246,7 +265,7 @@ async def retrieve_batch(
         api_base = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
-            get_custom_headers(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
@@ -306,11 +325,7 @@ async def list_batches(
 
     ```
     """
-    from litellm.proxy.proxy_server import (
-        get_custom_headers,
-        proxy_logging_obj,
-        version,
-    )
+    from litellm.proxy.proxy_server import proxy_logging_obj, version
 
     verbose_proxy_logger.debug("GET /v1/batches after={} limit={}".format(after, limit))
     try:
@@ -332,7 +347,7 @@ async def list_batches(
         api_base = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
-            get_custom_headers(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
@@ -397,7 +412,6 @@ async def cancel_batch(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
-        get_custom_headers,
         proxy_config,
         proxy_logging_obj,
         version,
@@ -443,7 +457,7 @@ async def cancel_batch(
         api_base = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
-            get_custom_headers(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,

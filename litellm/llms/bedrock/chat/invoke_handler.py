@@ -72,6 +72,9 @@ _response_stream_shape_cache = None
 bedrock_tool_name_mappings: InMemoryCache = InMemoryCache(
     max_size_in_memory=50, default_ttl=600
 )
+from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+converse_config = AmazonConverseConfig()
 
 
 class AmazonCohereChatConfig:
@@ -1231,7 +1234,9 @@ class AWSEventStreamDecoder:
         if len(self.content_blocks) == 0:
             return False
 
-        if "text" in self.content_blocks[0]:
+        if (
+            "toolUse" not in self.content_blocks[0]
+        ):  # be explicit - only do this if tool use block, as this is to prevent json decoding errors
             return False
 
         for block in self.content_blocks:
@@ -1260,6 +1265,9 @@ class AWSEventStreamDecoder:
         _thinking_block = ChatCompletionThinkingBlock(type="thinking")
         if "text" in thinking_block:
             _thinking_block["thinking"] = thinking_block["text"]
+        elif "signature" in thinking_block:
+            _thinking_block["signature"] = thinking_block["signature"]
+            _thinking_block["thinking"] = ""  # consistent with anthropic response
         thinking_blocks_list.append(_thinking_block)
         return thinking_blocks_list
 
@@ -1269,7 +1277,7 @@ class AWSEventStreamDecoder:
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
             finish_reason = ""
-            usage: Optional[ChatCompletionUsageBlock] = None
+            usage: Optional[Usage] = None
             provider_specific_fields: dict = {}
             reasoning_content: Optional[str] = None
             thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
@@ -1322,6 +1330,12 @@ class AWSEventStreamDecoder:
                     thinking_blocks = self.translate_thinking_blocks(
                         delta_obj["reasoningContent"]
                     )
+                    if (
+                        thinking_blocks
+                        and len(thinking_blocks) > 0
+                        and reasoning_content is None
+                    ):
+                        reasoning_content = ""  # set to non-empty string to ensure consistency with Anthropic
             elif (
                 "contentBlockIndex" in chunk_data
             ):  # stop block, no 'start' or 'delta' object
@@ -1339,11 +1353,7 @@ class AWSEventStreamDecoder:
             elif "stopReason" in chunk_data:
                 finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
             elif "usage" in chunk_data:
-                usage = ChatCompletionUsageBlock(
-                    prompt_tokens=chunk_data.get("inputTokens", 0),
-                    completion_tokens=chunk_data.get("outputTokens", 0),
-                    total_tokens=chunk_data.get("totalTokens", 0),
-                )
+                usage = converse_config._transform_usage(chunk_data.get("usage", {}))
 
             model_response_provider_specific_fields = {}
             if "trace" in chunk_data:

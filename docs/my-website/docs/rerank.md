@@ -1,4 +1,4 @@
-# Rerank
+# /rerank
 
 :::tip
 

@@ -184,3 +184,21 @@ def test_cache_ping_health_check_includes_only_cache_attributes(mock_redis_succe
         "host": "localhost",
         "port": 6379,
     }
+
+
+def test_cache_ping_with_redis_version_float(mock_redis_success):
+    """Test cache ping works when redis_version is a float"""
+    # Set redis_version as a float
+    mock_redis_success.cache.redis_version = 7.2
+
+    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-1234"})
+    assert response.status_code == 200
+
+    data = response.json()
+    print("data=", json.dumps(data, indent=4))
+    assert data["status"] == "healthy"
+    assert data["cache_type"] == "redis"
+
+    cache_params = data["health_check_cache_params"]
+    assert isinstance(cache_params, dict)
+    assert isinstance(cache_params.get("redis_version"), float)

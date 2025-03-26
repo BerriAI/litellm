@@ -3,11 +3,20 @@ import TabItem from '@theme/TabItem';
 
 # 'Thinking' / 'Reasoning Content'
 
+:::info
+
+Requires LiteLLM v1.63.0+
+
+:::
+
 Supported Providers:
 - Deepseek (`deepseek/`)
 - Anthropic API (`anthropic/`)
 - Bedrock (Anthropic + Deepseek) (`bedrock/`)
 - Vertex AI (Anthropic) (`vertexai/`)
+- OpenRouter (`openrouter/`)
+
+LiteLLM will standardize the `reasoning_content` in the response and `thinking_blocks` in the assistant message.
 
 ```python
 "message": {
@@ -17,7 +26,7 @@ Supported Providers:
         {
             "type": "thinking",
             "thinking": "The capital of France is Paris.",
-            "signature_delta": "EqoBCkgIARABGAIiQL2UoU0b1OHYi+..."
+            "signature": "EqoBCkgIARABGAIiQL2UoU0b1OHYi+..."
         }
     ]
 }
@@ -292,7 +301,7 @@ curl http://0.0.0.0:4000/v1/chat/completions \
           {
             "type": "thinking",
             "thinking": "The user is asking for the current weather in three different locations: San Francisco, Tokyo, and Paris. I have access to the `get_current_weather` function that can provide this information.\n\nThe function requires a `location` parameter, and has an optional `unit` parameter. The user hasn't specified which unit they prefer (celsius or fahrenheit), so I'll use the default provided by the function.\n\nI need to make three separate function calls, one for each location:\n1. San Francisco\n2. Tokyo\n3. Paris\n\nThen I'll compile the results into a response with three distinct weather reports as requested by the user.",
-            "signature_delta": "EqoBCkgIARABGAIiQCkBXENoyB+HstUOs/iGjG+bvDbIQRrxPsPpOSt5yDxX6iulZ/4K/w9Rt4J5Nb2+3XUYsyOH+CpZMfADYvItFR4SDPb7CmzoGKoolCMAJRoM62p1ZRASZhrD3swqIjAVY7vOAFWKZyPEJglfX/60+bJphN9W1wXR6rWrqn3MwUbQ5Mb/pnpeb10HMploRgUqEGKOd6fRKTkUoNDuAnPb55c="
+            "signature": "EqoBCkgIARABGAIiQCkBXENoyB+HstUOs/iGjG+bvDbIQRrxPsPpOSt5yDxX6iulZ/4K/w9Rt4J5Nb2+3XUYsyOH+CpZMfADYvItFR4SDPb7CmzoGKoolCMAJRoM62p1ZRASZhrD3swqIjAVY7vOAFWKZyPEJglfX/60+bJphN9W1wXR6rWrqn3MwUbQ5Mb/pnpeb10HMploRgUqEGKOd6fRKTkUoNDuAnPb55c="
           }
         ],
         "provider_specific_fields": {
@@ -353,5 +362,5 @@ These fields can be accessed via `response.choices[0].message.reasoning_content`
 - `thinking_blocks` - Optional[List[Dict[str, str]]]: A list of thinking blocks from the model. Only returned for Anthropic models.
   - `type` - str: The type of thinking block.
   - `thinking` - str: The thinking from the model.
-  - `signature_delta` - str: The signature delta from the model.
+  - `signature` - str: The signature delta from the model.
 
