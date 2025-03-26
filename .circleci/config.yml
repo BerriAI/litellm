@@ -3,6 +3,14 @@ orbs:
   codecov: codecov/codecov@4.0.1
   node: circleci/node@5.1.0  # Add this line to declare the node orb
 
+commands:
+  setup_google_dns:
+    steps:
+      - run:
+          name: "Configure Google DNS"
+          command: |
+            echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
+            echo "nameserver 8.8.4.4" | sudo tee -a /etc/resolv.conf
 
 jobs:
   local_testing:
@@ -15,7 +23,7 @@ jobs:
 
     steps:
       - checkout
-
+      - setup_google_dns
       - run:
           name: Show git commit hash
           command: |
@@ -134,7 +142,7 @@ jobs:
 
     steps:
       - checkout
-
+      - setup_google_dns
       - run:
           name: Show git commit hash
           command: |
@@ -234,7 +242,7 @@ jobs:
 
     steps:
       - checkout
-
+      - setup_google_dns
       - run:
           name: Show git commit hash
           command: |
@@ -334,6 +342,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -388,6 +397,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -429,6 +439,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Show git commit hash
           command: |
@@ -479,7 +490,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
-
+      - setup_google_dns
       - run:
           name: Show git commit hash
           command: |
@@ -569,7 +580,7 @@ jobs:
             - litellm_proxy_unit_tests_coverage
   litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.13.1
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -577,6 +588,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -618,6 +630,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -654,6 +667,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -734,6 +748,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -778,6 +793,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -820,6 +836,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -866,6 +883,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -910,6 +928,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -956,6 +975,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -998,6 +1018,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -1040,6 +1061,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -1086,6 +1108,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -1118,6 +1141,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -1142,6 +1166,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       # Install Helm
       - run:
           name: Install Helm
@@ -1211,6 +1236,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -1247,6 +1273,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Python 3.9
           command: |
@@ -1321,6 +1348,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
@@ -1456,6 +1484,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
@@ -1580,6 +1609,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
@@ -1742,6 +1772,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
@@ -1853,6 +1884,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
@@ -1935,6 +1967,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       # Remove Docker CLI installation since it's already available in machine executor
       - run:
           name: Install Python 3.13
@@ -2032,6 +2065,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
@@ -2291,6 +2325,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Build UI
           command: |
@@ -2405,6 +2440,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Build Docker image
           command: |
@@ -2427,6 +2463,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Build Docker image
           command: |
