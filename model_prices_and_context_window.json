@@ -1468,7 +1468,7 @@
         "litellm_provider": "azure",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
+        "supports_parallel_function_calling": false,
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_tool_choice": true
@@ -1483,7 +1483,7 @@
         "litellm_provider": "azure",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
+        "supports_parallel_function_calling": false,
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_tool_choice": true
@@ -1528,7 +1528,7 @@
         "litellm_provider": "azure",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
+        "supports_parallel_function_calling": false,
         "supports_vision": false,
         "supports_prompt_caching": true
     },
@@ -1542,7 +1542,7 @@
         "litellm_provider": "azure",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
+        "supports_parallel_function_calling": false,
         "supports_vision": false,
         "supports_prompt_caching": true
     },
