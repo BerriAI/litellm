@@ -6364,6 +6364,11 @@ class ProviderConfigManager:
             return litellm.FireworksAIAudioTranscriptionConfig()
         elif litellm.LlmProviders.DEEPGRAM == provider:
             return litellm.DeepgramAudioTranscriptionConfig()
+        elif litellm.LlmProviders.OPENAI == provider:
+            if "gpt-4o" in model:
+                return litellm.OpenAIGPTAudioTranscriptionConfig()
+            else:
+                return litellm.OpenAIWhisperAudioTranscriptionConfig()
         return None
 
     @staticmethod
