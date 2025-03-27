@@ -3286,6 +3286,7 @@ async def test_aadmin_only_routes(prisma_client):
     only an admin should be able to access admin only routes
     """
     litellm.set_verbose = True
+    print(f"os.getenv('DATABASE_URL')={os.getenv('DATABASE_URL')}")
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     await litellm.proxy.proxy_server.prisma_client.connect()
