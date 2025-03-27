@@ -1776,6 +1776,7 @@ response = completion(
 )
 ```
 </TabItem>
+
 <TabItem value="proxy" label="PROXY">
 
 1. Setup config.yaml 
@@ -1820,11 +1821,13 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 ```
 
 </TabItem>
+
 </Tabs>
 
 ### SSO Login (AWS Profile)
 - Set `AWS_PROFILE` environment variable
 - Make bedrock completion call
+
 ```python
 import os
 from litellm import completion
@@ -1940,9 +1943,6 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/images/generations' \
     "colorGuidedGenerationParams":{"colors":["#FFFFFF"]}
 }'
 ```
-</TabItem>
-</Tabs>
-
 
 | Model Name              | Function Call                               |
 |-------------------------|---------------------------------------------|
