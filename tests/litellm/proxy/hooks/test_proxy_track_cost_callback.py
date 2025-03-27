@@ -12,6 +12,9 @@ sys.path.insert(
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from create_mock_standard_logging_payload import create_standard_logging_payload
+
+import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.types.utils import StandardLoggingPayload
@@ -80,3 +83,87 @@ async def test_async_post_call_failure_hook():
         assert metadata["status"] == "failure"
         assert "error_information" in metadata
         assert metadata["original_key"] == "original_value"
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_success_hook_with_disabled_spend():
+    # Setup
+    logger = _ProxyDBLogger()
+
+    # Mock user_api_key_dict
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        key_alias="test_alias",
+        user_email="test@example.com",
+        user_id="test_user_id",
+        team_id="test_team_id",
+        org_id="test_org_id",
+        team_alias="test_team_alias",
+        end_user_id="test_end_user_id",
+    )
+
+    # Mock request and response data
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+    response_data = {}
+
+    # Mock general_settings to disable spend updates
+    with patch(
+        "litellm.proxy.proxy_server.general_settings", {"disable_spend_updates": True}
+    ):
+        # Mock update_database function
+        with patch(
+            "litellm.proxy.proxy_server.update_database", new_callable=AsyncMock
+        ) as mock_update_database:
+            # Call the method
+            await logger.async_post_call_success_hook(
+                data=request_data,
+                response={},
+                user_api_key_dict=user_api_key_dict,
+            )
+
+            # Verify update_database was not called
+            mock_update_database.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_success_hook_with_no_key_team_in_metadata():
+    # Setup
+    litellm._turn_on_debug()
+    logger = _ProxyDBLogger()
+
+    # Mock user_api_key_dict
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        key_alias="test_alias",
+        user_email="test@example.com",
+        user_id="test_user_id",
+        team_id="test_team_id",
+        org_id="test_org_id",
+        team_alias="test_team_alias",
+        end_user_id="test_end_user_id",
+    )
+
+    # Mock request and response data
+    slp = create_standard_logging_payload()
+    slp["response_cost"] = 10.0
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {},
+        "standard_logging_object": slp,
+    }
+    response_data = {}
+
+    with patch(
+        "litellm.proxy.proxy_server.update_database", new_callable=AsyncMock
+    ) as mock_update_database:
+        # Call the method
+        await logger._PROXY_track_cost_callback(
+            kwargs=request_data,
+            completion_response={},
+        )
+
+        mock_update_database.assert_called_once()
