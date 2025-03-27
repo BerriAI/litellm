@@ -18,7 +18,7 @@ class TestMistralTransform:
 
     def test_map_mistral_params(self):
         """Test that parameters are correctly mapped"""
-        test_params = {"input": "Hello world", "temperature": 0.7, "max_tokens": 200, "max_completion_tokens": 256}
+        test_params = {"temperature": 0.7, "max_tokens": 200, "max_completion_tokens": 256}
 
         result = self.config.map_openai_params(
             non_default_params=test_params,
@@ -28,11 +28,11 @@ class TestMistralTransform:
         )
 
         # The function should properly map max_completion_tokens to max_tokens and override max_tokens
-        assert result == {"input": "Hello world", "temperature": 0.7, "max_tokens": 256}
+        assert result == {"temperature": 0.7, "max_tokens": 256}
 
     def test_mistral_max_tokens_backward_compat(self):
         """Test that parameters are correctly mapped"""
-        test_params = {"input": "Hello world", "temperature": 0.7, "max_tokens": 200,}
+        test_params = {"temperature": 0.7, "max_tokens": 200,}
 
         result = self.config.map_openai_params(
             non_default_params=test_params,
@@ -41,5 +41,5 @@ class TestMistralTransform:
             drop_params=False,
         )
 
-        # The function should properly map max_completion_tokens to max_tokens and override max_tokens
-        assert result == {"input": "Hello world", "temperature": 0.7, "max_tokens": 200}
+        # The function should properly map max_tokens if max_completion_tokens is not provided
+        assert result == {"temperature": 0.7, "max_tokens": 200}
