@@ -24,9 +24,9 @@ def test_schema_migration_check(schema_setup):
     # test_db_url = "postgresql://neondb_owner:npg_JiZPS0DAhRn4@ep-delicate-wave-a55cvbuc.us-east-2.aws.neon.tech/neondb?sslmode=require"
     os.environ["DATABASE_URL"] = test_db_url
 
-    deploy_dir = Path("../../deploy")
+    deploy_dir = Path("./deploy")
     source_migrations_dir = deploy_dir / "migrations"
-    schema_path = Path("../../schema.prisma")
+    schema_path = Path("./schema.prisma")
 
     # Create temporary migrations directory next to schema.prisma
     temp_migrations_dir = schema_path.parent / "migrations"
