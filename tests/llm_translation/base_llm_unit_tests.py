@@ -1086,7 +1086,6 @@ class BaseAnthropicChatTest(ABC):
             **base_completion_call_args,
             messages=messages,
             response_format=RFormat,
-            max_tokens=16500,
         )
 
         print(response)

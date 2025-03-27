@@ -369,6 +369,14 @@ class AnthropicConfig(BaseConfig):
                 optional_params["metadata"] = {"user_id": value}
             if param == "thinking":
                 optional_params["thinking"] = value
+
+        ## handle thinking tokens
+        if is_thinking_enabled and "max_tokens" not in optional_params:
+            thinking_token_budget = cast(dict, optional_params["thinking"]).get(
+                "budget_tokens", None
+            )
+            if thinking_token_budget is not None:
+                optional_params["max_tokens"] = thinking_token_budget + self.max_tokens
         return optional_params
 
     def _create_json_tool_call_for_response_format(
