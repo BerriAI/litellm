@@ -12,6 +12,7 @@ import { RequestResponsePanel } from "./columns";
 import { ErrorViewer } from './ErrorViewer';
 import { internalUserRoles } from "../../utils/roles";
 import { ConfigInfoMessage } from './ConfigInfoMessage';
+import { Tooltip } from "antd";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -681,7 +682,9 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">API Base:</span>
-              <span>{row.original.api_base || "-"}</span>
+              <Tooltip title={row.original.api_base || "-"}>
+                <span className="max-w-[15ch] truncate block">{row.original.api_base || "-"}</span>
+              </Tooltip>
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">Start Time:</span>
