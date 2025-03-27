@@ -17,12 +17,12 @@ def schema_setup(postgresql_my):
     return postgresql_my
 
 
-def test_aaaasschema_migration_check(schema_setup):
+def test_aaaasschema_migration_check(schema_setup, monkeypatch):
     """Test to check if schema requires migration"""
     # Set test database URL
     test_db_url = f"postgresql://{schema_setup.info.user}:@{schema_setup.info.host}:{schema_setup.info.port}/{schema_setup.info.dbname}"
     # test_db_url = "postgresql://neondb_owner:npg_JiZPS0DAhRn4@ep-delicate-wave-a55cvbuc.us-east-2.aws.neon.tech/neondb?sslmode=require"
-    os.environ["DATABASE_URL"] = test_db_url
+    monkeypatch.setenv("DATABASE_URL", test_db_url)
 
     deploy_dir = Path("./deploy")
     source_migrations_dir = deploy_dir / "migrations"
@@ -78,6 +78,7 @@ def test_aaaasschema_migration_check(schema_setup):
             print("No schema changes detected. Migration not needed.")
 
     finally:
+        monkeypatch.delenv("DATABASE_URL")
         # Clean up: remove temporary migrations directory
         if temp_migrations_dir.exists():
             shutil.rmtree(temp_migrations_dir)
