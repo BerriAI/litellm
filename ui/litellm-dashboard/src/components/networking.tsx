@@ -183,9 +183,8 @@ export const modelSettingsCall = async (accessToken: String) => {
     //message.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
-  } catch (error) {
-    console.error("Failed to get callbacks:", error);
-    throw error;
+  } catch (error: any) {
+    console.error("Failed to get model settings:", error);
   }
 };
 
@@ -1213,6 +1212,7 @@ export const modelInfoCall = async (
    * Get all models on proxy
    */
   try {
+    console.log("modelInfoCall:", accessToken, userID, userRole);
     let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/model/info` : `/v2/model/info`;
 
     //message.info("Requesting model data");

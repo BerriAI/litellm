@@ -480,9 +480,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     }
     const fetchData = async () => {
       try {
-        const _providerSettings = await modelSettingsCall(accessToken);
-        setProviderSettings(_providerSettings);
-
         // Replace with your actual API call for model data
         const modelDataResponse = await modelInfoCall(
           accessToken,
@@ -491,6 +488,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         );
         console.log("Model data response:", modelDataResponse.data);
         setModelData(modelDataResponse);
+        const _providerSettings = await modelSettingsCall(accessToken);
+        setProviderSettings(_providerSettings);
+
+
 
         // loop through modelDataResponse and get all`model_name` values
         let all_model_groups: Set<string> = new Set();
@@ -1094,7 +1095,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
                 {/* Right side - Filter */}
                 <div className="flex items-center gap-2">
-                  <Text>Filter by Model:</Text>
+                  <Text>Filter by Public Model Name:</Text>
                   <Select
                     className="w-64"
                     defaultValue={selectedModelGroup ?? "all"}
