@@ -292,6 +292,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/available",
         "/user/info",
         "/model/info",
+        "/v1/model/info",
         "/v2/model/info",
         "/v2/key/info",
         "/model_group/info",
@@ -386,6 +387,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/predict/spend/logs",
         "/global/activity",
         "/health/services",
+        "/get/litellm_model_cost_map",
     ] + info_routes
 
     internal_user_routes = [
@@ -412,6 +414,8 @@ class LiteLLMRoutes(enum.Enum):
         "/team/member_add",
         "/team/member_delete",
         "/model/new",
+        "/model/update",
+        "/model/delete",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
