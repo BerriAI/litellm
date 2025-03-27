@@ -97,6 +97,12 @@ class _ProxyDBLogger(CustomLogger):
             update_database,
         )
 
+        if ProxyUpdateSpend.disable_spend_updates() is True:
+            verbose_proxy_logger.debug(
+                "Spend updates are disabled, the `disable_spend_updates` flag is set to True"
+            )
+            return
+
         verbose_proxy_logger.debug("INSIDE _PROXY_track_cost_callback")
         try:
             verbose_proxy_logger.debug(
@@ -131,49 +137,39 @@ class _ProxyDBLogger(CustomLogger):
                 verbose_proxy_logger.debug(
                     f"user_api_key {user_api_key}, prisma_client: {prisma_client}"
                 )
-                if _should_track_cost_callback(
-                    user_api_key=user_api_key,
+                ## UPDATE DATABASE
+                await update_database(
+                    token=user_api_key,
+                    response_cost=response_cost,
                     user_id=user_id,
-                    team_id=team_id,
                     end_user_id=end_user_id,
-                ):
-                    ## UPDATE DATABASE
-                    await update_database(
+                    team_id=team_id,
+                    kwargs=kwargs,
+                    completion_response=completion_response,
+                    start_time=start_time,
+                    end_time=end_time,
+                    org_id=org_id,
+                )
+
+                # update cache
+                asyncio.create_task(
+                    update_cache(
                         token=user_api_key,
-                        response_cost=response_cost,
                         user_id=user_id,
                         end_user_id=end_user_id,
-                        team_id=team_id,
-                        kwargs=kwargs,
-                        completion_response=completion_response,
-                        start_time=start_time,
-                        end_time=end_time,
-                        org_id=org_id,
-                    )
-
-                    # update cache
-                    asyncio.create_task(
-                        update_cache(
-                            token=user_api_key,
-                            user_id=user_id,
-                            end_user_id=end_user_id,
-                            response_cost=response_cost,
-                            team_id=team_id,
-                            parent_otel_span=parent_otel_span,
-                        )
-                    )
-
-                    await proxy_logging_obj.slack_alerting_instance.customer_spend_alert(
-                        token=user_api_key,
-                        key_alias=key_alias,
-                        end_user_id=end_user_id,
                         response_cost=response_cost,
-                        max_budget=end_user_max_budget,
+                        team_id=team_id,
+                        parent_otel_span=parent_otel_span,
                     )
-                else:
-                    raise Exception(
-                        "User API key and team id and user id missing from custom callback."
-                    )
+                )
+
+                await proxy_logging_obj.slack_alerting_instance.customer_spend_alert(
+                    token=user_api_key,
+                    key_alias=key_alias,
+                    end_user_id=end_user_id,
+                    response_cost=response_cost,
+                    max_budget=end_user_max_budget,
+                )
             else:
                 if kwargs["stream"] is not True or (
                     kwargs["stream"] is True and "complete_streaming_response" in kwargs
@@ -220,27 +216,3 @@ class _ProxyDBLogger(CustomLogger):
         if general_settings.get("disable_error_logs") is True:
             return False
         return
-
-
-def _should_track_cost_callback(
-    user_api_key: Optional[str],
-    user_id: Optional[str],
-    team_id: Optional[str],
-    end_user_id: Optional[str],
-) -> bool:
-    """
-    Determine if the cost callback should be tracked based on the kwargs
-    """
-
-    # don't run track cost callback if user opted into disabling spend
-    if ProxyUpdateSpend.disable_spend_updates() is True:
-        return False
-
-    if (
-        user_api_key is not None
-        or user_id is not None
-        or team_id is not None
-        or end_user_id is not None
-    ):
-        return True
-    return False
