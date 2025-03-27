@@ -2,11 +2,17 @@
 Interface for Anthropic's messages API
 
 Use this to call LLMs in Anthropic /messages Request/Response format
+
+This is an __init__.py file to allow the following interface
+
+- litellm.messages.acreate
+- litellm.messages.create
+
 """
 
-from typing import Dict, List, Optional, Union
+from typing import AsyncIterator, Dict, Iterator, List, Optional, Union
 
-from litellm.llms.anthropic.experimental_pass_through.handler import (
+from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
     anthropic_messages as _async_anthropic_messages,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -29,7 +35,7 @@ async def acreate(
     top_k: Optional[int] = None,
     top_p: Optional[float] = None,
     **kwargs
-) -> AnthropicMessagesResponse:
+) -> Union[AnthropicMessagesResponse, AsyncIterator]:
     """
     Async wrapper for Anthropic's messages API
 
@@ -85,7 +91,7 @@ async def create(
     top_k: Optional[int] = None,
     top_p: Optional[float] = None,
     **kwargs
-) -> AnthropicMessagesResponse:
+) -> Union[AnthropicMessagesResponse, Iterator]:
     """
     Async wrapper for Anthropic's messages API
 
