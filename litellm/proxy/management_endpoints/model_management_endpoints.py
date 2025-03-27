@@ -404,6 +404,7 @@ async def delete_model(
 
         from litellm.proxy.proxy_server import (
             llm_router,
+            premium_user,
             prisma_client,
             store_model_in_db,
         )
@@ -415,6 +416,23 @@ async def delete_model(
                     "error": "No DB Connected. Here's how to do it - https://docs.litellm.ai/docs/proxy/virtual_keys"
                 },
             )
+
+        model_in_db = await prisma_client.db.litellm_proxymodeltable.find_unique(
+            where={"model_id": model_info.id}
+        )
+        if model_in_db is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"Model with id={model_info.id} not found in db"},
+            )
+
+        model_params = Deployment(**model_in_db.model_dump())
+        await allow_team_model_action(
+            model_params=model_params,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+            premium_user=premium_user,
+        )
 
         # update DB
         if store_model_in_db is True:
