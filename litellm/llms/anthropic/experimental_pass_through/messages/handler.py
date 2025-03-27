@@ -70,7 +70,7 @@ async def anthropic_messages(
     stop_sequences: Optional[List[str]] = None,
     stream: Optional[bool] = False,
     system: Optional[str] = None,
-    temperature: Optional[float] = 1.0,
+    temperature: Optional[float] = None,
     thinking: Optional[Dict] = None,
     tool_choice: Optional[Dict] = None,
     tools: Optional[List[Dict]] = None,
@@ -154,6 +154,7 @@ async def anthropic_messages(
         in anthropic_messages_provider_config.get_supported_anthropic_messages_params(
             model=model
         )
+        and v is not None
     }
     request_body["stream"] = stream
     request_body["model"] = model
