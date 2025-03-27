@@ -58,7 +58,7 @@ export default function ModelInfoView({
   const [isEditing, setIsEditing] = useState(false);
   const [existingCredential, setExistingCredential] = useState<CredentialItem | null>(null);
 
-  const canEditModel = userRole === "Admin";
+  const canEditModel = userRole === "Admin" || modelData.model_info.created_by === userID;
   const isAdmin = userRole === "Admin";
 
   const usingExistingCredential = modelData.litellm_params?.litellm_credential_name != null && modelData.litellm_params?.litellm_credential_name != undefined;
