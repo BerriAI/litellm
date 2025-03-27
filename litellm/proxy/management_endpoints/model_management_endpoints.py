@@ -528,36 +528,12 @@ async def add_new_model(
                 },
             )
 
-        if model_params.model_info.team_id is not None and premium_user is not True:
-            raise HTTPException(
-                status_code=403,
-                detail={"error": CommonProxyErrors.not_premium_user.value},
-            )
-
-        _existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
-            where={"team_id": model_params.model_info.team_id}
-        )
-
-        if _existing_team_row is None:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "Team id={} does not exist in db".format(
-                        model_params.model_info.team_id
-                    )
-                },
-            )
-        existing_team_row = LiteLLM_TeamTable(**_existing_team_row.model_dump())
-
-        if not check_if_team_id_matches_key(
-            team_id=model_params.model_info.team_id,
+        await allow_team_model_action(
+            model_params=model_params,
             user_api_key_dict=user_api_key_dict,
-            team_obj=existing_team_row,
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail={"error": "Team ID does not match the API key's team ID"},
-            )
+            prisma_client=prisma_client,
+            premium_user=premium_user,
+        )
 
         model_response: Optional[LiteLLM_ProxyModelTable] = None
         # update DB
