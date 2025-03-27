@@ -322,7 +322,7 @@ async def _add_team_model_to_db(
 def check_if_team_id_matches_key(
     team_id: Optional[str],
     user_api_key_dict: UserAPIKeyAuth,
-    existing_team_row: Optional[LiteLLM_TeamTable] = None,
+    team_obj: Optional[LiteLLM_TeamTable] = None,
 ) -> bool:
     can_make_call = True
     if (
@@ -333,8 +333,8 @@ def check_if_team_id_matches_key(
     if team_id is None:
         if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
             can_make_call = False
-    elif existing_team_row is None or not _is_user_team_admin(
-        user_api_key_dict=user_api_key_dict, team_obj=existing_team_row
+    elif team_obj is None or not _is_user_team_admin(
+        user_api_key_dict=user_api_key_dict, team_obj=team_obj
     ):
         can_make_call = False
     return can_make_call
@@ -493,7 +493,7 @@ async def add_new_model(
         if not check_if_team_id_matches_key(
             team_id=model_params.model_info.team_id,
             user_api_key_dict=user_api_key_dict,
-            existing_team_row=existing_team_row,
+            team_obj=existing_team_row,
         ):
             raise HTTPException(
                 status_code=403,
