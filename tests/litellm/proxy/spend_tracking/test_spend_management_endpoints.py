@@ -416,7 +416,8 @@ class TestSpendLogsPayload:
         # litellm._turn_on_debug()
 
         with patch.object(
-            litellm.proxy.proxy_server, "_set_spend_logs_payload"
+            litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter,
+            "_set_spend_logs_payload",
         ) as mock_client, patch.object(litellm.proxy.proxy_server, "prisma_client"):
             response = await litellm.acompletion(
                 model="gpt-4o",
@@ -509,7 +510,8 @@ class TestSpendLogsPayload:
         client = AsyncHTTPHandler()
 
         with patch.object(
-            litellm.proxy.proxy_server, "_set_spend_logs_payload"
+            litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter,
+            "_set_spend_logs_payload",
         ) as mock_client, patch.object(
             litellm.proxy.proxy_server, "prisma_client"
         ), patch.object(
@@ -604,7 +606,8 @@ class TestSpendLogsPayload:
         )
 
         with patch.object(
-            litellm.proxy.proxy_server, "_set_spend_logs_payload"
+            litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter,
+            "_set_spend_logs_payload",
         ) as mock_client, patch.object(
             litellm.proxy.proxy_server, "prisma_client"
         ), patch.object(
