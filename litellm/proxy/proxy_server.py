@@ -6895,6 +6895,14 @@ async def login(request: Request):  # noqa: PLR0915
         user_email = getattr(_user_row, "user_email", "unknown")
         _password = getattr(_user_row, "password", "unknown")
 
+        if _password is None:
+            raise ProxyException(
+                message="User has no password set. Please set a password for the user via `/user/update`.",
+                type=ProxyErrorTypes.auth_error,
+                param="password",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
+
         # check if password == _user_row.password
         hash_password = hash_token(token=password)
         if secrets.compare_digest(password, _password) or secrets.compare_digest(
