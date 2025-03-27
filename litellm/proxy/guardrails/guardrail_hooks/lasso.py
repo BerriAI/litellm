@@ -6,13 +6,12 @@
 # +-------------------------------------------------------------+
 
 import os
-import sys
-from typing import Dict, List, Literal, Optional, Any
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import HTTPException
 
-from litellm._logging import verbose_proxy_logger
 from litellm import DualCache
+from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -22,6 +21,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.utils import CustomLoggerCallTypes
 
 
 class LassoGuardrailMissingSecrets(Exception):
@@ -43,10 +43,14 @@ class LassoGuardrail(CustomGuardrail):
         conversation_id: Optional[str] = None,
         **kwargs,
     ):
-        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.async_handler = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
         self.lasso_api_key = lasso_api_key or os.environ.get("LASSO_API_KEY")
         self.user_id = user_id or os.environ.get("LASSO_USER_ID")
-        self.conversation_id = conversation_id or os.environ.get("LASSO_CONVERSATION_ID")
+        self.conversation_id = conversation_id or os.environ.get(
+            "LASSO_CONVERSATION_ID"
+        )
 
         if self.lasso_api_key is None:
             msg = (
@@ -64,8 +68,8 @@ class LassoGuardrail(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal["completion", "text_completion"],
-    ) -> Exception | str | dict | None:
+        call_type: CustomLoggerCallTypes,
+    ) -> Union[Exception, str, dict, None]:
         verbose_proxy_logger.debug("Inside Lasso Pre-Call Hook")
         messages: List[Dict[str, str]] = data.get("messages", [])
 
@@ -86,7 +90,9 @@ class LassoGuardrail(CustomGuardrail):
                 raise e
             verbose_proxy_logger.error(f"Error calling Lasso API: {str(e)}")
             # Instead of allowing the request to proceed, raise an exception
-            raise LassoGuardrailAPIError(f"Failed to verify request safety with Lasso API: {str(e)}")
+            raise LassoGuardrailAPIError(
+                f"Failed to verify request safety with Lasso API: {str(e)}"
+            )
 
     def _prepare_headers(self) -> dict[str, str]:
         """Prepare headers for the Lasso API request."""
@@ -97,7 +103,10 @@ class LassoGuardrail(CustomGuardrail):
             )
             raise LassoGuardrailMissingSecrets(msg)
 
-        headers: dict[str, str] = {"lasso-api-key": self.lasso_api_key, "Content-Type": "application/json"}
+        headers: dict[str, str] = {
+            "lasso-api-key": self.lasso_api_key,
+            "Content-Type": "application/json",
+        }
 
         # Add optional headers if provided
         if self.user_id:
@@ -112,7 +121,9 @@ class LassoGuardrail(CustomGuardrail):
         """Prepare the payload for the Lasso API request."""
         return {"messages": messages}
 
-    async def _call_lasso_api(self, headers: Dict[str, str], payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def _call_lasso_api(
+        self, headers: Dict[str, str], payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Call the Lasso API and return the response."""
         verbose_proxy_logger.debug(f"Sending request to Lasso API: {payload}")
         response = await self.async_handler.post(
@@ -130,7 +141,9 @@ class LassoGuardrail(CustomGuardrail):
         """Process the Lasso API response and raise exceptions if violations are detected."""
         if response and response.get("violations_detected") is True:
             violated_deputies = self._parse_violated_deputies(response)
-            verbose_proxy_logger.warning(f"Lasso guardrail detected violations: {violated_deputies}")
+            verbose_proxy_logger.warning(
+                f"Lasso guardrail detected violations: {violated_deputies}"
+            )
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -154,8 +167,8 @@ class LassoGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal["completion", "text_completion"],
-    ) -> Exception | str | dict | None:
+        call_type: CustomLoggerCallTypes,
+    ) -> Union[Exception, str, dict, None]:
         """
         This is used for during_call moderation
         """

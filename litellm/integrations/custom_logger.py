@@ -1,16 +1,7 @@
 #### What this does ####
 #    On success, logs events to Promptlayer
 import traceback
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    AsyncGenerator,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    Union,
-)
+from typing import TYPE_CHECKING, Any, AsyncGenerator, List, Optional, Tuple, Union
 
 from pydantic import BaseModel
 
@@ -20,6 +11,7 @@ from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
 from litellm.types.utils import (
     AdapterCompletionStreamWrapper,
+    CustomLoggerCallTypes,
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
@@ -196,16 +188,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-        ],
+        call_type: CustomLoggerCallTypes,
     ) -> Optional[
         Union[Exception, str, dict]
     ]:  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm
@@ -243,14 +226,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-        ],
+        call_type: CustomLoggerCallTypes,
     ) -> Any:
         pass
 
