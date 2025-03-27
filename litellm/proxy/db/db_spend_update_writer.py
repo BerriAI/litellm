@@ -7,9 +7,8 @@ from typing import Any, Optional, Union
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LiteLLM_UserTable, SpendLogsPayload
-from litellm.proxy.proxy_server import hash_token
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
-from litellm.proxy.utils import PrismaClient, ProxyUpdateSpend
+from litellm.proxy.utils import PrismaClient, ProxyUpdateSpend, hash_token
 
 
 class DBSpendUpdateWriter:
