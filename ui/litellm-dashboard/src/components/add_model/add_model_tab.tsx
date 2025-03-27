@@ -232,6 +232,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
               label="Team"
               name="team_id"
               className="mb-4"
+              tooltip="Only keys for this team, will be able to call this model."
               rules={[
                 {
                   required: !isAdmin, // Required if not admin
