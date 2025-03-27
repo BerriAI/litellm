@@ -78,7 +78,6 @@ def test_aaaasschema_migration_check(schema_setup, monkeypatch):
             print("No schema changes detected. Migration not needed.")
 
     finally:
-        monkeypatch.delenv("DATABASE_URL")
         # Clean up: remove temporary migrations directory
         if temp_migrations_dir.exists():
             shutil.rmtree(temp_migrations_dir)
