@@ -1151,6 +1151,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 teams={teams}
                 credentials={credentialsList}
                 accessToken={accessToken}
+                userRole={userRole}
               />
             </TabPanel>
             <TabPanel>
