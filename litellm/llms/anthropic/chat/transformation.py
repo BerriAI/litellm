@@ -301,9 +301,9 @@ class AnthropicConfig(BaseConfig):
         drop_params: bool,
     ) -> dict:
 
-        is_thinking_enabled = False
-        if "thinking" in non_default_params:
-            is_thinking_enabled = True
+        is_thinking_enabled = self.is_thinking_enabled(
+            non_default_params=non_default_params
+        )
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_tokens"] = value
@@ -371,12 +371,9 @@ class AnthropicConfig(BaseConfig):
                 optional_params["thinking"] = value
 
         ## handle thinking tokens
-        if is_thinking_enabled and "max_tokens" not in optional_params:
-            thinking_token_budget = cast(dict, optional_params["thinking"]).get(
-                "budget_tokens", None
-            )
-            if thinking_token_budget is not None:
-                optional_params["max_tokens"] = thinking_token_budget + self.max_tokens
+        self.update_optional_params_with_thinking_tokens(
+            optional_params=optional_params
+        )
         return optional_params
 
     def _create_json_tool_call_for_response_format(

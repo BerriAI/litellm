@@ -210,6 +210,7 @@ class AmazonConverseConfig(BaseConfig):
         drop_params: bool,
         messages: Optional[List[AllMessageValues]] = None,
     ) -> dict:
+        is_thinking_enabled = self.is_thinking_enabled(non_default_params)
         for param, value in non_default_params.items():
             if param == "response_format" and isinstance(value, dict):
 
@@ -247,8 +248,11 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=[_tool]
                 )
-                if litellm.utils.supports_tool_choice(
-                    model=model, custom_llm_provider=self.custom_llm_provider
+                if (
+                    litellm.utils.supports_tool_choice(
+                        model=model, custom_llm_provider=self.custom_llm_provider
+                    )
+                    and not is_thinking_enabled
                 ):
                     optional_params["tool_choice"] = ToolChoiceValuesBlock(
                         tool=SpecificToolChoiceBlock(
@@ -284,6 +288,9 @@ class AmazonConverseConfig(BaseConfig):
                     optional_params["tool_choice"] = _tool_choice_value
             if param == "thinking":
                 optional_params["thinking"] = value
+        self.update_optional_params_with_thinking_tokens(
+            optional_params=optional_params
+        )
         return optional_params
 
     @overload

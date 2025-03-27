@@ -13,12 +13,13 @@ from typing import (
     Optional,
     Type,
     Union,
+    cast,
 )
 
 import httpx
 from pydantic import BaseModel
 
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.constants import DEFAULT_MAX_TOKENS, RESPONSE_FORMAT_TOOL_NAME
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -101,6 +102,23 @@ class BaseConfig(ABC):
         self, response_format: Optional[Union[Type[BaseModel], dict]]
     ) -> Optional[dict]:
         return type_to_response_format_param(response_format=response_format)
+
+    def is_thinking_enabled(self, non_default_params: dict) -> bool:
+        return non_default_params.get("thinking", {}).get("type", None) == "enabled"
+
+    def update_optional_params_with_thinking_tokens(self, optional_params: dict):
+        """
+        Handles scenario where max tokens is not specified. For anthropic models (anthropic api/bedrock/vertex ai), this requires having the max tokens being set and being greater than the thinking token budget.
+        """
+        is_thinking_enabled = self.is_thinking_enabled(optional_params)
+        if is_thinking_enabled and "max_tokens" not in optional_params:
+            thinking_token_budget = cast(dict, optional_params["thinking"]).get(
+                "budget_tokens", None
+            )
+            if thinking_token_budget is not None:
+                optional_params["max_tokens"] = (
+                    thinking_token_budget + DEFAULT_MAX_TOKENS
+                )
 
     def should_fake_stream(
         self,
