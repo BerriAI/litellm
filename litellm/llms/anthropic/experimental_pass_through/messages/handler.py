@@ -143,8 +143,6 @@ async def anthropic_messages(
         },
         custom_llm_provider=_custom_llm_provider,
     )
-    litellm_logging_obj.model_call_details.update(kwargs)
-
     # Prepare request body
     request_body = locals().copy()
     request_body = {
@@ -159,6 +157,7 @@ async def anthropic_messages(
     request_body["stream"] = stream
     request_body["model"] = model
     litellm_logging_obj.stream = stream
+    litellm_logging_obj.model_call_details.update(request_body)
 
     # Make the request
     request_url = anthropic_messages_provider_config.get_complete_url(
