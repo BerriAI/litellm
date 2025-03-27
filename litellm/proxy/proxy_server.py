@@ -3436,6 +3436,7 @@ async def model_list(
     else:
         proxy_model_list = llm_router.get_model_names()
         model_access_groups = llm_router.get_model_access_groups()
+
     key_models = get_key_models(
         user_api_key_dict=user_api_key_dict,
         proxy_model_list=proxy_model_list,
@@ -3445,6 +3446,7 @@ async def model_list(
     team_models: List[str] = user_api_key_dict.team_models
 
     if team_id:
+        key_models = []
         team_object = await get_team_object(
             team_id=team_id,
             prisma_client=prisma_client,
@@ -3461,7 +3463,7 @@ async def model_list(
     )
 
     all_models = get_complete_model_list(
-        key_models=key_models if not team_models else [],
+        key_models=key_models,
         team_models=team_models,
         proxy_model_list=proxy_model_list,
         user_model=user_model,
