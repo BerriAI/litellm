@@ -950,6 +950,12 @@ openaiOSeriesConfig = OpenAIOSeriesConfig()
 from .llms.openai.chat.gpt_transformation import (
     OpenAIGPTConfig,
 )
+from .llms.openai.transcriptions.whisper_transformation import (
+    OpenAIWhisperAudioTranscriptionConfig,
+)
+from .llms.openai.transcriptions.gpt_transformation import (
+    OpenAIGPTAudioTranscriptionConfig,
+)
 
 openAIGPTConfig = OpenAIGPTConfig()
 from .llms.openai.chat.gpt_audio_transformation import (
