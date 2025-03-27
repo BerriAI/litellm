@@ -17,7 +17,7 @@ def schema_setup(postgresql_my):
     return postgresql_my
 
 
-def test_schema_migration_check(schema_setup):
+def test_aaaasschema_migration_check(schema_setup):
     """Test to check if schema requires migration"""
     # Set test database URL
     test_db_url = f"postgresql://{schema_setup.info.user}:@{schema_setup.info.host}:{schema_setup.info.port}/{schema_setup.info.dbname}"
