@@ -1,6 +1,7 @@
 /**
  * Helper file for calls being made to proxy
  */
+import { all_admin_roles } from "@/utils/roles";
 import { message } from "antd";
 
 const isLocal = process.env.NODE_ENV === "development";
@@ -131,9 +132,9 @@ export const modelCreateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await response.text();
       const errorMsg =
-        errorData.error?.message?.error ||
+        errorData||    
         "Network response was not ok";
       message.error(errorMsg);
       throw new Error(errorMsg);
@@ -183,9 +184,8 @@ export const modelSettingsCall = async (accessToken: String) => {
     //message.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
-  } catch (error) {
-    console.error("Failed to get callbacks:", error);
-    throw error;
+  } catch (error: any) {
+    console.error("Failed to get model settings:", error);
   }
 };
 
@@ -1213,8 +1213,12 @@ export const modelInfoCall = async (
    * Get all models on proxy
    */
   try {
+    console.log("modelInfoCall:", accessToken, userID, userRole);
     let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/model/info` : `/v2/model/info`;
 
+    if (!all_admin_roles.includes(userRole as string)) { // only show users models they've added
+      url += `?user_models_only=true`;
+    }
     //message.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",

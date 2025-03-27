@@ -215,7 +215,6 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
     _add_team_model_to_db,
-    check_if_team_id_matches_key,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     router as model_management_router,
@@ -5494,9 +5493,40 @@ async def transform_request(request: TransformRequestBody):
     return return_raw_request(endpoint=request.call_type, kwargs=request.request_body)
 
 
+async def _check_if_model_is_user_added(
+    models: List[Dict],
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: Optional[PrismaClient],
+) -> List[Dict]:
+    """
+    Check if model is in db
+
+    Check if db model is 'created_by' == user_api_key_dict.user_id
+
+    Only return models that match
+    """
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+    filtered_models = []
+    for model in models:
+        id = model.get("model_info", {}).get("id", None)
+        if id is None:
+            continue
+        db_model = await prisma_client.db.litellm_proxymodeltable.find_unique(
+            where={"model_id": id}
+        )
+        if db_model is not None:
+            if db_model.created_by == user_api_key_dict.user_id:
+                filtered_models.append(model)
+    return filtered_models
+
+
 @router.get(
     "/v2/model/info",
-    description="v2 - returns all the models set on the config.yaml, shows 'user_access' = True if the user has access to the model. Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)",
+    description="v2 - returns models available to the user based on their API key permissions. Shows model info from config.yaml (except api key and api base). Filter to just user-added models with ?user_models_only=true",
     tags=["model management"],
     dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
@@ -5505,6 +5535,9 @@ async def model_info_v2(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     model: Optional[str] = fastapi.Query(
         None, description="Specify the model name (optional)"
+    ),
+    user_models_only: Optional[bool] = fastapi.Query(
+        False, description="Only return models added by this user"
     ),
     debug: Optional[bool] = False,
 ):
@@ -5535,6 +5568,20 @@ async def model_info_v2(
 
     if model is not None:
         all_models = [m for m in all_models if m["model_name"] == model]
+
+    if user_models_only is True:
+        """
+        Check if model is in db
+
+        Check if db model is 'created_by' == user_api_key_dict.user_id
+
+        Only return models that match
+        """
+        all_models = await _check_if_model_is_user_added(
+            models=all_models,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        )
 
     # fill in model info based on config.yaml and litellm model_prices_and_context_window.json
     for _model in all_models:
