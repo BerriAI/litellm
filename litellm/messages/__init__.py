@@ -9,6 +9,9 @@ from typing import Dict, List, Optional, Union
 from litellm.llms.anthropic.experimental_pass_through.handler import (
     anthropic_messages as _async_anthropic_messages,
 )
+from litellm.types.llms.anthropic_messages.anthropic_response import (
+    AnthropicMessagesResponse,
+)
 
 
 async def acreate(
@@ -26,7 +29,7 @@ async def acreate(
     top_k: Optional[int] = None,
     top_p: Optional[float] = None,
     **kwargs
-) -> Dict:
+) -> AnthropicMessagesResponse:
     """
     Async wrapper for Anthropic's messages API
 
@@ -82,7 +85,7 @@ async def create(
     top_k: Optional[int] = None,
     top_p: Optional[float] = None,
     **kwargs
-) -> Dict:
+) -> AnthropicMessagesResponse:
     """
     Async wrapper for Anthropic's messages API
 
