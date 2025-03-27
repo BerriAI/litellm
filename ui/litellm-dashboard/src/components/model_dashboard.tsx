@@ -1091,7 +1091,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 <div>
                   <Title>Model Management</Title>
                   {!all_admin_roles.includes(userRole) && <Text className="text-tremor-content">
-                    Add and manage models for teams you are an admin for.
+                    Add models for teams you are an admin for.
                   </Text>}
                 </div>
 

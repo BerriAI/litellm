@@ -386,6 +386,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/predict/spend/logs",
         "/global/activity",
         "/health/services",
+        "/get/litellm_model_cost_map",
     ] + info_routes
 
     internal_user_routes = [
