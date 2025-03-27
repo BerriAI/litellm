@@ -3393,6 +3393,7 @@ class ProxyStartupEvent:
             return prisma_client
         except Exception as e:
             PrismaDBExceptionHandler.handle_db_exception(e)
+            return None
 
     @classmethod
     def _init_dd_tracer(cls):
