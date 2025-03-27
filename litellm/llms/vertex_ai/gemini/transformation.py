@@ -23,6 +23,7 @@ from litellm.types.files import (
     get_file_mime_type_for_file_type,
     get_file_type_from_extension,
     is_gemini_1_5_accepted_file_type,
+    requires_base64_encoding,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -55,16 +56,16 @@ else:
     LiteLLMLoggingObj = Any
 
 
-def _process_gemini_image(image_url: str, format: Optional[str] = None) -> PartType:
+def _process_gemini_file(file_url: str, format: Optional[str] = None) -> PartType:
     """
-    Given an image URL, return the appropriate PartType for Gemini
+    Given an URL file, return the appropriate PartType for Gemini based on the file type.
     """
 
     try:
         # GCS URIs
-        if "gs://" in image_url:
+        if "gs://" in file_url:
             # Figure out file type
-            extension_with_dot = os.path.splitext(image_url)[-1]  # Ex: ".png"
+            extension_with_dot = os.path.splitext(file_url)[-1]  # Ex: ".png"
             extension = extension_with_dot[1:]  # Ex: "png"
 
             if not format:
@@ -77,28 +78,39 @@ def _process_gemini_image(image_url: str, format: Optional[str] = None) -> PartT
                 mime_type = get_file_mime_type_for_file_type(file_type)
             else:
                 mime_type = format
-            file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
+            file_data = FileDataType(mime_type=mime_type, file_uri=file_url)
 
             return PartType(file_data=file_data)
         elif (
-            "https://" in image_url
-            and (image_type := format or _get_image_mime_type_from_url(image_url))
+            "https://" in file_url
+            and (file_type := format or _get_mime_type_from_url(file_url))
             is not None
         ):
 
-            file_data = FileDataType(file_uri=image_url, mime_type=image_type)
+            file_data = FileDataType(file_uri=file_url, mime_type=file_type)
             return PartType(file_data=file_data)
-        elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
+        elif "http://" in file_url or "https://" in file_url or "base64" in file_url:
             # https links for unsupported mime types and base64 images
-            image = convert_to_anthropic_image_obj(image_url, format=format)
-            _blob = BlobType(data=image["data"], mime_type=image["media_type"])
-            return PartType(inline_data=_blob)
-        raise Exception("Invalid image received - {}".format(image_url))
+            mime_type = format or _get_mime_type_from_url(file_url)
+
+            # Handle different file types
+            if mime_type and not requires_base64_encoding(mime_type):
+                # If the file type is not base64 encoded, use the file_url directly
+                response = httpx.get(file_url)
+                text_content = response.text
+                _blob = BlobType(data=text_content, mime_type=mime_type)
+                return PartType(inline_data=_blob)
+            else:
+                # For binary files, use base64 encoding
+                image = convert_to_anthropic_image_obj(file_url, format=format)
+                _blob = BlobType(data=image["data"], mime_type=image["media_type"])
+                return PartType(inline_data=_blob)
+        raise Exception("Invalid file received - {}".format(file_url)) #corrcted file spelling
     except Exception as e:
         raise e
 
 
-def _get_image_mime_type_from_url(url: str) -> Optional[str]:
+def _get_mime_type_from_url(url: str) -> Optional[str]:
     """
     Get mime type for common image URLs
     See gemini mime types: https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/image-understanding#image-requirements
@@ -112,16 +124,32 @@ def _get_image_mime_type_from_url(url: str) -> Optional[str]:
         Returns: image/jpeg
     """
     url = url.lower()
+    # Images types
     if url.endswith((".jpg", ".jpeg")):
         return "image/jpeg"
     elif url.endswith(".png"):
         return "image/png"
     elif url.endswith(".webp"):
         return "image/webp"
+    # Videos types
     elif url.endswith(".mp4"):
         return "video/mp4"
+    # Document types
     elif url.endswith(".pdf"):
         return "application/pdf"
+    # Text Types
+    elif url.endswith((".md", ".markdown")):
+        return "text/markdown"
+    elif url.endswith(".txt"):
+        return "text/plain"
+    elif url.endswith(".csv"):
+        return "text/csv"
+    elif url.endswith(".json"):
+        return "application/json"
+    elif url.endswith((".html", ".htm")):
+        return "text/html"
+    elif url.endswith(".xml"):
+        return "application/xml"
     return None
 
 
@@ -171,8 +199,8 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 format = img_element["image_url"].get("format")
                             else:
                                 image_url = img_element["image_url"]
-                            _part = _process_gemini_image(
-                                image_url=image_url, format=format
+                            _part = _process_gemini_file(
+                                file_url=image_url, format=format
                             )
                             _parts.append(_part)
                     user_content.extend(_parts)
