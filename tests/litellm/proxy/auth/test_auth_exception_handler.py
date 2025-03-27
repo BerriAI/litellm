@@ -101,9 +101,33 @@ def test_should_allow_request_on_db_unavailable_false():
     assert handler.should_allow_request_on_db_unavailable() == False
 
 
-# Test _handle_authentication_error method
 @pytest.mark.asyncio
-async def test_handle_authentication_error_db_unavailable():
+@pytest.mark.parametrize(
+    "prisma_error",
+    [
+        PrismaError(),
+        DataError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
+        UniqueViolationError(
+            data={"user_facing_error": {"meta": {"table": "test_table"}}}
+        ),
+        ForeignKeyViolationError(
+            data={"user_facing_error": {"meta": {"table": "test_table"}}}
+        ),
+        MissingRequiredValueError(
+            data={"user_facing_error": {"meta": {"table": "test_table"}}}
+        ),
+        RawQueryError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
+        TableNotFoundError(
+            data={"user_facing_error": {"meta": {"table": "test_table"}}}
+        ),
+        RecordNotFoundError(
+            data={"user_facing_error": {"meta": {"table": "test_table"}}}
+        ),
+        HTTPClientClosedError(),
+        ClientNotConnectedError(),
+    ],
+)
+async def test_handle_authentication_error_db_unavailable(prisma_error):
     handler = UserAPIKeyAuthExceptionHandler()
 
     # Mock request and other dependencies
@@ -118,9 +142,8 @@ async def test_handle_authentication_error_db_unavailable():
         "litellm.proxy.proxy_server.general_settings",
         {"allow_requests_on_db_unavailable": True},
     ):
-        db_error = prisma_errors.PrismaError()
         result = await handler._handle_authentication_error(
-            db_error,
+            prisma_error,
             mock_request,
             mock_request_data,
             mock_route,
