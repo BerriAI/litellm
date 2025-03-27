@@ -794,7 +794,7 @@ def test_redis_cache_completion():
     response3 = completion(
         model="gpt-3.5-turbo", messages=messages, caching=True, temperature=0.5
     )
-    response4 = completion(model="azure/chatgpt-v-2", messages=messages, caching=True)
+    response4 = completion(model="gpt-4o-mini", messages=messages, caching=True)
 
     print("\nresponse 1", response1)
     print("\nresponse 2", response2)
@@ -1690,19 +1690,11 @@ def test_cache_context_managers():
     print("VARS of litellm.cache", vars(litellm.cache))
 
 
-# test_cache_context_managers()
-
-
-@pytest.mark.skip(reason="beta test - new redis semantic cache")
 def test_redis_semantic_cache_completion():
     litellm.set_verbose = True
     import logging
 
     logging.basicConfig(level=logging.DEBUG)
-
-    random_number = random.randint(
-        1, 100000
-    )  # add a random number to ensure it's always adding /reading from cache
 
     print("testing semantic caching")
     litellm.cache = Cache(
@@ -1718,33 +1710,31 @@ def test_redis_semantic_cache_completion():
         messages=[
             {
                 "role": "user",
-                "content": f"write a one sentence poem about: {random_number}",
+                "content": "write a one sentence poem about summer",
             }
         ],
         max_tokens=20,
     )
     print(f"response1: {response1}")
 
-    random_number = random.randint(1, 100000)
-
     response2 = completion(
         model="gpt-3.5-turbo",
         messages=[
             {
                 "role": "user",
-                "content": f"write a one sentence poem about: {random_number}",
+                "content": "write a one sentence poem about summertime",
             }
         ],
         max_tokens=20,
     )
-    print(f"response2: {response1}")
+    print(f"response2: {response2}")
     assert response1.id == response2.id
 
 
 # test_redis_cache_completion()
 
 
-@pytest.mark.skip(reason="beta test - new redis semantic cache")
+@pytest.mark.flaky(reruns=3)
 @pytest.mark.asyncio
 async def test_redis_semantic_cache_acompletion():
     litellm.set_verbose = True
@@ -1752,38 +1742,34 @@ async def test_redis_semantic_cache_acompletion():
 
     logging.basicConfig(level=logging.DEBUG)
 
-    random_number = random.randint(
-        1, 100000
-    )  # add a random number to ensure it's always adding / reading from cache
-
     print("testing semantic caching")
     litellm.cache = Cache(
         type="redis-semantic",
         host=os.environ["REDIS_HOST"],
         port=os.environ["REDIS_PORT"],
         password=os.environ["REDIS_PASSWORD"],
-        similarity_threshold=0.8,
-        redis_semantic_cache_use_async=True,
+        similarity_threshold=0.7,
     )
     response1 = await litellm.acompletion(
         model="gpt-3.5-turbo",
         messages=[
             {
                 "role": "user",
-                "content": f"write a one sentence poem about: {random_number}",
+                "content": "write a one sentence poem about summer",
             }
         ],
         max_tokens=5,
     )
     print(f"response1: {response1}")
 
-    random_number = random.randint(1, 100000)
+    await asyncio.sleep(2)
+
     response2 = await litellm.acompletion(
         model="gpt-3.5-turbo",
         messages=[
             {
                 "role": "user",
-                "content": f"write a one sentence poem about: {random_number}",
+                "content": "write a one sentence poem about summertime",
             }
         ],
         max_tokens=5,

@@ -2646,3 +2646,15 @@ class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
     models: Optional[List[str]] = Field(
         default=None, description="Default list of models that new users can access"
     )
+
+
+class DailyUserSpendTransaction(TypedDict):
+    user_id: str
+    date: str
+    api_key: str
+    model: str
+    model_group: Optional[str]
+    custom_llm_provider: Optional[str]
+    prompt_tokens: int
+    completion_tokens: int
+    spend: float

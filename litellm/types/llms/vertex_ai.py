@@ -179,11 +179,17 @@ class TTL(TypedDict, total=False):
     nano: float
 
 
+class PromptTokensDetails(TypedDict):
+    modality: Literal["TEXT", "AUDIO", "IMAGE", "VIDEO"]
+    tokenCount: int
+
+
 class UsageMetadata(TypedDict, total=False):
     promptTokenCount: int
     totalTokenCount: int
     candidatesTokenCount: int
     cachedContentTokenCount: int
+    promptTokensDetails: List[PromptTokensDetails]
 
 
 class CachedContent(TypedDict, total=False):
