@@ -65,7 +65,7 @@ class AnthropicMessagesHandler:
 @client
 async def anthropic_messages(
     max_tokens: int,
-    messages: List[Dict[str, Union[str, List[Dict[str, str]]]]],
+    messages: List[Dict],
     model: str,
     metadata: Optional[Dict] = None,
     stop_sequences: Optional[List[str]] = None,
