@@ -378,13 +378,5 @@
         "SLACK_TEAM_ID": "T01234567"
       }
     }
-  },
-  {
-    "timezone": "Europe/Warsaw"
-  },
-  {
-    "source_timezone": "America/New_York",
-    "time": "16:30",
-    "target_timezone": "Asia/Tokyo"
   }
 ]

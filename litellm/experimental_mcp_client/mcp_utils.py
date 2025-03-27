@@ -19,7 +19,7 @@ def extract_json_from_markdown(markdown_content: str) -> List[Dict[str, Any]]:
         Dict[str, Any]: Extracted JSON configuration or empty dict if not found
     """
     # Use a regex to find all JSON code blocks
-    json_blocks = re.findall(r'```json\n(.*?)\n```', markdown_content, re.DOTALL)
+    json_blocks = re.findall(r"```json\s*([\s\S]*?)```", markdown_content, re.DOTALL)
     extracted_jsons = []
     for block in json_blocks:
         try:
@@ -34,6 +34,7 @@ def fetch_mcp_servers() -> List[Dict[str, Any]]:
     """
     Fetches MCP server configurations from the modelcontextprotocol/servers repository
     and returns them in a standardized format.
+    Scans the src directory README.md files for server configurations and extracts JSON from key "mcpServers".
     
     Returns:
         List[Dict[str, Any]]: List of server configurations
@@ -67,7 +68,7 @@ def fetch_mcp_servers() -> List[Dict[str, Any]]:
             for json_obj in config:
                 if isinstance(json_obj, dict):  # Ensure it's a dictionary
                     for key, value in json_obj.items():
-                        if isinstance(value, dict):
+                        if key == "mcpServers" and isinstance(value, dict):
                             server_configs.append(value)
                             break
             
