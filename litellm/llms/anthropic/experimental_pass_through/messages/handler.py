@@ -6,7 +6,7 @@
 """
 
 import json
-from typing import Any, AsyncIterator, Dict, Optional, Union, cast
+from typing import AsyncIterator, Dict, List, Optional, Union, cast
 
 import httpx
 
@@ -64,9 +64,20 @@ class AnthropicMessagesHandler:
 
 @client
 async def anthropic_messages(
-    api_key: str,
+    max_tokens: int,
+    messages: List[Dict[str, Union[str, List[Dict[str, str]]]]],
     model: str,
-    stream: bool = False,
+    metadata: Optional[Dict] = None,
+    stop_sequences: Optional[List[str]] = None,
+    stream: Optional[bool] = False,
+    system: Optional[str] = None,
+    temperature: Optional[float] = 1.0,
+    thinking: Optional[Dict] = None,
+    tool_choice: Optional[Dict] = None,
+    tools: Optional[List[Dict]] = None,
+    top_k: Optional[int] = None,
+    top_p: Optional[float] = None,
+    api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     client: Optional[AsyncHTTPHandler] = None,
     custom_llm_provider: Optional[str] = None,
@@ -133,7 +144,7 @@ async def anthropic_messages(
     litellm_logging_obj.model_call_details.update(kwargs)
 
     # Prepare request body
-    request_body = kwargs.copy()
+    request_body = locals().copy()
     request_body = {
         k: v
         for k, v in request_body.items()
@@ -165,7 +176,7 @@ async def anthropic_messages(
         url=request_url,
         headers=headers,
         data=json.dumps(request_body),
-        stream=stream,
+        stream=stream or False,
     )
     response.raise_for_status()
 
