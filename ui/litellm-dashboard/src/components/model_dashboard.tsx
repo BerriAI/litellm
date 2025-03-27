@@ -489,9 +489,11 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         console.log("Model data response:", modelDataResponse.data);
         setModelData(modelDataResponse);
         const _providerSettings = await modelSettingsCall(accessToken);
-        setProviderSettings(_providerSettings);
+        if (_providerSettings) {
+          setProviderSettings(_providerSettings);
+        }
 
-
+        
 
         // loop through modelDataResponse and get all`model_name` values
         let all_model_groups: Set<string> = new Set();
@@ -1003,7 +1005,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   );
 
   let dynamicProviderForm: ProviderSettings | undefined = undefined;
-  if (providerKey) {
+  if (providerKey && providerSettings) {
     dynamicProviderForm = providerSettings.find(
       (provider) => provider.name === provider_map[providerKey]
     );
