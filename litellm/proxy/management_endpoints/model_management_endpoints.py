@@ -319,66 +319,111 @@ async def _add_team_model_to_db(
     return model_response
 
 
-def check_if_team_id_matches_key(
-    team_id: Optional[str],
-    user_api_key_dict: UserAPIKeyAuth,
-    team_obj: Optional[LiteLLM_TeamTable] = None,
-) -> bool:
-    can_make_call = True
-    if (
-        user_api_key_dict.user_role
-        and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
-    ):
+class ModelManagementAuthChecks:
+    """
+    Common auth checks for model management endpoints
+    """
+
+    @staticmethod
+    def can_user_make_team_model_call(
+        team_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+        team_obj: Optional[LiteLLM_TeamTable] = None,
+        premium_user: bool = False,
+    ) -> Literal[True]:
+        if premium_user is False:
+            raise HTTPException(
+                status_code=403,
+                detail={"error": CommonProxyErrors.not_premium_user.value},
+            )
+        if (
+            user_api_key_dict.user_role
+            and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        ):
+            return True
+        elif team_obj is None or not _is_user_team_admin(
+            user_api_key_dict=user_api_key_dict, team_obj=team_obj
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Team ID={} does not match the API key's team ID={}, OR you are not the admin for this team. Check `/user/info` to verify your team admin status.".format(
+                        team_id, user_api_key_dict.team_id
+                    )
+                },
+            )
         return True
-    if team_id is None:
-        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-            can_make_call = False
-    elif team_obj is None or not _is_user_team_admin(
-        user_api_key_dict=user_api_key_dict, team_obj=team_obj
-    ):
-        can_make_call = False
-    return can_make_call
 
+    @staticmethod
+    async def allow_team_model_action(
+        model_params: Union[Deployment, updateDeployment],
+        user_api_key_dict: UserAPIKeyAuth,
+        prisma_client: PrismaClient,
+        premium_user: bool,
+    ) -> Literal[True]:
+        if model_params.model_info is None or model_params.model_info.team_id is None:
+            return True
+        if model_params.model_info.team_id is not None and premium_user is not True:
+            raise HTTPException(
+                status_code=403,
+                detail={"error": CommonProxyErrors.not_premium_user.value},
+            )
 
-async def allow_team_model_action(
-    model_params: Union[Deployment, updateDeployment],
-    user_api_key_dict: UserAPIKeyAuth,
-    prisma_client: PrismaClient,
-    premium_user: bool,
-) -> Literal[True]:
-    if model_params.model_info is None or model_params.model_info.team_id is None:
+        _existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
+            where={"team_id": model_params.model_info.team_id}
+        )
+
+        if _existing_team_row is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Team id={} does not exist in db".format(
+                        model_params.model_info.team_id
+                    )
+                },
+            )
+        existing_team_row = LiteLLM_TeamTable(**_existing_team_row.model_dump())
+
+        ModelManagementAuthChecks.can_user_make_team_model_call(
+            team_id=model_params.model_info.team_id,
+            user_api_key_dict=user_api_key_dict,
+            team_obj=existing_team_row,
+            premium_user=premium_user,
+        )
         return True
-    if model_params.model_info.team_id is not None and premium_user is not True:
-        raise HTTPException(
-            status_code=403,
-            detail={"error": CommonProxyErrors.not_premium_user.value},
-        )
 
-    _existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
-        where={"team_id": model_params.model_info.team_id}
-    )
+    @staticmethod
+    async def can_user_make_model_call(
+        model_params: Union[Deployment, updateDeployment],
+        user_api_key_dict: UserAPIKeyAuth,
+        prisma_client: PrismaClient,
+        premium_user: bool,
+    ) -> Literal[True]:
 
-    if _existing_team_row is None:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "Team id={} does not exist in db".format(
-                    model_params.model_info.team_id
-                )
-            },
-        )
-    existing_team_row = LiteLLM_TeamTable(**_existing_team_row.model_dump())
+        ## Check team model auth
+        if (
+            model_params.model_info is not None
+            and model_params.model_info.team_id is not None
+        ):
+            return ModelManagementAuthChecks.can_user_make_team_model_call(
+                team_id=model_params.model_info.team_id,
+                user_api_key_dict=user_api_key_dict,
+                premium_user=premium_user,
+            )
+        ## Check non-team model auth
+        elif user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "User does not have permission to make this model call. Your role={}. You can only make model calls if you are a PROXY_ADMIN or if you are a team admin, by specifying a team_id in the model_info.".format(
+                        user_api_key_dict.user_role
+                    )
+                },
+            )
+        else:
+            return True
 
-    if not check_if_team_id_matches_key(
-        team_id=model_params.model_info.team_id,
-        user_api_key_dict=user_api_key_dict,
-        team_obj=existing_team_row,
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail={"error": "Team ID does not match the API key's team ID"},
-        )
-    return True
+        return True
 
 
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
@@ -427,7 +472,7 @@ async def delete_model(
             )
 
         model_params = Deployment(**model_in_db.model_dump())
-        await allow_team_model_action(
+        await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=model_params,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
@@ -528,7 +573,8 @@ async def add_new_model(
                 },
             )
 
-        await allow_team_model_action(
+        ## Auth check
+        await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=model_params,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
@@ -665,7 +711,7 @@ async def update_model(
                 },
             )
 
-        await allow_team_model_action(
+        await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=model_params,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
