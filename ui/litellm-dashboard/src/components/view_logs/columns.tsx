@@ -12,6 +12,7 @@ export type LogEntry = {
   api_key: string;
   team_id: string;
   model: string;
+  model_id: string;
   api_base?: string;
   call_type: string;
   spend: number;

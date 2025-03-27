@@ -672,17 +672,22 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
               <span>{row.original.model}</span>
             </div>
             <div className="flex">
+              <span className="font-medium w-1/3">Model ID:</span>
+              <span>{row.original.model_id}</span>
+            </div>
+            <div className="flex">
               <span className="font-medium w-1/3">Provider:</span>
               <span>{row.original.custom_llm_provider || "-"}</span>
+            </div>
+            <div className="flex">
+              <span className="font-medium w-1/3">API Base:</span>
+              <span>{row.original.api_base || "-"}</span>
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">Start Time:</span>
               <span>{row.original.startTime}</span>
             </div>
-            <div className="flex">
-              <span className="font-medium w-1/3">End Time:</span>
-              <span>{row.original.endTime}</span>
-            </div>
+
           </div>
           <div className="space-y-2">
             <div className="flex">
@@ -712,6 +717,11 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
               }`}>
                 {(row.original.metadata?.status || "Success").toLowerCase() !== "failure" ? "Success" : "Failure"}
               </span>
+              
+            </div>
+            <div className="flex">
+              <span className="font-medium w-1/3">End Time:</span>
+              <span>{row.original.endTime}</span>
             </div>
           </div>
         </div>
