@@ -23,6 +23,7 @@ from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._types import (
     CommonProxyErrors,
     LiteLLM_ProxyModelTable,
+    LiteLLM_TeamTable,
     LitellmTableNames,
     LitellmUserRoles,
     ModelInfoDelete,
@@ -35,6 +36,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_endpoints.team_endpoints import (
     team_model_add,
     update_team,
@@ -318,7 +320,9 @@ async def _add_team_model_to_db(
 
 
 def check_if_team_id_matches_key(
-    team_id: Optional[str], user_api_key_dict: UserAPIKeyAuth
+    team_id: Optional[str],
+    user_api_key_dict: UserAPIKeyAuth,
+    existing_team_row: Optional[LiteLLM_TeamTable] = None,
 ) -> bool:
     can_make_call = True
     if (
@@ -329,9 +333,10 @@ def check_if_team_id_matches_key(
     if team_id is None:
         if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
             can_make_call = False
-    else:
-        if user_api_key_dict.team_id != team_id:
-            can_make_call = False
+    elif existing_team_row is None or not _is_user_team_admin(
+        user_api_key_dict=user_api_key_dict, team_obj=existing_team_row
+    ):
+        can_make_call = False
     return can_make_call
 
 
@@ -470,8 +475,25 @@ async def add_new_model(
                 detail={"error": CommonProxyErrors.not_premium_user.value},
             )
 
+        _existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
+            where={"team_id": model_params.model_info.team_id}
+        )
+
+        if _existing_team_row is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Team id={} does not exist in db".format(
+                        model_params.model_info.team_id
+                    )
+                },
+            )
+        existing_team_row = LiteLLM_TeamTable(**_existing_team_row.model_dump())
+
         if not check_if_team_id_matches_key(
-            team_id=model_params.model_info.team_id, user_api_key_dict=user_api_key_dict
+            team_id=model_params.model_info.team_id,
+            user_api_key_dict=user_api_key_dict,
+            existing_team_row=existing_team_row,
         ):
             raise HTTPException(
                 status_code=403,
