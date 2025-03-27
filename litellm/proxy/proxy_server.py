@@ -3089,14 +3089,14 @@ class ProxyStartupEvent:
                 prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
             )
 
-        ### GET STORED CREDENTIALS ###
-        scheduler.add_job(
-            proxy_config.get_credentials,
-            "interval",
-            seconds=1,
-            args=[prisma_client],
-        )
-        await proxy_config.get_credentials(prisma_client=prisma_client)
+            ### GET STORED CREDENTIALS ###
+            scheduler.add_job(
+                proxy_config.get_credentials,
+                "interval",
+                seconds=10,
+                args=[prisma_client],
+            )
+            await proxy_config.get_credentials(prisma_client=prisma_client)
         if (
             proxy_logging_obj is not None
             and proxy_logging_obj.slack_alerting_instance.alerting is not None
