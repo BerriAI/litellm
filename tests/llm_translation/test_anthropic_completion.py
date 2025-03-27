@@ -467,6 +467,12 @@ class TestAnthropicCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
     def get_base_completion_call_args(self) -> dict:
         return {"model": "anthropic/claude-3-5-sonnet-20240620"}
 
+    def get_base_completion_call_args_with_thinking(self) -> dict:
+        return {
+            "model": "anthropic/claude-3-7-sonnet-latest",
+            "thinking": {"type": "enabled", "budget_tokens": 16000},
+        }
+
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -1110,22 +1116,3 @@ def test_anthropic_thinking_in_assistant_message(model):
     response = litellm.completion(**params)
 
     assert response is not None
-
-
-def test_completion_thinking_with_response_format():
-    from pydantic import BaseModel
-
-    class RFormat(BaseModel):
-        question: str
-        answer: str
-
-    messages = [{"role": "user", "content": "Generate 5 question + answer pairs"}]
-    response = completion(
-        model="claude-3-7-sonnet-20250219",
-        messages=messages,
-        response_format=RFormat,
-        thinking={"type": "enabled", "budget_tokens": 16000},
-        max_tokens=16500,
-    )
-
-    print(response)

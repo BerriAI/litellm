@@ -1008,6 +1008,11 @@ class BaseAnthropicChatTest(ABC):
         """Must return the base completion call args"""
         pass
 
+    @abstractmethod
+    def get_base_completion_call_args_with_thinking(self) -> dict:
+        """Must return the base completion call args"""
+        pass
+
     @property
     def completion_function(self):
         return litellm.completion
@@ -1066,3 +1071,22 @@ class BaseAnthropicChatTest(ABC):
             json.loads(built_response.choices[0].message.content).keys()
             == json.loads(non_stream_response.choices[0].message.content).keys()
         ), f"Got={json.loads(built_response.choices[0].message.content)}, Expected={json.loads(non_stream_response.choices[0].message.content)}"
+
+    def test_completion_thinking_with_response_format(self):
+        from pydantic import BaseModel
+
+        class RFormat(BaseModel):
+            question: str
+            answer: str
+
+        base_completion_call_args = self.get_base_completion_call_args_with_thinking()
+
+        messages = [{"role": "user", "content": "Generate 5 question + answer pairs"}]
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages=messages,
+            response_format=RFormat,
+            max_tokens=16500,
+        )
+
+        print(response)
