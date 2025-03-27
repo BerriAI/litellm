@@ -13,7 +13,7 @@ model/{model_id}/update - PATCH endpoint for model update.
 import asyncio
 import json
 import uuid
-from typing import Optional, cast
+from typing import Literal, Optional, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -340,6 +340,47 @@ def check_if_team_id_matches_key(
     return can_make_call
 
 
+async def allow_team_model_action(
+    model_params: Union[Deployment, updateDeployment],
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+    premium_user: bool,
+) -> Literal[True]:
+    if model_params.model_info is None or model_params.model_info.team_id is None:
+        return True
+    if model_params.model_info.team_id is not None and premium_user is not True:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": CommonProxyErrors.not_premium_user.value},
+        )
+
+    _existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": model_params.model_info.team_id}
+    )
+
+    if _existing_team_row is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Team id={} does not exist in db".format(
+                    model_params.model_info.team_id
+                )
+            },
+        )
+    existing_team_row = LiteLLM_TeamTable(**_existing_team_row.model_dump())
+
+    if not check_if_team_id_matches_key(
+        team_id=model_params.model_info.team_id,
+        user_api_key_dict=user_api_key_dict,
+        team_obj=existing_team_row,
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Team ID does not match the API key's team ID"},
+        )
+    return True
+
+
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
 @router.post(
     "/model/delete",
@@ -615,6 +656,7 @@ async def update_model(
     from litellm.proxy.proxy_server import (
         LITELLM_PROXY_ADMIN_NAME,
         llm_router,
+        premium_user,
         prisma_client,
         store_model_in_db,
     )
@@ -628,6 +670,14 @@ async def update_model(
                     "error": "No DB Connected. Here's how to do it - https://docs.litellm.ai/docs/proxy/virtual_keys"
                 },
             )
+
+        await allow_team_model_action(
+            model_params=model_params,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+            premium_user=premium_user,
+        )
+
         # update DB
         if store_model_in_db is True:
             _model_id = None
