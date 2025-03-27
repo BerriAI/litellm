@@ -16,7 +16,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 
 async def acreate(
     max_tokens: int,
-    messages: List[Dict[str, Union[str, List[Dict[str, str]]]]],
+    messages: List[Dict],
     model: str,
     metadata: Optional[Dict] = None,
     stop_sequences: Optional[List[str]] = None,
@@ -72,7 +72,7 @@ async def acreate(
 
 async def create(
     max_tokens: int,
-    messages: List[Dict[str, Union[str, List[Dict[str, str]]]]],
+    messages: List[Dict],
     model: str,
     metadata: Optional[Dict] = None,
     stop_sequences: Optional[List[str]] = None,
