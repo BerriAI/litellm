@@ -242,7 +242,7 @@ class CreateFileRequest(TypedDict, total=False):
 
     Required Params:
         file: FileTypes
-        purpose: Literal['assistants', 'batch', 'fine-tune']
+        purpose: Literal['assistants', 'batch', 'fine-tune', 'vision', 'user_data', 'evals']
 
     Optional Params:
         extra_headers: Optional[Dict[str, str]]
@@ -251,7 +251,7 @@ class CreateFileRequest(TypedDict, total=False):
     """
 
     file: FileTypes
-    purpose: Literal["assistants", "batch", "fine-tune"]
+    purpose: Literal["assistants", "batch", "fine-tune", "vision", "user_data", "evals"]
     extra_headers: Optional[Dict[str, str]]
     extra_body: Optional[Dict[str, str]]
     timeout: Optional[float]
