@@ -1216,7 +1216,7 @@ export const modelInfoCall = async (
     console.log("modelInfoCall:", accessToken, userID, userRole);
     let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/model/info` : `/v2/model/info`;
 
-    if (!all_admin_roles.includes(userRole)) { // only show users models they've added
+    if (!all_admin_roles.includes(userRole as string)) { // only show users models they've added
       url += `?user_models_only=true`;
     }
     //message.info("Requesting model data");
