@@ -1110,3 +1110,22 @@ def test_anthropic_thinking_in_assistant_message(model):
     response = litellm.completion(**params)
 
     assert response is not None
+
+
+def test_completion_thinking_with_response_format():
+    from pydantic import BaseModel
+
+    class RFormat(BaseModel):
+        question: str
+        answer: str
+
+    messages = [{"role": "user", "content": "Generate 5 question + answer pairs"}]
+    response = completion(
+        model="claude-3-7-sonnet-20250219",
+        messages=messages,
+        response_format=RFormat,
+        thinking={"type": "enabled", "budget_tokens": 16000},
+        max_tokens=16500,
+    )
+
+    print(response)

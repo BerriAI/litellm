@@ -300,6 +300,10 @@ class AnthropicConfig(BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+
+        is_thinking_enabled = False
+        if "thinking" in non_default_params:
+            is_thinking_enabled = True
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_tokens"] = value
@@ -349,14 +353,17 @@ class AnthropicConfig(BaseConfig):
                 - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
                 """
 
-                _tool_choice = {"name": RESPONSE_FORMAT_TOOL_NAME, "type": "tool"}
+                if not is_thinking_enabled:
+                    _tool_choice = {"name": RESPONSE_FORMAT_TOOL_NAME, "type": "tool"}
+                    optional_params["tool_choice"] = _tool_choice
+
                 _tool = self._create_json_tool_call_for_response_format(
                     json_schema=json_schema,
                 )
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=[_tool]
                 )
-                optional_params["tool_choice"] = _tool_choice
+
                 optional_params["json_mode"] = True
             if param == "user":
                 optional_params["metadata"] = {"user_id": value}
