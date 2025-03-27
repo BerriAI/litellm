@@ -1,3 +1,10 @@
+"""
+Module responsible for
+
+1. Writing spend increments to either in memory list of transactions or to redis
+2. Reading increments from redis or in memory list of transactions and committing them to db
+"""
+
 import asyncio
 import os
 import traceback
@@ -12,6 +19,12 @@ from litellm.proxy.utils import PrismaClient, ProxyUpdateSpend, hash_token
 
 
 class DBSpendUpdateWriter:
+    """
+    Module responsible for
+
+    1. Writing spend increments to either in memory list of transactions or to redis
+    2. Reading increments from redis or in memory list of transactions and committing them to db
+    """
 
     @staticmethod
     async def update_database(  # noqa: PLR0915
