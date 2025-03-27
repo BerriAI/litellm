@@ -24,6 +24,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -107,3 +108,41 @@ def test_should_allow_request_on_db_unavailable_true():
 )
 def test_should_allow_request_on_db_unavailable_false():
     assert PrismaDBExceptionHandler.should_allow_request_on_db_unavailable() == False
+
+
+@patch(
+    "litellm.proxy.proxy_server.general_settings",
+    {"allow_requests_on_db_unavailable": True},
+)
+def test_handle_db_exception_with_connection_error():
+    """
+    Test that DB connection errors are handled gracefully when allow_requests_on_db_unavailable is True
+    """
+    db_error = ClientNotConnectedError()
+    result = PrismaDBExceptionHandler.handle_db_exception(db_error)
+    assert result is None
+
+
+@patch(
+    "litellm.proxy.proxy_server.general_settings",
+    {"allow_requests_on_db_unavailable": False},
+)
+def test_handle_db_exception_raises_error():
+    """
+    Test that DB connection errors are raised when allow_requests_on_db_unavailable is False
+    """
+    db_error = ClientNotConnectedError()
+    with pytest.raises(ClientNotConnectedError):
+        PrismaDBExceptionHandler.handle_db_exception(db_error)
+
+
+def test_handle_db_exception_with_non_db_error():
+    """
+    Test that non-DB errors are always raised regardless of allow_requests_on_db_unavailable setting
+    """
+    regular_error = litellm.BudgetExceededError(
+        current_cost=10,
+        max_budget=10,
+    )
+    with pytest.raises(litellm.BudgetExceededError):
+        PrismaDBExceptionHandler.handle_db_exception(regular_error)
