@@ -9,13 +9,9 @@ from fastapi import HTTPException, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import (
-    DB_CONNECTION_ERROR_TYPES,
-    ProxyErrorTypes,
-    ProxyException,
-    UserAPIKeyAuth,
-)
+from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import _get_request_ip_address
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
 
 if TYPE_CHECKING:
@@ -58,8 +54,8 @@ class UserAPIKeyAuthExceptionHandler:
         )
 
         if (
-            UserAPIKeyAuthExceptionHandler.should_allow_request_on_db_unavailable()
-            and UserAPIKeyAuthExceptionHandler.is_database_connection_error(e)
+            PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+            and PrismaDBExceptionHandler.is_database_connection_error(e)
         ):
             # log this as a DB failure on prometheus
             proxy_logging_obj.service_logging_obj.service_failure_hook(
@@ -125,29 +121,3 @@ class UserAPIKeyAuthExceptionHandler:
                 param=getattr(e, "param", "None"),
                 code=status.HTTP_401_UNAUTHORIZED,
             )
-
-    @staticmethod
-    def should_allow_request_on_db_unavailable() -> bool:
-        """
-        Returns True if the request should be allowed to proceed despite the DB connection error
-        """
-        from litellm.proxy.proxy_server import general_settings
-
-        if general_settings.get("allow_requests_on_db_unavailable", False) is True:
-            return True
-        return False
-
-    @staticmethod
-    def is_database_connection_error(e: Exception) -> bool:
-        """
-        Returns True if the exception is from a database outage / connection error
-        """
-        import prisma
-
-        if isinstance(e, DB_CONNECTION_ERROR_TYPES):
-            return True
-        if isinstance(e, prisma.errors.PrismaError):
-            return True
-        if isinstance(e, ProxyException) and e.type == ProxyErrorTypes.no_db_connection:
-            return True
-        return False
