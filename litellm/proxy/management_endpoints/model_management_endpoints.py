@@ -418,6 +418,7 @@ class ModelManagementAuthChecks:
                     },
                 )
             team_obj = LiteLLM_TeamTable(**team_obj_row.model_dump())
+
             return ModelManagementAuthChecks.can_user_make_team_model_call(
                 team_id=model_params.model_info.team_id,
                 user_api_key_dict=user_api_key_dict,
