@@ -83,6 +83,11 @@ RUN chmod +x docker/prod_entrypoint.sh
 USER nobody
 
 RUN prisma generate
+
+# Set the environment variable to skip Prisma generate in the future
+# This is necessary because the migration script will try to run Prisma generate again otherwise
+ENV LITELLM_MIGRATION_SKIP_PRISMA_GENERATE=true
+
 ### End of Prisma Handling for Non-Root #########################################
 
 EXPOSE 4000/tcp
