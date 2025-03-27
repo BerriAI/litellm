@@ -643,16 +643,25 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         completion_response: GenerateContentResponseBody,
     ) -> Usage:
         cached_tokens: Optional[int] = None
+        audio_tokens: Optional[int] = None
+        text_tokens: Optional[int] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         if "cachedContentTokenCount" in completion_response["usageMetadata"]:
             cached_tokens = completion_response["usageMetadata"][
                 "cachedContentTokenCount"
             ]
+        if "promptTokensDetails" in completion_response["usageMetadata"]:
+            for detail in completion_response["usageMetadata"]["promptTokensDetails"]:
+                if detail["modality"] == "AUDIO":
+                    audio_tokens = detail["tokenCount"]
+                elif detail["modality"] == "TEXT":
+                    text_tokens = detail["tokenCount"]
 
-        if cached_tokens is not None:
-            prompt_tokens_details = PromptTokensDetailsWrapper(
-                cached_tokens=cached_tokens,
-            )
+        prompt_tokens_details = PromptTokensDetailsWrapper(
+            cached_tokens=cached_tokens,
+            audio_tokens=audio_tokens,
+            text_tokens=text_tokens,
+        )
         ## GET USAGE ##
         usage = Usage(
             prompt_tokens=completion_response["usageMetadata"].get(
@@ -791,6 +800,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     model_response.choices.append(choice)
 
             usage = self._calculate_usage(completion_response=completion_response)
+
             setattr(model_response, "usage", usage)
 
             ## ADD GROUNDING METADATA ##

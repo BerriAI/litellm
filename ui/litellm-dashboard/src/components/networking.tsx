@@ -2376,6 +2376,7 @@ export const testConnectionRequest = async (
 // ... existing code ...
 export const keyInfoV1Call = async (accessToken: string, key: string) => {
   try {
+    console.log("entering keyInfoV1Call");
     let url = proxyBaseUrl ? `${proxyBaseUrl}/key/info` : `/key/info`;
     url = `${url}?key=${key}`; // Add key as query parameter
 
@@ -2388,13 +2389,16 @@ export const keyInfoV1Call = async (accessToken: string, key: string) => {
       // Remove body since this is a GET request
     });
 
+    console.log("response", response);
+
     if (!response.ok) {
       const errorData = await response.text();
       handleError(errorData);
-      throw new Error("Network response was not ok");
+      message.error("Failed to fetch key info - " + errorData);
     }
 
     const data = await response.json();
+    console.log("data", data);
     return data;
   } catch (error) {
     console.error("Failed to fetch key info:", error);
