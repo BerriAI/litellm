@@ -18,10 +18,9 @@ class PrismaDBExceptionHandler:
         """
         Returns True if the request should be allowed to proceed despite the DB connection error
         """
-        from litellm.proxy.proxy_server import proxy_config
+        from litellm.proxy.proxy_server import general_settings
 
-        _general_settings = proxy_config.config
-        _allow_requests_on_db_unavailable: Union[bool, str] = _general_settings.get(
+        _allow_requests_on_db_unavailable: Union[bool, str] = general_settings.get(
             "allow_requests_on_db_unavailable", False
         )
         if isinstance(_allow_requests_on_db_unavailable, bool):
