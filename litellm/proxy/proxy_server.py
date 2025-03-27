@@ -5492,7 +5492,7 @@ async def transform_request(request: TransformRequestBody):
 async def _check_if_model_is_user_added(
     models: List[Dict],
     user_api_key_dict: UserAPIKeyAuth,
-    prisma_client: PrismaClient,
+    prisma_client: Optional[PrismaClient],
 ) -> List[Dict]:
     """
     Check if model is in db
@@ -5501,6 +5501,11 @@ async def _check_if_model_is_user_added(
 
     Only return models that match
     """
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
     filtered_models = []
     for model in models:
         id = model.get("model_info", {}).get("id", None)
@@ -5568,11 +5573,6 @@ async def model_info_v2(
 
         Only return models that match
         """
-        if prisma_client is None:
-            raise HTTPException(
-                status_code=500,
-                detail={"error": CommonProxyErrors.db_not_connected_error.value},
-            )
         all_models = await _check_if_model_is_user_added(
             models=all_models,
             user_api_key_dict=user_api_key_dict,
