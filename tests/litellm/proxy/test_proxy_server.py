@@ -77,15 +77,40 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
         assert len(mock_scheduler_calls) > 0
 
 
+# Mock Prisma
+class MockPrisma:
+    def __init__(self, database_url=None, proxy_logging_obj=None, http_client=None):
+        self.database_url = database_url
+        self.proxy_logging_obj = proxy_logging_obj
+        self.http_client = http_client
+
+    async def connect(self):
+        pass
+
+    async def disconnect(self):
+        pass
+
+
+mock_prisma = MockPrisma()
+
+
+@patch(
+    "litellm.proxy.proxy_server.ProxyStartupEvent._setup_prisma_client",
+    return_value=mock_prisma,
+)
 @pytest.mark.asyncio
-async def test_proxy_startup_master_key(monkeypatch, tmp_path):
+async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
     """
     Test that master_key is correctly loaded from either config.yaml or environment variables
     """
     import yaml
     from fastapi import FastAPI
 
+    # Import happens here - this is when the module probably reads the config path
     from litellm.proxy.proxy_server import proxy_startup_event
+
+    # Mock the Prisma import
+    monkeypatch.setattr("litellm.proxy.proxy_server.PrismaClient", MockPrisma)
 
     # Create test app
     app = FastAPI()
@@ -99,7 +124,11 @@ async def test_proxy_startup_master_key(monkeypatch, tmp_path):
     with open(config_path, "w") as f:
         yaml.dump(test_config, f)
 
+    print(f"SET ENV VARIABLE - CONFIG_FILE_PATH, str(config_path): {str(config_path)}")
+    # Second setting of CONFIG_FILE_PATH to a different value
     monkeypatch.setenv("CONFIG_FILE_PATH", str(config_path))
+    print(f"config_path: {config_path}")
+    print(f"os.getenv('CONFIG_FILE_PATH'): {os.getenv('CONFIG_FILE_PATH')}")
     async with proxy_startup_event(app):
         from litellm.proxy.proxy_server import master_key
 
