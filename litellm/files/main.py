@@ -490,7 +490,7 @@ def file_list(
 
 async def acreate_file(
     file: FileTypes,
-    purpose: Literal["assistants", "batch", "fine-tune"],
+    purpose: Literal["assistants", "batch", "fine-tune", "vision", "user_data", "evals"],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -532,7 +532,7 @@ async def acreate_file(
 
 def create_file(
     file: FileTypes,
-    purpose: Literal["assistants", "batch", "fine-tune"],
+    purpose: Literal["assistants", "batch", "fine-tune", "vision", "user_data", "evals"],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
