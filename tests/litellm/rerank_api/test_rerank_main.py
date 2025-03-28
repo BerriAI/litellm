@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 from litellm import rerank
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-@pytest.mark.skip(reason="This test requires a valid rerank API key")
+
 def test_rerank_infer_region_from_model_arn(monkeypatch):
     mock_response = MagicMock()
 
