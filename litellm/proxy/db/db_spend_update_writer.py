@@ -14,7 +14,7 @@ from typing import Any, Optional, Union
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
-from litellm.proxy._types import LiteLLM_UserTable, SpendLogsPayload
+from litellm.proxy._types import Litellm_EntityType, LiteLLM_UserTable, SpendLogsPayload
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.utils import PrismaClient, ProxyUpdateSpend, hash_token
 
@@ -113,22 +113,68 @@ class DBSpendUpdateWriter:
             )
 
     @staticmethod
+    async def _update_transaction_list(
+        response_cost: Optional[float],
+        entity_id: Optional[str],
+        transaction_list: dict,
+        entity_type: Litellm_EntityType,
+        debug_msg: Optional[str] = None,
+    ) -> bool:
+        """
+        Common helper method to update a transaction list for an entity
+
+        Args:
+            response_cost: The cost to add
+            entity_id: The ID of the entity to update
+            transaction_list: The transaction list dictionary to update
+            entity_type: The type of entity (from EntityType enum)
+            debug_msg: Optional custom debug message
+
+        Returns:
+            bool: True if update happened, False otherwise
+        """
+        try:
+            if debug_msg:
+                verbose_proxy_logger.debug(debug_msg)
+            else:
+                verbose_proxy_logger.debug(
+                    f"adding spend to {entity_type.value} db. Response cost: {response_cost}. {entity_type.value}_id: {entity_id}."
+                )
+
+            if entity_id is None:
+                verbose_proxy_logger.debug(
+                    f"track_cost_callback: {entity_type.value}_id is None. Not tracking spend for {entity_type.value}"
+                )
+                return False
+
+            transaction_list[entity_id] = response_cost + transaction_list.get(
+                entity_id, 0
+            )
+            return True
+
+        except Exception as e:
+            verbose_proxy_logger.info(
+                f"Update {entity_type.value.capitalize()} DB failed to execute - {str(e)}\n{traceback.format_exc()}"
+            )
+            raise e
+
+    @staticmethod
     async def _update_key_db(
         response_cost: Optional[float],
         hashed_token: Optional[str],
         prisma_client: Optional[PrismaClient],
     ):
         try:
-            verbose_proxy_logger.debug(
-                f"adding spend to key db. Response cost: {response_cost}. Token: {hashed_token}."
-            )
-            if hashed_token is None:
+            if hashed_token is None or prisma_client is None:
                 return
-            if prisma_client is not None:
-                prisma_client.key_list_transactons[hashed_token] = (
-                    response_cost
-                    + prisma_client.key_list_transactons.get(hashed_token, 0)
-                )
+
+            await DBSpendUpdateWriter._update_transaction_list(
+                response_cost=response_cost,
+                entity_id=hashed_token,
+                transaction_list=prisma_client.key_list_transactons,
+                entity_type=Litellm_EntityType.KEY,
+                debug_msg=f"adding spend to key db. Response cost: {response_cost}. Token: {hashed_token}.",
+            )
         except Exception as e:
             verbose_proxy_logger.exception(
                 f"Update Key DB Call failed to execute - {str(e)}"
@@ -159,17 +205,22 @@ class DBSpendUpdateWriter:
                     litellm.max_budget > 0
                 ):  # track global proxy budget, if user set max budget
                     user_ids.append(litellm_proxy_budget_name)
-                ### KEY CHANGE ###
+
                 for _id in user_ids:
                     if _id is not None:
-                        prisma_client.user_list_transactons[_id] = (
-                            response_cost
-                            + prisma_client.user_list_transactons.get(_id, 0)
+                        await DBSpendUpdateWriter._update_transaction_list(
+                            response_cost=response_cost,
+                            entity_id=_id,
+                            transaction_list=prisma_client.user_list_transactons,
+                            entity_type=Litellm_EntityType.USER,
                         )
+
                 if end_user_id is not None:
-                    prisma_client.end_user_list_transactons[end_user_id] = (
-                        response_cost
-                        + prisma_client.end_user_list_transactons.get(end_user_id, 0)
+                    await DBSpendUpdateWriter._update_transaction_list(
+                        response_cost=response_cost,
+                        entity_id=end_user_id,
+                        transaction_list=prisma_client.end_user_list_transactons,
+                        entity_type=Litellm_EntityType.END_USER,
                     )
         except Exception as e:
             verbose_proxy_logger.info(
@@ -185,31 +236,32 @@ class DBSpendUpdateWriter:
         prisma_client: Optional[PrismaClient],
     ):
         try:
-            verbose_proxy_logger.debug(
-                f"adding spend to team db. Response cost: {response_cost}. team_id: {team_id}."
-            )
-            if team_id is None:
+            if team_id is None or prisma_client is None:
                 verbose_proxy_logger.debug(
-                    "track_cost_callback: team_id is None. Not tracking spend for team"
+                    "track_cost_callback: team_id is None or prisma_client is None. Not tracking spend for team"
                 )
                 return
-            if prisma_client is not None:
-                prisma_client.team_list_transactons[team_id] = (
-                    response_cost + prisma_client.team_list_transactons.get(team_id, 0)
-                )
 
-                try:
-                    # Track spend of the team member within this team
+            await DBSpendUpdateWriter._update_transaction_list(
+                response_cost=response_cost,
+                entity_id=team_id,
+                transaction_list=prisma_client.team_list_transactons,
+                entity_type=Litellm_EntityType.TEAM,
+            )
+
+            try:
+                # Track spend of the team member within this team
+                if user_id is not None:
                     # key is "team_id::<value>::user_id::<value>"
                     team_member_key = f"team_id::{team_id}::user_id::{user_id}"
-                    prisma_client.team_member_list_transactons[team_member_key] = (
-                        response_cost
-                        + prisma_client.team_member_list_transactons.get(
-                            team_member_key, 0
-                        )
+                    await DBSpendUpdateWriter._update_transaction_list(
+                        response_cost=response_cost,
+                        entity_id=team_member_key,
+                        transaction_list=prisma_client.team_member_list_transactons,
+                        entity_type=Litellm_EntityType.TEAM_MEMBER,
                     )
-                except Exception:
-                    pass
+            except Exception:
+                pass
         except Exception as e:
             verbose_proxy_logger.info(
                 f"Update Team DB failed to execute - {str(e)}\n{traceback.format_exc()}"
@@ -223,20 +275,18 @@ class DBSpendUpdateWriter:
         prisma_client: Optional[PrismaClient],
     ):
         try:
-            verbose_proxy_logger.debug(
-                "adding spend to org db. Response cost: {}. org_id: {}.".format(
-                    response_cost, org_id
-                )
-            )
-            if org_id is None:
+            if org_id is None or prisma_client is None:
                 verbose_proxy_logger.debug(
-                    "track_cost_callback: org_id is None. Not tracking spend for org"
+                    "track_cost_callback: org_id is None or prisma_client is None. Not tracking spend for org"
                 )
                 return
-            if prisma_client is not None:
-                prisma_client.org_list_transactons[org_id] = (
-                    response_cost + prisma_client.org_list_transactons.get(org_id, 0)
-                )
+
+            await DBSpendUpdateWriter._update_transaction_list(
+                response_cost=response_cost,
+                entity_id=org_id,
+                transaction_list=prisma_client.org_list_transactons,
+                entity_type=Litellm_EntityType.ORGANIZATION,
+            )
         except Exception as e:
             verbose_proxy_logger.info(
                 f"Update Org DB failed to execute - {str(e)}\n{traceback.format_exc()}"
