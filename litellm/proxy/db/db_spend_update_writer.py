@@ -400,44 +400,85 @@ class DBSpendUpdateWriter:
             - Regular flow of this method
         """
         if RedisUpdateBuffer._should_commit_spend_updates_to_redis():
-            await self.redis_update_buffer.store_in_memory_spend_updates_in_redis(
-                prisma_client=prisma_client,
-            )
-
-            # Only commit from redis to db if this pod is the leader
-            if await self.pod_lock_manager.acquire_lock():
-                verbose_proxy_logger.debug("acquired lock for spend updates")
-
-                try:
-                    db_spend_update_transactions = (
-                        await self.redis_update_buffer.get_all_update_transactions_from_redis()
-                    )
-                    if db_spend_update_transactions is not None:
-                        await DBSpendUpdateWriter._commit_spend_updates_to_db(
-                            prisma_client=prisma_client,
-                            n_retry_times=n_retry_times,
-                            proxy_logging_obj=proxy_logging_obj,
-                            db_spend_update_transactions=db_spend_update_transactions,
-                        )
-                except Exception as e:
-                    verbose_proxy_logger.error(f"Error committing spend updates: {e}")
-                finally:
-                    await self.pod_lock_manager.release_lock()
-        else:
-            db_spend_update_transactions = DBSpendUpdateTransactions(
-                user_list_transactions=prisma_client.user_list_transactions,
-                end_user_list_transactions=prisma_client.end_user_list_transactions,
-                key_list_transactions=prisma_client.key_list_transactions,
-                team_list_transactions=prisma_client.team_list_transactions,
-                team_member_list_transactions=prisma_client.team_member_list_transactions,
-                org_list_transactions=prisma_client.org_list_transactions,
-            )
-            await DBSpendUpdateWriter._commit_spend_updates_to_db(
+            await self._commit_spend_updates_to_db_with_redis(
                 prisma_client=prisma_client,
                 n_retry_times=n_retry_times,
                 proxy_logging_obj=proxy_logging_obj,
-                db_spend_update_transactions=db_spend_update_transactions,
             )
+
+        else:
+            await self._commit_spend_updates_to_db_without_redis_buffer(
+                prisma_client=prisma_client,
+                n_retry_times=n_retry_times,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+    async def _commit_spend_updates_to_db_with_redis(
+        self,
+        prisma_client: PrismaClient,
+        n_retry_times: int,
+        proxy_logging_obj: ProxyLogging,
+    ):
+        """
+        Handler to commit spend updates to Redis and attempt to acquire lock to commit to db
+
+        This is a v2 scalable approach to first commit spend updates to redis, then commit to db
+
+        This minimizes DB Deadlocks since
+            - All pods only need to write their spend updates to redis
+            - Only 1 pod will commit to db at a time (based on if it can acquire the lock over writing to DB)
+        """
+        await self.redis_update_buffer.store_in_memory_spend_updates_in_redis(
+            prisma_client=prisma_client,
+        )
+
+        # Only commit from redis to db if this pod is the leader
+        if await self.pod_lock_manager.acquire_lock():
+            verbose_proxy_logger.debug("acquired lock for spend updates")
+
+            try:
+                db_spend_update_transactions = (
+                    await self.redis_update_buffer.get_all_update_transactions_from_redis()
+                )
+                if db_spend_update_transactions is not None:
+                    await DBSpendUpdateWriter._commit_spend_updates_to_db(
+                        prisma_client=prisma_client,
+                        n_retry_times=n_retry_times,
+                        proxy_logging_obj=proxy_logging_obj,
+                        db_spend_update_transactions=db_spend_update_transactions,
+                    )
+            except Exception as e:
+                verbose_proxy_logger.error(f"Error committing spend updates: {e}")
+            finally:
+                await self.pod_lock_manager.release_lock()
+
+    async def _commit_spend_updates_to_db_without_redis_buffer(
+        self,
+        prisma_client: PrismaClient,
+        n_retry_times: int,
+        proxy_logging_obj: ProxyLogging,
+    ):
+        """
+        Commits all the spend `UPDATE` transactions to the Database
+
+        This is the regular flow of committing to db without using a redis buffer
+
+        Note: This flow causes Deadlocks in production (1K RPS+). Use self._commit_spend_updates_to_db_with_redis() instead if you expect 1K+ RPS.
+        """
+        db_spend_update_transactions = DBSpendUpdateTransactions(
+            user_list_transactions=prisma_client.user_list_transactions,
+            end_user_list_transactions=prisma_client.end_user_list_transactions,
+            key_list_transactions=prisma_client.key_list_transactions,
+            team_list_transactions=prisma_client.team_list_transactions,
+            team_member_list_transactions=prisma_client.team_member_list_transactions,
+            org_list_transactions=prisma_client.org_list_transactions,
+        )
+        await DBSpendUpdateWriter._commit_spend_updates_to_db(
+            prisma_client=prisma_client,
+            n_retry_times=n_retry_times,
+            proxy_logging_obj=proxy_logging_obj,
+            db_spend_update_transactions=db_spend_update_transactions,
+        )
 
     @staticmethod
     async def _commit_spend_updates_to_db(  # noqa: PLR0915
