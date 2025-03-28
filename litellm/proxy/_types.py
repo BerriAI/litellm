@@ -292,6 +292,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/available",
         "/user/info",
         "/model/info",
+        "/v1/model/info",
         "/v2/model/info",
         "/v2/key/info",
         "/model_group/info",
@@ -386,6 +387,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/predict/spend/logs",
         "/global/activity",
         "/health/services",
+        "/get/litellm_model_cost_map",
     ] + info_routes
 
     internal_user_routes = [
@@ -412,6 +414,8 @@ class LiteLLMRoutes(enum.Enum):
         "/team/member_add",
         "/team/member_delete",
         "/model/new",
+        "/model/update",
+        "/model/delete",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -2067,16 +2071,68 @@ class SpendCalculateRequest(LiteLLMPydanticObjectBase):
 
 class ProxyErrorTypes(str, enum.Enum):
     budget_exceeded = "budget_exceeded"
+    """
+    Object was over budget
+    """
+    no_db_connection = "no_db_connection"
+    """
+    No database connection
+    """
+
+    token_not_found_in_db = "token_not_found_in_db"
+    """
+    Requested token was not found in the database
+    """
+
     key_model_access_denied = "key_model_access_denied"
+    """
+    Key does not have access to the model
+    """
+
     team_model_access_denied = "team_model_access_denied"
+    """
+    Team does not have access to the model
+    """
+
     user_model_access_denied = "user_model_access_denied"
+    """
+    User does not have access to the model
+    """
+
     expired_key = "expired_key"
+    """
+    Key has expired
+    """
+
     auth_error = "auth_error"
+    """
+    General authentication error
+    """
+
     internal_server_error = "internal_server_error"
+    """
+    Internal server error
+    """
+
     bad_request_error = "bad_request_error"
+    """
+    Bad request error
+    """
+
     not_found_error = "not_found_error"
-    validation_error = "bad_request_error"
+    """
+    Not found error
+    """
+
+    validation_error = "validation_error"
+    """
+    Validation error
+    """
+
     cache_ping_error = "cache_ping_error"
+    """
+    Cache ping error
+    """
 
     @classmethod
     def get_model_access_error_type_for_object(
@@ -2093,7 +2149,11 @@ class ProxyErrorTypes(str, enum.Enum):
             return cls.user_model_access_denied
 
 
-DB_CONNECTION_ERROR_TYPES = (httpx.ConnectError, httpx.ReadError, httpx.ReadTimeout)
+DB_CONNECTION_ERROR_TYPES = (
+    httpx.ConnectError,
+    httpx.ReadError,
+    httpx.ReadTimeout,
+)
 
 
 class SSOUserDefinedValues(TypedDict):
@@ -2646,3 +2706,15 @@ class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
     models: Optional[List[str]] = Field(
         default=None, description="Default list of models that new users can access"
     )
+
+
+class DailyUserSpendTransaction(TypedDict):
+    user_id: str
+    date: str
+    api_key: str
+    model: str
+    model_group: Optional[str]
+    custom_llm_provider: Optional[str]
+    prompt_tokens: int
+    completion_tokens: int
+    spend: float
