@@ -441,3 +441,7 @@ HEALTH_CHECK_TIMEOUT_SECONDS = 60  # 60 seconds
 
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
+
+########################### DB CRON JOB NAMES ###########################
+DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
+DEFAULT_CRON_JOB_LOCK_TTL_SECONDS = 600  # 5 minutes

@@ -351,3 +351,4 @@ enum JobStatus {
   ACTIVE
   INACTIVE
 }
+
