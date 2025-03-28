@@ -19,16 +19,19 @@ class PodLockManager:
     Ensures that only one pod can run a cron job at a time.
     """
 
-    def __init__(self, prisma_client: Optional[PrismaClient], cronjob_id: str):
+    def __init__(self, cronjob_id: str):
         self.pod_id = str(uuid.uuid4())
-        self.prisma = prisma_client
         self.cronjob_id = cronjob_id
 
     async def acquire_lock(self) -> bool:
         """
         Attempt to acquire the lock for a specific cron job.
         """
-        if not self.prisma:
+        from litellm.proxy.proxy_server import prisma_client
+
+        verbose_proxy_logger.debug("acquiring lock for cronjob_id=%s", self.cronjob_id)
+        if not prisma_client:
+            verbose_proxy_logger.debug("prisma is None, returning False")
             return False
         try:
             current_time = datetime.now(timezone.utc)
@@ -38,21 +41,24 @@ class PodLockManager:
             )
 
             # Attempt to acquire the lock by upserting the record in the `cronjob_locks` table
-            cronjob_lock = await self.prisma.db.cronJob.upsert(
+            cronjob_lock = await prisma_client.db.cronjob.upsert(
                 where={"cronjob_id": self.cronjob_id},
-                create={
-                    "cronjob_id": self.cronjob_id,
-                    "pod_id": self.pod_id,
-                    "status": "ACTIVE",
-                    "last_updated": current_time,
-                    "ttl": ttl_expiry,
-                },
-                update={
-                    "status": "ACTIVE",
-                    "last_updated": current_time,
-                    "ttl": ttl_expiry,
+                data={
+                    "create": {
+                        "cronjob_id": self.cronjob_id,
+                        "pod_id": self.pod_id,
+                        "status": "ACTIVE",
+                        "last_updated": current_time,
+                        "ttl": ttl_expiry,
+                    },
+                    "update": {
+                        "status": "ACTIVE",
+                        "last_updated": current_time,
+                        "ttl": ttl_expiry,
+                    },
                 },
             )
+            verbose_proxy_logger.debug("cronjob_lock=%s", cronjob_lock)
 
             if cronjob_lock.status == "ACTIVE" and cronjob_lock.pod_id == self.pod_id:
                 verbose_proxy_logger.debug(
@@ -70,16 +76,21 @@ class PodLockManager:
         """
         Renew the lock (update the TTL) for the pod holding the lock.
         """
-        if not self.prisma:
+        from litellm.proxy.proxy_server import prisma_client
+
+        if not prisma_client:
             return False
         try:
+            verbose_proxy_logger.debug(
+                "renewing lock for cronjob_id=%s", self.cronjob_id
+            )
             current_time = datetime.now(timezone.utc)
             # Extend the TTL for another DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
             ttl_expiry = current_time + timedelta(
                 seconds=DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
             )
 
-            await self.prisma.db.cronJob.update(
+            await prisma_client.db.cronjob.update(
                 where={"cronjob_id": self.cronjob_id, "pod_id": self.pod_id},
                 data={"ttl": ttl_expiry, "last_updated": current_time},
             )
@@ -95,10 +106,15 @@ class PodLockManager:
         """
         Release the lock and mark the pod as inactive.
         """
-        if not self.prisma:
+        from litellm.proxy.proxy_server import prisma_client
+
+        if not prisma_client:
             return False
         try:
-            await self.prisma.db.cronJob.update(
+            verbose_proxy_logger.debug(
+                "releasing lock for cronjob_id=%s", self.cronjob_id
+            )
+            await prisma_client.db.cronjob.update(
                 where={"cronjob_id": self.cronjob_id, "pod_id": self.pod_id},
                 data={"status": "INACTIVE"},
             )
