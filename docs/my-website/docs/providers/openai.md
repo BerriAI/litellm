@@ -325,6 +325,74 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 | fine tuned `gpt-3.5-turbo-0613` | `response = completion(model="ft:gpt-3.5-turbo-0613", messages=messages)` |
 
 
+## OpenAI Audio Transcription
+
+LiteLLM supports OpenAI Audio Transcription endpoint.
+
+Supported models:
+
+| Model Name                | Function Call                                                          |
+|---------------------------|-----------------------------------------------------------------|
+| `whisper-1`    | `response = completion(model="whisper-1", file=audio_file)`     |
+| `gpt-4o-transcribe` | `response = completion(model="gpt-4o-transcribe", file=audio_file)` |
+| `gpt-4o-mini-transcribe` | `response = completion(model="gpt-4o-mini-transcribe", file=audio_file)` |
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import transcription
+import os 
+
+# set api keys 
+os.environ["OPENAI_API_KEY"] = ""
+audio_file = open("/path/to/audio.mp3", "rb")
+
+response = transcription(model="gpt-4o-transcribe", file=audio_file)
+
+print(f"response: {response}")
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+- model_name: gpt-4o-transcribe
+  litellm_params:
+    model: gpt-4o-transcribe
+    api_key: os.environ/OPENAI_API_KEY
+  model_info:
+    mode: audio_transcription
+    
+general_settings:
+  master_key: sk-1234
+```
+
+2. Start the proxy
+
+```bash
+litellm --config config.yaml
+```
+
+3. Test it!
+
+```bash
+curl --location 'http://0.0.0.0:8000/v1/audio/transcriptions' \
+--header 'Authorization: Bearer sk-1234' \
+--form 'file=@"/Users/krrishdholakia/Downloads/gettysburg.wav"' \
+--form 'model="gpt-4o-transcribe"'
+```
+
+
+
+</TabItem>
+</Tabs>
+
+
+
 ## Advanced
 
 ### Getting OpenAI API Response Headers 

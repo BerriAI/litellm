@@ -500,6 +500,12 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - run:
+          name: Install PostgreSQL
+          command: |
+            sudo apt-get update
+            sudo apt-get install postgresql postgresql-contrib
+            echo 'export PATH=/usr/lib/postgresql/*/bin:$PATH' >> $BASH_ENV
       - setup_google_dns
       - run:
           name: Show git commit hash
@@ -555,6 +561,7 @@ jobs:
             pip install "diskcache==5.6.1"
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
+            pip install "pytest-postgresql==7.0.1"
       - save_cache:
           paths:
             - ./venv

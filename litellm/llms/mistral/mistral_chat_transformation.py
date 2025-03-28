@@ -28,7 +28,9 @@ class MistralConfig(OpenAIGPTConfig):
 
     - `top_p` (number or null): An alternative to sampling with temperature, used for nucleus sampling. API Default - 1.
 
-    - `max_tokens` (integer or null): This optional parameter helps to set the maximum number of tokens to generate in the chat completion. API Default - null.
+    - `max_tokens` [DEPRECATED - use max_completion_tokens] (integer or null): This optional parameter helps to set the maximum number of tokens to generate in the chat completion. API Default - null.
+
+    - `max_completion_tokens` (integer or null): This optional parameter helps to set the maximum number of tokens to generate in the chat completion. API Default - null.
 
     - `tools` (list or null): A list of available tools for the model. Use this to specify functions for which the model can generate JSON inputs.
 
@@ -46,6 +48,7 @@ class MistralConfig(OpenAIGPTConfig):
     temperature: Optional[int] = None
     top_p: Optional[int] = None
     max_tokens: Optional[int] = None
+    max_completion_tokens: Optional[int] = None
     tools: Optional[list] = None
     tool_choice: Optional[Literal["auto", "any", "none"]] = None
     random_seed: Optional[int] = None
@@ -58,6 +61,7 @@ class MistralConfig(OpenAIGPTConfig):
         temperature: Optional[int] = None,
         top_p: Optional[int] = None,
         max_tokens: Optional[int] = None,
+        max_completion_tokens: Optional[int] = None,
         tools: Optional[list] = None,
         tool_choice: Optional[Literal["auto", "any", "none"]] = None,
         random_seed: Optional[int] = None,
@@ -80,6 +84,7 @@ class MistralConfig(OpenAIGPTConfig):
             "temperature",
             "top_p",
             "max_tokens",
+            "max_completion_tokens"
             "tools",
             "tool_choice",
             "seed",
@@ -104,6 +109,8 @@ class MistralConfig(OpenAIGPTConfig):
     ) -> dict:
         for param, value in non_default_params.items():
             if param == "max_tokens":
+                optional_params["max_tokens"] = value
+            if param == "max_completion_tokens": # max_completion_tokens should take priority
                 optional_params["max_tokens"] = value
             if param == "tools":
                 optional_params["tools"] = value
