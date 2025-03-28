@@ -18,15 +18,13 @@ from litellm.caching import DualCache, RedisCache
 from litellm.constants import DB_SPEND_UPDATE_JOB_NAME
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
+    DBSpendUpdateTransactions,
     Litellm_EntityType,
     LiteLLM_UserTable,
     SpendLogsPayload,
 )
 from litellm.proxy.db.pod_lock_manager import PodLockManager
-from litellm.proxy.db.redis_update_buffer import (
-    DBSpendUpdateTransactions,
-    RedisUpdateBuffer,
-)
+from litellm.proxy.db.redis_update_buffer import RedisUpdateBuffer
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
