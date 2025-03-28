@@ -1,14 +1,12 @@
 #### SPEND MANAGEMENT #####
 import collections
 import os
-from datetime import date, datetime, timedelta, timezone
-from enum import Enum
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
 
 import litellm
 from litellm._logging import verbose_proxy_logger

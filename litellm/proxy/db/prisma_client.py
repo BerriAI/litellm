@@ -212,7 +212,7 @@ class PrismaManager:
 
                 return True
             return False
-        except Exception as e:
+        except Exception:
             return False
 
     @staticmethod
