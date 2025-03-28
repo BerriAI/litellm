@@ -41,7 +41,7 @@ class PodLockManager:
             )
 
             # Attempt to acquire the lock by upserting the record in the `cronjob_locks` table
-            cronjob_lock = await prisma_client.db.cronjob.upsert(
+            cronjob_lock = await prisma_client.db.litellm_cronjob.upsert(
                 where={"cronjob_id": self.cronjob_id},
                 data={
                     "create": {
@@ -90,7 +90,7 @@ class PodLockManager:
                 seconds=DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
             )
 
-            await prisma_client.db.cronjob.update(
+            await prisma_client.db.litellm_cronjob.update(
                 where={"cronjob_id": self.cronjob_id, "pod_id": self.pod_id},
                 data={"ttl": ttl_expiry, "last_updated": current_time},
             )
@@ -114,7 +114,7 @@ class PodLockManager:
             verbose_proxy_logger.debug(
                 "releasing lock for cronjob_id=%s", self.cronjob_id
             )
-            await prisma_client.db.cronjob.update(
+            await prisma_client.db.litellm_cronjob.update(
                 where={"cronjob_id": self.cronjob_id, "pod_id": self.pod_id},
                 data={"status": "INACTIVE"},
             )
