@@ -15,12 +15,14 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache, RedisCache, RedisClusterCache
+from litellm.constants import DB_SPEND_UPDATE_JOB_NAME
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
     Litellm_EntityType,
     LiteLLM_UserTable,
     SpendLogsPayload,
 )
+from litellm.proxy.db.pod_leader_manager import PodLockManager
 from litellm.proxy.db.redis_update_buffer import RedisUpdateBuffer
 
 if TYPE_CHECKING:
@@ -41,8 +43,14 @@ class DBSpendUpdateWriter:
     def __init__(
         self, redis_cache: Optional[Union[RedisCache, RedisClusterCache]] = None
     ):
+        from litellm.proxy.proxy_server import prisma_client
+
         self.redis_cache = redis_cache
         self.redis_update_buffer = RedisUpdateBuffer(redis_cache=redis_cache)
+        self.pod_leader_manager = PodLockManager(
+            cronjob_id=DB_SPEND_UPDATE_JOB_NAME,
+            prisma_client=prisma_client,
+        )
 
     @staticmethod
     async def update_database(
@@ -397,32 +405,19 @@ class DBSpendUpdateWriter:
                 prisma_client=prisma_client,
             )
 
-        if DBSpendUpdateWriter._should_commit_spend_updates_to_db():
+            if await self.pod_leader_manager.acquire_lock():
+                await DBSpendUpdateWriter._commit_spend_updates_to_db(
+                    prisma_client=prisma_client,
+                    n_retry_times=n_retry_times,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                await self.pod_leader_manager.release_lock()
+        else:
             await DBSpendUpdateWriter._commit_spend_updates_to_db(
                 prisma_client=prisma_client,
                 n_retry_times=n_retry_times,
                 proxy_logging_obj=proxy_logging_obj,
             )
-
-        pass
-
-    @staticmethod
-    async def _commit_spend_updates_to_redis(
-        prisma_client: PrismaClient,
-    ):
-        """
-        Commits all the spend updates to Redis for each entity type
-
-        once committed, the transactions are cleared from the in-memory variables
-        """
-        pass
-
-    @staticmethod
-    def _should_commit_spend_updates_to_db() -> bool:
-        """
-        Checks if the Pod should commit spend updates to the Database
-        """
-        return False
 
     @staticmethod
     async def _commit_spend_updates_to_db(  # noqa: PLR0915
