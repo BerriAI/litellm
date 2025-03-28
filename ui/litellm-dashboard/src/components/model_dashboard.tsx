@@ -111,6 +111,7 @@ import ModelInfoView from "./model_info_view";
 import AddModelTab from "./add_model/add_model_tab";
 import { ModelDataTable } from "./model_dashboard/table";
 import { columns } from "./model_dashboard/columns";
+import { all_admin_roles } from "@/utils/roles";
 
 interface ModelDashboardProps {
   accessToken: string | null;
@@ -479,9 +480,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     }
     const fetchData = async () => {
       try {
-        const _providerSettings = await modelSettingsCall(accessToken);
-        setProviderSettings(_providerSettings);
-
         // Replace with your actual API call for model data
         const modelDataResponse = await modelInfoCall(
           accessToken,
@@ -490,6 +488,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         );
         console.log("Model data response:", modelDataResponse.data);
         setModelData(modelDataResponse);
+        const _providerSettings = await modelSettingsCall(accessToken);
+        if (_providerSettings) {
+          setProviderSettings(_providerSettings);
+        }
+
+        
 
         // loop through modelDataResponse and get all`model_name` values
         let all_model_groups: Set<string> = new Set();
@@ -1001,7 +1005,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   );
 
   let dynamicProviderForm: ProviderSettings | undefined = undefined;
-  if (providerKey) {
+  if (providerKey && providerSettings) {
     dynamicProviderForm = providerSettings.find(
       (provider) => provider.name === provider_map[providerKey]
     );
@@ -1055,16 +1059,17 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         />
       ) : (
         <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
+          
           <TabList className="flex justify-between mt-2 w-full items-center">
             <div className="flex">
-              <Tab>All Models</Tab>
+              {all_admin_roles.includes(userRole) ? <Tab>All Models</Tab> : <Tab>Your Models</Tab>}
               <Tab>Add Model</Tab>
-              <Tab>LLM Credentials</Tab>
-              <Tab>
+              {all_admin_roles.includes(userRole) && <Tab>LLM Credentials</Tab>}
+              {all_admin_roles.includes(userRole) && <Tab>
                 <pre>/health Models</pre>
-              </Tab>
-              <Tab>Model Analytics</Tab>
-              <Tab>Model Retry Settings</Tab>
+              </Tab>}
+              {all_admin_roles.includes(userRole) && <Tab>Model Analytics</Tab>}
+              {all_admin_roles.includes(userRole) && <Tab>Model Retry Settings</Tab>}
               
             </div>
 
@@ -1082,25 +1087,31 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           <TabPanels>
             <TabPanel>
               <Grid>
-                <div className="flex items-center">
-                  <Text>Filter by Public Model Name</Text>
+              <div className="flex justify-between items-center mb-6">
+                {/* Left side - Title and description */}
+                <div>
+                  <Title>Model Management</Title>
+                  {!all_admin_roles.includes(userRole) ? (
+                    <Text className="text-tremor-content">
+                      Add models for teams you are an admin for.
+                    </Text>
+                  ) : (
+                    <Text className="text-tremor-content">
+                      Add and manage models for the proxy
+                    </Text>
+                  )}
+                </div>
+
+                {/* Right side - Filter */}
+                <div className="flex items-center gap-2">
+                  <Text>Filter by Public Model Name:</Text>
                   <Select
-                    className="mb-4 mt-2 ml-2 w-50"
-                    defaultValue={
-                      selectedModelGroup
-                        ? selectedModelGroup
-                        : undefined
-                    }
-                    onValueChange={(value) =>
-                      setSelectedModelGroup(value === "all" ? "all" : value)
-                    }
-                    value={
-                      selectedModelGroup
-                        ? selectedModelGroup
-                        : undefined
-                    }
+                    className="w-64"
+                    defaultValue={selectedModelGroup ?? "all"}
+                    onValueChange={(value) => setSelectedModelGroup(value === "all" ? "all" : value)}
+                    value={selectedModelGroup ?? "all"}
                   >
-                    <SelectItem value={"all"}>All Models</SelectItem>
+                    <SelectItem value="all">All Models</SelectItem>
                     {availableModelGroups.map((group, idx) => (
                       <SelectItem
                         key={idx}
@@ -1112,31 +1123,26 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     ))}
                   </Select>
                 </div>
-                  <ModelDataTable
-                    columns={columns(
-                      premiumUser,
-                      setSelectedModelId,
-                      setSelectedTeamId,
-                      getDisplayModelName,
-                      handleEditClick,
-                      handleRefreshClick,
-                      setEditModel
-                    )}
-                    data={modelData.data.filter(
-                      (model: any) =>
-                        selectedModelGroup === "all" ||
-                        model.model_name === selectedModelGroup ||
-                        !selectedModelGroup
-                    )}
-                    isLoading={false} // Add loading state if needed
-                  />
-              </Grid>
-              <EditModelModal
-                visible={editModalVisible}
-                onCancel={handleEditCancel}
-                model={selectedModel}
-                onSubmit={(data: FormData) => handleEditModelSubmit(data, accessToken, setEditModalVisible, setSelectedModel)}
+              </div>
+              <ModelDataTable
+                columns={columns(
+                  premiumUser,
+                  setSelectedModelId,
+                  setSelectedTeamId,
+                  getDisplayModelName,
+                  handleEditClick,
+                  handleRefreshClick,
+                  setEditModel
+                )}
+                data={modelData.data.filter(
+                  (model: any) =>
+                    selectedModelGroup === "all" ||
+                    model.model_name === selectedModelGroup ||
+                    !selectedModelGroup
+                )}
+                isLoading={false} // Add loading state if needed
               />
+              </Grid>
             </TabPanel>
             <TabPanel className="h-full">
               <AddModelTab
@@ -1153,6 +1159,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 teams={teams}
                 credentials={credentialsList}
                 accessToken={accessToken}
+                userRole={userRole}
               />
             </TabPanel>
             <TabPanel>
