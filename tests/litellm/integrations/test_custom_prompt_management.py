@@ -19,6 +19,11 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import StandardCallbackDynamicParams
 
 
+@pytest.fixture(autouse=True)
+def setup_anthropic_api_key(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-some-key")
+
+
 class TestCustomPromptManagement(CustomPromptManagement):
     def get_chat_completion_prompt(
         self,
@@ -50,7 +55,7 @@ class TestCustomPromptManagement(CustomPromptManagement):
 
 
 @pytest.mark.asyncio
-async def test_custom_prompt_management_with_prompt_id():
+async def test_custom_prompt_management_with_prompt_id(monkeypatch):
     custom_prompt_management = TestCustomPromptManagement()
     litellm.callbacks = [custom_prompt_management]
 
