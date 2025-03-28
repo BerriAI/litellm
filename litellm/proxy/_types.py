@@ -2736,6 +2736,10 @@ class DailyUserSpendTransaction(TypedDict):
 
 
 class DBSpendUpdateTransactions(TypedDict):
+    """
+    Internal Data Structure for buffering spend updates in Redis or in memory before committing them to the database
+    """
+
     user_list_transactions: Optional[Dict[str, float]]
     end_user_list_transactions: Optional[Dict[str, float]]
     key_list_transactions: Optional[Dict[str, float]]
