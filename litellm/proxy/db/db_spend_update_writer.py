@@ -496,6 +496,9 @@ class DBSpendUpdateWriter:
 
         ### UPDATE USER TABLE ###
         user_list_transactions = db_spend_update_transactions["user_list_transactions"]
+        verbose_proxy_logger.debug(
+            "User Spend transactions: {}".format(user_list_transactions)
+        )
         if (
             user_list_transactions is not None
             and len(user_list_transactions.keys()) > 0
@@ -536,14 +539,12 @@ class DBSpendUpdateWriter:
                     )
 
         ### UPDATE END-USER TABLE ###
-        verbose_proxy_logger.debug(
-            "End-User Spend transactions: {}".format(
-                len(prisma_client.end_user_list_transactions.keys())
-            )
-        )
         end_user_list_transactions = db_spend_update_transactions[
             "end_user_list_transactions"
         ]
+        verbose_proxy_logger.debug(
+            "End-User Spend transactions: {}".format(end_user_list_transactions)
+        )
         if (
             end_user_list_transactions is not None
             and len(end_user_list_transactions.keys()) > 0
@@ -595,12 +596,10 @@ class DBSpendUpdateWriter:
                     )
 
         ### UPDATE TEAM TABLE ###
-        verbose_proxy_logger.debug(
-            "Team Spend transactions: {}".format(
-                len(prisma_client.team_list_transactions.keys())
-            )
-        )
         team_list_transactions = db_spend_update_transactions["team_list_transactions"]
+        verbose_proxy_logger.debug(
+            "Team Spend transactions: {}".format(team_list_transactions)
+        )
         if (
             team_list_transactions is not None
             and len(team_list_transactions.keys()) > 0
@@ -649,6 +648,11 @@ class DBSpendUpdateWriter:
         team_member_list_transactions = db_spend_update_transactions[
             "team_member_list_transactions"
         ]
+        verbose_proxy_logger.debug(
+            "Team Membership Spend transactions: {}".format(
+                team_member_list_transactions
+            )
+        )
         if (
             team_member_list_transactions is not None
             and len(team_member_list_transactions.keys()) > 0
@@ -694,6 +698,9 @@ class DBSpendUpdateWriter:
 
         ### UPDATE ORG TABLE ###
         org_list_transactions = db_spend_update_transactions["org_list_transactions"]
+        verbose_proxy_logger.debug(
+            "Org Spend transactions: {}".format(org_list_transactions)
+        )
         if org_list_transactions is not None and len(org_list_transactions.keys()) > 0:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
