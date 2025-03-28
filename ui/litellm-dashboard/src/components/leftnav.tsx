@@ -47,7 +47,7 @@ interface MenuItem {
 const menuItems: MenuItem[] = [
   { key: "1", page: "api-keys", label: "Virtual Keys", icon: <KeyOutlined /> },
   { key: "3", page: "llm-playground", label: "Test Key", icon: <PlayCircleOutlined />, roles: rolesWithWriteAccess },
-  { key: "2", page: "models", label: "Models", icon: <BlockOutlined />, roles: all_admin_roles },
+  { key: "2", page: "models", label: "Models", icon: <BlockOutlined />, roles: rolesWithWriteAccess },
   { key: "4", page: "usage", label: "Usage", icon: <BarChartOutlined /> },
   { key: "6", page: "teams", label: "Teams", icon: <TeamOutlined /> },
   { key: "17", page: "organizations", label: "Organizations", icon: <BankOutlined />, roles: all_admin_roles },
@@ -68,6 +68,7 @@ const menuItems: MenuItem[] = [
       { key: "9", page: "caching", label: "Caching", icon: <DatabaseOutlined />, roles: all_admin_roles },
       { key: "10", page: "budgets", label: "Budgets", icon: <BankOutlined />, roles: all_admin_roles },
       { key: "11", page: "guardrails", label: "Guardrails", icon: <SafetyOutlined />, roles: all_admin_roles },
+      { key: "12", page: "new_usage", label: "New Usage", icon: <BarChartOutlined />, roles: all_admin_roles },
     ]
   },
   {

@@ -275,15 +275,13 @@ def cost_per_token(  # noqa: PLR0915
                 custom_llm_provider=custom_llm_provider,
                 prompt_characters=prompt_characters,
                 completion_characters=completion_characters,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
+                usage=usage_block,
             )
         elif cost_router == "cost_per_token":
             return google_cost_per_token(
                 model=model_without_prefix,
                 custom_llm_provider=custom_llm_provider,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
+                usage=usage_block,
             )
     elif custom_llm_provider == "anthropic":
         return anthropic_cost_per_token(model=model, usage=usage_block)
@@ -828,11 +826,14 @@ def get_response_cost_from_hidden_params(
         _hidden_params_dict = hidden_params
 
     additional_headers = _hidden_params_dict.get("additional_headers", {})
-    if additional_headers and "x-litellm-response-cost" in additional_headers:
-        response_cost = additional_headers["x-litellm-response-cost"]
+    if (
+        additional_headers
+        and "llm_provider-x-litellm-response-cost" in additional_headers
+    ):
+        response_cost = additional_headers["llm_provider-x-litellm-response-cost"]
         if response_cost is None:
             return None
-        return float(additional_headers["x-litellm-response-cost"])
+        return float(additional_headers["llm_provider-x-litellm-response-cost"])
     return None
 
 
