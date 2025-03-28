@@ -17,6 +17,7 @@ import {
 
 import { userDailyActivityCall } from "./networking";
 import ViewUserSpend from "./view_user_spend";
+import TopKeyView from "./top_key_view";
 
 interface NewUsagePageProps {
   accessToken: string | null;
@@ -32,13 +33,16 @@ interface SpendMetrics {
   api_requests: number;
 }
 
+interface BreakdownMetrics {
+  models: { [key: string]: SpendMetrics };
+  providers: { [key: string]: SpendMetrics };
+  api_keys: { [key: string]: SpendMetrics };
+}
+
 interface DailyData {
   date: string;
   metrics: SpendMetrics;
-  breakdown: {
-    models?: { [key: string]: number };
-    providers?: { [key: string]: number };
-  };
+  breakdown: BreakdownMetrics;
 }
 
 const NewUsagePage: React.FC<NewUsagePageProps> = ({
@@ -56,30 +60,98 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
   
   // Calculate top models from the breakdown data
   const getTopModels = () => {
-    const modelSpend: { [key: string]: number } = {};
+    const modelSpend: { [key: string]: SpendMetrics } = {};
     userSpendData.results.forEach(day => {
-      Object.entries(day.breakdown.models || {}).forEach(([model, spend]) => {
-        modelSpend[model] = (modelSpend[model] || 0) + spend;
+      Object.entries(day.breakdown.models || {}).forEach(([model, metrics]) => {
+        if (!modelSpend[model]) {
+          modelSpend[model] = {
+            spend: 0,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+            api_requests: 0
+          };
+        }
+        modelSpend[model].spend += metrics.spend;
+        modelSpend[model].prompt_tokens += metrics.prompt_tokens;
+        modelSpend[model].completion_tokens += metrics.completion_tokens;
+        modelSpend[model].total_tokens += metrics.total_tokens;
+        modelSpend[model].api_requests += metrics.api_requests;
       });
     });
     
     return Object.entries(modelSpend)
-      .map(([model, spend]) => ({ key: model, spend }))
+      .map(([model, metrics]) => ({
+        key: model,
+        spend: metrics.spend,
+        requests: metrics.api_requests,
+        tokens: metrics.total_tokens
+      }))
       .sort((a, b) => b.spend - a.spend)
       .slice(0, 5);
   };
 
   // Calculate provider spend from the breakdown data
   const getProviderSpend = () => {
-    const providerSpend: { [key: string]: number } = {};
+    const providerSpend: { [key: string]: SpendMetrics } = {};
     userSpendData.results.forEach(day => {
-      Object.entries(day.breakdown.providers || {}).forEach(([provider, spend]) => {
-        providerSpend[provider] = (providerSpend[provider] || 0) + spend;
+      Object.entries(day.breakdown.providers || {}).forEach(([provider, metrics]) => {
+        if (!providerSpend[provider]) {
+          providerSpend[provider] = {
+            spend: 0,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+            api_requests: 0
+          };
+        }
+        providerSpend[provider].spend += metrics.spend;
+        providerSpend[provider].prompt_tokens += metrics.prompt_tokens;
+        providerSpend[provider].completion_tokens += metrics.completion_tokens;
+        providerSpend[provider].total_tokens += metrics.total_tokens;
+        providerSpend[provider].api_requests += metrics.api_requests;
       });
     });
     
     return Object.entries(providerSpend)
-      .map(([provider, spend]) => ({ provider, spend }));
+      .map(([provider, metrics]) => ({
+        provider,
+        spend: metrics.spend,
+        requests: metrics.api_requests,
+        tokens: metrics.total_tokens
+      }));
+  };
+
+  // Calculate top API keys from the breakdown data
+  const getTopKeys = () => {
+    const keySpend: { [key: string]: SpendMetrics } = {};
+    userSpendData.results.forEach(day => {
+      Object.entries(day.breakdown.api_keys || {}).forEach(([key, metrics]) => {
+        if (!keySpend[key]) {
+          keySpend[key] = {
+            spend: 0,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+            api_requests: 0
+          };
+        }
+        keySpend[key].spend += metrics.spend;
+        keySpend[key].prompt_tokens += metrics.prompt_tokens;
+        keySpend[key].completion_tokens += metrics.completion_tokens;
+        keySpend[key].total_tokens += metrics.total_tokens;
+        keySpend[key].api_requests += metrics.api_requests;
+      });
+    });
+    
+    return Object.entries(keySpend)
+      .map(([api_key, metrics]) => ({
+        api_key,
+        key_alias: api_key.substring(0, 10), // Using truncated key as alias
+        spend: metrics.spend,
+      }))
+      .sort((a, b) => b.spend - a.spend)
+      .slice(0, 5);
   };
 
   const fetchUserSpendData = async () => {
@@ -141,6 +213,20 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
           </Card>
         </Col>
 
+        {/* Top API Keys */}
+        <Col numColSpan={1}>
+          <Card className="h-full">
+            <Title>Top API Keys</Title>
+            <TopKeyView
+              topKeys={getTopKeys()}
+              accessToken={accessToken}
+              userID={userID}
+              userRole={userRole}
+              teams={null}
+            />
+          </Card>
+        </Col>
+
         {/* Top Models */}
         <Col numColSpan={1}>
           <Card className="h-full">
@@ -155,12 +241,24 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               layout="vertical"
               yAxisWidth={200}
               showLegend={false}
+              customTooltip={({ payload, active }) => {
+                if (!active || !payload?.[0]) return null;
+                const data = payload[0].payload;
+                return (
+                  <div className="bg-white p-4 shadow-lg rounded-lg border">
+                    <p className="font-bold">{data.key}</p>
+                    <p className="text-cyan-500">Spend: ${data.spend.toFixed(2)}</p>
+                    <p className="text-gray-600">Requests: {data.requests.toLocaleString()}</p>
+                    <p className="text-gray-600">Tokens: {data.tokens.toLocaleString()}</p>
+                  </div>
+                );
+              }}
             />
           </Card>
         </Col>
 
         {/* Spend by Provider */}
-        <Col numColSpan={1}>
+        <Col numColSpan={2}>
           <Card className="h-full">
             <Title>Spend by Provider</Title>
             <Grid numItems={2}>
@@ -180,6 +278,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                     <TableRow>
                       <TableHeaderCell>Provider</TableHeaderCell>
                       <TableHeaderCell>Spend</TableHeaderCell>
+                      <TableHeaderCell>Requests</TableHeaderCell>
+                      <TableHeaderCell>Tokens</TableHeaderCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -187,10 +287,12 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                       <TableRow key={provider.provider}>
                         <TableCell>{provider.provider}</TableCell>
                         <TableCell>
-                          {provider.spend < 0.00001 
+                          ${provider.spend < 0.00001 
                             ? "less than 0.00" 
                             : provider.spend.toFixed(2)}
                         </TableCell>
+                        <TableCell>{provider.requests.toLocaleString()}</TableCell>
+                        <TableCell>{provider.tokens.toLocaleString()}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -226,6 +328,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
             </Grid>
           </Card>
         </Col>
+
+        
       </Grid>
     </div>
   );
