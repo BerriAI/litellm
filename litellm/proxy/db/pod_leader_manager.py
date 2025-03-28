@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
