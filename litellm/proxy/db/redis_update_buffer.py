@@ -111,6 +111,13 @@ class RedisUpdateBuffer:
                 value=transaction_amount,
             )
 
+    @staticmethod
+    def _remove_prefix_from_keys(data: Dict[str, Any], prefix: str) -> Dict[str, Any]:
+        """
+        Removes the specified prefix from the keys of a dictionary.
+        """
+        return {key.replace(prefix, "", 1): value for key, value in data.items()}
+
     async def get_all_update_transactions_from_redis(
         self,
     ) -> Optional[DBSpendUpdateTransactions]:
@@ -119,24 +126,69 @@ class RedisUpdateBuffer:
         """
         if self.redis_cache is None:
             return None
-        expected_keys = [
-            "user_list_transactions",
-            "end_user_list_transactions",
-            "key_list_transactions",
-            "team_list_transactions",
-            "team_member_list_transactions",
-            "org_list_transactions",
-        ]
-        result = await self.redis_cache.async_batch_get_cache(expected_keys)
-        if result is None:
-            return None
+        user_transaction_keys = await self.redis_cache.async_scan_iter(
+            "user_list_transactions:*"
+        )
+        end_user_transaction_keys = await self.redis_cache.async_scan_iter(
+            "end_user_list_transactions:*"
+        )
+        key_transaction_keys = await self.redis_cache.async_scan_iter(
+            "key_list_transactions:*"
+        )
+        team_transaction_keys = await self.redis_cache.async_scan_iter(
+            "team_list_transactions:*"
+        )
+        team_member_transaction_keys = await self.redis_cache.async_scan_iter(
+            "team_member_list_transactions:*"
+        )
+        org_transaction_keys = await self.redis_cache.async_scan_iter(
+            "org_list_transactions:*"
+        )
+
+        user_list_transactions = await self.redis_cache.async_batch_get_cache(
+            user_transaction_keys
+        )
+        end_user_list_transactions = await self.redis_cache.async_batch_get_cache(
+            end_user_transaction_keys
+        )
+        key_list_transactions = await self.redis_cache.async_batch_get_cache(
+            key_transaction_keys
+        )
+        team_list_transactions = await self.redis_cache.async_batch_get_cache(
+            team_transaction_keys
+        )
+        team_member_list_transactions = await self.redis_cache.async_batch_get_cache(
+            team_member_transaction_keys
+        )
+        org_list_transactions = await self.redis_cache.async_batch_get_cache(
+            org_transaction_keys
+        )
+
+        # filter out the "prefix" from the keys using the helper method
+        user_list_transactions = self._remove_prefix_from_keys(
+            user_list_transactions, "user_list_transactions:"
+        )
+        end_user_list_transactions = self._remove_prefix_from_keys(
+            end_user_list_transactions, "end_user_list_transactions:"
+        )
+        key_list_transactions = self._remove_prefix_from_keys(
+            key_list_transactions, "key_list_transactions:"
+        )
+        team_list_transactions = self._remove_prefix_from_keys(
+            team_list_transactions, "team_list_transactions:"
+        )
+        team_member_list_transactions = self._remove_prefix_from_keys(
+            team_member_list_transactions, "team_member_list_transactions:"
+        )
+        org_list_transactions = self._remove_prefix_from_keys(
+            org_list_transactions, "org_list_transactions:"
+        )
+
         return DBSpendUpdateTransactions(
-            user_list_transactions=result.get("user_list_transactions", {}),
-            end_user_list_transactions=result.get("end_user_list_transactions", {}),
-            key_list_transactions=result.get("key_list_transactions", {}),
-            team_list_transactions=result.get("team_list_transactions", {}),
-            team_member_list_transactions=result.get(
-                "team_member_list_transactions", {}
-            ),
-            org_list_transactions=result.get("org_list_transactions", {}),
+            user_list_transactions=user_list_transactions,
+            end_user_list_transactions=end_user_list_transactions,
+            key_list_transactions=key_list_transactions,
+            team_list_transactions=team_list_transactions,
+            team_member_list_transactions=team_member_list_transactions,
+            org_list_transactions=org_list_transactions,
         )

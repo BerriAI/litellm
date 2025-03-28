@@ -339,7 +339,7 @@ model LiteLLM_DailyUserSpend {
 
 
 // Track the status of cron jobs running. Only allow one pod to run the job at a time
-model CronJob {
+model LiteLLM_CronJob {
   cronjob_id            String   @id @default(cuid()) // Unique ID for the record
   pod_id         String   // Unique identifier for the pod acting as the leader
   status        JobStatus @default(INACTIVE) // Status of the cron job (active or inactive)

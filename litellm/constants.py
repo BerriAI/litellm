@@ -444,4 +444,4 @@ LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
-DEFAULT_CRON_JOB_LOCK_TTL_SECONDS = 600  # 5 minutes
+DEFAULT_CRON_JOB_LOCK_TTL_SECONDS = 60  # 1 minute
