@@ -2,7 +2,7 @@
 import warnings
 
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
-### INIT VARIABLES ##########
+### INIT VARIABLES ###########
 import threading
 import os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
@@ -122,6 +122,9 @@ langsmith_batch_size: Optional[int] = None
 prometheus_initialize_budget_metrics: Optional[bool] = False
 argilla_batch_size: Optional[int] = None
 datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged payload
+gcs_pub_sub_use_v1: Optional[bool] = (
+    False  # if you want to use v1 gcs pubsub logged payload
+)
 argilla_transformation_object: Optional[Dict[str, Any]] = None
 _async_input_callback: List[Union[str, Callable, CustomLogger]] = (
     []
@@ -810,6 +813,7 @@ from .llms.oobabooga.chat.transformation import OobaboogaConfig
 from .llms.maritalk import MaritalkConfig
 from .llms.openrouter.chat.transformation import OpenrouterConfig
 from .llms.anthropic.chat.transformation import AnthropicConfig
+from .llms.anthropic.common_utils import AnthropicModelInfo
 from .llms.groq.stt.transformation import GroqSTTConfig
 from .llms.anthropic.completion.transformation import AnthropicTextConfig
 from .llms.triton.completion.transformation import TritonConfig
@@ -845,6 +849,7 @@ from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
     VertexGeminiConfig as VertexAIConfig,
 )
+from .llms.gemini.common_utils import GeminiModelInfo
 from .llms.gemini.chat.transformation import (
     GoogleAIStudioGeminiConfig,
     GoogleAIStudioGeminiConfig as GeminiConfig,  # aliased to maintain backwards compatibility
@@ -947,6 +952,12 @@ openaiOSeriesConfig = OpenAIOSeriesConfig()
 from .llms.openai.chat.gpt_transformation import (
     OpenAIGPTConfig,
 )
+from .llms.openai.transcriptions.whisper_transformation import (
+    OpenAIWhisperAudioTranscriptionConfig,
+)
+from .llms.openai.transcriptions.gpt_transformation import (
+    OpenAIGPTAudioTranscriptionConfig,
+)
 
 openAIGPTConfig = OpenAIGPTConfig()
 from .llms.openai.chat.gpt_audio_transformation import (
@@ -975,6 +986,7 @@ from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
 from .llms.friendliai.chat.transformation import FriendliaiChatConfig
 from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
 from .llms.xai.chat.transformation import XAIChatConfig
+from .llms.xai.common_utils import XAIModelInfo
 from .llms.volcengine import VolcEngineConfig
 from .llms.codestral.completion.transformation import CodestralTextCompletionConfig
 from .llms.azure.azure import (
