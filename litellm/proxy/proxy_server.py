@@ -29,6 +29,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     TextCompletionResponse,
 )
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -1524,7 +1525,7 @@ class ProxyConfig:
                 yaml.dump(new_config, config_file, default_flow_style=False)
 
     def _check_for_os_environ_vars(
-        self, config: dict, depth: int = 0, max_depth: int = 10
+        self, config: dict, depth: int = 0, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH
     ) -> dict:
         """
         Check for os.environ/ variables in the config and replace them with the actual values.
