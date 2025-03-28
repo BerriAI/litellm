@@ -6,7 +6,8 @@ This is to prevent deadlocks and improve reliability
 
 from typing import TYPE_CHECKING, Any, Dict, Optional, TypedDict, Union, cast
 
-from litellm.caching import RedisCache, RedisClusterCache
+from litellm._logging import verbose_proxy_logger
+from litellm.caching import RedisCache
 from litellm.secret_managers.main import str_to_bool
 
 if TYPE_CHECKING:
@@ -32,7 +33,8 @@ class RedisUpdateBuffer:
     """
 
     def __init__(
-        self, redis_cache: Optional[Union[RedisCache, RedisClusterCache]] = None
+        self,
+        redis_cache: Optional[RedisCache] = None,
     ):
         self.redis_cache = redis_cache
 
@@ -99,6 +101,9 @@ class RedisUpdateBuffer:
         Increments all transaction objects in Redis
         """
         if self.redis_cache is None:
+            verbose_proxy_logger.debug(
+                "redis_cache is None, skipping increment_all_transaction_objects_in_redis"
+            )
             return
         for transaction_id, transaction_amount in transactions.items():
             await self.redis_cache.async_increment(

@@ -6,4 +6,9 @@ model_list:
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 general_settings:
-  allow_requests_on_db_unavailable: True
+  use_redis_transaction_buffer: True
+
+litellm_settings:
+  cache: true
+  cache_params:
+    type: redis

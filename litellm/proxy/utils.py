@@ -265,9 +265,7 @@ class ProxyLogging:
         )
         self.premium_user = premium_user
         self.service_logging_obj = ServiceLogging()
-        self.db_spend_update_writer = DBSpendUpdateWriter(
-            redis_cache=self.internal_usage_cache.dual_cache.redis_cache
-        )
+        self.db_spend_update_writer = DBSpendUpdateWriter()
 
     def startup_event(
         self,
@@ -340,6 +338,7 @@ class ProxyLogging:
 
         if redis_cache is not None:
             self.internal_usage_cache.dual_cache.redis_cache = redis_cache
+            self.db_spend_update_writer.redis_update_buffer.redis_cache = redis_cache
 
     def _init_litellm_callbacks(self, llm_router: Optional[Router] = None):
         litellm.logging_callback_manager.add_litellm_callback(self.max_parallel_request_limiter)  # type: ignore
