@@ -1086,13 +1086,20 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           </TabList>
           <TabPanels>
             <TabPanel>
+              <Grid>
               <div className="flex justify-between items-center mb-6">
                 {/* Left side - Title and description */}
                 <div>
                   <Title>Model Management</Title>
-                  {!all_admin_roles.includes(userRole) && <Text className="text-tremor-content">
-                    Add models for teams you are an admin for.
-                  </Text>}
+                  {!all_admin_roles.includes(userRole) ? (
+                    <Text className="text-tremor-content">
+                      Add models for teams you are an admin for.
+                    </Text>
+                  ) : (
+                    <Text className="text-tremor-content">
+                      Add and manage models for the proxy
+                    </Text>
+                  )}
                 </div>
 
                 {/* Right side - Filter */}
@@ -1135,6 +1142,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 )}
                 isLoading={false} // Add loading state if needed
               />
+              </Grid>
             </TabPanel>
             <TabPanel className="h-full">
               <AddModelTab
