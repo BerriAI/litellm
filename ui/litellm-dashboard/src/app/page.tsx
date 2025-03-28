@@ -20,6 +20,7 @@ import PassThroughSettings from "@/components/pass_through_settings";
 import BudgetPanel from "@/components/budgets/budget_panel";
 import SpendLogsTable from "@/components/view_logs";
 import ModelHub from "@/components/model_hub";
+import NewUsagePage from "@/components/new_usage";
 import APIRef from "@/components/api_ref";
 import ChatUI from "@/components/chat_ui";
 import Sidebar from "@/components/leftnav";
@@ -346,7 +347,14 @@ export default function CreateKeyPage() {
                   accessToken={accessToken}
                   allTeams={teams as Team[] ?? []}
                 />
-              ) : (
+              ) : page == "new_usage" ? (
+                <NewUsagePage
+                  userID={userID}
+                  userRole={userRole}
+                  accessToken={accessToken}
+                />
+              ) : 
+              (
                 <Usage
                   userID={userID}
                   userRole={userRole}
