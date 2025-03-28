@@ -3,7 +3,7 @@ import TabItem from '@theme/TabItem';
 
 # Caching - In-Memory, Redis, s3, Redis Semantic Cache, Disk
 
-[**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm.caching.caching.py)
+[**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/caching/caching.py)
 
 :::info
 
