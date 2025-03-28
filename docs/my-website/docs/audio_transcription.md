@@ -106,3 +106,11 @@ transcript = client.audio.transcriptions.create(
 ```
 </TabItem>
 </Tabs>
+
+## Supported Providers
+
+- OpenAI
+- Azure
+- [Fireworks AI](./providers/fireworks_ai.md#audio-transcription)
+- [Groq](./providers/groq.md#speech-to-text---whisper)
+- [Deepgram](./providers/deepgram.md)

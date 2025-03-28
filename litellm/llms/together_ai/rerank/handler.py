@@ -6,9 +6,6 @@ LiteLLM supports the re rank API format, no paramter transformation occurs
 
 from typing import Any, Dict, List, Optional, Union
 
-import httpx
-from pydantic import BaseModel
-
 import litellm
 from litellm.llms.base import BaseLLM
 from litellm.llms.custom_httpx.http_handler import (
@@ -16,13 +13,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.llms.together_ai.rerank.transformation import TogetherAIRerankConfig
-from litellm.types.rerank import (
-    RerankBilledUnits,
-    RerankRequest,
-    RerankResponse,
-    RerankResponseMeta,
-    RerankTokens,
-)
+from litellm.types.rerank import RerankRequest, RerankResponse
 
 
 class TogetherAIRerank(BaseLLM):

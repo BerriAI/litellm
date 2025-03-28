@@ -1,135 +1,129 @@
-"use client";
-
 import Link from "next/link";
-import Image from "next/image";
-import React, { useEffect, useState } from "react";
+import React, { useState, useEffect } from "react";
 import type { MenuProps } from "antd";
-import { Dropdown, Space } from "antd";
-import { useSearchParams } from "next/navigation";
-import {
-  Button,
-  Text,
-  Metric,
-  Title,
-  TextInput,
-  Grid,
-  Col,
-  Card,
-} from "@tremor/react";
+import { Dropdown } from "antd";
+import { Organization } from "@/components/networking";
+import { defaultOrg } from "@/components/common_components/default_org";
+import { 
+  UserOutlined,
+  LogoutOutlined
+} from '@ant-design/icons';
+import { clearTokenCookies } from "@/utils/cookieUtils";
+import { fetchProxySettings } from "@/utils/proxyUtils";
 
-// Define the props type
 interface NavbarProps {
   userID: string | null;
-  userRole: string | null;
   userEmail: string | null;
+  userRole: string | null;
   premiumUser: boolean;
   setProxySettings: React.Dispatch<React.SetStateAction<any>>;
   proxySettings: any;
+  accessToken: string | null;
 }
+
 const Navbar: React.FC<NavbarProps> = ({
   userID,
-  userRole,
   userEmail,
+  userRole,
   premiumUser,
-  setProxySettings,
   proxySettings,
+  setProxySettings,
+  accessToken,
 }) => {
-  console.log("User ID:", userID);
-  console.log("userEmail:", userEmail);
-  console.log("premiumUser:", premiumUser);
-
-  // const userColors = require('./ui_colors.json') || {};
   const isLocal = process.env.NODE_ENV === "development";
-  if (isLocal != true) {
-    console.log = function() {};
-  }
-  const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
   const imageUrl = isLocal ? "http://localhost:4000/get_image" : "/get_image";
-  let logoutUrl = "";
+  const [logoutUrl, setLogoutUrl] = useState("");
 
-  console.log("PROXY_settings=", proxySettings);
+  useEffect(() => {
+    const initializeProxySettings = async () => {
+      if (accessToken) {
+        const settings = await fetchProxySettings(accessToken);
+        console.log("response from fetchProxySettings", settings);
+        if (settings) {
+          setProxySettings(settings);
+        }
+      }
+    };
 
-  if (proxySettings) {
-    if (proxySettings.PROXY_LOGOUT_URL && proxySettings.PROXY_LOGOUT_URL !== undefined) {
-      logoutUrl = proxySettings.PROXY_LOGOUT_URL;
-    }
-  }
+    initializeProxySettings();
+  }, [accessToken]);
 
-  console.log("logoutUrl=", logoutUrl);
+  useEffect(() => {
+    setLogoutUrl(proxySettings?.PROXY_LOGOUT_URL || "");
+  }, [proxySettings]);
 
   const handleLogout = () => {
-    // Clear cookies
-    document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+    clearTokenCookies();
     window.location.href = logoutUrl;
-  }
-   
+  };
 
-  const items: MenuProps["items"] = [
+  const userItems: MenuProps["items"] = [
     {
       key: "1",
       label: (
-        <>
-          <p>Role: {userRole}</p>
-          <p>ID: {userID}</p>
-          <p>Premium User: {String(premiumUser)}</p>
-        </>
+        <div className="py-1">
+          <p className="text-sm text-gray-600">Role: {userRole}</p>
+          <p className="text-sm text-gray-600">Email: {userEmail || "Unknown"}</p>
+          <p className="text-sm text-gray-600"><UserOutlined /> {userID}</p>
+          <p className="text-sm text-gray-600">Premium User: {String(premiumUser)}</p>
+        </div>
       ),
     },
     {
       key: "2",
-      label: <p onClick={handleLogout}>Logout</p>,
+      label: <p className="text-sm hover:text-gray-900" onClick={handleLogout}><LogoutOutlined /> Logout</p>,
     }
   ];
 
+
   return (
-    <nav className="left-0 right-0 top-0 flex justify-between items-center h-12 mb-4">
-      <div className="text-left my-2 absolute top-0 left-0">
-        <div className="flex flex-col items-center">
-          <Link href="/">
-            <button className="text-gray-800 rounded text-center">
+    <nav className="bg-white border-b border-gray-200 sticky top-0 z-10">
+      <div className="w-full">
+        <div className="flex items-center h-12 px-4">
+          {/* Left side with correct logo positioning */}
+          <div className="flex items-center flex-shrink-0">
+            <Link href="/" className="flex items-center">
               <img
                 src={imageUrl}
-                width={160}
-                height={160}
                 alt="LiteLLM Brand"
-                className="mr-2"
+                className="h-8 w-auto"
               />
-            </button>
-          </Link>
-        </div>
-      </div>
-      <div className="text-right mx-4 my-2 absolute top-0 right-0 flex items-center justify-end space-x-2">
-        {premiumUser ? null : (
-          <div
-            style={{
-              // border: '1px solid #391085',
-              padding: "6px",
-              borderRadius: "8px", // Added border-radius property
-            }}
-          >
+            </Link>
+          </div>
+
+          {/* Right side nav items */}
+          <div className="flex items-center space-x-5 ml-auto">
             <a
-              href="https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat"
+              href="https://docs.litellm.ai/docs/"
               target="_blank"
-              style={{
-                fontSize: "14px",
-                textDecoration: "underline",
+              rel="noopener noreferrer"
+              className="text-[13px] text-gray-600 hover:text-gray-900 transition-colors"
+            >
+              Docs
+            </a>
+
+            <Dropdown 
+              menu={{ 
+                items: userItems,
+                style: {
+                  padding: '4px',
+                  marginTop: '4px'
+                }
               }}
             >
-              Get enterprise license
-            </a>
+              <button className="inline-flex items-center text-[13px] text-gray-600 hover:text-gray-900 transition-colors">
+                User
+                <svg
+                  className="ml-1 w-4 h-4 text-gray-500"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+            </Dropdown>
           </div>
-        )}
-
-        <div
-          style={{
-            border: "1px solid #391085",
-            padding: "6px",
-            borderRadius: "8px", // Added border-radius property
-          }}
-        >
-          <Dropdown menu={{ items }}>
-            <Space>{userEmail ? userEmail : userRole}</Space>
-          </Dropdown>
         </div>
       </div>
     </nav>

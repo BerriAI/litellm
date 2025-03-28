@@ -10,10 +10,12 @@ Use this is you want to write code to run a custom guardrail
 
 ### 1. Write a `CustomGuardrail` Class
 
-A CustomGuardrail has 3 methods to enforce guardrails 
+A CustomGuardrail has 4 methods to enforce guardrails 
 - `async_pre_call_hook` - (Optional) modify input or reject request before making LLM API call
 - `async_moderation_hook` - (Optional) reject request, runs while making LLM API call (help to lower latency)
 - `async_post_call_success_hook`- (Optional) apply guardrail on input/output, runs after making LLM API call
+- `async_post_call_streaming_iterator_hook` - (Optional) pass the entire stream to the guardrail
+
 
 **[See detailed spec of methods here](#customguardrail-methods)**
 
@@ -128,6 +130,23 @@ class myCustomGuardrail(CustomGuardrail):
                     ):
                         raise ValueError("Guardrail failed Coffee Detected")
 
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_data: dict,
+    ) -> AsyncGenerator[ModelResponseStream, None]:
+        """
+        Passes the entire stream to the guardrail
+
+        This is useful for guardrails that need to see the entire response, such as PII masking.
+
+        See Aim guardrail implementation for an example - https://github.com/BerriAI/litellm/blob/d0e022cfacb8e9ebc5409bb652059b6fd97b45c0/litellm/proxy/guardrails/guardrail_hooks/aim.py#L168
+
+        Triggered by mode: 'post_call'
+        """
+        async for item in response:
+            yield item
 
 ```
 
@@ -409,6 +428,117 @@ Expected response after running during-guard
 
 </Tabs>
 
+## ✨ Pass additional parameters to guardrail
+
+:::info
+
+✨ This is an Enterprise only feature [Contact us to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+:::
+
+
+Use this to pass additional parameters to the guardrail API call. e.g. things like success threshold
+
+1. Use `get_guardrail_dynamic_request_body_params`
+
+`get_guardrail_dynamic_request_body_params` is a method of the `litellm.integrations.custom_guardrail.CustomGuardrail` class that fetches the dynamic guardrail params passed in the request body.
+
+```python
+from typing import Any, Dict, List, Literal, Optional, Union
+import litellm
+from litellm._logging import verbose_proxy_logger
+from litellm.caching.caching import DualCache
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy._types import UserAPIKeyAuth
+
+class myCustomGuardrail(CustomGuardrail):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict,
+        call_type: Literal[
+            "completion",
+            "text_completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+            "pass_through_endpoint",
+            "rerank"
+        ],
+    ) -> Optional[Union[Exception, str, dict]]:
+        # Get dynamic params from request body
+        params = self.get_guardrail_dynamic_request_body_params(request_data=data)
+        # params will contain: {"success_threshold": 0.9}
+        verbose_proxy_logger.debug("Guardrail params: %s", params)
+        return data
+```
+
+2. Pass parameters in your API requests:
+
+LiteLLM Proxy allows you to pass `guardrails` in the request body, following the [`guardrails` spec](quick_start#spec-guardrails-parameter).
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python">
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Write a short poem"}],
+    extra_body={
+        "guardrails": [
+            "custom-pre-guard": {
+                "extra_body": {
+                    "success_threshold": 0.9
+                }
+            }
+        ]
+    }
+)
+```
+</TabItem>
+
+<TabItem value="curl" label="Curl">
+
+```shell
+curl 'http://0.0.0.0:4000/chat/completions' \
+    -H 'Content-Type: application/json' \
+    -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+            "role": "user",
+            "content": "Write a short poem"
+        }
+    ],
+    "guardrails": [
+        "custom-pre-guard": {
+            "extra_body": {
+                "success_threshold": 0.9
+            }
+        }
+    ]
+}'
+```
+</TabItem>
+</Tabs>
+
+The `get_guardrail_dynamic_request_body_params` method will return:
+```json
+{
+    "success_threshold": 0.9
+}
+```
 
 ## **CustomGuardrail methods**
 

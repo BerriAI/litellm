@@ -4,6 +4,7 @@ Handles logging DB success/failure to ServiceLogger()
 ServiceLogger() then sends DB logs to Prometheus, OTEL, Datadog etc
 """
 
+import asyncio
 from datetime import datetime
 from functools import wraps
 from typing import Callable, Dict, Tuple
@@ -35,7 +36,6 @@ def log_db_metrics(func):
 
     @wraps(func)
     async def wrapper(*args, **kwargs):
-        from prisma.errors import PrismaError
 
         start_time: datetime = datetime.now()
 
@@ -45,40 +45,45 @@ def log_db_metrics(func):
             from litellm.proxy.proxy_server import proxy_logging_obj
 
             if "PROXY" not in func.__name__:
-                await proxy_logging_obj.service_logging_obj.async_service_success_hook(
-                    service=ServiceTypes.DB,
-                    call_type=func.__name__,
-                    parent_otel_span=kwargs.get("parent_otel_span", None),
-                    duration=(end_time - start_time).total_seconds(),
-                    start_time=start_time,
-                    end_time=end_time,
-                    event_metadata={
-                        "function_name": func.__name__,
-                        "function_kwargs": kwargs,
-                        "function_args": args,
-                    },
+                asyncio.create_task(
+                    proxy_logging_obj.service_logging_obj.async_service_success_hook(
+                        service=ServiceTypes.DB,
+                        call_type=func.__name__,
+                        parent_otel_span=kwargs.get("parent_otel_span", None),
+                        duration=(end_time - start_time).total_seconds(),
+                        start_time=start_time,
+                        end_time=end_time,
+                        event_metadata={
+                            "function_name": func.__name__,
+                            "function_kwargs": kwargs,
+                            "function_args": args,
+                        },
+                    )
                 )
             elif (
                 # in litellm custom callbacks kwargs is passed as arg[0]
                 # https://docs.litellm.ai/docs/observability/custom_callback#callback-functions
                 args is not None
-                and len(args) > 0
-                and isinstance(args[0], dict)
+                and len(args) > 1
+                and isinstance(args[1], dict)
             ):
-                passed_kwargs = args[0]
+                passed_kwargs = args[1]
                 parent_otel_span = _get_parent_otel_span_from_kwargs(
                     kwargs=passed_kwargs
                 )
                 if parent_otel_span is not None:
                     metadata = get_litellm_metadata_from_kwargs(kwargs=passed_kwargs)
-                    await proxy_logging_obj.service_logging_obj.async_service_success_hook(
-                        service=ServiceTypes.BATCH_WRITE_TO_DB,
-                        call_type=func.__name__,
-                        parent_otel_span=parent_otel_span,
-                        duration=0.0,
-                        start_time=start_time,
-                        end_time=end_time,
-                        event_metadata=metadata,
+
+                    asyncio.create_task(
+                        proxy_logging_obj.service_logging_obj.async_service_success_hook(
+                            service=ServiceTypes.BATCH_WRITE_TO_DB,
+                            call_type=func.__name__,
+                            parent_otel_span=parent_otel_span,
+                            duration=0.0,
+                            start_time=start_time,
+                            end_time=end_time,
+                            event_metadata=metadata,
+                        )
                     )
             # end of logging to otel
             return result

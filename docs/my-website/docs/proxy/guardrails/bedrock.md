@@ -4,6 +4,8 @@ import TabItem from '@theme/TabItem';
 
 # Bedrock
 
+LiteLLM supports Bedrock guardrails via the [Bedrock ApplyGuardrail API](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html). 
+
 ## Quick Start
 ### 1. Define Guardrails on your LiteLLM config.yaml 
 
@@ -56,7 +58,7 @@ curl -i http://localhost:4000/v1/chat/completions \
     "messages": [
       {"role": "user", "content": "hi my email is ishaan@berri.ai"}
     ],
-    "guardrails": ["bedrock-guard"]
+    "guardrails": ["bedrock-pre-guard"]
   }'
 ```
 
@@ -124,7 +126,7 @@ curl -i http://localhost:4000/v1/chat/completions \
     "messages": [
       {"role": "user", "content": "hi what is the weather"}
     ],
-    "guardrails": ["bedrock-guard"]
+    "guardrails": ["bedrock-pre-guard"]
   }'
 ```
 

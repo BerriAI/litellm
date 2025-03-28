@@ -1,21 +1,20 @@
 from enum import Enum
-from typing import Dict, List, Literal, Optional, TypedDict
+from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from typing_extensions import Required, TypedDict
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
 
-litellm_settings:
-  guardrails:
-    - prompt_injection:
-        callbacks: [lakera_prompt_injection, prompt_injection_api_2]
-        default_on: true
-        enabled_roles: [system, user]
-    - detect_secrets:
-        callbacks: [hide_secrets]
-        default_on: true
+guardrails:
+  - guardrail_name: "bedrock-pre-guard"
+    litellm_params:
+      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
+      mode: "during_call"
+      guardrailIdentifier: ff6ujrregl1q
+      guardrailVersion: "DRAFT"
+      default_on: true
 """
 
 
@@ -26,6 +25,7 @@ class SupportedGuardrailIntegrations(Enum):
     LAKERA = "lakera"
     PRESIDIO = "presidio"
     HIDE_SECRETS = "hide-secrets"
+    AIM = "aim"
 
 
 class Role(Enum):
@@ -83,7 +83,7 @@ class LakeraCategoryThresholds(TypedDict, total=False):
 class LitellmParams(TypedDict):
     guardrail: str
     mode: str
-    api_key: str
+    api_key: Optional[str]
     api_base: Optional[str]
 
     # Lakera specific params
@@ -103,11 +103,13 @@ class LitellmParams(TypedDict):
 
     # guardrails ai params
     guard_name: Optional[str]
+    default_on: Optional[bool]
 
 
-class Guardrail(TypedDict):
+class Guardrail(TypedDict, total=False):
     guardrail_name: str
     litellm_params: LitellmParams
+    guardrail_info: Optional[Dict]
 
 
 class guardrailConfig(TypedDict):
@@ -132,3 +134,35 @@ class BedrockContentItem(TypedDict, total=False):
 class BedrockRequest(TypedDict, total=False):
     source: Literal["INPUT", "OUTPUT"]
     content: List[BedrockContentItem]
+
+
+class DynamicGuardrailParams(TypedDict):
+    extra_body: Dict[str, Any]
+
+
+class GuardrailLiteLLMParamsResponse(BaseModel):
+    """The returned LiteLLM Params object for /guardrails/list"""
+
+    guardrail: str
+    mode: Union[str, List[str]]
+    default_on: bool = Field(default=False)
+
+    def __init__(self, **kwargs):
+        default_on = kwargs.get("default_on")
+        if default_on is None:
+            default_on = False
+
+        super().__init__(**kwargs)
+
+
+class GuardrailInfoResponse(BaseModel):
+    guardrail_name: str
+    litellm_params: GuardrailLiteLLMParamsResponse
+    guardrail_info: Optional[Dict]
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+
+class ListGuardrailsResponse(BaseModel):
+    guardrails: List[GuardrailInfoResponse]

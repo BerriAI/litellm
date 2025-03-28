@@ -164,6 +164,7 @@ class GenerationConfig(TypedDict, total=False):
 
 class Tools(TypedDict, total=False):
     function_declarations: List[FunctionDeclaration]
+    googleSearch: dict
     googleSearchRetrieval: dict
     code_execution: dict
     retrieval: Retrieval
@@ -178,10 +179,17 @@ class TTL(TypedDict, total=False):
     nano: float
 
 
+class PromptTokensDetails(TypedDict):
+    modality: Literal["TEXT", "AUDIO", "IMAGE", "VIDEO"]
+    tokenCount: int
+
+
 class UsageMetadata(TypedDict, total=False):
     promptTokenCount: int
     totalTokenCount: int
     candidatesTokenCount: int
+    cachedContentTokenCount: int
+    promptTokensDetails: List[PromptTokensDetails]
 
 
 class CachedContent(TypedDict, total=False):
@@ -311,12 +319,9 @@ class GenerateContentResponseBody(TypedDict, total=False):
     usageMetadata: Required[UsageMetadata]
 
 
-class FineTunesupervisedTuningSpec(TypedDict, total=False):
-    training_dataset_uri: str
-    validation_dataset: Optional[str]
+class FineTuneHyperparameters(TypedDict, total=False):
     epoch_count: Optional[int]
     learning_rate_multiplier: Optional[float]
-    tuned_model_display_name: Optional[str]
     adapter_size: Optional[
         Literal[
             "ADAPTER_SIZE_UNSPECIFIED",
@@ -328,14 +333,22 @@ class FineTunesupervisedTuningSpec(TypedDict, total=False):
     ]
 
 
+class FineTunesupervisedTuningSpec(TypedDict, total=False):
+    training_dataset_uri: str
+    validation_dataset: Optional[str]
+    tuned_model_display_name: Optional[str]
+    hyperParameters: Optional[FineTuneHyperparameters]
+
+
 class FineTuneJobCreate(TypedDict, total=False):
     baseModel: str
     supervisedTuningSpec: FineTunesupervisedTuningSpec
     tunedModelDisplayName: Optional[str]
 
 
-class ResponseSupervisedTuningSpec(TypedDict):
+class ResponseSupervisedTuningSpec(TypedDict, total=False):
     trainingDatasetUri: Optional[str]
+    hyperParameters: Optional[FineTuneHyperparameters]
 
 
 class ResponseTuningJob(TypedDict):
@@ -434,3 +447,46 @@ class VertexAIBatchEmbeddingsRequestBody(TypedDict, total=False):
 
 class VertexAIBatchEmbeddingsResponseObject(TypedDict):
     embeddings: List[ContentEmbeddings]
+
+
+# Vertex AI Batch Prediction
+
+
+class GcsSource(TypedDict):
+    uris: str
+
+
+class InputConfig(TypedDict):
+    instancesFormat: str
+    gcsSource: GcsSource
+
+
+class GcsDestination(TypedDict):
+    outputUriPrefix: str
+
+
+class OutputConfig(TypedDict, total=False):
+    predictionsFormat: str
+    gcsDestination: GcsDestination
+
+
+class VertexAIBatchPredictionJob(TypedDict):
+    displayName: str
+    model: str
+    inputConfig: InputConfig
+    outputConfig: OutputConfig
+
+
+class VertexBatchPredictionResponse(TypedDict, total=False):
+    name: str
+    displayName: str
+    model: str
+    inputConfig: InputConfig
+    outputConfig: OutputConfig
+    state: str
+    createTime: str
+    updateTime: str
+    modelVersionId: str
+
+
+VERTEX_CREDENTIALS_TYPES = Union[str, Dict[str, str]]

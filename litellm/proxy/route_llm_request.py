@@ -1,21 +1,8 @@
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
-from fastapi import (
-    Depends,
-    FastAPI,
-    File,
-    Form,
-    Header,
-    HTTPException,
-    Path,
-    Request,
-    Response,
-    UploadFile,
-    status,
-)
+from fastapi import HTTPException, status
 
 import litellm
-from litellm._logging import verbose_logger
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -34,6 +21,7 @@ ROUTE_ENDPOINT_MAPPING = {
     "atranscription": "/audio/transcriptions",
     "amoderation": "/moderations",
     "arerank": "/rerank",
+    "aresponses": "/responses",
 }
 
 
@@ -58,22 +46,23 @@ async def route_request(
         "atranscription",
         "amoderation",
         "arerank",
+        "aresponses",
         "_arealtime",  # private function for realtime API
     ],
 ):
     """
     Common helper to route the request
-
     """
-
     router_model_names = llm_router.model_names if llm_router is not None else []
     if "api_key" in data or "api_base" in data:
-        return getattr(litellm, f"{route_type}")(**data)
+        return getattr(llm_router, f"{route_type}")(**data)
 
     elif "user_config" in data:
         router_config = data.pop("user_config")
         user_router = litellm.Router(**router_config)
-        return getattr(user_router, f"{route_type}")(**data)
+        ret_val = getattr(user_router, f"{route_type}")(**data)
+        user_router.discard()
+        return ret_val
 
     elif (
         route_type == "acompletion"

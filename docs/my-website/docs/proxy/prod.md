@@ -94,22 +94,38 @@ This disables the load_dotenv() functionality, which will automatically load you
 
 ## 5. If running LiteLLM on VPC, gracefully handle DB unavailability
 
-This will allow LiteLLM to continue to process requests even if the DB is unavailable. This is better handling for DB unavailability.
+When running LiteLLM on a VPC (and inaccessible from the public internet), you can enable graceful degradation so that request processing continues even if the database is temporarily unavailable.
+
 
 **WARNING: Only do this if you're running LiteLLM on VPC, that cannot be accessed from the public internet.**
 
-```yaml
+#### Configuration
+
+```yaml showLineNumbers title="litellm config.yaml"
 general_settings:
   allow_requests_on_db_unavailable: True
 ```
+
+#### Expected Behavior
+
+When `allow_requests_on_db_unavailable` is set to `true`, LiteLLM will handle errors as follows:
+
+| Type of Error | Expected Behavior | Details |
+|---------------|-------------------|----------------|
+| Prisma Errors | ✅ Request will be allowed | Covers issues like DB connection resets or rejections from the DB via Prisma, the ORM used by LiteLLM. |
+| Httpx Errors | ✅ Request will be allowed | Occurs when the database is unreachable, allowing the request to proceed despite the DB outage. |
+| Pod Startup Behavior | ✅ Pods start regardless | LiteLLM Pods will start even if the database is down or unreachable, ensuring higher uptime guarantees for deployments. |
+| Health/Readiness Check | ✅ Always returns 200 OK | The /health/readiness endpoint returns a 200 OK status to ensure that pods remain operational even when the database is unavailable.
+| LiteLLM Budget Errors or Model Errors | ❌ Request will be blocked | Triggered when the DB is reachable but the authentication token is invalid, lacks access, or exceeds budget limits. |
+
 
 ## 6. Disable spend_logs & error_logs if not using the LiteLLM UI
 
 By default, LiteLLM writes several types of logs to the database:
 - Every LLM API request to the `LiteLLM_SpendLogs` table
-- LLM Exceptions to the `LiteLLM_LogsErrors` table
+- LLM Exceptions to the `LiteLLM_SpendLogs` table
 
-If you're not viewing these logs on the LiteLLM UI (most users use Prometheus for monitoring), you can disable them by setting the following flags to `True`:
+If you're not viewing these logs on the LiteLLM UI, you can disable them by setting the following flags to `True`:
 
 ```yaml
 general_settings:
@@ -133,7 +149,7 @@ To ensure only one service manages database migrations, use our [Helm PreSync ho
   ```yaml
   db:
     useExisting: true # use existing Postgres DB
-    url: postgresql://ishaanjaffer0324:3rnwpOBau6hT@ep-withered-mud-a5dkdpke.us-east-2.aws.neon.tech/test-argo-cd?sslmode=require # url of existing Postgres DB
+    url: postgresql://ishaanjaffer0324:... # url of existing Postgres DB
   ```
 
 2. **LiteLLM Pods**:
@@ -182,94 +198,4 @@ You should only see the following level of details in logs on the proxy server
 # INFO:     192.168.2.205:11774 - "POST /chat/completions HTTP/1.1" 200 OK
 # INFO:     192.168.2.205:34717 - "POST /chat/completions HTTP/1.1" 200 OK
 # INFO:     192.168.2.205:29734 - "POST /chat/completions HTTP/1.1" 200 OK
-```
-
-
-### Machine Specifications to Deploy LiteLLM
-
-| Service | Spec | CPUs | Memory | Architecture | Version|
-| --- | --- | --- | --- | --- | --- | 
-| Server | `t2.small`. | `1vCPUs` | `8GB` | `x86` |
-| Redis Cache | - | - | - | - | 7.0+ Redis Engine|
-
-
-### Reference Kubernetes Deployment YAML
-
-Reference Kubernetes `deployment.yaml` that was load tested by us
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: litellm-deployment
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: litellm
-  template:
-    metadata:
-      labels:
-        app: litellm
-    spec:
-      containers:
-        - name: litellm-container
-          image: ghcr.io/berriai/litellm:main-latest
-          imagePullPolicy: Always
-          env:
-            - name: AZURE_API_KEY
-              value: "d6******"
-            - name: AZURE_API_BASE
-              value: "https://ope******"
-            - name: LITELLM_MASTER_KEY
-              value: "sk-1234"
-            - name: DATABASE_URL
-              value: "po**********"
-          args:
-            - "--config"
-            - "/app/proxy_config.yaml"  # Update the path to mount the config file
-          volumeMounts:                 # Define volume mount for proxy_config.yaml
-            - name: config-volume
-              mountPath: /app
-              readOnly: true
-          livenessProbe:
-            httpGet:
-              path: /health/liveliness
-              port: 4000
-            initialDelaySeconds: 120
-            periodSeconds: 15
-            successThreshold: 1
-            failureThreshold: 3
-            timeoutSeconds: 10
-          readinessProbe:
-            httpGet:
-              path: /health/readiness
-              port: 4000
-            initialDelaySeconds: 120
-            periodSeconds: 15
-            successThreshold: 1
-            failureThreshold: 3
-            timeoutSeconds: 10
-      volumes:  # Define volume to mount proxy_config.yaml
-        - name: config-volume
-          configMap:
-            name: litellm-config  
-
-```
-
-
-Reference Kubernetes `service.yaml` that was load tested by us
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: litellm-service
-spec:
-  selector:
-    app: litellm
-  ports:
-    - protocol: TCP
-      port: 4000
-      targetPort: 4000
-  type: LoadBalancer
 ```

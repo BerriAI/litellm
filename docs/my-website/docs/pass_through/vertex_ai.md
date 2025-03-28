@@ -6,7 +6,99 @@ import TabItem from '@theme/TabItem';
 
 Pass-through endpoints for Vertex AI - call provider-specific endpoint, in native format (no translation).
 
+| Feature | Supported | Notes | 
+|-------|-------|-------|
+| Cost Tracking | ✅ | supports all models on `/generateContent` endpoint |
+| Logging | ✅ | works across all integrations |
+| End-user Tracking | ❌ | [Tell us if you need this](https://github.com/BerriAI/litellm/issues/new) |
+| Streaming | ✅ | |
+
 Just replace `https://REGION-aiplatform.googleapis.com` with `LITELLM_PROXY_BASE_URL/vertex_ai`
+
+LiteLLM supports 3 flows for calling Vertex AI endpoints via pass-through:
+
+1. **Specific Credentials**: Admin sets passthrough credentials for a specific project/region.
+
+2. **Default Credentials**: Admin sets default credentials.
+
+3. **Client-Side Credentials**: User can send client-side credentials through to Vertex AI (default behavior - if no default or mapped credentials are found, the request is passed through directly).
+
+
+## Example Usage
+
+<Tabs>
+<TabItem value="specific_credentials" label="Specific Project/Region">
+
+```yaml
+model_list:
+  - model_name: gemini-1.0-pro
+    litellm_params:
+      model: vertex_ai/gemini-1.0-pro
+      vertex_project: adroit-crow-413218
+      vertex_region: us-central1
+      vertex_credentials: /path/to/credentials.json
+      use_in_pass_through: true # 👈 KEY CHANGE
+```
+
+</TabItem>
+<TabItem value="default_credentials" label="Default Credentials">
+
+<Tabs>
+<TabItem value="yaml" label="Set in config.yaml">
+
+```yaml
+default_vertex_config: 
+  vertex_project: adroit-crow-413218
+  vertex_region: us-central1
+  vertex_credentials: /path/to/credentials.json
+```
+</TabItem>
+<TabItem value="env_var" label="Set in environment variables">
+
+```bash
+export DEFAULT_VERTEXAI_PROJECT="adroit-crow-413218"
+export DEFAULT_VERTEXAI_LOCATION="us-central1"
+export DEFAULT_GOOGLE_APPLICATION_CREDENTIALS="/path/to/credentials.json"
+```
+
+</TabItem>
+</Tabs>
+</TabItem>
+<TabItem value="client_credentials" label="Client Credentials">
+
+Try Gemini 2.0 Flash (curl)
+
+```
+MODEL_ID="gemini-2.0-flash-001"
+PROJECT_ID="YOUR_PROJECT_ID"
+```
+
+```bash
+curl \
+  -X POST \
+  -H "Authorization: Bearer $(gcloud auth application-default print-access-token)" \
+  -H "Content-Type: application/json" \
+  "${LITELLM_PROXY_BASE_URL}/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/${MODEL_ID}:streamGenerateContent" -d \
+  $'{
+    "contents": {
+      "role": "user",
+      "parts": [
+        {
+        "fileData": {
+          "mimeType": "image/png",
+          "fileUri": "gs://generativeai-downloads/images/scones.jpg"
+          }
+        },
+        {
+          "text": "Describe this picture."
+        }
+      ]
+    }
+  }'
+```
+
+</TabItem>
+</Tabs>
 
 
 #### **Example Usage**
@@ -15,7 +107,7 @@ Just replace `https://REGION-aiplatform.googleapis.com` with `LITELLM_PROXY_BASE
 <TabItem value="curl" label="curl">
 
 ```bash
-curl http://localhost:4000/vertex_ai/publishers/google/models/gemini-1.0-pro:generateContent \
+curl http://localhost:4000/vertex_ai/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/${MODEL_ID}:generateContent \
   -H "Content-Type: application/json" \
   -H "x-litellm-api-key: Bearer sk-1234" \
   -d '{
@@ -94,7 +186,7 @@ litellm
 Let's call the Google AI Studio token counting endpoint
 
 ```bash
-curl http://localhost:4000/vertex-ai/publishers/google/models/gemini-1.0-pro:generateContent \
+curl http://localhost:4000/vertex-ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/gemini-1.0-pro:generateContent \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
@@ -133,7 +225,7 @@ LiteLLM Proxy Server supports two methods of authentication to Vertex AI:
 
 
 ```shell
-curl http://localhost:4000/vertex_ai/publishers/google/models/gemini-1.5-flash-001:generateContent \
+curl http://localhost:4000/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/gemini-1.5-flash-001:generateContent \
   -H "Content-Type: application/json" \
   -H "x-litellm-api-key: Bearer sk-1234" \
   -d '{"contents":[{"role": "user", "parts":[{"text": "hi"}]}]}'
@@ -145,7 +237,7 @@ curl http://localhost:4000/vertex_ai/publishers/google/models/gemini-1.5-flash-0
 
 
 ```shell
-curl http://localhost:4000/vertex_ai/publishers/google/models/textembedding-gecko@001:predict \
+curl http://localhost:4000/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/textembedding-gecko@001:predict \
   -H "Content-Type: application/json" \
   -H "x-litellm-api-key: Bearer sk-1234" \
   -d '{"instances":[{"content": "gm"}]}'
@@ -155,7 +247,7 @@ curl http://localhost:4000/vertex_ai/publishers/google/models/textembedding-geck
 ### Imagen API
 
 ```shell
-curl http://localhost:4000/vertex_ai/publishers/google/models/imagen-3.0-generate-001:predict \
+curl http://localhost:4000/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/imagen-3.0-generate-001:predict \
   -H "Content-Type: application/json" \
   -H "x-litellm-api-key: Bearer sk-1234" \
   -d '{"instances":[{"prompt": "make an otter"}], "parameters": {"sampleCount": 1}}'
@@ -165,7 +257,7 @@ curl http://localhost:4000/vertex_ai/publishers/google/models/imagen-3.0-generat
 ### Count Tokens API
 
 ```shell
-curl http://localhost:4000/vertex_ai/publishers/google/models/gemini-1.5-flash-001:countTokens \
+curl http://localhost:4000/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/gemini-1.5-flash-001:countTokens \
   -H "Content-Type: application/json" \
   -H "x-litellm-api-key: Bearer sk-1234" \
   -d '{"contents":[{"role": "user", "parts":[{"text": "hi"}]}]}'
@@ -176,7 +268,7 @@ Create Fine Tuning Job
 
 
 ```shell
-curl http://localhost:4000/vertex_ai/tuningJobs \
+curl http://localhost:4000/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/gemini-1.5-flash-001:tuningJobs \
       -H "Content-Type: application/json" \
       -H "x-litellm-api-key: Bearer sk-1234" \
       -d '{
@@ -236,7 +328,7 @@ Expected Response
 
 
 ```bash
-curl http://localhost:4000/vertex_ai/publishers/google/models/gemini-1.0-pro:generateContent \
+curl http://localhost:4000/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/gemini-1.0-pro:generateContent \
   -H "Content-Type: application/json" \
   -H "x-litellm-api-key: Bearer sk-1234" \
   -d '{
@@ -261,7 +353,7 @@ tags: ["vertex-js-sdk", "pass-through-endpoint"]
 <TabItem value="curl" label="curl">
 
 ```bash
-curl http://localhost:4000/vertex-ai/publishers/google/models/gemini-1.0-pro:generateContent \
+curl http://localhost:4000/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/gemini-1.0-pro:generateContent \
   -H "Content-Type: application/json" \
   -H "x-litellm-api-key: Bearer sk-1234" \
   -H "tags: vertex-js-sdk,pass-through-endpoint" \

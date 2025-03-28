@@ -70,6 +70,21 @@ class MyCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/observabilit
         response: str,
     ):
         pass
+
+    aasync def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_data: dict,
+    ) -> AsyncGenerator[ModelResponseStream, None]:
+        """
+        Passes the entire stream to the guardrail
+
+        This is useful for plugins that need to see the entire stream.
+        """
+        async for item in response:
+            yield item
+
 proxy_handler_instance = MyCustomHandler()
 ```
 
@@ -139,9 +154,6 @@ class MyCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/observabilit
 
     #### ASYNC #### 
     
-    async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
-        pass
-
     async def async_log_pre_api_call(self, model, messages, kwargs):
         pass
 

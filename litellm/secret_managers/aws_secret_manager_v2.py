@@ -13,20 +13,15 @@ Requires:
 * `pip install boto3>=1.28.57`
 """
 
-import ast
-import asyncio
-import base64
 import json
 import os
-import re
-import sys
-from typing import Any, Dict, Optional, Union
+from typing import Any, Optional, Union
 
 import httpx
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
@@ -34,8 +29,14 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._types import KeyManagementSystem
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
+from .base_secret_manager import BaseSecretManager
 
-class AWSSecretsManagerV2(BaseAWSLLM):
+
+class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
+    def __init__(self, **kwargs):
+        BaseSecretManager.__init__(self, **kwargs)
+        BaseAWSLLM.__init__(self, **kwargs)
+
     @classmethod
     def validate_environment(cls):
         if "AWS_REGION_NAME" not in os.environ:
@@ -49,7 +50,6 @@ class AWSSecretsManagerV2(BaseAWSLLM):
         if use_aws_secret_manager is None or use_aws_secret_manager is False:
             return
         try:
-            import boto3
 
             cls.validate_environment()
             litellm.secret_manager_client = cls()
@@ -63,6 +63,7 @@ class AWSSecretsManagerV2(BaseAWSLLM):
         secret_name: str,
         optional_params: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
+        primary_secret_name: Optional[str] = None,
     ) -> Optional[str]:
         """
         Async function to read a secret from AWS Secrets Manager
@@ -72,6 +73,11 @@ class AWSSecretsManagerV2(BaseAWSLLM):
         Raises:
             ValueError: If the secret is not found or an HTTP error occurs
         """
+        if primary_secret_name:
+            return await self.async_read_secret_from_primary_secret(
+                secret_name=secret_name, primary_secret_name=primary_secret_name
+            )
+
         endpoint_url, headers, body = self._prepare_request(
             action="GetSecretValue",
             secret_name=secret_name,
@@ -93,7 +99,9 @@ class AWSSecretsManagerV2(BaseAWSLLM):
             raise ValueError("Timeout error occurred")
         except Exception as e:
             verbose_logger.exception(
-                "Error reading secret from AWS Secrets Manager: %s", str(e)
+                "Error reading secret='%s' from AWS Secrets Manager: %s",
+                secret_name,
+                str(e),
             )
         return None
 
@@ -102,13 +110,13 @@ class AWSSecretsManagerV2(BaseAWSLLM):
         secret_name: str,
         optional_params: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
+        primary_secret_name: Optional[str] = None,
     ) -> Optional[str]:
         """
         Sync function to read a secret from AWS Secrets Manager
 
         Done for backwards compatibility with existing codebase, since get_secret is a sync function
         """
-
         # self._prepare_request uses these env vars, we cannot read them from AWS Secrets Manager. If we do we'd get stuck in an infinite loop
         if secret_name in [
             "AWS_ACCESS_KEY_ID",
@@ -118,6 +126,11 @@ class AWSSecretsManagerV2(BaseAWSLLM):
             "AWS_BEDROCK_RUNTIME_ENDPOINT",
         ]:
             return os.getenv(secret_name)
+
+        if primary_secret_name:
+            return self.sync_read_secret_from_primary_secret(
+                secret_name=secret_name, primary_secret_name=primary_secret_name
+            )
 
         endpoint_url, headers, body = self._prepare_request(
             action="GetSecretValue",
@@ -133,22 +146,63 @@ class AWSSecretsManagerV2(BaseAWSLLM):
             response = sync_client.post(
                 url=endpoint_url, headers=headers, data=body.decode("utf-8")
             )
-            response.raise_for_status()
             return response.json()["SecretString"]
         except httpx.TimeoutException:
             raise ValueError("Timeout error occurred")
+        except httpx.HTTPStatusError as e:
+            verbose_logger.exception(
+                "Error reading secret='%s' from AWS Secrets Manager: %s, %s",
+                secret_name,
+                str(e.response.text),
+                str(e.response.status_code),
+            )
         except Exception as e:
             verbose_logger.exception(
-                "Error reading secret from AWS Secrets Manager: %s", str(e)
+                "Error reading secret='%s' from AWS Secrets Manager: %s",
+                secret_name,
+                str(e),
             )
         return None
+
+    def _parse_primary_secret(self, primary_secret_json_str: Optional[str]) -> dict:
+        """
+        Parse the primary secret JSON string into a dictionary
+
+        Args:
+            primary_secret_json_str: JSON string containing key-value pairs
+
+        Returns:
+            Dictionary of key-value pairs from the primary secret
+        """
+        return json.loads(primary_secret_json_str or "{}")
+
+    def sync_read_secret_from_primary_secret(
+        self, secret_name: str, primary_secret_name: str
+    ) -> Optional[str]:
+        """
+        Read a secret from the primary secret
+        """
+        primary_secret_json_str = self.sync_read_secret(secret_name=primary_secret_name)
+        primary_secret_kv_pairs = self._parse_primary_secret(primary_secret_json_str)
+        return primary_secret_kv_pairs.get(secret_name)
+
+    async def async_read_secret_from_primary_secret(
+        self, secret_name: str, primary_secret_name: str
+    ) -> Optional[str]:
+        """
+        Read a secret from the primary secret
+        """
+        primary_secret_json_str = await self.async_read_secret(
+            secret_name=primary_secret_name
+        )
+        primary_secret_kv_pairs = self._parse_primary_secret(primary_secret_json_str)
+        return primary_secret_kv_pairs.get(secret_name)
 
     async def async_write_secret(
         self,
         secret_name: str,
         secret_value: str,
         description: Optional[str] = None,
-        client_request_token: Optional[str] = None,
         optional_params: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
     ) -> dict:
@@ -159,7 +213,6 @@ class AWSSecretsManagerV2(BaseAWSLLM):
             secret_name: Name of the secret
             secret_value: Value to store (can be a JSON string)
             description: Optional description for the secret
-            client_request_token: Optional unique identifier to ensure idempotency
             optional_params: Additional AWS parameters
             timeout: Request timeout
         """
@@ -254,10 +307,8 @@ class AWSSecretsManagerV2(BaseAWSLLM):
     ) -> tuple[str, Any, bytes]:
         """Prepare the AWS Secrets Manager request"""
         try:
-            import boto3
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
-            from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         optional_params = optional_params or {}

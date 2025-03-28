@@ -13,11 +13,13 @@ import { TrashIcon } from "@heroicons/react/outline";
 interface DeleteModelProps {
     modelID: string;
     accessToken: string;
+    callback?: ()=>void;
 }
 
 const DeleteModelButton: React.FC<DeleteModelProps> = ({
     modelID,
     accessToken,
+    callback
 }) => {
     const [isModalVisible, setIsModalVisible] = useState(false);
 
@@ -30,6 +32,7 @@ const DeleteModelButton: React.FC<DeleteModelProps> = ({
             console.log("model delete Response:", response);
             message.success(`Model ${modelID} deleted successfully`);
             setIsModalVisible(false);
+            callback && setTimeout(callback, 4000) //added timeout  of 4 seconds as deleted model is taking time to reflect in get models
         } catch (error) {
             console.error("Error deleting the model:", error);
         }

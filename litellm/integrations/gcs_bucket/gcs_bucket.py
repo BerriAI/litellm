@@ -2,44 +2,33 @@ import asyncio
 import json
 import os
 import uuid
-from datetime import datetime
-from re import S
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, TypedDict, Union
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from urllib.parse import quote
 
-import httpx
-from pydantic import BaseModel, Field
-
-import litellm
 from litellm._logging import verbose_logger
-from litellm.integrations.custom_batch_logger import CustomBatchLogger
-from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.additional_logging_utils import AdditionalLoggingUtils
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.proxy._types import CommonProxyErrors, SpendLogsMetadata, SpendLogsPayload
+from litellm.proxy._types import CommonProxyErrors
+from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.integrations.gcs_bucket import *
-from litellm.types.utils import (
-    StandardCallbackDynamicParams,
-    StandardLoggingMetadata,
-    StandardLoggingPayload,
-)
+from litellm.types.utils import StandardLoggingPayload
 
 if TYPE_CHECKING:
-    from litellm.llms.vertex_ai_and_google_ai_studio.vertex_llm_base import VertexBase
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 else:
     VertexBase = Any
 
 
-IAM_AUTH_KEY = "IAM_AUTH"
 GCS_DEFAULT_BATCH_SIZE = 2048
 GCS_DEFAULT_FLUSH_INTERVAL_SECONDS = 20
 
 
-class GCSBucketLogger(GCSBucketBase):
+class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
     def __init__(self, bucket_name: Optional[str] = None) -> None:
         from litellm.proxy.proxy_server import premium_user
 
         super().__init__(bucket_name=bucket_name)
-        self.vertex_instances: Dict[str, VertexBase] = {}
 
         # Init Batch logging settings
         self.log_queue: List[GCSLogQueueItem] = []
@@ -54,6 +43,7 @@ class GCSBucketLogger(GCSBucketBase):
             batch_size=self.batch_size,
             flush_interval=self.flush_interval,
         )
+        AdditionalLoggingUtils.__init__(self)
 
         if premium_user is not True:
             raise ValueError(
@@ -79,7 +69,6 @@ class GCSBucketLogger(GCSBucketBase):
             )
             if logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
-
             # Add to logging queue - this will be flushed periodically
             self.log_queue.append(
                 GCSLogQueueItem(
@@ -103,7 +92,6 @@ class GCSBucketLogger(GCSBucketBase):
             )
             if logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
-
             # Add to logging queue - this will be flushed periodically
             self.log_queue.append(
                 GCSLogQueueItem(
@@ -129,35 +117,37 @@ class GCSBucketLogger(GCSBucketBase):
         if not self.log_queue:
             return
 
-        try:
-            for log_item in self.log_queue:
-                logging_payload = log_item["payload"]
-                kwargs = log_item["kwargs"]
-                response_obj = log_item.get("response_obj", None) or {}
+        for log_item in self.log_queue:
+            logging_payload = log_item["payload"]
+            kwargs = log_item["kwargs"]
+            response_obj = log_item.get("response_obj", None) or {}
 
-                gcs_logging_config: GCSLoggingConfig = (
-                    await self.get_gcs_logging_config(kwargs)
-                )
-                headers = await self.construct_request_headers(
-                    vertex_instance=gcs_logging_config["vertex_instance"],
-                    service_account_json=gcs_logging_config["path_service_account"],
-                )
-                bucket_name = gcs_logging_config["bucket_name"]
-                object_name = self._get_object_name(
-                    kwargs, logging_payload, response_obj
-                )
+            gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
+                kwargs
+            )
+            headers = await self.construct_request_headers(
+                vertex_instance=gcs_logging_config["vertex_instance"],
+                service_account_json=gcs_logging_config["path_service_account"],
+            )
+            bucket_name = gcs_logging_config["bucket_name"]
+            object_name = self._get_object_name(kwargs, logging_payload, response_obj)
+
+            try:
                 await self._log_json_data_on_gcs(
                     headers=headers,
                     bucket_name=bucket_name,
                     object_name=object_name,
                     logging_payload=logging_payload,
                 )
+            except Exception as e:
+                # don't let one log item fail the entire batch
+                verbose_logger.exception(
+                    f"GCS Bucket error logging payload to GCS bucket: {str(e)}"
+                )
+                pass
 
-            # Clear the queue after processing
-            self.log_queue.clear()
-
-        except Exception as e:
-            verbose_logger.exception(f"GCS Bucket batch logging error: {str(e)}")
+        # Clear the queue after processing
+        self.log_queue.clear()
 
     def _get_object_name(
         self, kwargs: Dict, logging_payload: StandardLoggingPayload, response_obj: Any
@@ -165,11 +155,16 @@ class GCSBucketLogger(GCSBucketBase):
         """
         Get the object name to use for the current payload
         """
-        current_date = datetime.now().strftime("%Y-%m-%d")
+        current_date = self._get_object_date_from_datetime(datetime.now(timezone.utc))
         if logging_payload.get("error_str", None) is not None:
-            object_name = f"{current_date}/failure-{uuid.uuid4().hex}"
+            object_name = self._generate_failure_object_name(
+                request_date_str=current_date,
+            )
         else:
-            object_name = f"{current_date}/{response_obj.get('id', '')}"
+            object_name = self._generate_success_object_name(
+                request_date_str=current_date,
+                response_id=response_obj.get("id", ""),
+            )
 
         # used for testing
         _litellm_params = kwargs.get("litellm_params", None) or {}
@@ -179,231 +174,64 @@ class GCSBucketLogger(GCSBucketBase):
 
         return object_name
 
-    def _handle_folders_in_bucket_name(
+    async def get_request_response_payload(
         self,
-        bucket_name: str,
-        object_name: str,
-    ) -> Tuple[str, str]:
+        request_id: str,
+        start_time_utc: Optional[datetime],
+        end_time_utc: Optional[datetime],
+    ) -> Optional[dict]:
         """
-        Handles when the user passes a bucket name with a folder postfix
-
-
-        Example:
-            - Bucket name: "my-bucket/my-folder/dev"
-            - Object name: "my-object"
-            - Returns: bucket_name="my-bucket", object_name="my-folder/dev/my-object"
-
+        Get the request and response payload for a given `request_id`
+        Tries current day, next day, and previous day until it finds the payload
         """
-        if "/" in bucket_name:
-            bucket_name, prefix = bucket_name.split("/", 1)
-            object_name = f"{prefix}/{object_name}"
-            return bucket_name, object_name
-        return bucket_name, object_name
+        if start_time_utc is None:
+            raise ValueError(
+                "start_time_utc is required for getting a payload from GCS Bucket"
+            )
 
-    async def _log_json_data_on_gcs(
+        # Try current day, next day, and previous day
+        dates_to_try = [
+            start_time_utc,
+            start_time_utc + timedelta(days=1),
+            start_time_utc - timedelta(days=1),
+        ]
+        date_str = None
+        for date in dates_to_try:
+            try:
+                date_str = self._get_object_date_from_datetime(datetime_obj=date)
+                object_name = self._generate_success_object_name(
+                    request_date_str=date_str,
+                    response_id=request_id,
+                )
+                encoded_object_name = quote(object_name, safe="")
+                response = await self.download_gcs_object(encoded_object_name)
+
+                if response is not None:
+                    loaded_response = json.loads(response)
+                    return loaded_response
+            except Exception as e:
+                verbose_logger.debug(
+                    f"Failed to fetch payload for date {date_str}: {str(e)}"
+                )
+                continue
+
+        return None
+
+    def _generate_success_object_name(
         self,
-        headers: Dict[str, str],
-        bucket_name: str,
-        object_name: str,
-        logging_payload: StandardLoggingPayload,
-    ):
-        """
-        Helper function to make POST request to GCS Bucket in the specified bucket.
-        """
-        json_logged_payload = json.dumps(logging_payload, default=str)
+        request_date_str: str,
+        response_id: str,
+    ) -> str:
+        return f"{request_date_str}/{response_id}"
 
-        bucket_name, object_name = self._handle_folders_in_bucket_name(
-            bucket_name=bucket_name,
-            object_name=object_name,
-        )
+    def _generate_failure_object_name(
+        self,
+        request_date_str: str,
+    ) -> str:
+        return f"{request_date_str}/failure-{uuid.uuid4().hex}"
 
-        response = await self.async_httpx_client.post(
-            headers=headers,
-            url=f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={object_name}",
-            data=json_logged_payload,
-        )
+    def _get_object_date_from_datetime(self, datetime_obj: datetime) -> str:
+        return datetime_obj.strftime("%Y-%m-%d")
 
-        if response.status_code != 200:
-            verbose_logger.error("GCS Bucket logging error: %s", str(response.text))
-
-        verbose_logger.debug("GCS Bucket response %s", response)
-        verbose_logger.debug("GCS Bucket status code %s", response.status_code)
-        verbose_logger.debug("GCS Bucket response.text %s", response.text)
-
-    async def get_gcs_logging_config(
-        self, kwargs: Optional[Dict[str, Any]] = {}
-    ) -> GCSLoggingConfig:
-        """
-        This function is used to get the GCS logging config for the GCS Bucket Logger.
-        It checks if the dynamic parameters are provided in the kwargs and uses them to get the GCS logging config.
-        If no dynamic parameters are provided, it uses the default values.
-        """
-        if kwargs is None:
-            kwargs = {}
-
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-            kwargs.get("standard_callback_dynamic_params", None)
-        )
-
-        bucket_name: str
-        path_service_account: Optional[str]
-        if standard_callback_dynamic_params is not None:
-            verbose_logger.debug("Using dynamic GCS logging")
-            verbose_logger.debug(
-                "standard_callback_dynamic_params: %s", standard_callback_dynamic_params
-            )
-
-            _bucket_name: Optional[str] = (
-                standard_callback_dynamic_params.get("gcs_bucket_name", None)
-                or self.BUCKET_NAME
-            )
-            _path_service_account: Optional[str] = (
-                standard_callback_dynamic_params.get("gcs_path_service_account", None)
-                or self.path_service_account_json
-            )
-
-            if _bucket_name is None:
-                raise ValueError(
-                    "GCS_BUCKET_NAME is not set in the environment, but GCS Bucket is being used as a logging callback. Please set 'GCS_BUCKET_NAME' in the environment."
-                )
-            bucket_name = _bucket_name
-            path_service_account = _path_service_account
-            vertex_instance = await self.get_or_create_vertex_instance(
-                credentials=path_service_account
-            )
-        else:
-            # If no dynamic parameters, use the default instance
-            if self.BUCKET_NAME is None:
-                raise ValueError(
-                    "GCS_BUCKET_NAME is not set in the environment, but GCS Bucket is being used as a logging callback. Please set 'GCS_BUCKET_NAME' in the environment."
-                )
-            bucket_name = self.BUCKET_NAME
-            path_service_account = self.path_service_account_json
-            vertex_instance = await self.get_or_create_vertex_instance(
-                credentials=path_service_account
-            )
-
-        return GCSLoggingConfig(
-            bucket_name=bucket_name,
-            vertex_instance=vertex_instance,
-            path_service_account=path_service_account,
-        )
-
-    async def get_or_create_vertex_instance(
-        self, credentials: Optional[str]
-    ) -> VertexBase:
-        """
-        This function is used to get the Vertex instance for the GCS Bucket Logger.
-        It checks if the Vertex instance is already created and cached, if not it creates a new instance and caches it.
-        """
-        from litellm.llms.vertex_ai_and_google_ai_studio.vertex_llm_base import (
-            VertexBase,
-        )
-
-        _in_memory_key = self._get_in_memory_key_for_vertex_instance(credentials)
-        if _in_memory_key not in self.vertex_instances:
-            vertex_instance = VertexBase()
-            await vertex_instance._ensure_access_token_async(
-                credentials=credentials,
-                project_id=None,
-                custom_llm_provider="vertex_ai",
-            )
-            self.vertex_instances[_in_memory_key] = vertex_instance
-        return self.vertex_instances[_in_memory_key]
-
-    def _get_in_memory_key_for_vertex_instance(self, credentials: Optional[str]) -> str:
-        """
-        Returns key to use for caching the Vertex instance in-memory.
-
-        When using Vertex with Key based logging, we need to cache the Vertex instance in-memory.
-
-        - If a credentials string is provided, it is used as the key.
-        - If no credentials string is provided, "IAM_AUTH" is used as the key.
-        """
-        return credentials or IAM_AUTH_KEY
-
-    async def download_gcs_object(self, object_name: str, **kwargs):
-        """
-        Download an object from GCS.
-
-        https://cloud.google.com/storage/docs/downloading-objects#download-object-json
-        """
-        try:
-            gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
-                kwargs=kwargs
-            )
-            headers = await self.construct_request_headers(
-                vertex_instance=gcs_logging_config["vertex_instance"],
-                service_account_json=gcs_logging_config["path_service_account"],
-            )
-            bucket_name = gcs_logging_config["bucket_name"]
-            bucket_name, object_name = self._handle_folders_in_bucket_name(
-                bucket_name=bucket_name,
-                object_name=object_name,
-            )
-
-            url = f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{object_name}?alt=media"
-
-            # Send the GET request to download the object
-            response = await self.async_httpx_client.get(url=url, headers=headers)
-
-            if response.status_code != 200:
-                verbose_logger.error(
-                    "GCS object download error: %s", str(response.text)
-                )
-                return None
-
-            verbose_logger.debug(
-                "GCS object download response status code: %s", response.status_code
-            )
-
-            # Return the content of the downloaded object
-            return response.content
-
-        except Exception as e:
-            verbose_logger.error("GCS object download error: %s", str(e))
-            return None
-
-    async def delete_gcs_object(self, object_name: str, **kwargs):
-        """
-        Delete an object from GCS.
-        """
-        try:
-            gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
-                kwargs=kwargs
-            )
-            headers = await self.construct_request_headers(
-                vertex_instance=gcs_logging_config["vertex_instance"],
-                service_account_json=gcs_logging_config["path_service_account"],
-            )
-            bucket_name = gcs_logging_config["bucket_name"]
-            bucket_name, object_name = self._handle_folders_in_bucket_name(
-                bucket_name=bucket_name,
-                object_name=object_name,
-            )
-
-            url = f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{object_name}"
-
-            # Send the DELETE request to delete the object
-            response = await self.async_httpx_client.delete(url=url, headers=headers)
-
-            if (response.status_code != 200) or (response.status_code != 204):
-                verbose_logger.error(
-                    "GCS object delete error: %s, status code: %s",
-                    str(response.text),
-                    response.status_code,
-                )
-                return None
-
-            verbose_logger.debug(
-                "GCS object delete response status code: %s, response: %s",
-                response.status_code,
-                response.text,
-            )
-
-            # Return the content of the downloaded object
-            return response.text
-
-        except Exception as e:
-            verbose_logger.error("GCS object download error: %s", str(e))
-            return None
+    async def async_health_check(self) -> IntegrationHealthCheckStatus:
+        raise NotImplementedError("GCS Bucket does not support health check")

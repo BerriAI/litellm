@@ -44,7 +44,6 @@ import {
   setCallbacksCall,
   serviceHealthCheck,
 } from "./networking";
-import StaticGenerationSearchParamsBailoutProvider from "next/dist/client/components/static-generation-searchparams-bailout-provider";
 import AlertingSettings from "./alerting/alerting_settings";
 import FormItem from "antd/es/form/FormItem";
 interface SettingsPageProps {

@@ -1,7 +1,0 @@
-# openai
-# fastapi
-# uvicorn
-# boto3
-# litellm
-# python-dotenv
-# redis

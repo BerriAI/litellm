@@ -13,6 +13,7 @@ class ServiceTypes(str, enum.Enum):
     REDIS = "redis"
     DB = "postgres"
     BATCH_WRITE_TO_DB = "batch_write_to_db"
+    RESET_BUDGET_JOB = "reset_budget_job"
     LITELLM = "self"
     ROUTER = "router"
     AUTH = "auth"

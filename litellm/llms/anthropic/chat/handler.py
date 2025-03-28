@@ -4,32 +4,23 @@ Calling + translation logic for anthropic's `/v1/messages` endpoint
 
 import copy
 import json
-import os
-import time
-import traceback
-import types
-from enum import Enum
-from functools import partial
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import httpx  # type: ignore
-import requests  # type: ignore
-from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
 import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
-from litellm import verbose_logger
+from litellm import LlmProviders
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
 )
 from litellm.types.llms.anthropic import (
-    AllAnthropicToolsValues,
     AnthropicChatCompletionUsageBlock,
     ContentBlockDelta,
     ContentBlockStart,
@@ -39,52 +30,21 @@ from litellm.types.llms.anthropic import (
     UsageDelta,
 )
 from litellm.types.llms.openai import (
-    AllMessageValues,
+    ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
-    ChatCompletionToolCallFunctionChunk,
     ChatCompletionUsageBlock,
 )
-from litellm.types.utils import GenericStreamingChunk
-from litellm.utils import CustomStreamWrapper, ModelResponse
+from litellm.types.utils import (
+    Delta,
+    GenericStreamingChunk,
+    ModelResponseStream,
+    StreamingChoices,
+)
+from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
 
 from ...base import BaseLLM
 from ..common_utils import AnthropicError, process_anthropic_headers
 from .transformation import AnthropicConfig
-
-
-# makes headers for API call
-def validate_environment(
-    api_key,
-    user_headers,
-    model,
-    messages: List[AllMessageValues],
-    is_vertex_request: bool,
-    tools: Optional[List[AllAnthropicToolsValues]],
-    anthropic_version: Optional[str] = None,
-):
-
-    if api_key is None:
-        raise litellm.AuthenticationError(
-            message="Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` in your environment vars",
-            llm_provider="anthropic",
-            model=model,
-        )
-
-    prompt_caching_set = AnthropicConfig().is_cache_control_set(messages=messages)
-    computer_tool_used = AnthropicConfig().is_computer_tool_used(tools=tools)
-    pdf_used = AnthropicConfig().is_pdf_used(messages=messages)
-    headers = AnthropicConfig().get_anthropic_headers(
-        anthropic_version=anthropic_version,
-        computer_tool_used=computer_tool_used,
-        prompt_caching_set=prompt_caching_set,
-        pdf_used=pdf_used,
-        api_key=api_key,
-        is_vertex_request=is_vertex_request,
-    )
-
-    if user_headers is not None and isinstance(user_headers, dict):
-        headers = {**headers, **user_headers}
-    return headers
 
 
 async def make_call(
@@ -260,7 +220,8 @@ class AnthropicChatCompletion(BaseLLM):
         data: dict,
         optional_params: dict,
         json_mode: bool,
-        litellm_params=None,
+        litellm_params: dict,
+        provider_config: BaseConfig,
         logger_fn=None,
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
@@ -295,17 +256,16 @@ class AnthropicChatCompletion(BaseLLM):
                 headers=error_headers,
             )
 
-        return AnthropicConfig._process_response(
+        return provider_config.transform_response(
             model=model,
-            response=response,
+            raw_response=response,
             model_response=model_response,
-            stream=stream,
             logging_obj=logging_obj,
             api_key=api_key,
-            data=data,
+            request_data=data,
             messages=messages,
-            print_verbose=print_verbose,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             encoding=encoding,
             json_mode=json_mode,
         )
@@ -315,6 +275,7 @@ class AnthropicChatCompletion(BaseLLM):
         model: str,
         messages: list,
         api_base: str,
+        custom_llm_provider: str,
         custom_prompt_dict: dict,
         model_response: ModelResponse,
         print_verbose: Callable,
@@ -329,29 +290,32 @@ class AnthropicChatCompletion(BaseLLM):
         headers={},
         client=None,
     ):
+
         optional_params = copy.deepcopy(optional_params)
         stream = optional_params.pop("stream", None)
         json_mode: bool = optional_params.pop("json_mode", False)
         is_vertex_request: bool = optional_params.pop("is_vertex_request", False)
         _is_function_call = False
         messages = copy.deepcopy(messages)
-        headers = validate_environment(
-            api_key,
-            headers,
-            model,
+        headers = AnthropicConfig().validate_environment(
+            api_key=api_key,
+            headers=headers,
+            model=model,
             messages=messages,
-            tools=optional_params.get("tools"),
-            is_vertex_request=is_vertex_request,
+            optional_params={**optional_params, "is_vertex_request": is_vertex_request},
         )
 
-        data = AnthropicConfig()._transform_request(
+        config = ProviderConfigManager.get_provider_chat_config(
+            model=model,
+            provider=LlmProviders(custom_llm_provider),
+        )
+
+        data = config.transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
             headers=headers,
-            _is_function_call=_is_function_call,
-            is_vertex_request=is_vertex_request,
         )
 
         ## LOGGING
@@ -407,6 +371,7 @@ class AnthropicChatCompletion(BaseLLM):
                     print_verbose=print_verbose,
                     encoding=encoding,
                     api_key=api_key,
+                    provider_config=config,
                     logging_obj=logging_obj,
                     optional_params=optional_params,
                     stream=stream,
@@ -471,17 +436,16 @@ class AnthropicChatCompletion(BaseLLM):
                         headers=error_headers,
                     )
 
-        return AnthropicConfig._process_response(
+        return config.transform_response(
             model=model,
-            response=response,
+            raw_response=response,
             model_response=model_response,
-            stream=stream,
             logging_obj=logging_obj,
             api_key=api_key,
-            data=data,  # type: ignore
+            request_data=data,
             messages=messages,
-            print_verbose=print_verbose,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             encoding=encoding,
             json_mode=json_mode,
         )
@@ -510,7 +474,10 @@ class ModelResponseIterator:
         if len(self.content_blocks) == 0:
             return False
 
-        if self.content_blocks[0]["delta"]["type"] == "text_delta":
+        if (
+            self.content_blocks[0]["delta"]["type"] == "text_delta"
+            or self.content_blocks[0]["delta"]["type"] == "thinking_delta"
+        ):
             return False
 
         for block in self.content_blocks:
@@ -548,15 +515,76 @@ class ModelResponseIterator:
 
         return usage_block
 
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+    def _content_block_delta_helper(self, chunk: dict) -> Tuple[
+        str,
+        Optional[ChatCompletionToolCallChunk],
+        List[ChatCompletionThinkingBlock],
+        Dict[str, Any],
+    ]:
+        """
+        Helper function to handle the content block delta
+        """
+
+        text = ""
+        tool_use: Optional[ChatCompletionToolCallChunk] = None
+        provider_specific_fields = {}
+        content_block = ContentBlockDelta(**chunk)  # type: ignore
+        thinking_blocks: List[ChatCompletionThinkingBlock] = []
+
+        self.content_blocks.append(content_block)
+        if "text" in content_block["delta"]:
+            text = content_block["delta"]["text"]
+        elif "partial_json" in content_block["delta"]:
+            tool_use = {
+                "id": None,
+                "type": "function",
+                "function": {
+                    "name": None,
+                    "arguments": content_block["delta"]["partial_json"],
+                },
+                "index": self.tool_index,
+            }
+        elif "citation" in content_block["delta"]:
+            provider_specific_fields["citation"] = content_block["delta"]["citation"]
+        elif (
+            "thinking" in content_block["delta"]
+            or "signature" in content_block["delta"]
+        ):
+            thinking_blocks = [
+                ChatCompletionThinkingBlock(
+                    type="thinking",
+                    thinking=content_block["delta"].get("thinking") or "",
+                    signature=content_block["delta"].get("signature"),
+                )
+            ]
+            provider_specific_fields["thinking_blocks"] = thinking_blocks
+        return text, tool_use, thinking_blocks, provider_specific_fields
+
+    def _handle_reasoning_content(
+        self, thinking_blocks: List[ChatCompletionThinkingBlock]
+    ) -> Optional[str]:
+        """
+        Handle the reasoning content
+        """
+        reasoning_content = None
+        for block in thinking_blocks:
+            if reasoning_content is None:
+                reasoning_content = ""
+            if "thinking" in block:
+                reasoning_content += block["thinking"]
+        return reasoning_content
+
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
             type_chunk = chunk.get("type", "") or ""
 
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
-            is_finished = False
             finish_reason = ""
             usage: Optional[ChatCompletionUsageBlock] = None
+            provider_specific_fields: Dict[str, Any] = {}
+            reasoning_content: Optional[str] = None
+            thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
 
             index = int(chunk.get("index", 0))
             if type_chunk == "content_block_delta":
@@ -564,20 +592,13 @@ class ModelResponseIterator:
                 Anthropic content chunk
                 chunk = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': 'Hello'}}
                 """
-                content_block = ContentBlockDelta(**chunk)  # type: ignore
-                self.content_blocks.append(content_block)
-                if "text" in content_block["delta"]:
-                    text = content_block["delta"]["text"]
-                elif "partial_json" in content_block["delta"]:
-                    tool_use = {
-                        "id": None,
-                        "type": "function",
-                        "function": {
-                            "name": None,
-                            "arguments": content_block["delta"]["partial_json"],
-                        },
-                        "index": self.tool_index,
-                    }
+                text, tool_use, thinking_blocks, provider_specific_fields = (
+                    self._content_block_delta_helper(chunk=chunk)
+                )
+                if thinking_blocks:
+                    reasoning_content = self._handle_reasoning_content(
+                        thinking_blocks=thinking_blocks
+                    )
             elif type_chunk == "content_block_start":
                 """
                 event: content_block_start
@@ -599,9 +620,11 @@ class ModelResponseIterator:
                         "index": self.tool_index,
                     }
             elif type_chunk == "content_block_stop":
+
                 ContentBlockStop(**chunk)  # type: ignore
                 # check if tool call content block
                 is_empty = self.check_empty_tool_call_args()
+
                 if is_empty:
                     tool_use = {
                         "id": None,
@@ -624,7 +647,6 @@ class ModelResponseIterator:
                     or "stop"
                 )
                 usage = self._handle_usage(anthropic_usage_chunk=message_delta["usage"])
-                is_finished = True
             elif type_chunk == "message_start":
                 """
                 Anthropic
@@ -663,13 +685,27 @@ class ModelResponseIterator:
 
             text, tool_use = self._handle_json_mode_chunk(text=text, tool_use=tool_use)
 
-            returned_chunk = GenericStreamingChunk(
-                text=text,
-                tool_use=tool_use,
-                is_finished=is_finished,
-                finish_reason=finish_reason,
+            returned_chunk = ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        index=index,
+                        delta=Delta(
+                            content=text,
+                            tool_calls=[tool_use] if tool_use is not None else None,
+                            provider_specific_fields=(
+                                provider_specific_fields
+                                if provider_specific_fields
+                                else None
+                            ),
+                            thinking_blocks=(
+                                thinking_blocks if thinking_blocks else None
+                            ),
+                            reasoning_content=reasoning_content,
+                        ),
+                        finish_reason=finish_reason,
+                    )
+                ],
                 usage=usage,
-                index=index,
             )
 
             return returned_chunk
@@ -780,7 +816,7 @@ class ModelResponseIterator:
         except ValueError as e:
             raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
-    def convert_str_chunk_to_generic_chunk(self, chunk: str) -> GenericStreamingChunk:
+    def convert_str_chunk_to_generic_chunk(self, chunk: str) -> ModelResponseStream:
         """
         Convert a string chunk to a GenericStreamingChunk
 
@@ -800,11 +836,4 @@ class ModelResponseIterator:
             data_json = json.loads(str_line[5:])
             return self.chunk_parser(chunk=data_json)
         else:
-            return GenericStreamingChunk(
-                text="",
-                is_finished=False,
-                finish_reason="",
-                usage=None,
-                index=0,
-                tool_use=None,
-            )
+            return ModelResponseStream()

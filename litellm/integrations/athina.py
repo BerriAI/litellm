@@ -1,5 +1,7 @@
 import datetime
 
+import litellm
+
 
 class AthinaLogger:
     def __init__(self):
@@ -10,7 +12,7 @@ class AthinaLogger:
             "athina-api-key": self.athina_api_key,
             "Content-Type": "application/json",
         }
-        self.athina_logging_url = "https://log.athina.ai/api/v1/log/inference"
+        self.athina_logging_url = os.getenv("ATHINA_BASE_URL", "https://log.athina.ai") + "/api/v1/log/inference"
         self.additional_keys = [
             "environment",
             "prompt_slug",
@@ -21,13 +23,15 @@ class AthinaLogger:
             "context",
             "expected_response",
             "user_query",
+            "tags",
+            "user_feedback",
+            "model_options",
+            "custom_attributes",
         ]
 
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         import json
         import traceback
-
-        import requests  # type: ignore
 
         try:
             is_stream = kwargs.get("stream", False)
@@ -80,8 +84,7 @@ class AthinaLogger:
                 for key in self.additional_keys:
                     if key in metadata:
                         data[key] = metadata[key]
-
-            response = requests.post(
+            response = litellm.module_level_client.post(
                 self.athina_logging_url,
                 headers=self.headers,
                 data=json.dumps(data, default=str),

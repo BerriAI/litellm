@@ -1,5 +1,6 @@
 import base64
 import os
+from typing import Optional
 
 from litellm._logging import verbose_proxy_logger
 
@@ -19,9 +20,9 @@ def _get_salt_key():
     return salt_key
 
 
-def encrypt_value_helper(value: str):
+def encrypt_value_helper(value: str, new_encryption_key: Optional[str] = None):
 
-    signing_key = _get_salt_key()
+    signing_key = new_encryption_key or _get_salt_key()
 
     try:
         if isinstance(value, str):
@@ -40,7 +41,6 @@ def encrypt_value_helper(value: str):
 
 
 def decrypt_value_helper(value: str):
-    from litellm.proxy.proxy_server import master_key
 
     signing_key = _get_salt_key()
 
@@ -53,8 +53,11 @@ def decrypt_value_helper(value: str):
         # if it's not str - do not decrypt it, return the value
         return value
     except Exception as e:
+        import traceback
+
+        traceback.print_stack()
         verbose_proxy_logger.error(
-            f"Error decrypting value, Did your master_key/salt key change recently? : {value}\nError: {str(e)}\nSet permanent salt key - https://docs.litellm.ai/docs/proxy/prod#5-set-litellm-salt-key"
+            f"Error decrypting value, Did your master_key/salt key change recently? \nError: {str(e)}\nSet permanent salt key - https://docs.litellm.ai/docs/proxy/prod#5-set-litellm-salt-key"
         )
         # [Non-Blocking Exception. - this should not block decrypting other values]
         pass

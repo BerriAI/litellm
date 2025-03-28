@@ -10,7 +10,6 @@ Convers
 Docs - https://docs.cohere.com/v2/reference/embed
 """
 
-import types
 from typing import Any, List, Optional, Union
 
 import httpx
@@ -18,16 +17,10 @@ import httpx
 from litellm import COHERE_DEFAULT_EMBEDDING_INPUT_TYPE
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.llms.bedrock import (
-    COHERE_EMBEDDING_INPUT_TYPES,
     CohereEmbeddingRequest,
     CohereEmbeddingRequestWithModel,
 )
-from litellm.types.utils import (
-    Embedding,
-    EmbeddingResponse,
-    PromptTokensDetailsWrapper,
-    Usage,
-)
+from litellm.types.utils import EmbeddingResponse, PromptTokensDetailsWrapper, Usage
 from litellm.utils import is_base64_encoded
 
 

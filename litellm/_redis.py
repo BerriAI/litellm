@@ -12,12 +12,11 @@ import json
 
 # s/o [@Frank Colson](https://www.linkedin.com/in/frank-colson-422b9b183/) for this redis implementation
 import os
-from typing import Dict, List, Optional, Union
+from typing import List, Optional, Union
 
 import redis  # type: ignore
 import redis.asyncio as async_redis  # type: ignore
 
-import litellm
 from litellm import get_secret, get_secret_str
 
 from ._logging import verbose_logger
@@ -183,9 +182,7 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
                 "REDIS_CLUSTER_NODES environment variable is not valid JSON. Please ensure it's properly formatted."
             )
 
-    verbose_logger.debug(
-        "init_redis_cluster: startup nodes: ", redis_kwargs["startup_nodes"]
-    )
+    verbose_logger.debug("init_redis_cluster: startup nodes are being initialized.")
     from redis.cluster import ClusterNode
 
     args = _get_redis_cluster_kwargs()
@@ -267,7 +264,9 @@ def get_redis_client(**env_overrides):
     return redis.Redis(**redis_kwargs)
 
 
-def get_redis_async_client(**env_overrides) -> async_redis.Redis:
+def get_redis_async_client(
+    **env_overrides,
+) -> async_redis.Redis:
     redis_kwargs = _get_redis_client_logic(**env_overrides)
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         args = _get_redis_url_kwargs(client=async_redis.Redis.from_url)
@@ -306,7 +305,6 @@ def get_redis_async_client(**env_overrides) -> async_redis.Redis:
         return _init_async_redis_sentinel(redis_kwargs)
 
     return async_redis.Redis(
-        socket_timeout=5,
         **redis_kwargs,
     )
 

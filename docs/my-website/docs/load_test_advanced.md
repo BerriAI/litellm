@@ -25,6 +25,18 @@ Tutorial on how to get to 1K+ RPS with LiteLLM Proxy on locust
         callbacks: ["prometheus"] # Enterprise LiteLLM Only - use prometheus to get metrics on your load test
     ```
 
+**Use this config for testing:**
+
+**Note:**  we're currently migrating to aiohttp which has 10x higher throughput. We recommend using the `aiohttp_openai/` provider for load testing.
+
+```yaml
+model_list:
+  - model_name: "fake-openai-endpoint"
+    litellm_params:
+      model: aiohttp_openai/any
+      api_base: https://your-fake-openai-endpoint.com/chat/completions
+      api_key: "test"
+```
 
 
 ## Load Test - Fake OpenAI Endpoint
@@ -46,7 +58,7 @@ litellm provides a hosted `fake-openai-endpoint` you can load test against
 model_list:
   - model_name: fake-openai-endpoint
     litellm_params:
-      model: openai/fake
+      model: aiohttp_openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
@@ -170,7 +182,7 @@ Use the following [prometheus metrics to debug your load tests / failures](./pro
 
 ## Machine Specifications for Running LiteLLM Proxy
 
-👉 **Number of Replicas of LiteLLM Proxy=20** for getting 1K+ RPS
+👉 **Number of Replicas of LiteLLM Proxy=4** for getting 1K+ RPS
 
 | Service | Spec | CPUs | Memory | Architecture | Version|
 | --- | --- | --- | --- | --- | --- | 

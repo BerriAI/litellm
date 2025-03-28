@@ -1,9 +1,9 @@
 # What this tests ?
-## Tests /chat/completions by generating a key and then making a chat completions request
+## Tests /chat/completions by generating a key and then making a chat completions-request
 import pytest
 import asyncio
 import aiohttp, openai
-from openai import OpenAI, AsyncOpenAI
+from openai import OpenAI, AsyncOpenAI, AzureOpenAI, AsyncAzureOpenAI
 from typing import Optional, List, Union
 import uuid
 
@@ -201,6 +201,14 @@ async def chat_completion_with_headers(session, key, model="gpt-4"):
         return raw_headers_json
 
 
+async def chat_completion_with_model_from_route(session, key, route):
+    url = "http://0.0.0.0:4000/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+
+
 async def completion(session, key):
     url = "http://0.0.0.0:4000/completions"
     headers = {
@@ -288,15 +296,23 @@ async def test_chat_completion():
     make chat completion call
     """
     async with aiohttp.ClientSession() as session:
-        key_gen = await generate_key(session=session)
-        key = key_gen["key"]
-        await chat_completion(session=session, key=key)
-        key_gen = await new_user(session=session)
-        key_2 = key_gen["key"]
-        await chat_completion(session=session, key=key_2)
+        key_gen = await generate_key(session=session, models=["gpt-3.5-turbo"])
+        azure_client = AsyncAzureOpenAI(
+            azure_endpoint="http://0.0.0.0:4000",
+            azure_deployment="random-model",
+            api_key=key_gen["key"],
+            api_version="2024-02-15-preview",
+        )
+        with pytest.raises(openai.AuthenticationError) as e:
+            response = await azure_client.chat.completions.create(
+                model="gpt-4",
+                messages=[{"role": "user", "content": "Hello!"}],
+            )
+        assert "key not allowed to access model." in str(e)
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_chat_completion_ratelimit():
     """
     - call model with rpm 1
@@ -375,6 +391,69 @@ async def test_chat_completion_streaming():
         response_str += chunk.choices[0].delta.content or ""
 
     print(f"response_str: {response_str}")
+
+
+@pytest.mark.asyncio
+async def test_completion_streaming_usage_metrics():
+    """
+    [PROD Test] Ensures usage metrics are returned correctly when `include_usage` is set to `True`
+    """
+    client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+    response = await client.completions.create(
+        model="gpt-instruct",
+        prompt="hey",
+        stream=True,
+        stream_options={"include_usage": True},
+        max_tokens=4,
+        temperature=0.00000001,
+    )
+
+    last_chunk = None
+    async for chunk in response:
+        print("chunk", chunk)
+        last_chunk = chunk
+
+    assert last_chunk is not None, "No chunks were received"
+    assert last_chunk.usage is not None, "Usage information was not received"
+    assert last_chunk.usage.prompt_tokens > 0, "Prompt tokens should be greater than 0"
+    assert (
+        last_chunk.usage.completion_tokens > 0
+    ), "Completion tokens should be greater than 0"
+    assert last_chunk.usage.total_tokens > 0, "Total tokens should be greater than 0"
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_anthropic_structured_output():
+    """
+    Ensure nested pydantic output is returned correctly
+    """
+    from pydantic import BaseModel
+
+    class CalendarEvent(BaseModel):
+        name: str
+        date: str
+        participants: list[str]
+
+    class EventsList(BaseModel):
+        events: list[CalendarEvent]
+
+    messages = [
+        {"role": "user", "content": "List 5 important events in the XIX century"}
+    ]
+
+    client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+    res = await client.beta.chat.completions.parse(
+        model="bedrock/us.anthropic.claude-3-sonnet-20240229-v1:0",
+        messages=messages,
+        response_format=EventsList,
+        timeout=60,
+    )
+    message = res.choices[0].message
+
+    if message.parsed:
+        print(message.parsed.events)
 
 
 @pytest.mark.asyncio

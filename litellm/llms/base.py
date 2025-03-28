@@ -2,9 +2,10 @@
 from typing import Any, Optional, Union
 
 import httpx
-import requests
 
 import litellm
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.types.utils import ModelResponse, TextCompletionResponse
 
 
 class BaseLLM:
@@ -14,8 +15,8 @@ class BaseLLM:
     def process_response(
         self,
         model: str,
-        response: Union[requests.Response, httpx.Response],
-        model_response: litellm.utils.ModelResponse,
+        response: httpx.Response,
+        model_response: ModelResponse,
         stream: bool,
         logging_obj: Any,
         optional_params: dict,
@@ -24,7 +25,7 @@ class BaseLLM:
         messages: list,
         print_verbose,
         encoding,
-    ) -> Union[litellm.utils.ModelResponse, litellm.utils.CustomStreamWrapper]:
+    ) -> Union[ModelResponse, CustomStreamWrapper]:
         """
         Helper function to process the response across sync + async completion calls
         """
@@ -33,8 +34,8 @@ class BaseLLM:
     def process_text_completion_response(
         self,
         model: str,
-        response: Union[requests.Response, httpx.Response],
-        model_response: litellm.utils.TextCompletionResponse,
+        response: httpx.Response,
+        model_response: TextCompletionResponse,
         stream: bool,
         logging_obj: Any,
         optional_params: dict,
@@ -43,7 +44,7 @@ class BaseLLM:
         messages: list,
         print_verbose,
         encoding,
-    ) -> Union[litellm.utils.TextCompletionResponse, litellm.utils.CustomStreamWrapper]:
+    ) -> Union[TextCompletionResponse, CustomStreamWrapper]:
         """
         Helper function to process the response across sync + async completion calls
         """

@@ -134,29 +134,12 @@ general_settings:
 | content_policy_fallbacks | array of objects | Fallbacks to use when a ContentPolicyViolationError is encountered. [Further docs](./reliability#content-policy-fallbacks) |
 | context_window_fallbacks | array of objects | Fallbacks to use when a ContextWindowExceededError is encountered. [Further docs](./reliability#context-window-fallbacks) |
 | cache | boolean | If true, enables caching. [Further docs](./caching) |
-| cache_params | object | Parameters for the cache. [Further docs](./caching) |
-| cache_params.type | string | The type of cache to initialize. Can be one of ["local", "redis", "redis-semantic", "s3", "disk", "qdrant-semantic"]. Defaults to "redis". [Furher docs](./caching) |
-| cache_params.host | string | The host address for the Redis cache. Required if type is "redis". |
-| cache_params.port | integer | The port number for the Redis cache. Required if type is "redis". |
-| cache_params.password | string | The password for the Redis cache. Required if type is "redis". |
-| cache_params.namespace | string | The namespace for the Redis cache. |
-| cache_params.redis_startup_nodes | array of objects | Redis Cluster Settings. [Further docs](./caching) |
-| cache_params.service_name | string | Redis Sentinel Settings. [Further docs](./caching) |
-| cache_params.sentinel_nodes | array of arrays | Redis Sentinel Settings. [Further docs](./caching) |
-| cache_params.ttl | integer | The time (in seconds) to store entries in cache. |
-| cache_params.qdrant_semantic_cache_embedding_model | string | The embedding model to use for qdrant semantic cache. |
-| cache_params.qdrant_collection_name | string | The name of the collection to use for qdrant semantic cache. |
-| cache_params.qdrant_quantization_config | string | The quantization configuration for the qdrant semantic cache. |
-| cache_params.similarity_threshold | float | The similarity threshold for the semantic cache. |
-| cache_params.s3_bucket_name | string | The name of the S3 bucket to use for the semantic cache. |
-| cache_params.s3_region_name | string | The region name for the S3 bucket. |
-| cache_params.s3_aws_access_key_id | string | The AWS access key ID for the S3 bucket. |
-| cache_params.s3_aws_secret_access_key | string | The AWS secret access key for the S3 bucket. |
-| cache_params.s3_endpoint_url | string | Optional - The endpoint URL for the S3 bucket. |
-| cache_params.supported_call_types | array of strings | The types of calls to cache. [Further docs](./caching) |
-| cache_params.mode | string | The mode of the cache. [Further docs](./caching) |
+| cache_params | object | Parameters for the cache. [Further docs](./caching#supported-cache_params-on-proxy-configyaml) |
 | disable_end_user_cost_tracking | boolean | If true, turns off end user cost tracking on prometheus metrics + litellm spend logs table on proxy. |
+| disable_end_user_cost_tracking_prometheus_only | boolean | If true, turns off end user cost tracking on prometheus metrics only. |
 | key_generation_settings | object | Restricts who can generate keys. [Further docs](./virtual_keys.md#restricting-key-generation) |
+| disable_add_transform_inline_image_block | boolean | For Fireworks AI models - if true, turns off the auto-add of `#transform=inline` to the url of the image_url, if the model is not a vision model. |
+| disable_hf_tokenizer_download | boolean | If true, it defaults to using the openai tokenizer for all models (including huggingface models). |
 
 ### general_settings - Reference
 
@@ -164,6 +147,7 @@ general_settings:
 |------|------|-------------|
 | completion_model | string | The default model to use for completions when `model` is not specified in the request |
 | disable_spend_logs | boolean | If true, turns off writing each transaction to the database |
+| disable_spend_updates | boolean | If true, turns off all spend updates to the DB. Including key/user/team spend updates. |
 | disable_master_key_return | boolean | If true, turns off returning master key on UI. (checked on '/user/info' endpoint) |
 | disable_retry_on_max_parallel_request_limit_error | boolean | If true, turns off retries when max parallel request limit is reached |
 | disable_reset_budget | boolean | If true, turns off reset budget scheduled task |
@@ -176,7 +160,7 @@ general_settings:
 | database_url | string | The URL for the database connection [Set up Virtual Keys](virtual_keys) |
 | database_connection_pool_limit | integer | The limit for database connection pool [Setting DB Connection Pool limit](#configure-db-pool-limits--connection-timeouts) |
 | database_connection_timeout | integer | The timeout for database connections in seconds [Setting DB Connection Pool limit, timeout](#configure-db-pool-limits--connection-timeouts) |
-| allow_requests_on_db_unavailable | boolean | If true, allows requests to succeed even if DB is unreachable. **Only use this if running LiteLLM in your VPC** This will allow requests to work even when LiteLLM cannot connect to the DB to verify a Virtual Key |
+| allow_requests_on_db_unavailable | boolean | If true, allows requests to succeed even if DB is unreachable. **Only use this if running LiteLLM in your VPC** This will allow requests to work even when LiteLLM cannot connect to the DB to verify a Virtual Key [Doc on graceful db unavailability](prod#5-if-running-litellm-on-vpc-gracefully-handle-db-unavailability) |
 | custom_auth | string | Write your own custom authentication logic [Doc Custom Auth](virtual_keys#custom-auth) |
 | max_parallel_requests | integer | The max parallel requests allowed per deployment |
 | global_max_parallel_requests | integer | The max parallel requests allowed on the proxy overall |
@@ -194,7 +178,8 @@ general_settings:
 | use_x_forwarded_for | str | If true, uses the X-Forwarded-For header to get the client IP address |
 | service_account_settings | List[Dict[str, Any]] | Set `service_account_settings` if you want to create settings that only apply to service account keys (Doc on service accounts)[./service_accounts.md] | 
 | image_generation_model | str | The default model to use for image generation - ignores model set in request |
-| store_model_in_db | boolean | If true, allows `/model/new` endpoint to store model information in db. Endpoint disabled by default. [Doc on `/model/new` endpoint](./model_management.md#create-a-new-model) |
+| store_model_in_db | boolean | If true, enables storing model + credential information in the DB. |
+| store_prompts_in_spend_logs | boolean | If true, allows prompts and responses to be stored in the spend logs table. |
 | max_request_size_mb | int | The maximum size for requests in MB. Requests above this size will be rejected. |
 | max_response_size_mb | int | The maximum size for responses in MB. LLM Responses above this size will not be sent. |
 | proxy_budget_rescheduler_min_time | int | The minimum time (in seconds) to wait before checking db for budget resets. **Default is 597 seconds** |
@@ -240,7 +225,7 @@ router_settings:
   redis_host: <your-redis-host>           # string
   redis_password: <your-redis-password>   # string
   redis_port: <your-redis-port>           # string
-  enable_pre_call_check: true             # bool - Before call is made check if a call is within model context window 
+  enable_pre_call_checks: true            # bool - Before call is made check if a call is within model context window 
   allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
   cooldown_time: 30 # (in seconds) how long to cooldown model if fails/min > allowed_fails
   disable_cooldowns: True                  # bool - Disable cooldowns for all models 
@@ -284,7 +269,8 @@ router_settings:
 | polling_interval | (Optional[float]) | frequency of polling queue. Only for '.scheduler_acompletion()'. Default is 3ms. |
 | max_fallbacks | Optional[int] | The maximum number of fallbacks to try before exiting the call. Defaults to 5. |
 | default_litellm_params | Optional[dict] | The default litellm parameters to add to all requests (e.g. `temperature`, `max_tokens`). |
-| timeout | Optional[float] | The default timeout for a request. |
+| timeout | Optional[float] | The default timeout for a request. Default is 10 minutes. |
+| stream_timeout | Optional[float] | The default timeout for a streaming request. If not set, the 'timeout' value is used. |
 | debug_level | Literal["DEBUG", "INFO"] | The debug level for the logging library in the router. Defaults to "INFO". |
 | client_ttl | int | Time-to-live for cached clients in seconds. Defaults to 3600. |
 | cache_kwargs | dict | Additional keyword arguments for the cache initialization. |
@@ -304,6 +290,8 @@ router_settings:
 | redis_url | str | URL for Redis server. **Known performance issue with Redis URL.** |
 | cache_responses | boolean | Flag to enable caching LLM Responses, if cache set under `router_settings`. If true, caches responses. Defaults to False. |
 | router_general_settings | RouterGeneralSettings | [SDK-Only] Router general settings - contains optimizations like 'async_only_mode'. [Docs](../routing.md#router-general-settings) |
+| optional_pre_call_checks | List[str] | List of pre-call checks to add to the router. Currently supported: 'router_budget_limiting', 'prompt_caching' |
+
 
 ### environment variables - Reference
 
@@ -322,6 +310,7 @@ router_settings:
 | ARGILLA_DATASET_NAME | Dataset name for Argilla logging
 | ARGILLA_BASE_URL | Base URL for Argilla service
 | ATHINA_API_KEY | API key for Athina service
+| ATHINA_BASE_URL | Base URL for Athina service (defaults to `https://log.athina.ai`)
 | AUTH_STRATEGY | Strategy used for authentication (e.g., OAuth, API key)
 | AWS_ACCESS_KEY_ID | Access Key ID for AWS services
 | AWS_PROFILE_NAME | AWS CLI profile name to be used
@@ -336,6 +325,12 @@ router_settings:
 | AZURE_CLIENT_SECRET | Client secret for Azure services
 | AZURE_FEDERATED_TOKEN_FILE | File path to Azure federated token
 | AZURE_KEY_VAULT_URI | URI for Azure Key Vault
+| AZURE_STORAGE_ACCOUNT_KEY | The Azure Storage Account Key to use for Authentication to Azure Blob Storage logging
+| AZURE_STORAGE_ACCOUNT_NAME | Name of the Azure Storage Account to use for logging to Azure Blob Storage
+| AZURE_STORAGE_FILE_SYSTEM | Name of the Azure Storage File System to use for logging to Azure Blob Storage.  (Typically the Container name)
+| AZURE_STORAGE_TENANT_ID | The Application Tenant ID to use for Authentication to Azure Blob Storage logging
+| AZURE_STORAGE_CLIENT_ID | The Application Client ID to use for Authentication to Azure Blob Storage logging
+| AZURE_STORAGE_CLIENT_SECRET | The Application Client Secret to use for Authentication to Azure Blob Storage logging
 | AZURE_TENANT_ID | Tenant ID for Azure Active Directory
 | BERRISPEND_ACCOUNT_ID | Account ID for BerriSpend service
 | BRAINTRUST_API_KEY | API key for Braintrust integration
@@ -374,6 +369,8 @@ router_settings:
 | GCS_PATH_SERVICE_ACCOUNT | Path to the Google Cloud service account JSON file
 | GCS_FLUSH_INTERVAL | Flush interval for GCS logging (in seconds). Specify how often you want a log to be sent to GCS. **Default is 20 seconds**
 | GCS_BATCH_SIZE | Batch size for GCS logging. Specify after how many logs you want to flush to GCS. If `BATCH_SIZE` is set to 10, logs are flushed every 10 logs. **Default is 2048**
+| GCS_PUBSUB_TOPIC_ID | PubSub Topic ID to send LiteLLM SpendLogs to.
+| GCS_PUBSUB_PROJECT_ID | PubSub Project ID to send LiteLLM SpendLogs to.
 | GENERIC_AUTHORIZATION_ENDPOINT | Authorization endpoint for generic OAuth providers
 | GENERIC_CLIENT_ID | Client ID for generic OAuth providers
 | GENERIC_CLIENT_SECRET | Client secret for generic OAuth providers
@@ -400,7 +397,14 @@ router_settings:
 | GOOGLE_CLIENT_SECRET | Client secret for Google OAuth
 | GOOGLE_KMS_RESOURCE_NAME | Name of the resource in Google KMS
 | HF_API_BASE | Base URL for Hugging Face API
+| HCP_VAULT_ADDR | Address for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
+| HCP_VAULT_CLIENT_CERT | Path to client certificate for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
+| HCP_VAULT_CLIENT_KEY | Path to client key for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
+| HCP_VAULT_NAMESPACE | Namespace for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
+| HCP_VAULT_TOKEN | Token for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
+| HCP_VAULT_CERT_ROLE | Role for [Hashicorp Vault Secret Manager Auth](../secret.md#hashicorp-vault)
 | HELICONE_API_KEY | API key for Helicone service
+| HOSTNAME | Hostname for the server, this will be [emitted to `datadog` logs](https://docs.litellm.ai/docs/proxy/logging#datadog)
 | HUGGINGFACE_API_BASE | Base URL for Hugging Face API
 | IAM_TOKEN_DB_AUTH | IAM token for database authentication
 | JSON_LOGS | Enable JSON formatted logging
@@ -439,6 +443,7 @@ router_settings:
 | LITELLM_SALT_KEY | Salt key for encryption in LiteLLM
 | LITELLM_SECRET_AWS_KMS_LITELLM_LICENSE | AWS KMS encrypted license for LiteLLM
 | LITELLM_TOKEN | Access token for LiteLLM integration
+| LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD | If true, prints the standard logging payload to the console - useful for debugging
 | LOGFIRE_TOKEN | Token for Logfire logging service
 | MICROSOFT_CLIENT_ID | Client ID for Microsoft services
 | MICROSOFT_CLIENT_SECRET | Client secret for Microsoft services
@@ -461,6 +466,11 @@ router_settings:
 | OTEL_HEADERS | Headers for OpenTelemetry requests
 | OTEL_SERVICE_NAME | Service name identifier for OpenTelemetry
 | OTEL_TRACER_NAME | Tracer name for OpenTelemetry tracing
+| PAGERDUTY_API_KEY | API key for PagerDuty Alerting
+| PHOENIX_API_KEY | API key for Arize Phoenix
+| PHOENIX_COLLECTOR_ENDPOINT | API endpoint for Arize Phoenix
+| PHOENIX_COLLECTOR_HTTP_ENDPOINT | API http endpoint for Arize Phoenix
+| POD_NAME | Pod name for the server, this will be [emitted to `datadog` logs](https://docs.litellm.ai/docs/proxy/logging#datadog) as `POD_NAME` 
 | PREDIBASE_API_BASE | Base URL for Predibase API
 | PRESIDIO_ANALYZER_API_BASE | Base URL for Presidio Analyzer service
 | PRESIDIO_ANONYMIZER_API_BASE | Base URL for Presidio Anonymizer service
@@ -469,7 +479,7 @@ router_settings:
 | PROXY_ADMIN_ID | Admin identifier for proxy server
 | PROXY_BASE_URL | Base URL for proxy service
 | PROXY_LOGOUT_URL | URL for logging out of the proxy service
-| PROXY_MASTER_KEY | Master key for proxy authentication
+| LITELLM_MASTER_KEY | Master key for proxy authentication
 | QDRANT_API_BASE | Base URL for Qdrant API
 | QDRANT_API_KEY | API key for Qdrant service
 | QDRANT_URL | Connection URL for Qdrant database
@@ -482,17 +492,19 @@ router_settings:
 | SLACK_DAILY_REPORT_FREQUENCY | Frequency of daily Slack reports (e.g., daily, weekly)
 | SLACK_WEBHOOK_URL | Webhook URL for Slack integration
 | SMTP_HOST | Hostname for the SMTP server
-| SMTP_PASSWORD | Password for SMTP authentication
+| SMTP_PASSWORD | Password for SMTP authentication (do not set if SMTP does not require auth)
 | SMTP_PORT | Port number for SMTP server
 | SMTP_SENDER_EMAIL | Email address used as the sender in SMTP transactions
 | SMTP_SENDER_LOGO | Logo used in emails sent via SMTP
 | SMTP_TLS | Flag to enable or disable TLS for SMTP connections
-| SMTP_USERNAME | Username for SMTP authentication
+| SMTP_USERNAME | Username for SMTP authentication (do not set if SMTP does not require auth)
 | SPEND_LOGS_URL | URL for retrieving spend logs
 | SSL_CERTIFICATE | Path to the SSL certificate file
+| SSL_SECURITY_LEVEL | [BETA] Security level for SSL/TLS connections. E.g. `DEFAULT@SECLEVEL=1`
 | SSL_VERIFY | Flag to enable or disable SSL certificate verification
 | SUPABASE_KEY | API key for Supabase service
 | SUPABASE_URL | Base URL for Supabase instance
+| STORE_MODEL_IN_DB | If true, enables storing model + credential information in the DB. 
 | TEST_EMAIL_ADDRESS | Email address used for testing purposes
 | UI_LOGO_PATH | Path to the logo image used in the UI
 | UI_PASSWORD | Password for accessing the UI
@@ -504,4 +516,3 @@ router_settings:
 | UPSTREAM_LANGFUSE_SECRET_KEY | Secret key for upstream Langfuse authentication
 | USE_AWS_KMS | Flag to enable AWS Key Management Service for encryption
 | WEBHOOK_URL | URL for receiving webhooks from external services
-

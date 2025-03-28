@@ -9,7 +9,6 @@ def get_file_contents_from_s3(bucket_name, object_key):
         import tempfile
 
         import boto3
-        from botocore.config import Config
         from botocore.credentials import Credentials
 
         from litellm.main import bedrock_converse_chat_completion

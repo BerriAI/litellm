@@ -4,6 +4,8 @@ import os
 import subprocess
 from typing import List, Optional, Tuple
 
+from litellm._logging import verbose_logger
+
 
 def extract_sql_commands(diff_output: str) -> List[str]:
     """
@@ -52,6 +54,7 @@ def check_prisma_schema_diff_helper(db_url: str) -> Tuple[bool, List[str]]:
         subprocess.CalledProcessError: If the Prisma command fails.
         Exception: For any other errors during execution.
     """
+    verbose_logger.debug("Checking for Prisma schema diff...")  # noqa: T201
     try:
         result = subprocess.run(
             [
@@ -94,8 +97,8 @@ def check_prisma_schema_diff(db_url: Optional[str] = None) -> None:
             raise Exception("DATABASE_URL not set")
     has_diff, message = check_prisma_schema_diff_helper(db_url)
     if has_diff:
-        raise Exception(
-            "prisma schema out of sync with db. Consider running these sql_commands to sync the two - {}".format(
+        verbose_logger.exception(
+            "🚨🚨🚨 prisma schema out of sync with db. Consider running these sql_commands to sync the two - {}".format(
                 message
             )
         )

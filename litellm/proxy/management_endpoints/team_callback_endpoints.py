@@ -4,32 +4,22 @@ Endpoints to control callbacks per team
 Use this when each team should control its own callbacks
 """
 
-import asyncio
-import copy
 import json
 import traceback
-import uuid
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Optional
 
-import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     AddTeamCallback,
-    LiteLLM_TeamTable,
     ProxyErrorTypes,
     ProxyException,
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_helpers.utils import (
-    add_new_member,
-    management_endpoint_wrapper,
-)
+from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 
 router = APIRouter()
 
@@ -89,12 +79,7 @@ async def add_team_callbacks(
 
     """
     try:
-        from litellm.proxy.proxy_server import (
-            create_audit_log_for_update,
-            duration_in_seconds,
-            litellm_proxy_admin_name,
-            prisma_client,
-        )
+        from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
             raise HTTPException(status_code=500, detail={"error": "No db connected"})

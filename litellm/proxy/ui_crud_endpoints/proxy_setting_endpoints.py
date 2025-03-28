@@ -1,9 +1,7 @@
 #### CRUD ENDPOINTS for UI Settings #####
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import List
 
-import fastapi
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -111,3 +109,94 @@ async def delete_allowed_ip(ip_address: IPAddress):
     await proxy_config.save_config(new_config=config)
 
     return {"message": f"IP {ip_address.ip} deleted successfully", "status": "success"}
+
+
+@router.get(
+    "/get/internal_user_settings",
+    tags=["SSO Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_sso_settings():
+    """
+    Get all SSO settings from the litellm_settings configuration.
+    Returns a structured object with values and descriptions for UI display.
+    """
+    from pydantic import TypeAdapter
+
+    from litellm.proxy.proxy_server import proxy_config
+
+    # Load existing config
+    config = await proxy_config.get_config()
+    litellm_settings = config.get("litellm_settings", {}) or {}
+    default_internal_user_params = (
+        litellm_settings.get("default_internal_user_params", {}) or {}
+    )
+
+    # Create the settings object first
+    sso_settings = DefaultInternalUserParams(**(default_internal_user_params))
+    # Get the schema for UISSOSettings
+    schema = TypeAdapter(DefaultInternalUserParams).json_schema(by_alias=True)
+
+    # Convert to dict for response
+    settings_dict = sso_settings.model_dump()
+
+    # Add descriptions to the response
+    result = {
+        "values": settings_dict,
+        "schema": {"description": schema.get("description", ""), "properties": {}},
+    }
+
+    # Add property descriptions
+    for field_name, field_info in schema["properties"].items():
+        result["schema"]["properties"][field_name] = {
+            "description": field_info.get("description", ""),
+            "type": field_info.get("type", "string"),
+        }
+
+    # Add nested object descriptions
+    for def_name, def_schema in schema.get("definitions", {}).items():
+        result["schema"][def_name] = {
+            "description": def_schema.get("description", ""),
+            "properties": {
+                prop_name: {"description": prop_info.get("description", "")}
+                for prop_name, prop_info in def_schema.get("properties", {}).items()
+            },
+        }
+
+    return result
+
+
+@router.patch(
+    "/update/internal_user_settings",
+    tags=["SSO Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_internal_user_settings(settings: DefaultInternalUserParams):
+    """
+    Update the default internal user parameters for SSO users.
+    These settings will be applied to new users who sign in via SSO.
+    """
+    from litellm.proxy.proxy_server import proxy_config
+
+    # Update the in-memory settings
+    litellm.default_internal_user_params = settings.model_dump(exclude_none=True)
+
+    # Load existing config
+    config = await proxy_config.get_config()
+
+    # Update config with new settings
+    if "litellm_settings" not in config:
+        config["litellm_settings"] = {}
+
+    config["litellm_settings"]["default_internal_user_params"] = settings.model_dump(
+        exclude_none=True
+    )
+
+    # Save the updated config
+    await proxy_config.save_config(new_config=config)
+
+    return {
+        "message": "Internal user settings updated successfully",
+        "status": "success",
+        "settings": litellm.default_internal_user_params,
+    }

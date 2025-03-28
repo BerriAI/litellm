@@ -77,6 +77,7 @@ def test_embedding_nvidia_nim():
                 model="nvidia_nim/nvidia/nv-embedqa-e5-v5",
                 input="What is the meaning of life?",
                 input_type="passage",
+                dimensions=1024,
                 client=client,
             )
         except Exception as e:
@@ -87,3 +88,4 @@ def test_embedding_nvidia_nim():
         assert request_body["input"] == "What is the meaning of life?"
         assert request_body["model"] == "nvidia/nv-embedqa-e5-v5"
         assert request_body["extra_body"]["input_type"] == "passage"
+        assert request_body["dimensions"] == 1024

@@ -62,14 +62,42 @@ def test_is_llm_api_route():
     assert RouteChecks.is_llm_api_route("/anthropic/messages") is True
     assert RouteChecks.is_llm_api_route("/anthropic/v1/messages") is True
     assert RouteChecks.is_llm_api_route("/azure/endpoint") is True
+    assert (
+        RouteChecks.is_llm_api_route("/v1/realtime?model=gpt-4o-realtime-preview")
+        is True
+    )
+    assert (
+        RouteChecks.is_llm_api_route("/realtime?model=gpt-4o-realtime-preview") is True
+    )
+    assert (
+        RouteChecks.is_llm_api_route(
+            "/openai/deployments/vertex_ai/gemini-1.5-flash/chat/completions"
+        )
+        is True
+    )
+    assert (
+        RouteChecks.is_llm_api_route(
+            "/openai/deployments/gemini/gemini-1.5-flash/chat/completions"
+        )
+        is True
+    )
+    assert (
+        RouteChecks.is_llm_api_route(
+            "/openai/deployments/anthropic/claude-3-5-sonnet-20240620/chat/completions"
+        )
+        is True
+    )
 
     # check non-matching routes
     assert RouteChecks.is_llm_api_route("/some/random/route") is False
     assert RouteChecks.is_llm_api_route("/key/regenerate/82akk800000000jjsk") is False
     assert RouteChecks.is_llm_api_route("/key/82akk800000000jjsk/delete") is False
 
+    all_llm_api_routes = llm_passthrough_router.routes
+
     # check all routes in llm_passthrough_router, ensure they are considered llm api routes
-    for route in llm_passthrough_router.routes:
+    for route in all_llm_api_routes:
+        print("route", route)
         route_path = str(route.path)
         print("route_path", route_path)
         assert RouteChecks.is_llm_api_route(route_path) is True
@@ -134,7 +162,6 @@ def test_llm_api_route(route_checks):
             route="/v1/chat/completions",
             request=MockRequest(),
             valid_token=UserAPIKeyAuth(api_key="test_key"),
-            api_key="test_key",
             request_data={},
         )
         is None
@@ -152,7 +179,6 @@ def test_key_info_route_allowed(route_checks):
             route="/key/info",
             request=MockRequest(query_params={"key": "test_key"}),
             valid_token=UserAPIKeyAuth(api_key="test_key"),
-            api_key="test_key",
             request_data={},
         )
         is None
@@ -170,7 +196,6 @@ def test_user_info_route_allowed(route_checks):
             route="/user/info",
             request=MockRequest(query_params={"user_id": "test_user"}),
             valid_token=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
-            api_key="test_key",
             request_data={},
         )
         is None
@@ -188,7 +213,6 @@ def test_user_info_route_forbidden(route_checks):
             route="/user/info",
             request=MockRequest(query_params={"user_id": "wrong_user"}),
             valid_token=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
-            api_key="test_key",
             request_data={},
         )
     assert exc_info.value.status_code == 403

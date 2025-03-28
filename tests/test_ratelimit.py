@@ -13,6 +13,7 @@ sys.path.insert(
     0, os.path.abspath("../")
 )  # Adds the parent directory to the system path
 
+import litellm
 from pydantic import BaseModel
 from litellm import utils, Router
 
@@ -124,6 +125,7 @@ def test_rate_limit(
         ExpectNoException: Signfies that no other error has happened. A NOP
     """
     # Can send more messages then we're going to; so don't expect a rate limit error
+    litellm.logging_callback_manager._reset_all_callbacks()
     args = locals()
     print(f"args: {args}")
     expected_exception = (

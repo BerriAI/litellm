@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.secret_managers.main import str_to_bool
+from litellm.types.utils import StandardCallbackDynamicParams
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -68,15 +70,12 @@ def perform_redaction(model_call_details: dict, result):
                     choice.delta.content = "redacted-by-litellm"
         return _result
     else:
-        return "redacted-by-litellm"
+        return {"text": "redacted-by-litellm"}
 
 
-def redact_message_input_output_from_logging(
-    model_call_details: dict, result, input: Optional[Any] = None
-):
+def should_redact_message_logging(model_call_details: dict) -> bool:
     """
-    Removes messages, prompts, input, response from logging. This modifies the data in-place
-    only redacts when litellm.turn_off_message_logging == True
+    Determine if message logging should be redacted.
     """
     _request_headers = (
         model_call_details.get("litellm_params", {}).get("metadata", {}) or {}
@@ -84,19 +83,70 @@ def redact_message_input_output_from_logging(
 
     request_headers = _request_headers.get("headers", {})
 
+    possible_request_headers = [
+        "litellm-enable-message-redaction",  # old header. maintain backwards compatibility
+        "x-litellm-enable-message-redaction",  # new header
+    ]
+
+    is_redaction_enabled_via_header = False
+    for header in possible_request_headers:
+        if bool(request_headers.get(header, False)):
+            is_redaction_enabled_via_header = True
+            break
+
     # check if user opted out of logging message/response to callbacks
     if (
         litellm.turn_off_message_logging is not True
-        and request_headers.get("litellm-enable-message-redaction", False) is not True
+        and is_redaction_enabled_via_header is not True
+        and _get_turn_off_message_logging_from_dynamic_params(model_call_details)
+        is not True
     ):
-        return result
+        return False
 
-    if request_headers and request_headers.get(
-        "litellm-disable-message-redaction", False
+    if request_headers and bool(
+        request_headers.get("litellm-disable-message-redaction", False)
     ):
-        return result
+        return False
 
-    return perform_redaction(model_call_details, result)
+    # user has OPTED OUT of message redaction
+    if _get_turn_off_message_logging_from_dynamic_params(model_call_details) is False:
+        return False
+
+    return True
+
+
+def redact_message_input_output_from_logging(
+    model_call_details: dict, result, input: Optional[Any] = None
+) -> Any:
+    """
+    Removes messages, prompts, input, response from logging. This modifies the data in-place
+    only redacts when litellm.turn_off_message_logging == True
+    """
+    if should_redact_message_logging(model_call_details):
+        return perform_redaction(model_call_details, result)
+    return result
+
+
+def _get_turn_off_message_logging_from_dynamic_params(
+    model_call_details: dict,
+) -> Optional[bool]:
+    """
+    gets the value of `turn_off_message_logging` from the dynamic params, if it exists.
+
+    handles boolean and string values of `turn_off_message_logging`
+    """
+    standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+        model_call_details.get("standard_callback_dynamic_params", None)
+    )
+    if standard_callback_dynamic_params:
+        _turn_off_message_logging = standard_callback_dynamic_params.get(
+            "turn_off_message_logging"
+        )
+        if isinstance(_turn_off_message_logging, bool):
+            return _turn_off_message_logging
+        elif isinstance(_turn_off_message_logging, str):
+            return str_to_bool(_turn_off_message_logging)
+    return None
 
 
 def redact_user_api_key_info(metadata: dict) -> dict:

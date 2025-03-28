@@ -6,6 +6,11 @@ import os
 import sys
 import traceback
 
+
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
+
 from dotenv import load_dotenv
 from openai.types.image import Image
 from litellm.caching import InMemoryCache
@@ -14,10 +19,6 @@ logging.basicConfig(level=logging.DEBUG)
 load_dotenv()
 import asyncio
 import os
-
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 
 import litellm
@@ -111,7 +112,7 @@ class TestVertexImageGeneration(BaseImageGenTest):
         litellm.in_memory_llm_clients_cache = InMemoryCache()
         return {
             "model": "vertex_ai/imagegeneration@006",
-            "vertex_ai_project": "adroit-crow-413218",
+            "vertex_ai_project": "pathrise-convert-1606954137718",
             "vertex_ai_location": "us-central1",
             "n": 1,
         }
@@ -129,6 +130,33 @@ class TestBedrockSd1(BaseImageGenTest):
         return {"model": "bedrock/stability.sd3-large-v1:0"}
 
 
+class TestBedrockNovaCanvasTextToImage(BaseImageGenTest):
+    def get_base_image_generation_call_args(self) -> dict:
+        litellm.in_memory_llm_clients_cache = InMemoryCache()
+        return {
+            "model": "bedrock/amazon.nova-canvas-v1:0",
+            "n": 1,
+            "size": "320x320",
+            "imageGenerationConfig": {"cfgScale": 6.5, "seed": 12},
+            "taskType": "TEXT_IMAGE",
+            "aws_region_name": "us-east-1",
+        }
+
+
+class TestBedrockNovaCanvasColorGuidedGeneration(BaseImageGenTest):
+    def get_base_image_generation_call_args(self) -> dict:
+        litellm.in_memory_llm_clients_cache = InMemoryCache()
+        return {
+                "model": "bedrock/amazon.nova-canvas-v1:0",
+                "n": 1,
+                "size": "320x320",
+                "imageGenerationConfig": {"cfgScale":6.5,"seed":12},
+                "taskType": "COLOR_GUIDED_GENERATION",
+                "colorGuidedGenerationParams":{"colors":["#FFFFFF"]},
+                "aws_region_name": "us-east-1",
+        }
+
+
 class TestOpenAIDalle3(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "dall-e-3"}
@@ -142,7 +170,7 @@ class TestAzureOpenAIDalle3(BaseImageGenTest):
             "api_version": "2023-09-01-preview",
             "metadata": {
                 "model_info": {
-                    "base_model": "dall-e-3",
+                    "base_model": "azure/dall-e-3",
                 }
             },
         }
@@ -158,8 +186,15 @@ def test_image_generation_azure_dall_e_3():
             api_version="2023-12-01-preview",
             api_base=os.getenv("AZURE_SWEDEN_API_BASE"),
             api_key=os.getenv("AZURE_SWEDEN_API_KEY"),
+            metadata={
+                "model_info": {
+                    "base_model": "azure/dall-e-3",
+                }
+            },
         )
         print(f"response: {response}")
+
+        print("response", response._hidden_params)
         assert len(response.data) > 0
     except litellm.InternalServerError as e:
         pass

@@ -1,17 +1,16 @@
 #### What this tests ####
 
-from memory_profiler import profile, memory_usage
-import sys, os, time
-import traceback, asyncio
-import pytest
+from memory_profiler import profile
+import sys
+import os
+import time
+import asyncio
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
 from litellm import Router
-from concurrent.futures import ThreadPoolExecutor
-from collections import defaultdict
 from dotenv import load_dotenv
 import uuid
 

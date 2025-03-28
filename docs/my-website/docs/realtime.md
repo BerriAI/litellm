@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Realtime Endpoints
+# /realtime
 
 Use this to loadbalance across Azure + OpenAI. 
 
