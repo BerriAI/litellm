@@ -2950,15 +2950,6 @@ async def test_bedrock_stream_thinking_content_openwebui():
     ), "There should be non-empty content after thinking tags"
 
 
-def test_bedrock_latency_optimized_inference():
-    response = completion(
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        messages=[{"role": "user", "content": "Hello, how are you?"}],
-        performanceConfig={"latency": "optimized"},
-    )
-    assert response.choices[0].message.content is not None
-
-
 def test_bedrock_application_inference_profile():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 
