@@ -17,12 +17,12 @@ else:
 
 
 class DBSpendUpdateTransactions(TypedDict):
-    user_list_transactons: Dict[str, float]
-    end_user_list_transactons: Dict[str, float]
-    key_list_transactons: Dict[str, float]
-    team_list_transactons: Dict[str, float]
-    team_member_list_transactons: Dict[str, float]
-    org_list_transactons: Dict[str, float]
+    user_list_transactions: Dict[str, float]
+    end_user_list_transactions: Dict[str, float]
+    key_list_transactions: Dict[str, float]
+    team_list_transactions: Dict[str, float]
+    team_member_list_transactions: Dict[str, float]
+    org_list_transactions: Dict[str, float]
 
 
 class RedisUpdateBuffer:
@@ -78,12 +78,12 @@ class RedisUpdateBuffer:
         """
         IN_MEMORY_UPDATE_TRANSACTIONS: DBSpendUpdateTransactions = (
             DBSpendUpdateTransactions(
-                user_list_transactons=prisma_client.user_list_transactons,
-                end_user_list_transactons=prisma_client.end_user_list_transactons,
-                key_list_transactons=prisma_client.key_list_transactons,
-                team_list_transactons=prisma_client.team_list_transactons,
-                team_member_list_transactons=prisma_client.team_member_list_transactons,
-                org_list_transactons=prisma_client.org_list_transactons,
+                user_list_transactions=prisma_client.user_list_transactions,
+                end_user_list_transactions=prisma_client.end_user_list_transactions,
+                key_list_transactions=prisma_client.key_list_transactions,
+                team_list_transactions=prisma_client.team_list_transactions,
+                team_member_list_transactions=prisma_client.team_member_list_transactions,
+                org_list_transactions=prisma_client.org_list_transactions,
             )
         )
         for key, _transactions in IN_MEMORY_UPDATE_TRANSACTIONS.items():
@@ -120,21 +120,23 @@ class RedisUpdateBuffer:
         if self.redis_cache is None:
             return None
         expected_keys = [
-            "user_list_transactons",
-            "end_user_list_transactons",
-            "key_list_transactons",
-            "team_list_transactons",
-            "team_member_list_transactons",
-            "org_list_transactons",
+            "user_list_transactions",
+            "end_user_list_transactions",
+            "key_list_transactions",
+            "team_list_transactions",
+            "team_member_list_transactions",
+            "org_list_transactions",
         ]
         result = await self.redis_cache.async_batch_get_cache(expected_keys)
         if result is None:
             return None
         return DBSpendUpdateTransactions(
-            user_list_transactons=result.get("user_list_transactons", {}),
-            end_user_list_transactons=result.get("end_user_list_transactons", {}),
-            key_list_transactons=result.get("key_list_transactons", {}),
-            team_list_transactons=result.get("team_list_transactons", {}),
-            team_member_list_transactons=result.get("team_member_list_transactons", {}),
-            org_list_transactons=result.get("org_list_transactons", {}),
+            user_list_transactions=result.get("user_list_transactions", {}),
+            end_user_list_transactions=result.get("end_user_list_transactions", {}),
+            key_list_transactions=result.get("key_list_transactions", {}),
+            team_list_transactions=result.get("team_list_transactions", {}),
+            team_member_list_transactions=result.get(
+                "team_member_list_transactions", {}
+            ),
+            org_list_transactions=result.get("org_list_transactions", {}),
         )
