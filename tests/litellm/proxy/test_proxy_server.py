@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 import click
 import httpx
 import pytest
+import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -74,3 +75,63 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
             call[0] for call in mock_proxy_config.get_credentials.mock_calls
         ]
         assert len(mock_scheduler_calls) > 0
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_master_key(monkeypatch, tmp_path):
+    """
+    Test that master_key is correctly loaded from either config.yaml or environment variables
+    """
+    import yaml
+    from fastapi import FastAPI
+
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    # Create test app
+    app = FastAPI()
+
+    # Test Case 1: Master key from config.yaml
+    test_master_key = "sk-12345"
+    test_config = {"general_settings": {"master_key": test_master_key}}
+
+    # Create a temporary config file
+    config_path = tmp_path / "config.yaml"
+    with open(config_path, "w") as f:
+        yaml.dump(test_config, f)
+
+    monkeypatch.setenv("CONFIG_FILE_PATH", str(config_path))
+    async with proxy_startup_event(app):
+        from litellm.proxy.proxy_server import master_key
+
+        assert master_key == test_master_key
+
+    # Test Case 2: Master key from environment variable
+    test_env_master_key = "sk-67890"
+
+    # Create empty config
+    empty_config = {"general_settings": {}}
+    with open(config_path, "w") as f:
+        yaml.dump(empty_config, f)
+
+    monkeypatch.setenv("LITELLM_MASTER_KEY", test_env_master_key)
+    print("test_env_master_key: {}".format(test_env_master_key))
+    async with proxy_startup_event(app):
+        from litellm.proxy.proxy_server import master_key
+
+        assert master_key == test_env_master_key
+
+    # Test Case 3: Master key with os.environ prefix
+    test_resolved_key = "sk-resolved-key"
+    test_config_with_prefix = {
+        "general_settings": {"master_key": "os.environ/CUSTOM_MASTER_KEY"}
+    }
+
+    # Create config with os.environ prefix
+    with open(config_path, "w") as f:
+        yaml.dump(test_config_with_prefix, f)
+
+    monkeypatch.setenv("CUSTOM_MASTER_KEY", test_resolved_key)
+    async with proxy_startup_event(app):
+        from litellm.proxy.proxy_server import master_key
+
+        assert master_key == test_resolved_key
