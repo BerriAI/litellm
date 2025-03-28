@@ -353,7 +353,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                     </Subtitle>
                     <AreaChart
                       className="h-40"
-                      data={userSpendData.results}
+                      data={[...userSpendData.results].reverse()}
                       valueFormatter={valueFormatterNumbers}
                       index="date"
                       colors={['cyan']}
@@ -366,7 +366,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                     </Subtitle>
                     <BarChart
                       className="h-40"
-                      data={userSpendData.results}
+                      data={[...userSpendData.results].reverse()}
                       valueFormatter={valueFormatterNumbers}
                       index="date"
                       colors={['cyan']}
@@ -387,7 +387,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                       </Subtitle>
                       <AreaChart
                         className="h-40"
-                        data={data.daily_data}
+                        data={[...data.daily_data].reverse()}
                         index="date"
                         colors={['cyan']}
                         categories={['api_requests']}
@@ -400,7 +400,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                       </Subtitle>
                       <BarChart
                         className="h-40"
-                        data={data.daily_data}
+                        data={[...data.daily_data].reverse()}
                         index="date"
                         colors={['cyan']}
                         categories={['total_tokens']}
