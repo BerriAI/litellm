@@ -63,7 +63,6 @@ response = completion(
     api_base = "snowflakecomputing.com"
 )
 ```
-and Litellm will add the `/api/v2/cortex/inference:complete/` and the `account-id` for you.
 
 ## Usage with LiteLLM Proxy 
 
