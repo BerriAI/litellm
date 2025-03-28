@@ -105,6 +105,8 @@ class LitellmParams(TypedDict):
     guard_name: Optional[str]
     default_on: Optional[bool]
 
+    # custom config params
+    custom_config: Optional[dict]
 
 class Guardrail(TypedDict, total=False):
     guardrail_name: str
