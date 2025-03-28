@@ -144,6 +144,21 @@ class LitellmTableNames(str, enum.Enum):
     PROXY_MODEL_TABLE_NAME = "LiteLLM_ProxyModelTable"
 
 
+class Litellm_EntityType(enum.Enum):
+    """
+    Enum for types of entities on litellm
+
+    This enum allows specifying the type of entity that is being tracked in the database.
+    """
+
+    KEY = "key"
+    USER = "user"
+    END_USER = "end_user"
+    TEAM = "team"
+    TEAM_MEMBER = "team_member"
+    ORGANIZATION = "organization"
+
+
 def hash_token(token: str):
     import hashlib
 
