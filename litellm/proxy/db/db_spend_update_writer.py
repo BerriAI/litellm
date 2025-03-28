@@ -22,7 +22,7 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     SpendLogsPayload,
 )
-from litellm.proxy.db.pod_leader_manager import PodLockManager
+from litellm.proxy.db.pod_lock_manager import PodLockManager
 from litellm.proxy.db.redis_update_buffer import (
     DBSpendUpdateTransactions,
     RedisUpdateBuffer,
@@ -49,7 +49,7 @@ class DBSpendUpdateWriter:
     ):
         self.redis_cache = redis_cache
         self.redis_update_buffer = RedisUpdateBuffer(redis_cache=self.redis_cache)
-        self.pod_leader_manager = PodLockManager(cronjob_id=DB_SPEND_UPDATE_JOB_NAME)
+        self.pod_lock_manager = PodLockManager(cronjob_id=DB_SPEND_UPDATE_JOB_NAME)
 
     @staticmethod
     async def update_database(
@@ -405,7 +405,7 @@ class DBSpendUpdateWriter:
             )
 
             # Only commit from redis to db if this pod is the leader
-            if await self.pod_leader_manager.acquire_lock():
+            if await self.pod_lock_manager.acquire_lock():
                 verbose_proxy_logger.debug("acquired lock for spend updates")
 
                 try:
@@ -422,7 +422,7 @@ class DBSpendUpdateWriter:
                 except Exception as e:
                     verbose_proxy_logger.error(f"Error committing spend updates: {e}")
                 finally:
-                    await self.pod_leader_manager.release_lock()
+                    await self.pod_lock_manager.release_lock()
         else:
             db_spend_update_transactions = DBSpendUpdateTransactions(
                 user_list_transactions=prisma_client.user_list_transactions,
