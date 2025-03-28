@@ -25,6 +25,7 @@ interface DataTableProps<TData, TValue> {
   isLoading?: boolean;
   expandedRequestId?: string | null;
   onRowExpand?: (requestId: string | null) => void;
+  setSelectedKeyIdInfoView?: (keyId: string | null) => void;
 }
 
 export function DataTable<TData extends { request_id: string }, TValue>({

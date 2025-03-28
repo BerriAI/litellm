@@ -2,7 +2,7 @@
 import warnings
 
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
-### INIT VARIABLES ##########
+### INIT VARIABLES ###########
 import threading
 import os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
@@ -951,6 +951,12 @@ from .llms.snowflake.chat.transformation import SnowflakeConfig
 openaiOSeriesConfig = OpenAIOSeriesConfig()
 from .llms.openai.chat.gpt_transformation import (
     OpenAIGPTConfig,
+)
+from .llms.openai.transcriptions.whisper_transformation import (
+    OpenAIWhisperAudioTranscriptionConfig,
+)
+from .llms.openai.transcriptions.gpt_transformation import (
+    OpenAIGPTAudioTranscriptionConfig,
 )
 
 openAIGPTConfig = OpenAIGPTConfig()

@@ -2092,3 +2092,13 @@ def test_delta_object():
     assert delta.role == "user"
     assert not hasattr(delta, "thinking_blocks")
     assert not hasattr(delta, "reasoning_content")
+
+
+def test_get_provider_audio_transcription_config():
+    from litellm.utils import ProviderConfigManager
+    from litellm.types.utils import LlmProviders
+
+    for provider in LlmProviders:
+        config = ProviderConfigManager.get_provider_audio_transcription_config(
+            model="whisper-1", provider=provider
+        )
