@@ -15,7 +15,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.11'
+        python-version: '3.x'
 
     - name: Install Poetry
       uses: snok/install-poetry@v1
@@ -23,7 +23,8 @@ jobs:
     - name: Install dependencies
       run: |
         poetry install --with dev --extras proxy
+        poetry run pip install pytest-xdist
 
     - name: Run tests
       run: |
-        poetry run pytest tests/litellm -x -vv 
+        poetry run pytest tests/litellm -x -vv -n 4 
