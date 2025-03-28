@@ -303,6 +303,24 @@ def test_aget_valid_models():
     os.environ = old_environ
 
 
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "anthropic", "xai"])
+def test_get_valid_models_with_custom_llm_provider(custom_llm_provider):
+    from litellm.utils import ProviderConfigManager
+    from litellm.types.utils import LlmProviders
+
+    provider_config = ProviderConfigManager.get_provider_model_info(
+        model=None,
+        provider=LlmProviders(custom_llm_provider),
+    )
+    assert provider_config is not None
+    valid_models = get_valid_models(
+        check_provider_endpoint=True, custom_llm_provider=custom_llm_provider
+    )
+    print(valid_models)
+    assert len(valid_models) > 0
+    assert provider_config.get_models() == valid_models
+
+
 # test_get_valid_models()
 
 

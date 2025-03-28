@@ -28,6 +28,7 @@ class MockPrismaClient:
         self.team_list_transactons = {}
         self.team_member_list_transactons = {}
         self.org_list_transactons = {}
+        self.daily_user_spend_transactions = {}
 
     def jsonify_object(self, obj):
         return obj
