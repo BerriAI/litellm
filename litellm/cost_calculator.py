@@ -9,6 +9,10 @@ from pydantic import BaseModel
 import litellm
 import litellm._logging
 from litellm import verbose_logger
+from litellm.constants import (
+    DEFAULT_MAX_LRU_CACHE_SIZE,
+    DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND,
+)
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
@@ -355,9 +359,7 @@ def cost_per_token(  # noqa: PLR0915
 def get_replicate_completion_pricing(completion_response: dict, total_time=0.0):
     # see https://replicate.com/pricing
     # for all litellm currently supported LLMs, almost all requests go to a100_80gb
-    a100_80gb_price_per_second_public = (
-        0.001400  # assume all calls sent to A100 80GB for now
-    )
+    a100_80gb_price_per_second_public = DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND  # assume all calls sent to A100 80GB for now
     if total_time == 0.0:  # total time is in ms
         start_time = completion_response.get("created", time.time())
         end_time = getattr(completion_response, "ended", time.time())
@@ -450,7 +452,7 @@ def _select_model_name_for_cost_calc(
     return return_model
 
 
-@lru_cache(maxsize=16)
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
 def _model_contains_known_llm_provider(model: str) -> bool:
     """
     Check if the model contains a known llm provider
