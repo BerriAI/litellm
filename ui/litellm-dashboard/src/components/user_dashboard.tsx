@@ -22,6 +22,8 @@ import { Team } from "./key_team_helpers/key_list";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
 import { clearTokenCookies } from "@/utils/cookieUtils";
+import useKeyList from "./key_team_helpers/key_list";
+
 const isLocal = process.env.NODE_ENV === "development";
 if (isLocal != true) {
   console.log = function() {};
@@ -107,7 +109,68 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     team_alias: "Default Team",
     team_id: null,
   };
-  const [selectedTeam, setSelectedTeam] = useState<any | null>(null);
+  const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
+  
+  // Add state for filtering
+  const [filteredUserID, setFilteredUserID] = useState<string | null>(null);
+  const [filteredTeamID, setFilteredTeamID] = useState<string | null>(null);
+  
+  // Use the keyList hook directly in the UserDashboard component
+  const { 
+    keys: fetchedKeys, 
+    isLoading: keysLoading, 
+    refresh: refreshKeys, 
+    setKeys: setFetchedKeys 
+  } = useKeyList({
+    selectedTeam: filteredTeamID ? teams?.find(t => t.team_id === filteredTeamID) || null : selectedTeam,
+    currentOrg,
+    accessToken: accessToken || "",
+  });
+
+  // Create a filtered version of the keys based on user ID
+  const filteredKeys = React.useMemo(() => {
+    let result = fetchedKeys;
+    
+    // If a user ID filter is set, apply it
+    if (filteredUserID) {
+      result = result.filter(key => key.user_id === filteredUserID);
+    }
+    
+    return result;
+  }, [fetchedKeys, filteredUserID]);
+
+  // Use the filtered keys or the keys from props
+  const effectiveKeys = keys?.length ? keys : filteredKeys;
+
+  // Function to set filter values - can be passed to child components
+  const setKeyFilters = (userId: string | null, teamId: string | null) => {
+    setFilteredUserID(userId);
+    setFilteredTeamID(teamId);
+    // Force refresh keys with new filters
+    refreshKeys();
+  };
+
+  // Expose refresh function to window for global access
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.refreshKeysList = refreshKeys;
+      window.addNewKeyToList = (newKey) => {
+        // Add the new key to the keys list without making an API call
+        if (setKeys) {
+          setKeys((prevKeys) => prevKeys ? [...prevKeys, newKey] : [newKey]);
+        }
+        setFetchedKeys((prevKeys) => [newKey, ...prevKeys]);
+      };
+    }
+  }, [refreshKeys]);
+
+  // Update parent component's keys state when filteredKeys changes
+  useEffect(() => {
+    if (filteredKeys.length > 0 && setKeys) {
+      setKeys(filteredKeys);
+    }
+  }, [filteredKeys]);
+
   // check if window is not undefined
   if (typeof window !== "undefined") {
     window.addEventListener("beforeunload", function () {
@@ -333,14 +396,14 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     <div className="w-full mx-4 h-[75vh]">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
-        <CreateKey
+          <CreateKey
             key={selectedTeam ? selectedTeam.team_id : null}
             userID={userID}
             team={selectedTeam as Team | null}
             teams={teams as Team[]}
             userRole={userRole}
             accessToken={accessToken}
-            data={keys}
+            data={effectiveKeys}
             setData={setKeys}
           />
 
@@ -350,7 +413,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             accessToken={accessToken}
             selectedTeam={selectedTeam ? selectedTeam : null}
             setSelectedTeam={setSelectedTeam}
-            data={keys}
+            data={effectiveKeys}
             setData={setKeys}
             premiumUser={premiumUser}
             teams={teams}

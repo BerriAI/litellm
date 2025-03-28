@@ -135,7 +135,6 @@ const useKeyList = ({
                 params.page as number || 1,
                 50
             );
-            console.log("data", data);
             setKeyData(data);
             setError(null);
         } catch (err) {
