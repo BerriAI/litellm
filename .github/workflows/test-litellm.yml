@@ -22,7 +22,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        poetry install --with dev --extras proxy
+        poetry install --with dev,proxy-dev --extras proxy
         poetry run pip install pytest-xdist
 
     - name: Run tests
