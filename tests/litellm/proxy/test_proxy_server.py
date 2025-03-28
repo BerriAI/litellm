@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 import click
 import httpx
 import pytest
+import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -74,3 +75,92 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
             call[0] for call in mock_proxy_config.get_credentials.mock_calls
         ]
         assert len(mock_scheduler_calls) > 0
+
+
+# Mock Prisma
+class MockPrisma:
+    def __init__(self, database_url=None, proxy_logging_obj=None, http_client=None):
+        self.database_url = database_url
+        self.proxy_logging_obj = proxy_logging_obj
+        self.http_client = http_client
+
+    async def connect(self):
+        pass
+
+    async def disconnect(self):
+        pass
+
+
+mock_prisma = MockPrisma()
+
+
+@patch(
+    "litellm.proxy.proxy_server.ProxyStartupEvent._setup_prisma_client",
+    return_value=mock_prisma,
+)
+@pytest.mark.asyncio
+async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
+    """
+    Test that master_key is correctly loaded from either config.yaml or environment variables
+    """
+    import yaml
+    from fastapi import FastAPI
+
+    # Import happens here - this is when the module probably reads the config path
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    # Mock the Prisma import
+    monkeypatch.setattr("litellm.proxy.proxy_server.PrismaClient", MockPrisma)
+
+    # Create test app
+    app = FastAPI()
+
+    # Test Case 1: Master key from config.yaml
+    test_master_key = "sk-12345"
+    test_config = {"general_settings": {"master_key": test_master_key}}
+
+    # Create a temporary config file
+    config_path = tmp_path / "config.yaml"
+    with open(config_path, "w") as f:
+        yaml.dump(test_config, f)
+
+    print(f"SET ENV VARIABLE - CONFIG_FILE_PATH, str(config_path): {str(config_path)}")
+    # Second setting of CONFIG_FILE_PATH to a different value
+    monkeypatch.setenv("CONFIG_FILE_PATH", str(config_path))
+    print(f"config_path: {config_path}")
+    print(f"os.getenv('CONFIG_FILE_PATH'): {os.getenv('CONFIG_FILE_PATH')}")
+    async with proxy_startup_event(app):
+        from litellm.proxy.proxy_server import master_key
+
+        assert master_key == test_master_key
+
+    # Test Case 2: Master key from environment variable
+    test_env_master_key = "sk-67890"
+
+    # Create empty config
+    empty_config = {"general_settings": {}}
+    with open(config_path, "w") as f:
+        yaml.dump(empty_config, f)
+
+    monkeypatch.setenv("LITELLM_MASTER_KEY", test_env_master_key)
+    print("test_env_master_key: {}".format(test_env_master_key))
+    async with proxy_startup_event(app):
+        from litellm.proxy.proxy_server import master_key
+
+        assert master_key == test_env_master_key
+
+    # Test Case 3: Master key with os.environ prefix
+    test_resolved_key = "sk-resolved-key"
+    test_config_with_prefix = {
+        "general_settings": {"master_key": "os.environ/CUSTOM_MASTER_KEY"}
+    }
+
+    # Create config with os.environ prefix
+    with open(config_path, "w") as f:
+        yaml.dump(test_config_with_prefix, f)
+
+    monkeypatch.setenv("CUSTOM_MASTER_KEY", test_resolved_key)
+    async with proxy_startup_event(app):
+        from litellm.proxy.proxy_server import master_key
+
+        assert master_key == test_resolved_key

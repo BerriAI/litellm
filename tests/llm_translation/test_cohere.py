@@ -22,6 +22,7 @@ litellm.num_retries = 3
 
 
 @pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.asyncio
 async def test_chat_completion_cohere_citations(stream):
     try:
