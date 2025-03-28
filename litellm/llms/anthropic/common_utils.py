@@ -24,7 +24,7 @@ class AnthropicError(BaseLLMException):
 
 class AnthropicModelInfo(BaseLLMModelInfo):
     @staticmethod
-    def get_api_base(api_base: Optional[str] = None) -> str | None:
+    def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
         return (
             api_base
             or get_secret_str("ANTHROPIC_API_BASE")
@@ -32,12 +32,12 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         )
 
     @staticmethod
-    def get_api_key(api_key: str | None = None) -> str | None:
+    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
         return api_key or get_secret_str("ANTHROPIC_API_KEY")
 
     @staticmethod
-    def get_base_model(model: str) -> str | None:
-        return model.replace("anthropic/", "")
+    def get_base_model(model: Optional[str] = None) -> Optional[str]:
+        return model.replace("anthropic/", "") if model else None
 
     def get_models(
         self, api_key: Optional[str] = None, api_base: Optional[str] = None
