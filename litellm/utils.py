@@ -4719,6 +4719,7 @@ def function_to_dict(input_function):  # noqa: C901
         # Try to extract param description from docstring using numpydoc
         for param_data in numpydoc["Parameters"]:
             if param_data.name == param_name:
+                items_type = None
                 if hasattr(param_data, "type"):
                     # replace type from docstring rather than annotation
                     param_type = param_data.type
@@ -4728,8 +4729,17 @@ def function_to_dict(input_function):  # noqa: C901
                         # may represent a set of acceptable values
                         # translating as enum for function calling
                         try:
-                            param_enum = str(list(literal_eval(param_type)))
+                            param_enum = list(literal_eval(param_type))
                             param_type = "string"
+                        except Exception:
+                            pass
+                    elif " of " in param_type:
+                        # may represent a list of acceptable values
+                        # translating as enum for function calling
+                        try:
+                            params = param_type.split(" of ")
+                            param_type = params[0]
+                            items_type = {"type": json_schema_type(params[1])}
                         except Exception:
                             pass
                     param_type = json_schema_type(param_type)
@@ -4741,8 +4751,11 @@ def function_to_dict(input_function):  # noqa: C901
             "enum": param_enum,
         }
 
+        if items_type:
+            param_dict["items"] = items_type
+
         parameters[param_name] = dict(
-            [(k, v) for k, v in param_dict.items() if isinstance(v, str)]
+            [(k, v) for k, v in param_dict.items() if v is not None]
         )
 
         # Check if the parameter has no default value (i.e., it's required)
