@@ -176,6 +176,7 @@ from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
 from litellm.proxy.guardrails.guardrail_endpoints import router as guardrails_router
@@ -214,7 +215,6 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
     _add_team_model_to_db,
-    check_if_team_id_matches_key,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     router as model_management_router,
@@ -453,18 +453,6 @@ async def proxy_startup_event(app: FastAPI):
     import json
 
     init_verbose_loggers()
-    ### LOAD MASTER KEY ###
-    # check if master key set in environment - load from there
-    master_key = get_secret("LITELLM_MASTER_KEY", None)  # type: ignore
-    # check if DATABASE_URL in environment - load from there
-    if prisma_client is None:
-        _db_url: Optional[str] = get_secret("DATABASE_URL", None)  # type: ignore
-        prisma_client = await ProxyStartupEvent._setup_prisma_client(
-            database_url=_db_url,
-            proxy_logging_obj=proxy_logging_obj,
-            user_api_key_cache=user_api_key_cache,
-        )
-
     ## CHECK PREMIUM USER
     verbose_proxy_logger.debug(
         "litellm.proxy.proxy_server.py::startup() - CHECKING PREMIUM USER - {}".format(
@@ -520,6 +508,18 @@ async def proxy_startup_event(app: FastAPI):
             worker_config = json.loads(worker_config)
             if isinstance(worker_config, dict):
                 await initialize(**worker_config)
+
+    ### LOAD MASTER KEY ###
+    # check if master key set in environment - load from there
+    master_key = get_secret("LITELLM_MASTER_KEY", None)  # type: ignore
+    # check if DATABASE_URL in environment - load from there
+    if prisma_client is None:
+        _db_url: Optional[str] = get_secret("DATABASE_URL", None)  # type: ignore
+        prisma_client = await ProxyStartupEvent._setup_prisma_client(
+            database_url=_db_url,
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_cache=user_api_key_cache,
+        )
 
     ProxyStartupEvent._initialize_startup_logging(
         llm_router=llm_router,
@@ -3362,33 +3362,37 @@ class ProxyStartupEvent:
         - Sets up prisma client
         - Adds necessary views to proxy
         """
-        prisma_client: Optional[PrismaClient] = None
-        if database_url is not None:
-            try:
-                prisma_client = PrismaClient(
-                    database_url=database_url, proxy_logging_obj=proxy_logging_obj
-                )
-            except Exception as e:
-                raise e
+        try:
+            prisma_client: Optional[PrismaClient] = None
+            if database_url is not None:
+                try:
+                    prisma_client = PrismaClient(
+                        database_url=database_url, proxy_logging_obj=proxy_logging_obj
+                    )
+                except Exception as e:
+                    raise e
 
-            await prisma_client.connect()
+                await prisma_client.connect()
 
-            ## Add necessary views to proxy ##
-            asyncio.create_task(
-                prisma_client.check_view_exists()
-            )  # check if all necessary views exist. Don't block execution
+                ## Add necessary views to proxy ##
+                asyncio.create_task(
+                    prisma_client.check_view_exists()
+                )  # check if all necessary views exist. Don't block execution
 
-            asyncio.create_task(
-                prisma_client._set_spend_logs_row_count_in_proxy_state()
-            )  # set the spend logs row count in proxy state. Don't block execution
+                asyncio.create_task(
+                    prisma_client._set_spend_logs_row_count_in_proxy_state()
+                )  # set the spend logs row count in proxy state. Don't block execution
 
-            # run a health check to ensure the DB is ready
-            if (
-                get_secret_bool("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", False)
-                is not True
-            ):
-                await prisma_client.health_check()
-        return prisma_client
+                # run a health check to ensure the DB is ready
+                if (
+                    get_secret_bool("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", False)
+                    is not True
+                ):
+                    await prisma_client.health_check()
+            return prisma_client
+        except Exception as e:
+            PrismaDBExceptionHandler.handle_db_exception(e)
+            return None
 
     @classmethod
     def _init_dd_tracer(cls):
@@ -5489,9 +5493,40 @@ async def transform_request(request: TransformRequestBody):
     return return_raw_request(endpoint=request.call_type, kwargs=request.request_body)
 
 
+async def _check_if_model_is_user_added(
+    models: List[Dict],
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: Optional[PrismaClient],
+) -> List[Dict]:
+    """
+    Check if model is in db
+
+    Check if db model is 'created_by' == user_api_key_dict.user_id
+
+    Only return models that match
+    """
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+    filtered_models = []
+    for model in models:
+        id = model.get("model_info", {}).get("id", None)
+        if id is None:
+            continue
+        db_model = await prisma_client.db.litellm_proxymodeltable.find_unique(
+            where={"model_id": id}
+        )
+        if db_model is not None:
+            if db_model.created_by == user_api_key_dict.user_id:
+                filtered_models.append(model)
+    return filtered_models
+
+
 @router.get(
     "/v2/model/info",
-    description="v2 - returns all the models set on the config.yaml, shows 'user_access' = True if the user has access to the model. Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)",
+    description="v2 - returns models available to the user based on their API key permissions. Shows model info from config.yaml (except api key and api base). Filter to just user-added models with ?user_models_only=true",
     tags=["model management"],
     dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
@@ -5500,6 +5535,9 @@ async def model_info_v2(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     model: Optional[str] = fastapi.Query(
         None, description="Specify the model name (optional)"
+    ),
+    user_models_only: Optional[bool] = fastapi.Query(
+        False, description="Only return models added by this user"
     ),
     debug: Optional[bool] = False,
 ):
@@ -5530,6 +5568,20 @@ async def model_info_v2(
 
     if model is not None:
         all_models = [m for m in all_models if m["model_name"] == model]
+
+    if user_models_only is True:
+        """
+        Check if model is in db
+
+        Check if db model is 'created_by' == user_api_key_dict.user_id
+
+        Only return models that match
+        """
+        all_models = await _check_if_model_is_user_added(
+            models=all_models,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        )
 
     # fill in model info based on config.yaml and litellm model_prices_and_context_window.json
     for _model in all_models:
