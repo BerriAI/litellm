@@ -265,6 +265,9 @@ class ProxyLogging:
         )
         self.premium_user = premium_user
         self.service_logging_obj = ServiceLogging()
+        self.db_spend_update_writer = DBSpendUpdateWriter(
+            redis_cache=self.internal_usage_cache.dual_cache.redis_cache
+        )
 
     def startup_event(
         self,
@@ -2675,7 +2678,7 @@ async def update_spend(  # noqa: PLR0915
     spend_logs: list,
     """
     n_retry_times = 3
-    await DBSpendUpdateWriter._commit_spend_updates_to_db(
+    await proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler(
         prisma_client=prisma_client,
         n_retry_times=n_retry_times,
         proxy_logging_obj=proxy_logging_obj,
