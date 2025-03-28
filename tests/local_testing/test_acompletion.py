@@ -29,8 +29,33 @@ def test_acompletion_params():
     # Assert that the parameters are the same
     if keys_acompletion != keys_completion:
         pytest.fail(
-            "The parameters of the litellm.acompletion function and litellm.completion are not the same."
+            "The parameters of the litellm.acompletion function and litellm.completion are not the same. "
+            f"Completion has extra keys: {keys_completion - keys_acompletion}"
         )
 
 
 # test_acompletion_params()
+
+
+@pytest.mark.asyncio
+async def test_langfuse_double_logging():
+    import litellm
+
+    litellm.set_verbose = True
+    litellm.success_callback = ["langfuse"]
+    litellm.failure_callback = ["langfuse"]  # logs errors to langfuse
+
+    models = ["gpt-4o-mini", "claude-3-5-haiku-20241022"]
+
+    messages = [
+        {"role": "user", "content": "Hello, how are you?"},
+    ]
+
+    resp = await litellm.acompletion(
+        model=models[0],
+        messages=messages,
+        temperature=0.0,
+        fallbacks=models[1:],
+        # metadata={"generation_name": "test-gen", "project": "litellm-test"},
+    )
+    return resp

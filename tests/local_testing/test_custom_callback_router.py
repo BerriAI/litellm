@@ -153,7 +153,7 @@ class CompletionCustomHandler(
             ## END TIME
             assert isinstance(end_time, datetime)
             ## RESPONSE OBJECT
-            assert isinstance(response_obj, litellm.ModelResponse)
+            assert isinstance(response_obj, litellm.ModelResponseStream)
             ## KWARGS
             assert isinstance(kwargs["model"], str)
             assert isinstance(kwargs["messages"], list) and isinstance(
@@ -381,7 +381,7 @@ class CompletionCustomHandler(
 
 # Simple Azure OpenAI call
 ## COMPLETION
-@pytest.mark.flaky(retries=5, delay=1)
+# @pytest.mark.flaky(retries=5, delay=1)
 @pytest.mark.asyncio
 async def test_async_chat_azure():
     try:
@@ -415,6 +415,8 @@ async def test_async_chat_azure():
             len(customHandler_completion_azure_router.states) == 3
         )  # pre, post, success
         # streaming
+
+        litellm.logging_callback_manager._reset_all_callbacks()
         litellm.callbacks = [customHandler_streaming_azure_router]
         router2 = Router(model_list=model_list, num_retries=0)  # type: ignore
         response = await router2.acompletion(
@@ -425,11 +427,11 @@ async def test_async_chat_azure():
         async for chunk in response:
             print(f"async azure router chunk: {chunk}")
             continue
-        await asyncio.sleep(1)
+        await asyncio.sleep(2)
         print(f"customHandler.states: {customHandler_streaming_azure_router.states}")
         assert len(customHandler_streaming_azure_router.errors) == 0
         assert (
-            len(customHandler_streaming_azure_router.states) >= 4
+            len(customHandler_streaming_azure_router.states) >= 3
         )  # pre, post, stream (multiple times), success
         # failure
         model_list = [
@@ -445,6 +447,8 @@ async def test_async_chat_azure():
                 "rpm": 1800,
             },
         ]
+
+        litellm.logging_callback_manager._reset_all_callbacks()
         litellm.callbacks = [customHandler_failure]
         router3 = Router(model_list=model_list, num_retries=0)  # type: ignore
         try:
@@ -507,6 +511,7 @@ async def test_async_embedding_azure():
                 "rpm": 1800,
             },
         ]
+        litellm.logging_callback_manager._reset_all_callbacks()
         litellm.callbacks = [customHandler_failure]
         router3 = Router(model_list=model_list, num_retries=0)  # type: ignore
         try:

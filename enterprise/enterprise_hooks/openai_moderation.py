@@ -5,26 +5,18 @@
 # +-------------------------------------------------------------+
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-import sys, os
+import sys
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-from typing import Optional, Literal, Union
-import litellm, traceback, sys, uuid
-from litellm.caching.caching import DualCache
+from typing import Literal
+import litellm
+import sys
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_logger import CustomLogger
 from fastapi import HTTPException
-from litellm._logging import verbose_proxy_logger
-from litellm.utils import (
-    ModelResponse,
-    EmbeddingResponse,
-    ImageResponse,
-    StreamingChoices,
-)
-from datetime import datetime
-import aiohttp, asyncio
 from litellm._logging import verbose_proxy_logger
 
 litellm.set_verbose = True
@@ -39,7 +31,7 @@ class _ENTERPRISE_OpenAI_Moderation(CustomLogger):
 
     #### CALL HOOKS - proxy only ####
 
-    async def async_moderation_hook(  ### 👈 KEY CHANGE ###
+    async def async_moderation_hook(
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
@@ -49,6 +41,7 @@ class _ENTERPRISE_OpenAI_Moderation(CustomLogger):
             "image_generation",
             "moderation",
             "audio_transcription",
+            "responses",
         ],
     ):
         text = ""

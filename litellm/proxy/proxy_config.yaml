@@ -1,5 +1,9 @@
-include:
-  - model_config.yaml
+model_list:
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
-litellm_settings:
-  callbacks: ["datadog"] 
+general_settings:
+  allow_requests_on_db_unavailable: True

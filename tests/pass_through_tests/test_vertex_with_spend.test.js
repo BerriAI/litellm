@@ -69,7 +69,7 @@ beforeAll(() => {
 describe('Vertex AI Tests', () => {
     test('should successfully generate non-streaming content with tags', async () => {
         const vertexAI = new VertexAI({
-            project: 'adroit-crow-413218',
+            project: 'pathrise-convert-1606954137718',
             location: 'us-central1',
             apiEndpoint: "127.0.0.1:4000/vertex_ai"
         });
@@ -84,7 +84,7 @@ describe('Vertex AI Tests', () => {
         };
 
         const generativeModel = vertexAI.getGenerativeModel(
-            { model: 'gemini-1.0-pro' },
+            { model: 'gemini-1.5-pro' },
             requestOptions
         );
 
@@ -121,11 +121,12 @@ describe('Vertex AI Tests', () => {
         expect(spendData[0].metadata).toHaveProperty('user_api_key');
         expect(spendData[0].model).toContain('gemini');
         expect(spendData[0].spend).toBeGreaterThan(0);
+        expect(spendData[0].custom_llm_provider).toBe('vertex_ai');
     }, 25000);
 
     test('should successfully generate streaming content with tags', async () => {
         const vertexAI = new VertexAI({
-            project: 'adroit-crow-413218',
+            project: 'pathrise-convert-1606954137718',
             location: 'us-central1',
             apiEndpoint: "127.0.0.1:4000/vertex_ai"
         });
@@ -140,7 +141,7 @@ describe('Vertex AI Tests', () => {
         };
 
         const generativeModel = vertexAI.getGenerativeModel(
-            { model: 'gemini-1.0-pro' },
+            { model: 'gemini-1.5-pro' },
             requestOptions
         );
 
@@ -190,5 +191,6 @@ describe('Vertex AI Tests', () => {
         expect(spendData[0].metadata).toHaveProperty('user_api_key');
         expect(spendData[0].model).toContain('gemini');
         expect(spendData[0].spend).toBeGreaterThan(0);
+        expect(spendData[0].custom_llm_provider).toBe('vertex_ai');
     }, 25000);
 });

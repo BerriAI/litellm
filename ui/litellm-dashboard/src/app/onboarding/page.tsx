@@ -20,18 +20,11 @@ import {
 } from "@/components/networking";
 import { jwtDecode } from "jwt-decode";
 import { Form, Button as Button2, message } from "antd";
-
-function getCookie(name: string) {
-  console.log("COOKIES", document.cookie)
-  const cookieValue = document.cookie
-      .split('; ')
-      .find(row => row.startsWith(name + '='));
-  return cookieValue ? cookieValue.split('=')[1] : null;
-}
+import { getCookie } from "@/utils/cookieUtils";
 
 export default function Onboarding() {
   const [form] = Form.useForm();
-  const searchParams = useSearchParams();
+  const searchParams = useSearchParams()!;
   const token = getCookie('token');
   const inviteID = searchParams.get("invitation_id");
   const [accessToken, setAccessToken] = useState<string | null>(null);

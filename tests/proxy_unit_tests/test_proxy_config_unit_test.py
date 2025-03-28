@@ -184,3 +184,83 @@ async def test_multiple_includes():
 
     # Verify original config settings remain
     assert config["litellm_settings"]["callbacks"] == ["prometheus"]
+
+
+def test_add_callbacks_from_db_config():
+    """Test that callbacks are added correctly and duplicates are prevented"""
+    # Setup
+    from litellm.integrations.langfuse.langfuse_prompt_management import (
+        LangfusePromptManagement,
+    )
+
+    proxy_config = ProxyConfig()
+
+    # Reset litellm callbacks before test
+    litellm.success_callback = []
+    litellm.failure_callback = []
+
+    # Test Case 1: Add new callbacks
+    config_data = {
+        "litellm_settings": {
+            "success_callback": ["langfuse", "custom_callback_api"],
+            "failure_callback": ["langfuse"],
+        }
+    }
+
+    proxy_config._add_callbacks_from_db_config(config_data)
+
+    # 1 instance of LangfusePromptManagement should exist in litellm.success_callback
+    num_langfuse_instances = sum(
+        isinstance(callback, LangfusePromptManagement)
+        for callback in litellm.success_callback
+    )
+    assert num_langfuse_instances == 1
+    assert len(litellm.success_callback) == 2
+    assert len(litellm.failure_callback) == 1
+
+    # Test Case 2: Try adding duplicate callbacks
+    proxy_config._add_callbacks_from_db_config(config_data)
+
+    # Verify no duplicates were added
+    assert len(litellm.success_callback) == 2
+    assert len(litellm.failure_callback) == 1
+
+    # Cleanup
+    litellm.success_callback = []
+    litellm.failure_callback = []
+    litellm._known_custom_logger_compatible_callbacks = []
+
+
+def test_add_callbacks_invalid_input():
+    """Test handling of invalid input for callbacks"""
+    proxy_config = ProxyConfig()
+
+    # Reset callbacks
+    litellm.success_callback = []
+    litellm.failure_callback = []
+
+    # Test Case 1: Invalid callback format
+    config_data = {
+        "litellm_settings": {
+            "success_callback": "invalid_string_format",  # Should be a list
+            "failure_callback": 123,  # Should be a list
+        }
+    }
+
+    proxy_config._add_callbacks_from_db_config(config_data)
+
+    # Verify no callbacks were added with invalid input
+    assert len(litellm.success_callback) == 0
+    assert len(litellm.failure_callback) == 0
+
+    # Test Case 2: Missing litellm_settings
+    config_data = {}
+    proxy_config._add_callbacks_from_db_config(config_data)
+
+    # Verify no callbacks were added
+    assert len(litellm.success_callback) == 0
+    assert len(litellm.failure_callback) == 0
+
+    # Cleanup
+    litellm.success_callback = []
+    litellm.failure_callback = []

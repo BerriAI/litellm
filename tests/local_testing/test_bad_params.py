@@ -23,7 +23,7 @@ model_val = None
 
 def test_completion_with_no_model():
     # test on empty
-    with pytest.raises(ValueError):
+    with pytest.raises(TypeError):
         response = completion(messages=messages)
 
 
@@ -34,39 +34,6 @@ def test_completion_with_empty_model():
     except Exception as e:
         print(f"error occurred: {e}")
         pass
-
-
-# def test_completion_catch_nlp_exception():
-# TEMP commented out NLP cloud API is unstable
-#     try:
-#         response = completion(model="dolphin", messages=messages, functions=[
-#             {
-#             "name": "get_current_weather",
-#             "description": "Get the current weather in a given location",
-#             "parameters": {
-#                 "type": "object",
-#                 "properties": {
-#                 "location": {
-#                     "type": "string",
-#                     "description": "The city and state, e.g. San Francisco, CA"
-#                 },
-#                 "unit": {
-#                     "type": "string",
-#                     "enum": ["celsius", "fahrenheit"]
-#                 }
-#                 },
-#                 "required": ["location"]
-#             }
-#             }
-#         ])
-
-#     except Exception as e:
-#         if "Function calling is not supported by nlp_cloud" in str(e):
-#             pass
-#         else:
-#             pytest.fail(f'An error occurred {e}')
-
-# test_completion_catch_nlp_exception()
 
 
 def test_completion_invalid_param_cohere():
@@ -92,9 +59,6 @@ def test_completion_function_call_cohere():
     except Exception as e:
         print(e)
         pass
-
-
-# test_completion_function_call_cohere()
 
 
 def test_completion_function_call_openai():
@@ -140,17 +104,3 @@ def test_completion_with_no_provider():
     except Exception as e:
         print(f"error occurred: {e}")
         pass
-
-
-# test_completion_with_no_provider()
-# # bad key
-# temp_key = os.environ.get("OPENAI_API_KEY")
-# os.environ["OPENAI_API_KEY"] = "bad-key"
-# # test on openai completion call
-# try:
-#     response = completion(model="gpt-3.5-turbo", messages=messages)
-#     print(f"response: {response}")
-# except Exception:
-#     print(f"error occurred: {traceback.format_exc()}")
-#     pass
-# os.environ["OPENAI_API_KEY"] = str(temp_key)  # this passes linting#5

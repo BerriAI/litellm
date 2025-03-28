@@ -757,6 +757,7 @@ async def test_async_fallbacks_max_retries_per_request():
         router.reset()
 
 
+@pytest.mark.flaky(retries=6, delay=2)
 def test_ausage_based_routing_fallbacks():
     try:
         import litellm
@@ -1013,7 +1014,7 @@ async def test_service_unavailable_fallbacks(sync_mode):
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
 
-    assert response.model == "gpt-35-turbo"
+    assert response.model == "gpt-3.5-turbo-0125"
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -1357,6 +1358,7 @@ def test_router_fallbacks_with_custom_model_costs():
 
     Goal: make sure custom model doesn't override default model costs.
     """
+
     model_list = [
         {
             "model_name": "claude-3-5-sonnet-20240620",
@@ -1498,3 +1500,158 @@ async def test_router_disable_fallbacks_dynamically():
             print(e)
 
         mock_client.assert_not_called()
+
+
+def test_router_fallbacks_with_model_id():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "rpm": 1},
+                "model_info": {
+                    "id": "123",
+                },
+            }
+        ],
+        routing_strategy="usage-based-routing-v2",
+        fallbacks=[{"gpt-3.5-turbo": ["123"]}],
+    )
+
+    ## test model id fallback works
+    router.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_testing_fallbacks=True,
+    )
+
+
+def test_router_fallbacks_with_wildcard_model_name():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+            {
+                "model_name": "claude-3-haiku",
+                "litellm_params": {
+                    "model": "claude-3-haiku-20240307",
+                    "api_key": os.getenv("ANTHROPIC_API_KEY"),
+                    "mock_response": "Hi this is claude!",
+                },
+            },
+        ],
+        fallbacks=[{"gpt-3.5-turbo": ["claude-3-haiku"]}],
+    )
+
+    response = router.completion(
+        model="openai/gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        mock_testing_fallbacks=True,
+    )
+
+    print(response)
+    assert response["choices"][0]["message"]["content"] == "Hi this is claude!"
+
+
+def test_get_fallback_model_group():
+    from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
+
+    args = {
+        "fallbacks": [
+            {"gpt-3.5-turbo": ["claude-3-haiku"]},
+            {"*": ["claude-3-sonnet"]},
+        ],
+        "model_group": "openai/gpt-3.5-turbo",
+    }
+    fallback_model_group, _ = get_fallback_model_group(**args)
+    assert fallback_model_group == ["claude-3-haiku"]
+
+
+def test_fallbacks_with_different_messages():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+            {
+                "model_name": "claude-3-haiku",
+                "litellm_params": {
+                    "model": "claude-3-haiku-20240307",
+                    "api_key": os.getenv("ANTHROPIC_API_KEY"),
+                },
+            },
+        ],
+    )
+
+    resp = router.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        mock_testing_fallbacks=True,
+        fallbacks=[
+            {
+                "model": "claude-3-haiku",
+                "messages": [{"role": "user", "content": "Hey, how's it going?"}],
+            }
+        ],
+    )
+
+    print(resp)
+
+
+@pytest.mark.parametrize("expected_attempted_fallbacks", [0, 1, 3])
+@pytest.mark.asyncio
+async def test_router_attempted_fallbacks_in_response(expected_attempted_fallbacks):
+    """
+    Test that the router returns the correct number of attempted fallbacks in the response
+
+    - Test cases: works on first try, `x-litellm-attempted-fallbacks` is 0
+    - Works on 1st fallback, `x-litellm-attempted-fallbacks` is 1
+    - Works on 3rd fallback, `x-litellm-attempted-fallbacks` is 3
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "working-fake-endpoint",
+                "litellm_params": {
+                    "model": "openai/working-fake-endpoint",
+                    "api_key": "my-fake-key",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app",
+                },
+            },
+            {
+                "model_name": "badly-configured-openai-endpoint",
+                "litellm_params": {
+                    "model": "openai/my-fake-model",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.appzzzzz",
+                },
+            },
+        ],
+        fallbacks=[{"badly-configured-openai-endpoint": ["working-fake-endpoint"]}],
+    )
+
+    if expected_attempted_fallbacks == 0:
+        resp = router.completion(
+            model="working-fake-endpoint",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+        assert (
+            resp._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"]
+            == expected_attempted_fallbacks
+        )
+    elif expected_attempted_fallbacks == 1:
+        resp = router.completion(
+            model="badly-configured-openai-endpoint",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+        assert (
+            resp._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"]
+            == expected_attempted_fallbacks
+        )

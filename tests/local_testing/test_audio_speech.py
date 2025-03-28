@@ -42,6 +42,7 @@ import litellm
     ],
 )  # ,
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_audio_speech_litellm(sync_mode, model, api_base, api_key):
     speech_file_path = Path(__file__).parent / "speech.mp3"
 
@@ -60,7 +61,7 @@ async def test_audio_speech_litellm(sync_mode, model, api_base, api_key):
             optional_params={},
         )
 
-        from litellm.llms.OpenAI.openai import HttpxBinaryResponseContent
+        from litellm.types.llms.openai import HttpxBinaryResponseContent
 
         assert isinstance(response, HttpxBinaryResponseContent)
     else:
@@ -78,7 +79,7 @@ async def test_audio_speech_litellm(sync_mode, model, api_base, api_key):
             optional_params={},
         )
 
-        from litellm.llms.OpenAI.openai import HttpxBinaryResponseContent
+        from litellm.llms.openai.openai import HttpxBinaryResponseContent
 
         assert isinstance(response, HttpxBinaryResponseContent)
 
@@ -89,6 +90,7 @@ async def test_audio_speech_litellm(sync_mode, model, api_base, api_key):
 )
 @pytest.mark.skip(reason="local only test - we run testing using MockRequests below")
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_audio_speech_litellm_vertex(sync_mode):
     litellm.set_verbose = True
     speech_file_path = Path(__file__).parent / "speech_vertex.mp3"
@@ -109,11 +111,12 @@ async def test_audio_speech_litellm_vertex(sync_mode):
 
         from types import SimpleNamespace
 
-        from litellm.llms.OpenAI.openai import HttpxBinaryResponseContent
+        from litellm.llms.openai.openai import HttpxBinaryResponseContent
 
         response.stream_to_file(speech_file_path)
 
 
+@pytest.mark.flaky(retries=6, delay=2)
 @pytest.mark.asyncio
 async def test_speech_litellm_vertex_async():
     # Mock the response
@@ -135,10 +138,14 @@ async def test_speech_litellm_vertex_async():
         mock_async_post.return_value = mock_response
         model = "vertex_ai/test"
 
-        response = await litellm.aspeech(
-            model=model,
-            input="async hello what llm guardrail do you have",
-        )
+        try:
+            response = await litellm.aspeech(
+                model=model,
+                input="async hello what llm guardrail do you have",
+            )
+        except litellm.APIConnectionError as e:
+            if "Your default credentials were not found" in str(e):
+                pytest.skip("skipping test, credentials not found")
 
         # Assert asynchronous call
         mock_async_post.assert_called_once()
@@ -178,18 +185,22 @@ async def test_speech_litellm_vertex_async_with_voice():
         mock_async_post.return_value = mock_response
         model = "vertex_ai/test"
 
-        response = await litellm.aspeech(
-            model=model,
-            input="async hello what llm guardrail do you have",
-            voice={
-                "languageCode": "en-UK",
-                "name": "en-UK-Studio-O",
-            },
-            audioConfig={
-                "audioEncoding": "LINEAR22",
-                "speakingRate": "10",
-            },
-        )
+        try:
+            response = await litellm.aspeech(
+                model=model,
+                input="async hello what llm guardrail do you have",
+                voice={
+                    "languageCode": "en-UK",
+                    "name": "en-UK-Studio-O",
+                },
+                audioConfig={
+                    "audioEncoding": "LINEAR22",
+                    "speakingRate": "10",
+                },
+            )
+        except litellm.APIConnectionError as e:
+            if "Your default credentials were not found" in str(e):
+                pytest.skip("skipping test, credentials not found")
 
         # Assert asynchronous call
         mock_async_post.assert_called_once()
@@ -236,18 +247,22 @@ async def test_speech_litellm_vertex_async_with_voice_ssml():
         mock_async_post.return_value = mock_response
         model = "vertex_ai/test"
 
-        response = await litellm.aspeech(
-            input=ssml,
-            model=model,
-            voice={
-                "languageCode": "en-UK",
-                "name": "en-UK-Studio-O",
-            },
-            audioConfig={
-                "audioEncoding": "LINEAR22",
-                "speakingRate": "10",
-            },
-        )
+        try:
+            response = await litellm.aspeech(
+                input=ssml,
+                model=model,
+                voice={
+                    "languageCode": "en-UK",
+                    "name": "en-UK-Studio-O",
+                },
+                audioConfig={
+                    "audioEncoding": "LINEAR22",
+                    "speakingRate": "10",
+                },
+            )
+        except litellm.APIConnectionError as e:
+            if "Your default credentials were not found" in str(e):
+                pytest.skip("skipping test, credentials not found")
 
         # Assert asynchronous call
         mock_async_post.assert_called_once()
@@ -264,3 +279,39 @@ async def test_speech_litellm_vertex_async_with_voice_ssml():
             "voice": {"languageCode": "en-UK", "name": "en-UK-Studio-O"},
             "audioConfig": {"audioEncoding": "LINEAR22", "speakingRate": "10"},
         }
+
+
+@pytest.mark.skip(reason="causes openai rate limit errors")
+def test_audio_speech_cost_calc():
+    from litellm.integrations.custom_logger import CustomLogger
+
+    model = "azure/azure-tts"
+    api_base = os.getenv("AZURE_SWEDEN_API_BASE")
+    api_key = os.getenv("AZURE_SWEDEN_API_KEY")
+
+    custom_logger = CustomLogger()
+    litellm.set_verbose = True
+
+    with patch.object(custom_logger, "log_success_event") as mock_cost_calc:
+        litellm.callbacks = [custom_logger]
+        litellm.speech(
+            model=model,
+            voice="alloy",
+            input="the quick brown fox jumped over the lazy dogs",
+            api_base=api_base,
+            api_key=api_key,
+            base_model="azure/tts-1",
+        )
+
+        time.sleep(1)
+
+        mock_cost_calc.assert_called_once()
+
+        print(
+            f"mock_cost_calc.call_args: {mock_cost_calc.call_args.kwargs['kwargs'].keys()}"
+        )
+        standard_logging_payload = mock_cost_calc.call_args.kwargs["kwargs"][
+            "standard_logging_object"
+        ]
+        print(f"standard_logging_payload: {standard_logging_payload}")
+        assert standard_logging_payload["response_cost"] > 0

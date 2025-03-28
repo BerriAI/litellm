@@ -23,17 +23,10 @@ from litellm.proxy.proxy_server import (
     router,
     save_worker_config,
     initialize,
-    startup_event,
 )  # Replace with the actual module where your FastAPI router is defined
 
 filepath = os.path.dirname(os.path.abspath(__file__))
 python_file_path = f"{filepath}/test_configs/custom_callbacks.py"
-
-# @app.on_event("startup")
-# async def wrapper_startup_event():
-# initialize(config=config_fp)
-
-# Use the app fixture in your client fixture
 
 
 @pytest.fixture
@@ -58,7 +51,7 @@ print("Testing proxy custom logger")
 def test_embedding(client):
     try:
         litellm.set_verbose = False
-        from litellm.proxy.utils import get_instance_fn
+        from litellm.proxy.types_utils.utils import get_instance_fn
 
         my_custom_logger = get_instance_fn(
             value="custom_callbacks.my_custom_logger", config_file_path=python_file_path
@@ -129,7 +122,7 @@ def test_chat_completion(client):
     try:
         # Your test data
         litellm.set_verbose = False
-        from litellm.proxy.utils import get_instance_fn
+        from litellm.proxy.types_utils.utils import get_instance_fn
 
         my_custom_logger = get_instance_fn(
             value="custom_callbacks.my_custom_logger", config_file_path=python_file_path
@@ -224,7 +217,7 @@ def test_chat_completion_stream(client):
     try:
         # Your test data
         litellm.set_verbose = False
-        from litellm.proxy.utils import get_instance_fn
+        from litellm.proxy.types_utils.utils import get_instance_fn
 
         my_custom_logger = get_instance_fn(
             value="custom_callbacks.my_custom_logger", config_file_path=python_file_path

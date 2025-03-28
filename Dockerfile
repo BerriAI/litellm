@@ -1,18 +1,20 @@
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=python:3.11.8-slim
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/python:latest-dev
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=python:3.11.8-slim
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/python:latest-dev
 # Builder stage
 FROM $LITELLM_BUILD_IMAGE AS builder
 
 # Set the working directory to /app
 WORKDIR /app
 
+USER root
+
 # Install build dependencies
-RUN apt-get clean && apt-get update && \
-    apt-get install -y gcc python3-dev && \
-    rm -rf /var/lib/apt/lists/*
+RUN apk update && \
+    apk add --no-cache gcc python3-dev openssl openssl-dev
+
 
 RUN pip install --upgrade pip && \
     pip install build
@@ -35,9 +37,6 @@ RUN pip install dist/*.whl
 # install dependencies as wheels
 RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 
-# install semantic-cache [Experimental]- we need this here and not in requirements.txt because redisvl pins to pydantic 1.0 
-RUN pip install redisvl==0.0.7 --no-deps
-
 # ensure pyjwt is used, not jwt
 RUN pip uninstall jwt -y
 RUN pip uninstall PyJWT -y
@@ -49,8 +48,12 @@ RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
-# Update dependencies and clean up - handles debian security issue
-RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/* 
+# Ensure runtime stage runs as root
+USER root
+
+# Install runtime dependencies
+RUN apk update && \
+    apk add --no-cache openssl
 
 WORKDIR /app
 # Copy the current directory contents into the container at /app
@@ -67,10 +70,11 @@ RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl 
 # Generate prisma client
 RUN prisma generate
 RUN chmod +x docker/entrypoint.sh
+RUN chmod +x docker/prod_entrypoint.sh
 
 EXPOSE 4000/tcp
 
-ENTRYPOINT ["litellm"]
+ENTRYPOINT ["docker/prod_entrypoint.sh"]
 
 # Append "--detailed_debug" to the end of CMD to view detailed debug logs 
 CMD ["--port", "4000"]

@@ -448,6 +448,34 @@ model_list:
 
 s/o to [@David Manouchehri](https://www.linkedin.com/in/davidmanouchehri/) for helping with this. 
 
+### Centralized Credential Management
+
+Define credentials once and reuse them across multiple models. This helps with:
+- Secret rotation
+- Reducing config duplication
+
+```yaml
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: azure/gpt-4o
+      litellm_credential_name: default_azure_credential  # Reference credential below
+
+credential_list:
+  - credential_name: default_azure_credential
+    credential_values:
+      api_key: os.environ/AZURE_API_KEY  # Load from environment
+      api_base: os.environ/AZURE_API_BASE
+      api_version: "2023-05-15"
+    credential_info:
+      description: "Production credentials for EU region"
+```
+
+#### Key Parameters
+- `credential_name`: Unique identifier for the credential set
+- `credential_values`: Key-value pairs of credentials/secrets (supports `os.environ/` syntax)
+- `credential_info`: Key-value pairs of user provided credentials information.  No key-value pairs are required, but the dictionary must exist.
+
 ### Load API Keys from Secret Managers (Azure Vault, etc)
 
 [**Using Secret Managers with LiteLLM Proxy**](../secret)
@@ -515,6 +543,32 @@ model_list:
 ```shell
 $ litellm --config /path/to/config.yaml
 ``` 
+
+### Set custom tokenizer 
+
+If you're using the [`/utils/token_counter` endpoint](https://litellm-api.up.railway.app/#/llm%20utils/token_counter_utils_token_counter_post), and want to set a custom huggingface tokenizer for a model, you can do so in the `config.yaml`
+
+```yaml
+model_list:
+  - model_name: openai-deepseek
+    litellm_params:
+      model: deepseek/deepseek-chat
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      access_groups: ["restricted-models"]
+      custom_tokenizer: 
+        identifier: deepseek-ai/DeepSeek-V3-Base
+        revision: main
+        auth_token: os.environ/HUGGINGFACE_API_KEY
+```
+
+**Spec**
+```
+custom_tokenizer: 
+  identifier: str # huggingface model identifier
+  revision: str # huggingface model revision (usually 'main')
+  auth_token: Optional[str] # huggingface auth token 
+```
 
 ## General Settings `general_settings` (DB Connection, etc)
 

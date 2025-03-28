@@ -3,13 +3,14 @@ import copy
 import os
 import traceback
 from datetime import datetime, timedelta
-from typing import Literal, Optional, Union
+from typing import Dict, Literal, Optional, Union
 
 import fastapi
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS
 from litellm.proxy._types import (
     AlertType,
     CallInfo,
@@ -19,7 +20,13 @@ from litellm.proxy._types import (
     WebhookEvent,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.health_check import perform_health_check
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.health_check import (
+    _clean_endpoint_data,
+    _update_litellm_params_for_health_check,
+    perform_health_check,
+    run_with_timeout,
+)
 
 #### Health ENDPOINTS ####
 
@@ -51,7 +58,6 @@ async def test_endpoint(request: Request):
     "/health/services",
     tags=["health"],
     dependencies=[Depends(user_api_key_auth)],
-    include_in_schema=False,
 )
 async def health_services_endpoint(  # noqa: PLR0915
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -64,14 +70,19 @@ async def health_services_endpoint(  # noqa: PLR0915
             "webhook",
             "email",
             "braintrust",
+            "datadog",
         ],
         str,
     ] = fastapi.Query(description="Specify the service being hit."),
 ):
     """
-    Hidden endpoint.
+    Use this admin-only endpoint to check if the service is healthy.
 
-    Used by the UI to let user check if slack alerting is working as expected.
+    Example:
+    ```
+    curl -L -X GET 'http://0.0.0.0:4000/health/services?service=datadog' \
+    -H 'Authorization: Bearer sk-1234'
+    ```
     """
     try:
         from litellm.proxy.proxy_server import (
@@ -84,6 +95,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             raise HTTPException(
                 status_code=400, detail={"error": "Service must be specified."}
             )
+
         if service not in [
             "slack_budget_alerts",
             "email",
@@ -95,6 +107,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "otel",
             "custom_callback_api",
             "langsmith",
+            "datadog",
         ]:
             raise HTTPException(
                 status_code=400,
@@ -118,8 +131,20 @@ async def health_services_endpoint(  # noqa: PLR0915
                 "status": "success",
                 "message": "Mock LLM request made - check {}.".format(service),
             }
+        elif service == "datadog":
+            from litellm.integrations.datadog.datadog import DataDogLogger
 
-        if service == "langfuse":
+            datadog_logger = DataDogLogger()
+            response = await datadog_logger.async_health_check()
+            return {
+                "status": response["status"],
+                "message": (
+                    response["error_message"]
+                    if response["status"] == "unhealthy"
+                    else "Datadog is healthy"
+                ),
+            }
+        elif service == "langfuse":
             from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
             langfuse_logger = LangFuseLogger()
@@ -357,19 +382,22 @@ async def _db_health_readiness_check():
     global db_health_cache
 
     # Note - Intentionally don't try/except this so it raises an exception when it fails
+    try:
+        # if timedelta is less than 2 minutes return DB Status
+        time_diff = datetime.now() - db_health_cache["last_updated"]
+        if db_health_cache["status"] != "unknown" and time_diff < timedelta(minutes=2):
+            return db_health_cache
 
-    # if timedelta is less than 2 minutes return DB Status
-    time_diff = datetime.now() - db_health_cache["last_updated"]
-    if db_health_cache["status"] != "unknown" and time_diff < timedelta(minutes=2):
+        if prisma_client is None:
+            db_health_cache = {"status": "disconnected", "last_updated": datetime.now()}
+            return db_health_cache
+
+        await prisma_client.health_check()
+        db_health_cache = {"status": "connected", "last_updated": datetime.now()}
         return db_health_cache
-
-    if prisma_client is None:
-        db_health_cache = {"status": "disconnected", "last_updated": datetime.now()}
+    except Exception as e:
+        PrismaDBExceptionHandler.handle_db_exception(e)
         return db_health_cache
-
-    await prisma_client.health_check()
-    db_health_cache = {"status": "connected", "last_updated": datetime.now()}
-    return db_health_cache
 
 
 @router.get(
@@ -473,7 +501,7 @@ async def health_readiness():
     """
     Unprotected endpoint for checking if worker can receive requests
     """
-    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, version
+    from litellm.proxy.proxy_server import prisma_client, version
 
     try:
         # get success callback
@@ -582,3 +610,93 @@ async def health_liveliness_options():
         "Access-Control-Allow-Headers": "*",
     }
     return Response(headers=response_headers, status_code=200)
+
+
+@router.post(
+    "/health/test_connection",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def test_model_connection(
+    request: Request,
+    mode: Optional[
+        Literal[
+            "chat",
+            "completion",
+            "embedding",
+            "audio_speech",
+            "audio_transcription",
+            "image_generation",
+            "batch",
+            "rerank",
+            "realtime",
+        ]
+    ] = fastapi.Body("chat", description="The mode to test the model with"),
+    litellm_params: Dict = fastapi.Body(
+        None,
+        description="Parameters for litellm.completion, litellm.embedding for the health check",
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Test a direct connection to a specific model.
+    
+    This endpoint allows you to verify if your proxy can successfully connect to a specific model.
+    It's useful for troubleshooting model connectivity issues without going through the full proxy routing.
+    
+    Example:
+    ```bash
+    curl -X POST 'http://localhost:4000/health/test_connection' \\
+      -H 'Authorization: Bearer sk-1234' \\
+      -H 'Content-Type: application/json' \\
+      -d '{
+        "litellm_params": {
+            "model": "gpt-4",
+            "custom_llm_provider": "azure_ai",
+            "litellm_credential_name": null,
+            "api_key": "6xxxxxxx",
+            "api_base": "https://litellm8397336933.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-10-21",
+        },
+        "mode": "chat"
+      }'
+    ```
+    
+    Returns:
+        dict: A dictionary containing the health check result with either success information or error details.
+    """
+    try:
+        # Include health_check_params if provided
+        litellm_params = _update_litellm_params_for_health_check(
+            model_info={},
+            litellm_params=litellm_params,
+        )
+        mode = mode or litellm_params.pop("mode", None)
+        result = await run_with_timeout(
+            litellm.ahealth_check(
+                model_params=litellm_params,
+                mode=mode,
+                prompt="test from litellm",
+                input=["test from litellm"],
+            ),
+            HEALTH_CHECK_TIMEOUT_SECONDS,
+        )
+
+        # Clean the result for display
+        cleaned_result = _clean_endpoint_data(
+            {**litellm_params, **result}, details=True
+        )
+
+        return {
+            "status": "error" if "error" in result else "success",
+            "result": cleaned_result,
+        }
+
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"litellm.proxy.health_endpoints.test_model_connection(): Exception occurred - {str(e)}"
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": f"Failed to test connection: {str(e)}"},
+        )

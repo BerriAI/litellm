@@ -2,19 +2,22 @@ import json
 import re
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
-
+from urllib.parse import urlparse
 import httpx
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.litellm_logging import (
-    get_standard_logging_object_payload,
-)
-from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as VertexModelResponseIterator,
 )
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
+from litellm.types.utils import (
+    EmbeddingResponse,
+    ImageResponse,
+    ModelResponse,
+    TextCompletionResponse,
+)
 
 if TYPE_CHECKING:
     from ..success_handler import PassThroughEndpointLogging
@@ -40,21 +43,20 @@ class VertexPassthroughLoggingHandler:
             model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
 
             instance_of_vertex_llm = litellm.VertexGeminiConfig()
-            litellm_model_response: litellm.ModelResponse = (
-                instance_of_vertex_llm._transform_response(
+            litellm_model_response: ModelResponse = (
+                instance_of_vertex_llm.transform_response(
                     model=model,
                     messages=[
                         {"role": "user", "content": "no-message-pass-through-endpoint"}
                     ],
-                    response=httpx_response,
+                    raw_response=httpx_response,
                     model_response=litellm.ModelResponse(),
                     logging_obj=logging_obj,
                     optional_params={},
                     litellm_params={},
                     api_key="",
-                    data={},
-                    print_verbose=litellm.print_verbose,
-                    encoding=None,
+                    request_data={},
+                    encoding=litellm.encoding,
                 )
             )
             kwargs = VertexPassthroughLoggingHandler._create_vertex_response_logging_payload_for_generate_content(
@@ -64,6 +66,9 @@ class VertexPassthroughLoggingHandler:
                 start_time=start_time,
                 end_time=end_time,
                 logging_obj=logging_obj,
+                custom_llm_provider=VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(
+                    url_route
+                ),
             )
 
             return {
@@ -72,7 +77,7 @@ class VertexPassthroughLoggingHandler:
             }
 
         elif "predict" in url_route:
-            from litellm.llms.vertex_ai_and_google_ai_studio.image_generation.image_generation_handler import (
+            from litellm.llms.vertex_ai.image_generation.image_generation_handler import (
                 VertexImageGeneration,
             )
             from litellm.types.utils import PassthroughCallTypes
@@ -83,8 +88,8 @@ class VertexPassthroughLoggingHandler:
             _json_response = httpx_response.json()
 
             litellm_prediction_response: Union[
-                litellm.ModelResponse, litellm.EmbeddingResponse, litellm.ImageResponse
-            ] = litellm.ModelResponse()
+                ModelResponse, EmbeddingResponse, ImageResponse
+            ] = ModelResponse()
             if vertex_image_generation_class.is_image_generation_response(
                 _json_response
             ):
@@ -165,6 +170,9 @@ class VertexPassthroughLoggingHandler:
             start_time=start_time,
             end_time=end_time,
             logging_obj=litellm_logging_obj,
+            custom_llm_provider=VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(
+                url_route
+            ),
         )
 
         return {
@@ -177,7 +185,7 @@ class VertexPassthroughLoggingHandler:
         all_chunks: List[str],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
-    ) -> Optional[Union[litellm.ModelResponse, litellm.TextCompletionResponse]]:
+    ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
         vertex_iterator = VertexModelResponseIterator(
             streaming_response=None,
             sync_stream=False,
@@ -212,15 +220,21 @@ class VertexPassthroughLoggingHandler:
         return "unknown"
 
     @staticmethod
+    def _get_custom_llm_provider_from_url(url: str) -> str:
+        parsed_url = urlparse(url)
+        if parsed_url.hostname and parsed_url.hostname.endswith("generativelanguage.googleapis.com"):
+            return litellm.LlmProviders.GEMINI.value
+        return litellm.LlmProviders.VERTEX_AI.value
+
+    @staticmethod
     def _create_vertex_response_logging_payload_for_generate_content(
-        litellm_model_response: Union[
-            litellm.ModelResponse, litellm.TextCompletionResponse
-        ],
+        litellm_model_response: Union[ModelResponse, TextCompletionResponse],
         model: str,
         kwargs: dict,
         start_time: datetime,
         end_time: datetime,
         logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: str,
     ):
         """
         Create the standard logging object for Vertex passthrough generateContent (streaming and non-streaming)
@@ -233,24 +247,12 @@ class VertexPassthroughLoggingHandler:
         kwargs["response_cost"] = response_cost
         kwargs["model"] = model
 
-        # Make standard logging object for Vertex AI
-        standard_logging_object = get_standard_logging_object_payload(
-            kwargs=kwargs,
-            init_response_obj=litellm_model_response,
-            start_time=start_time,
-            end_time=end_time,
-            logging_obj=logging_obj,
-            status="success",
-        )
-
         # pretty print standard logging object
-        verbose_proxy_logger.debug(
-            "standard_logging_object= %s", json.dumps(standard_logging_object, indent=4)
-        )
-        kwargs["standard_logging_object"] = standard_logging_object
+        verbose_proxy_logger.debug("kwargs= %s", json.dumps(kwargs, indent=4))
 
         # set litellm_call_id to logging response object
         litellm_model_response.id = logging_obj.litellm_call_id
         logging_obj.model = litellm_model_response.model or model
         logging_obj.model_call_details["model"] = logging_obj.model
+        logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
         return kwargs

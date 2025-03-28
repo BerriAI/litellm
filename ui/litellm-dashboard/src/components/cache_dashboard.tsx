@@ -12,11 +12,34 @@ import {
   DateRangePickerValue,
   MultiSelect,
   MultiSelectItem,
+  Button,
+  TabPanel,
+  TabPanels,
+  TabGroup,
+  TabList,
+  Tab,
+  TextInput,
+  Icon,
+  Text,
 } from "@tremor/react";
 
 import {
+  Button as Button2,
+  message,
+} from "antd";
+import {
+  RefreshIcon,
+  CheckCircleIcon,
+  XCircleIcon,
+} from "@heroicons/react/outline";
+import {
     adminGlobalCacheActivity,
+    cachingHealthCheckCall,
+    healthCheckCall,
 } from "./networking";
+
+// Import the new component
+import { CacheHealthTab } from "./cache_health";
 
 const formatDateWithoutTZ = (date: Date | undefined) => {
     if (!date) return undefined;
@@ -64,7 +87,32 @@ interface uiData {
 
 }
 
+interface CacheHealthResponse {
+  status?: string;
+  cache_type?: string;
+  ping_response?: boolean;
+  set_cache_response?: string;
+  litellm_cache_params?: string;
+  error?: {
+    message: string;
+    type: string;
+    param: string;
+    code: string;
+  };
+}
 
+// Helper function to deep-parse a JSON string if possible
+const deepParse = (input: any) => {
+  let parsed = input;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return parsed;
+    }
+  }
+  return parsed;
+};
 
 const CacheDashboard: React.FC<CachePageProps> = ({
   accessToken,
@@ -86,6 +134,8 @@ const CacheDashboard: React.FC<CachePageProps> = ({
     to: new Date(),
   });
 
+  const [lastRefreshed, setLastRefreshed] = useState("");
+  const [healthCheckResponse, setHealthCheckResponse] = useState<any>("");
 
   useEffect(() => {
     if (!accessToken || !dateValue) {
@@ -96,6 +146,9 @@ const CacheDashboard: React.FC<CachePageProps> = ({
       setData(response);
     };
     fetchData();
+
+    const currentDate = new Date();
+    setLastRefreshed(currentDate.toLocaleString());
   }, [accessToken]);
 
     const uniqueApiKeys = Array.from(new Set(data.map((item) => item?.api_key ?? "")));
@@ -208,8 +261,66 @@ const CacheDashboard: React.FC<CachePageProps> = ({
 
   }, [selectedApiKeys, selectedModels, dateValue, data]);
 
+
+const handleRefreshClick = () => {
+  // Update the 'lastRefreshed' state to the current date and time
+  const currentDate = new Date();
+  setLastRefreshed(currentDate.toLocaleString());
+};
+
+const runCachingHealthCheck = async () => {
+  try {
+    message.info("Running cache health check...");
+    setHealthCheckResponse("");
+    const response = await cachingHealthCheckCall(accessToken !== null ? accessToken : "");
+    console.log("CACHING HEALTH CHECK RESPONSE", response);
+    setHealthCheckResponse(response);
+  } catch (error: any) {
+    console.error("Error running health check:", error);
+    let errorData;
+    if (error && error.message) {
+      try {
+        // Parse the error message which may contain a nested error layer.
+        let parsedData = JSON.parse(error.message);
+        // If the parsed object is wrapped (e.g. { error: { ... } }), unwrap it.
+        if (parsedData.error) {
+          parsedData = parsedData.error;
+        }
+        errorData = parsedData;
+      } catch (e) {
+        errorData = { message: error.message };
+      }
+    } else {
+      errorData = { message: "Unknown error occurred" };
+    }
+    setHealthCheckResponse({ error: errorData });
+  }
+};
+
   return (        
-      <Card>      
+    <TabGroup className="gap-2 p-8 h-full w-full mt-2 mb-8">
+        <TabList className="flex justify-between mt-2 w-full items-center">
+          <div className="flex">
+            <Tab>Cache Analytics</Tab>
+            <Tab>
+              <pre>Cache Health</pre>
+            </Tab>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
+            <Icon
+              icon={RefreshIcon} // Modify as necessary for correct icon name
+              variant="shadow"
+              size="xs"
+              className="self-center"
+              onClick={handleRefreshClick}
+            />
+          </div>
+        </TabList>
+        <TabPanels>
+          <TabPanel>
+          <Card>      
       <Grid numItems={3} className="gap-4 mt-4">
         <Col>
           <MultiSelect
@@ -251,7 +362,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({
       </Grid>
 
       <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 mt-4">
-      <Card>
+          <Card>
             <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
               Cache Hit Ratio
             </p>
@@ -314,11 +425,16 @@ const CacheDashboard: React.FC<CachePageProps> = ({
 
 
       </Card>
-
-
-    
-
-
+          </TabPanel>
+          <TabPanel>
+            <CacheHealthTab 
+              accessToken={accessToken}
+              healthCheckResponse={healthCheckResponse}
+              runCachingHealthCheck={runCachingHealthCheck}
+            />
+          </TabPanel>
+        </TabPanels>
+      </TabGroup>
   );
 };
 

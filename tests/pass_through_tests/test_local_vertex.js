@@ -3,7 +3,7 @@ const { VertexAI, RequestOptions } = require('@google-cloud/vertexai');
 
 
 const vertexAI = new VertexAI({
-    project: 'adroit-crow-413218',
+    project: 'pathrise-convert-1606954137718',
     location: 'us-central1',
     apiEndpoint: "127.0.0.1:4000/vertex-ai"
 });
@@ -20,7 +20,7 @@ const requestOptions = {
 };
 
 const generativeModel = vertexAI.getGenerativeModel(
-    { model: 'gemini-1.0-pro' },
+    { model: 'gemini-1.5-pro' },
     requestOptions
 );
 

@@ -1,13 +1,8 @@
 #### What this does ####
 #    On success + failure, log events to Supabase
 
-import datetime
-import os
-import subprocess
-import sys
-import traceback
-import uuid
-from typing import Optional
+from datetime import datetime
+from typing import Optional, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -38,6 +33,8 @@ class S3Logger:
                 f"in init s3 logger - s3_callback_params {litellm.s3_callback_params}"
             )
 
+            s3_use_team_prefix = False
+
             if litellm.s3_callback_params is not None:
                 # read in .env variables - example os.environ/AWS_BUCKET_NAME
                 for key, value in litellm.s3_callback_params.items():
@@ -62,7 +59,10 @@ class S3Logger:
                 s3_config = litellm.s3_callback_params.get("s3_config")
                 s3_path = litellm.s3_callback_params.get("s3_path")
                 # done reading litellm.s3_callback_params
-
+                s3_use_team_prefix = bool(
+                    litellm.s3_callback_params.get("s3_use_team_prefix", False)
+                )
+            self.s3_use_team_prefix = s3_use_team_prefix
             self.bucket_name = s3_bucket_name
             self.s3_path = s3_path
             verbose_logger.debug(f"s3 logger using endpoint url {s3_endpoint_url}")
@@ -120,21 +120,31 @@ class S3Logger:
                         clean_metadata[key] = value
 
             # Ensure everything in the payload is converted to str
-            payload: Optional[StandardLoggingPayload] = kwargs.get(
-                "standard_logging_object", None
+            payload: Optional[StandardLoggingPayload] = cast(
+                Optional[StandardLoggingPayload],
+                kwargs.get("standard_logging_object", None),
             )
 
             if payload is None:
                 return
 
+            team_alias = payload["metadata"].get("user_api_key_team_alias")
+
+            team_alias_prefix = ""
+            if (
+                litellm.enable_preview_features
+                and self.s3_use_team_prefix
+                and team_alias is not None
+            ):
+                team_alias_prefix = f"{team_alias}/"
+
             s3_file_name = litellm.utils.get_logging_id(start_time, payload) or ""
-            s3_object_key = (
-                (self.s3_path.rstrip("/") + "/" if self.s3_path else "")
-                + start_time.strftime("%Y-%m-%d")
-                + "/"
-                + s3_file_name
-            )  # we need the s3 key to include the time, so we log cache hits too
-            s3_object_key += ".json"
+            s3_object_key = get_s3_object_key(
+                cast(Optional[str], self.s3_path) or "",
+                team_alias_prefix,
+                start_time,
+                s3_file_name,
+            )
 
             s3_object_download_filename = (
                 "time-"
@@ -167,3 +177,20 @@ class S3Logger:
         except Exception as e:
             verbose_logger.exception(f"s3 Layer Error - {str(e)}")
             pass
+
+
+def get_s3_object_key(
+    s3_path: str,
+    team_alias_prefix: str,
+    start_time: datetime,
+    s3_file_name: str,
+) -> str:
+    s3_object_key = (
+        (s3_path.rstrip("/") + "/" if s3_path else "")
+        + team_alias_prefix
+        + start_time.strftime("%Y-%m-%d")
+        + "/"
+        + s3_file_name
+    )  # we need the s3 key to include the time, so we log cache hits too
+    s3_object_key += ".json"
+    return s3_object_key

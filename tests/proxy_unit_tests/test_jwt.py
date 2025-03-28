@@ -21,14 +21,21 @@ from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import Request
-
+from fastapi import Request, HTTPException
+from fastapi.routing import APIRoute
+from fastapi.responses import Response
 import litellm
 from litellm.caching.caching import DualCache
-from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_UserTable, LiteLLMRoutes
-from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy._types import (
+    LiteLLM_JWTAuth,
+    LiteLLM_UserTable,
+    LiteLLMRoutes,
+    JWTAuthBuilderResult,
+)
+from litellm.proxy.auth.handle_jwt import JWTHandler, JWTAuthManager
 from litellm.proxy.management_endpoints.team_endpoints import new_team
 from litellm.proxy.proxy_server import chat_completion
+from typing import Literal
 
 public_key = {
     "kty": "RSA",
@@ -57,7 +64,7 @@ def test_load_config_with_custom_role_names():
 
 
 @pytest.mark.asyncio
-async def test_token_single_public_key():
+async def test_token_single_public_key(monkeypatch):
     import jwt
 
     jwt_handler = JWTHandler()
@@ -73,10 +80,15 @@ async def test_token_single_public_key():
         ]
     }
 
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://example.com/public-key")
+
     # set cache
     cache = DualCache()
 
-    await cache.async_set_cache(key="litellm_jwt_auth_keys", value=backend_keys["keys"])
+    await cache.async_set_cache(
+        key="litellm_jwt_auth_keys_https://example.com/public-key",
+        value=backend_keys["keys"],
+    )
 
     jwt_handler.user_api_key_cache = cache
 
@@ -92,7 +104,7 @@ async def test_token_single_public_key():
 
 @pytest.mark.parametrize("audience", [None, "litellm-proxy"])
 @pytest.mark.asyncio
-async def test_valid_invalid_token(audience):
+async def test_valid_invalid_token(audience, monkeypatch):
     """
     Tests
     - valid token
@@ -108,6 +120,8 @@ async def test_valid_invalid_token(audience):
     os.environ.pop("JWT_AUDIENCE", None)
     if audience:
         os.environ["JWT_AUDIENCE"] = audience
+
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://example.com/public-key")
 
     # Generate a private / public key pair using RSA algorithm
     key = rsa.generate_private_key(
@@ -138,7 +152,9 @@ async def test_valid_invalid_token(audience):
     # set cache
     cache = DualCache()
 
-    await cache.async_set_cache(key="litellm_jwt_auth_keys", value=[public_jwk])
+    await cache.async_set_cache(
+        key="litellm_jwt_auth_keys_https://example.com/public-key", value=[public_jwk]
+    )
 
     jwt_handler = JWTHandler()
 
@@ -287,7 +303,7 @@ def team_token_tuple():
 
 @pytest.mark.parametrize("audience", [None, "litellm-proxy"])
 @pytest.mark.asyncio
-async def test_team_token_output(prisma_client, audience):
+async def test_team_token_output(prisma_client, audience, monkeypatch):
     import json
     import uuid
 
@@ -308,6 +324,8 @@ async def test_team_token_output(prisma_client, audience):
     os.environ.pop("JWT_AUDIENCE", None)
     if audience:
         os.environ["JWT_AUDIENCE"] = audience
+
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://example.com/public-key")
 
     # Generate a private / public key pair using RSA algorithm
     key = rsa.generate_private_key(
@@ -338,7 +356,9 @@ async def test_team_token_output(prisma_client, audience):
     # set cache
     cache = DualCache()
 
-    await cache.async_set_cache(key="litellm_jwt_auth_keys", value=[public_jwk])
+    await cache.async_set_cache(
+        key="litellm_jwt_auth_keys_https://example.com/public-key", value=[public_jwk]
+    )
 
     jwt_handler = JWTHandler()
 
@@ -456,7 +476,7 @@ async def test_team_token_output(prisma_client, audience):
 @pytest.mark.parametrize("user_id_upsert", [True, False])
 @pytest.mark.asyncio
 async def aaaatest_user_token_output(
-    prisma_client, audience, team_id_set, default_team_id, user_id_upsert
+    prisma_client, audience, team_id_set, default_team_id, user_id_upsert, monkeypatch
 ):
     import uuid
 
@@ -521,10 +541,14 @@ async def aaaatest_user_token_output(
 
     assert isinstance(public_jwk, dict)
 
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://example.com/public-key")
+
     # set cache
     cache = DualCache()
 
-    await cache.async_set_cache(key="litellm_jwt_auth_keys", value=[public_jwk])
+    await cache.async_set_cache(
+        key="litellm_jwt_auth_keys_https://example.com/public-key", value=[public_jwk]
+    )
 
     jwt_handler = JWTHandler()
 
@@ -692,7 +716,9 @@ async def aaaatest_user_token_output(
 @pytest.mark.parametrize("admin_allowed_routes", [None, ["ui_routes"]])
 @pytest.mark.parametrize("audience", [None, "litellm-proxy"])
 @pytest.mark.asyncio
-async def test_allowed_routes_admin(prisma_client, audience, admin_allowed_routes):
+async def test_allowed_routes_admin(
+    prisma_client, audience, admin_allowed_routes, monkeypatch
+):
     """
     Add a check to make sure jwt proxy admin scope can access all allowed admin routes
 
@@ -715,6 +741,8 @@ async def test_allowed_routes_admin(prisma_client, audience, admin_allowed_route
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     await litellm.proxy.proxy_server.prisma_client.connect()
+
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://example.com/public-key")
 
     os.environ.pop("JWT_AUDIENCE", None)
     if audience:
@@ -749,7 +777,9 @@ async def test_allowed_routes_admin(prisma_client, audience, admin_allowed_route
     # set cache
     cache = DualCache()
 
-    await cache.async_set_cache(key="litellm_jwt_auth_keys", value=[public_jwk])
+    await cache.async_set_cache(
+        key="litellm_jwt_auth_keys_https://example.com/public-key", value=[public_jwk]
+    )
 
     jwt_handler = JWTHandler()
 
@@ -903,7 +933,9 @@ def mock_user_object(*args, **kwargs):
     "user_email, should_work", [("ishaan@berri.ai", True), ("krrish@tassle.xyz", False)]
 )
 @pytest.mark.asyncio
-async def test_allow_access_by_email(public_jwt_key, user_email, should_work):
+async def test_allow_access_by_email(
+    public_jwt_key, user_email, should_work, monkeypatch
+):
     """
     Allow anyone with an `@xyz.com` email make a request to the proxy.
 
@@ -918,10 +950,14 @@ async def test_allow_access_by_email(public_jwt_key, user_email, should_work):
     public_jwk = public_jwt_key["public_jwk"]
     private_key = public_jwt_key["private_key"]
 
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://example.com/public-key")
+
     # set cache
     cache = DualCache()
 
-    await cache.async_set_cache(key="litellm_jwt_auth_keys", value=[public_jwk])
+    await cache.async_set_cache(
+        key="litellm_jwt_auth_keys_https://example.com/public-key", value=[public_jwk]
+    )
 
     jwt_handler = JWTHandler()
 
@@ -985,7 +1021,7 @@ async def test_allow_access_by_email(public_jwt_key, user_email, should_work):
     #     )
     # ),
     with patch.object(
-        litellm.proxy.auth.user_api_key_auth,
+        litellm.proxy.auth.handle_jwt,
         "get_user_object",
         side_effect=mock_user_object,
     ) as mock_client:
@@ -1026,3 +1062,252 @@ def test_get_public_key_from_jwk_url():
 
     assert public_key is not None
     assert public_key == jwk_response[0]
+
+
+@pytest.mark.asyncio
+async def test_end_user_jwt_auth(monkeypatch):
+    import litellm
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+    from litellm.caching import DualCache
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.proxy_server import user_api_key_auth
+    import json
+
+    monkeypatch.delenv("JWT_AUDIENCE", None)
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://example.com/public-key")
+    jwt_handler = JWTHandler()
+
+    litellm_jwtauth = LiteLLM_JWTAuth(
+        end_user_id_jwt_field="sub",
+    )
+
+    cache = DualCache()
+
+    keys = [
+        {
+            "kid": "d-1733370597545",
+            "alg": "RS256",
+            "kty": "RSA",
+            "use": "sig",
+            "n": "j5Ik60FJSUIPMVdMSU8vhYvyPPH7rUsUllNI0BfBlIkgEYFk2mg4KX1XDQc6mcKFjbq9k_7TSkHWKnfPhNkkb0MdmZLKbwTrmte2k8xWDxp-rSmZpIJwC1zuPDx5joLHBgIb09-K2cPL2rvwzP75WtOr_QLXBerHAbXx8cOdI7mrSRWJ9iXbKv_pLDnZHnGNld75tztb8nCtgrywkF010jGi1xxaT8UKsTvK-QkIBkYI6m6WR9LMnG2OZm-ExuvNPUenfYUsqnynPF4SMNZwyQqJfavSLKI8uMzB2s9pcbx5HfQwIOYhMlgBHjhdDn2IUSnXSJqSsN6RQO18M2rgPQ",
+            "e": "AQAB",
+        },
+        {
+            "kid": "s-f836dd32-ef71-426a-8804-946a7f230bc9",
+            "alg": "RS256",
+            "kty": "RSA",
+            "use": "sig",
+            "n": "2A5-ZA18YKn7M4OtxsfXBc3Z7n2WyHTxbK4GEBlmD9T9TDr4sbJaI4oHfTvzsAC3H2r2YkASzrCISXMXQJjLHoeLgDVcKs8qTdLj7K5FNT9fA0kU9ayUjSGrqkz57SG7oNf9Wp__Qa-H-bs6Z8_CEfBy0JA9QSHUfrdOXp4vCB_qLn6DE0DJH9ELAq_0nktVQk_oxlvXlGtVZSZe31mNNgiD__RJMogf-SIFcYOkMLVGTTEBYiCk1mHxXS6oJZaVSWiBgHzu5wkra5AfQLUVelQaupT5H81hFPmiceEApf_2DacnqqRV4-Nl8sjhJtuTXiprVS2Z5r2pOMz_kVGNgw",
+            "e": "AQAB",
+        },
+    ]
+
+    cache.set_cache(
+        key="litellm_jwt_auth_keys_https://example.com/public-key",
+        value=keys,
+    )
+
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=cache,
+        litellm_jwtauth=litellm_jwtauth,
+        leeway=100000000000000,
+    )
+
+    token = "eyJraWQiOiJkLTE3MzMzNzA1OTc1NDUiLCJ0eXAiOiJKV1QiLCJ2ZXJzaW9uIjoiNCIsImFsZyI6IlJTMjU2In0.eyJpYXQiOjE3MzM1MDcyNzcsImV4cCI6MTczMzUwNzg3Nywic3ViIjoiODFiM2U1MmEtNjdhNi00ZWZiLTk2NDUtNzA1MjdlMTAxNDc5IiwidElkIjoicHVibGljIiwic2Vzc2lvbkhhbmRsZSI6Ijg4M2Y4YWFmLWUwOTEtNGE1Ny04YTJhLTRiMjcwMmZhZjMzYyIsInJlZnJlc2hUb2tlbkhhc2gxIjoiNDVhNDRhYjlmOTMwMGQyOTY4ZjkxODZkYWQ0YTcwY2QwNjk2YzBiNTBmZmUxZmQ4ZTM2YzU1NGU0MWE4ODU0YiIsInBhcmVudFJlZnJlc2hUb2tlbkhhc2gxIjpudWxsLCJhbnRpQ3NyZlRva2VuIjpudWxsLCJpc3MiOiJodHRwOi8vbG9jYWxob3N0OjMwMDEvYXV0aC9zdCIsImxlZ2FjeV9jb21wYW55X2lkIjoxNTI0OTM5LCJsZWdhY3lfaWQiOjM5NzAyNzk1LCJzY29wZSI6WyJza2lsbF91cCJdLCJzdC1ldiI6eyJ0IjoxNzMzNTA3Mjc4NzAwLCJ2IjpmYWxzZX19.XlYrT6dRIjaZKkJtdr7C_UuxajFRbNpA9BnIsny3rxiPVyS8rhIBwxW12tZwgttRywmXrXK-msowFhWU4XdL5Qfe4lwZb2HTbDeGiQPvQTlOjWWYMhgCoKdPtjCQsAcW45rg7aQ0p42JFQPoAQa8AnGfxXpgx2vSR7njiZ3ZZyHerDdKQHyIGSFVOxoK0TgR-hxBVY__Wjg8UTKgKSz9KU_uwnPgpe2DeYmP-LTK2oeoygsVRmbldY_GrrcRe3nqYcUfFkxSs0FSsoSv35jIxiptXfCjhEB1Y5eaJhHEjlYlP2rw98JysYxjO2rZbAdUpL3itPeo3T2uh1NZr_lArw"
+
+    response = await jwt_handler.auth_jwt(token=token)
+
+    assert response is not None
+
+    end_user_id = jwt_handler.get_end_user_id(
+        token=response,
+        default_value=None,
+    )
+
+    assert end_user_id is not None
+
+    ## CHECK USER API KEY AUTH ##
+    from starlette.datastructures import URL
+
+    bearer_token = "Bearer " + token
+
+    api_route = APIRoute(path="/chat/completions", endpoint=chat_completion)
+    request = Request(
+        {
+            "type": "http",
+            "route": api_route,
+            "path": "/chat/completions",
+            "headers": [(b"authorization", f"Bearer {bearer_token}".encode("latin-1"))],
+            "method": "POST",
+        }
+    )
+
+    async def return_body():
+        body_dict = {
+            "model": "openai/gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "Hello, how are you?"}],
+        }
+        # Serialize the dictionary to JSON and encode it to bytes
+        return json.dumps(body_dict).encode("utf-8")
+
+    request.body = return_body
+
+    ## 1. INITIAL TEAM CALL - should fail
+    # use generated key to auth in
+    setattr(
+        litellm.proxy.proxy_server,
+        "general_settings",
+        {"enable_jwt_auth": True, "pass_through_all_models": True},
+    )
+    setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        MagicMock(),
+    )
+    setattr(litellm.proxy.proxy_server, "prisma_client", {})
+    setattr(litellm.proxy.proxy_server, "jwt_handler", jwt_handler)
+    from litellm.proxy.proxy_server import cost_tracking
+
+    cost_tracking()
+    result = await user_api_key_auth(request=request, api_key=bearer_token)
+    assert (
+        result.end_user_id == "81b3e52a-67a6-4efb-9645-70527e101479"
+    )  # jwt token decoded sub value
+
+    temp_response = Response()
+    from litellm.proxy.hooks.proxy_track_cost_callback import (
+        _should_track_cost_callback,
+    )
+
+    with patch.object(
+        litellm.proxy.hooks.proxy_track_cost_callback, "_should_track_cost_callback"
+    ) as mock_client:
+        resp = await chat_completion(
+            request=request,
+            fastapi_response=temp_response,
+            model="gpt-4o",
+            user_api_key_dict=result,
+        )
+
+        assert resp is not None
+
+        await asyncio.sleep(1)
+
+        mock_client.assert_called_once()
+
+        mock_client.call_args.kwargs[
+            "end_user_id"
+        ] == "81b3e52a-67a6-4efb-9645-70527e101479"
+
+
+def test_can_rbac_role_call_route():
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+    from litellm.proxy._types import RoleBasedPermissions
+    from litellm.proxy._types import LitellmUserRoles
+
+    with pytest.raises(HTTPException):
+        JWTAuthManager.can_rbac_role_call_route(
+            rbac_role=LitellmUserRoles.TEAM,
+            general_settings={
+                "role_permissions": [
+                    RoleBasedPermissions(
+                        role=LitellmUserRoles.TEAM, routes=["/v1/chat/completions"]
+                    )
+                ]
+            },
+            route="/v1/embeddings",
+        )
+
+
+@pytest.mark.parametrize(
+    "requested_model, should_work",
+    [
+        ("gpt-3.5-turbo-testing", True),
+        ("gpt-4o", False),
+    ],
+)
+def test_check_scope_based_access(requested_model, should_work):
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+    from litellm.proxy._types import ScopeMapping
+
+    args = {
+        "scope_mappings": [
+            ScopeMapping(
+                models=["anthropic-claude"],
+                routes=["/v1/chat/completions"],
+                scope="litellm.api.consumer",
+            ),
+            ScopeMapping(
+                models=["gpt-3.5-turbo-testing"],
+                routes=None,
+                scope="litellm.api.gpt_3_5_turbo",
+            ),
+        ],
+        "scopes": [
+            "profile",
+            "groups-scope",
+            "email",
+            "litellm.api.gpt_3_5_turbo",
+            "litellm.api.consumer",
+        ],
+        "request_data": {
+            "model": requested_model,
+            "messages": [{"role": "user", "content": "Hey, how's it going 1234?"}],
+        },
+        "general_settings": {
+            "enable_jwt_auth": True,
+            "litellm_jwtauth": {
+                "team_id_jwt_field": "client_id",
+                "team_id_upsert": True,
+                "scope_mappings": [
+                    {
+                        "scope": "litellm.api.consumer",
+                        "models": ["anthropic-claude"],
+                        "routes": ["/v1/chat/completions"],
+                    },
+                    {
+                        "scope": "litellm.api.gpt_3_5_turbo",
+                        "models": ["gpt-3.5-turbo-testing"],
+                    },
+                ],
+                "enforce_scope_based_access": True,
+                "enforce_rbac": True,
+            },
+        },
+    }
+
+    if should_work:
+        JWTAuthManager.check_scope_based_access(**args)
+    else:
+        with pytest.raises(HTTPException):
+            JWTAuthManager.check_scope_based_access(**args)
+
+
+@pytest.mark.asyncio
+async def test_custom_validate_called():
+    # Setup
+    mock_custom_validate = MagicMock(return_value=True)
+
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = MagicMock(
+        custom_validate=mock_custom_validate, allowed_routes=["/chat/completions"]
+    )
+    jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "test_user"})
+
+    try:
+        await JWTAuthManager.auth_builder(
+            api_key="test",
+            jwt_handler=jwt_handler,
+            request_data={},
+            general_settings={},
+            route="/chat/completions",
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+    except Exception:
+        pass
+    # Assert custom_validate was called with the jwt token
+    mock_custom_validate.assert_called_once_with({"sub": "test_user"})

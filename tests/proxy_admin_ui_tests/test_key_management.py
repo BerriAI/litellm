@@ -8,6 +8,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from fastapi import Request
 from fastapi.routing import APIRoute
+from unittest.mock import MagicMock, patch
 
 load_dotenv()
 import io
@@ -100,7 +101,7 @@ proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 def prisma_client():
     from litellm.proxy.proxy_cli import append_query_params
 
-    ### add connection pool + pool timeout args
+    ### add connection pool + pool timeout args.
     params = {"connection_limit": 100, "pool_timeout": 60}
     database_url = os.getenv("DATABASE_URL")
     modified_url = append_query_params(database_url, params)
@@ -161,6 +162,7 @@ async def test_regenerate_api_key(prisma_client):
     print(result)
 
     # regenerate the key
+    print("regenerating key: {}".format(generated_key))
     new_key = await regenerate_key_fn(
         key=generated_key,
         user_api_key_dict=UserAPIKeyAuth(
@@ -369,15 +371,97 @@ async def test_get_users(prisma_client):
     assert "users" in result
 
     for user in result["users"]:
-        assert "user_id" in user
-        assert "spend" in user
-        assert "user_email" in user
-        assert "user_role" in user
-        assert "key_count" in user
+        assert isinstance(user, LiteLLM_UserTable)
 
     # Clean up test users
     for user in test_users:
         await prisma_client.db.litellm_usertable.delete(where={"user_id": user.user_id})
+
+
+@pytest.mark.asyncio
+async def test_get_users_filters_dashboard_keys(prisma_client):
+    """
+    Tests that /users/list endpoint doesn't return keys with team_id='litellm-dashboard'
+
+    The dashboard keys should be filtered out from the response
+    """
+    litellm.set_verbose = True
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # Create a test user
+    new_user_id = f"test_user_with_keys-{uuid.uuid4()}"
+    test_user = NewUserRequest(
+        user_id=new_user_id,
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        auto_create_key=False,
+    )
+
+    await new_user(
+        test_user,
+        UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="admin",
+        ),
+    )
+
+    # Create two keys for the user - one with team_id="litellm-dashboard" and one without
+    regular_key = await generate_key_helper_fn(
+        user_id=test_user.user_id,
+        request_type="key",
+        team_id="litellm-dashboard",  # This key should be included in the response
+        models=[],
+        aliases={},
+        config={},
+        spend=0,
+        duration=None,
+    )
+
+    regular_key = await generate_key_helper_fn(
+        user_id=test_user.user_id,
+        request_type="key",
+        team_id="NEW_TEAM",  # This key should be included in the response
+        models=[],
+        aliases={},
+        config={},
+        spend=0,
+        duration=None,
+    )
+
+    regular_key = await generate_key_helper_fn(
+        user_id=test_user.user_id,
+        request_type="key",
+        team_id=None,  # This key should be included in the response
+        models=[],
+        aliases={},
+        config={},
+        spend=0,
+        duration=None,
+    )
+
+    # Test get_users for the specific user
+    result = await get_users(
+        user_ids=test_user.user_id,
+        role=None,
+        page=1,
+        page_size=20,
+    )
+
+    print("get users result", result)
+    assert "users" in result
+    assert len(result["users"]) == 1
+
+    # Verify the key count is correct (should be 1, not counting dashboard keys)
+    user = result["users"][0]
+    assert user.user_id == test_user.user_id
+    assert user.key_count == 2  # Only count the regular keys, not the UI dashboard key
+
+    # Clean up test user and keys
+    await prisma_client.db.litellm_usertable.delete(
+        where={"user_id": test_user.user_id}
+    )
 
 
 @pytest.mark.asyncio
@@ -396,12 +480,12 @@ async def test_get_users_key_count(prisma_client):
     assert len(initial_users["users"]) > 0, "No users found to test with"
 
     test_user = initial_users["users"][0]
-    initial_key_count = test_user["key_count"]
+    initial_key_count = test_user.key_count
 
     # Create a new key for the selected user
     new_key = await generate_key_fn(
         data=GenerateKeyRequest(
-            user_id=test_user["user_id"],
+            user_id=test_user.user_id,
             key_alias=f"test_key_{uuid.uuid4()}",
             models=["fake-model"],
         ),
@@ -417,8 +501,8 @@ async def test_get_users_key_count(prisma_client):
     print("updated_users", updated_users)
     updated_key_count = None
     for user in updated_users["users"]:
-        if user["user_id"] == test_user["user_id"]:
-            updated_key_count = user["key_count"]
+        if user.user_id == test_user.user_id:
+            updated_key_count = user.key_count
             break
 
     assert updated_key_count is not None, "Test user not found in updated users list"
@@ -695,45 +779,490 @@ def test_personal_key_generation_check():
         )
 
 
-def test_prepare_metadata_fields():
+@pytest.mark.parametrize(
+    "update_request_data, non_default_values, existing_metadata, expected_result",
+    [
+        (
+            {"metadata": {"test": "new"}},
+            {"metadata": {"test": "new"}},
+            {"test": "test"},
+            {"metadata": {"test": "new"}},
+        ),
+        (
+            {"tags": ["new_tag"]},
+            {},
+            {"tags": ["old_tag"]},
+            {"metadata": {"tags": ["new_tag"]}},
+        ),
+        (
+            {"enforced_params": ["metadata.tags"]},
+            {},
+            {"tags": ["old_tag"]},
+            {"metadata": {"tags": ["old_tag"], "enforced_params": ["metadata.tags"]}},
+        ),
+    ],
+)
+def test_prepare_metadata_fields(
+    update_request_data, non_default_values, existing_metadata, expected_result
+):
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         prepare_metadata_fields,
     )
 
-    new_metadata = {"test": "new"}
-    old_metadata = {"test": "test"}
-
     args = {
         "data": UpdateKeyRequest(
-            key_alias=None,
-            duration=None,
-            models=[],
-            spend=None,
-            max_budget=None,
-            user_id=None,
-            team_id=None,
-            max_parallel_requests=None,
-            metadata=new_metadata,
-            tpm_limit=None,
-            rpm_limit=None,
-            budget_duration=None,
-            allowed_cache_controls=[],
-            soft_budget=None,
-            config={},
-            permissions={},
-            model_max_budget={},
-            send_invite_email=None,
-            model_rpm_limit=None,
-            model_tpm_limit=None,
-            guardrails=None,
-            blocked=None,
-            aliases={},
-            key="sk-1qGQUJJTcljeaPfzgWRrXQ",
-            tags=None,
+            key="sk-1qGQUJJTcljeaPfzgWRrXQ", **update_request_data
         ),
-        "non_default_values": {"metadata": new_metadata},
-        "existing_metadata": {"tags": None, **old_metadata},
+        "non_default_values": non_default_values,
+        "existing_metadata": existing_metadata,
     }
 
-    non_default_values = prepare_metadata_fields(**args)
-    assert non_default_values == {"metadata": new_metadata}
+    updated_non_default_values = prepare_metadata_fields(**args)
+    assert updated_non_default_values == expected_result
+
+
+@pytest.mark.asyncio
+async def test_key_update_with_model_specific_params(prisma_client):
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+    from litellm.proxy._types import UpdateKeyRequest
+
+    new_key = await generate_key_fn(
+        data=GenerateKeyRequest(models=["gpt-4"]),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+    )
+
+    generated_key = new_key.key
+    token_hash = new_key.token_id
+    print(generated_key)
+
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/update/key")
+
+    args = {
+        "key_alias": f"test-key_{uuid.uuid4()}",
+        "duration": None,
+        "models": ["all-team-models"],
+        "spend": 0,
+        "max_budget": None,
+        "user_id": "default_user_id",
+        "team_id": None,
+        "max_parallel_requests": None,
+        "metadata": {
+            "model_tpm_limit": {"fake-openai-endpoint": 10},
+            "model_rpm_limit": {"fake-openai-endpoint": 0},
+        },
+        "tpm_limit": None,
+        "rpm_limit": None,
+        "budget_duration": None,
+        "allowed_cache_controls": [],
+        "soft_budget": None,
+        "config": {},
+        "permissions": {},
+        "model_max_budget": {},
+        "send_invite_email": None,
+        "model_rpm_limit": None,
+        "model_tpm_limit": None,
+        "guardrails": None,
+        "blocked": None,
+        "aliases": {},
+        "key": token_hash,
+        "budget_id": None,
+        "key_name": "sk-...2GWA",
+        "expires": None,
+        "token_id": token_hash,
+        "litellm_budget_table": None,
+        "token": token_hash,
+    }
+    await update_key_fn(
+        request=request,
+        data=UpdateKeyRequest(**args),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_key_helper(prisma_client):
+    """
+    Test _list_key_helper function with various scenarios:
+    1. Basic pagination
+    2. Filtering by user_id
+    3. Filtering by team_id
+    4. Filtering by key_alias
+    5. Return full object vs token only
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _list_key_helper,
+    )
+
+    # Setup - create multiple test keys
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # Create test data
+    test_user_id = f"test_user_{uuid.uuid4()}"
+    test_team_id = f"test_team_{uuid.uuid4()}"
+    test_key_alias = f"test_alias_{uuid.uuid4()}"
+
+    # Create test data with clear patterns
+    test_keys = []
+
+    # 1. Create 2 keys for test user + test team
+    for i in range(2):
+        key = await generate_key_fn(
+            data=GenerateKeyRequest(
+                user_id=test_user_id,
+                team_id=test_team_id,
+                key_alias=f"team_key_{uuid.uuid4()}",  # Make unique with UUID
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="admin",
+            ),
+        )
+        test_keys.append(key)
+
+    # 2. Create 1 key for test user (no team)
+    key = await generate_key_fn(
+        data=GenerateKeyRequest(
+            user_id=test_user_id,
+            key_alias=test_key_alias,  # Already unique from earlier UUID generation
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="admin",
+        ),
+    )
+    test_keys.append(key)
+
+    # 3. Create 2 keys for other users
+    for i in range(2):
+        key = await generate_key_fn(
+            data=GenerateKeyRequest(
+                user_id=f"other_user_{i}",
+                key_alias=f"other_key_{uuid.uuid4()}",  # Make unique with UUID
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="admin",
+            ),
+        )
+        test_keys.append(key)
+
+    # Test 1: Basic pagination
+    result = await _list_key_helper(
+        prisma_client=prisma_client,
+        page=1,
+        size=2,
+        user_id=None,
+        team_id=None,
+        key_alias=None,
+        organization_id=None,
+    )
+    assert len(result["keys"]) == 2, "Should return exactly 2 keys"
+    assert result["total_count"] >= 5, "Should have at least 5 total keys"
+    assert result["current_page"] == 1
+    assert isinstance(result["keys"][0], str), "Should return token strings by default"
+
+    # Test 2: Filter by user_id
+    result = await _list_key_helper(
+        prisma_client=prisma_client,
+        page=1,
+        size=10,
+        user_id=test_user_id,
+        team_id=None,
+        key_alias=None,
+        organization_id=None,
+    )
+    assert len(result["keys"]) == 3, "Should return exactly 3 keys for test user"
+
+    # Test 3: Filter by team_id
+    result = await _list_key_helper(
+        prisma_client=prisma_client,
+        page=1,
+        size=10,
+        user_id=None,
+        team_id=test_team_id,
+        key_alias=None,
+        organization_id=None,
+    )
+    assert len(result["keys"]) == 2, "Should return exactly 2 keys for test team"
+
+    # Test 4: Filter by key_alias
+    result = await _list_key_helper(
+        prisma_client=prisma_client,
+        page=1,
+        size=10,
+        user_id=None,
+        team_id=None,
+        key_alias=test_key_alias,
+        organization_id=None,
+    )
+    assert len(result["keys"]) == 1, "Should return exactly 1 key with test alias"
+
+    # Test 5: Return full object
+    result = await _list_key_helper(
+        prisma_client=prisma_client,
+        page=1,
+        size=10,
+        user_id=test_user_id,
+        team_id=None,
+        key_alias=None,
+        return_full_object=True,
+        organization_id=None,
+    )
+    assert all(
+        isinstance(key, UserAPIKeyAuth) for key in result["keys"]
+    ), "Should return UserAPIKeyAuth objects"
+    assert len(result["keys"]) == 3, "Should return exactly 3 keys for test user"
+
+    # Clean up test keys
+    for key in test_keys:
+        await delete_key_fn(
+            data=KeyRequest(keys=[key.key]),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="admin",
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_list_key_helper_team_filtering(prisma_client):
+    """
+    Test _list_key_helper function's team filtering behavior:
+    1. Create keys with different team_ids (None, litellm-dashboard, other)
+    2. Verify filtering excludes litellm-dashboard keys
+    3. Verify keys with team_id=None are included
+    4. Test with pagination to ensure behavior is consistent across pages
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _list_key_helper,
+    )
+    import uuid
+
+    # Setup
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # Create test data with different team_ids
+    test_keys = []
+
+    # Create 3 keys with team_id=None
+    for i in range(3):
+        key = await generate_key_fn(
+            data=GenerateKeyRequest(
+                key_alias=f"no_team_key_{i}.{uuid.uuid4()}",
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="admin",
+            ),
+        )
+        test_keys.append(key)
+
+    # Create 2 keys with team_id=litellm-dashboard
+    for i in range(2):
+        key = await generate_key_fn(
+            data=GenerateKeyRequest(
+                team_id="litellm-dashboard",
+                key_alias=f"dashboard_key_{i}.{uuid.uuid4()}",
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="admin",
+            ),
+        )
+        test_keys.append(key)
+
+    # Create 2 keys with a different team_id
+    other_team_id = f"other_team_{uuid.uuid4()}"
+    for i in range(2):
+        key = await generate_key_fn(
+            data=GenerateKeyRequest(
+                team_id=other_team_id,
+                key_alias=f"other_team_key_{i}.{uuid.uuid4()}",
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="admin",
+            ),
+        )
+        test_keys.append(key)
+
+    try:
+        # Test 1: Get all keys with pagination (exclude litellm-dashboard)
+        all_keys = []
+        page = 1
+        max_pages_to_check = 3  # Only check the first 3 pages
+
+        while page <= max_pages_to_check:
+            result = await _list_key_helper(
+                prisma_client=prisma_client,
+                size=100,
+                page=page,
+                user_id=None,
+                team_id=None,
+                key_alias=None,
+                return_full_object=True,
+                organization_id=None,
+            )
+
+            all_keys.extend(result["keys"])
+
+            if page >= result["total_pages"] or page >= max_pages_to_check:
+                break
+            page += 1
+
+        # Verify results
+        print(f"Total keys found: {len(all_keys)}")
+        for key in all_keys:
+            print(f"Key team_id: {key.team_id}, alias: {key.key_alias}")
+
+        # Verify no litellm-dashboard keys are present
+        dashboard_keys = [k for k in all_keys if k.team_id == "litellm-dashboard"]
+        assert len(dashboard_keys) == 0, "Should not include litellm-dashboard keys"
+
+        # Verify keys with team_id=None are included
+        no_team_keys = [k for k in all_keys if k.team_id is None]
+        assert (
+            len(no_team_keys) > 0
+        ), f"Expected more than 0 keys with no team, got {len(no_team_keys)}"
+
+    finally:
+        # Clean up test keys
+        for key in test_keys:
+            await delete_key_fn(
+                data=KeyRequest(keys=[key.key]),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                    api_key="sk-1234",
+                    user_id="admin",
+                ),
+            )
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.management_endpoints.key_management_endpoints.get_team_object")
+async def test_key_generate_always_db_team(mock_get_team_object):
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_fn,
+    )
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", MagicMock())
+    mock_get_team_object.return_value = None
+    try:
+        await generate_key_fn(
+            data=GenerateKeyRequest(team_id="1234"),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="admin",
+            ),
+        )
+    except Exception as e:
+        print(f"Error: {e}")
+
+    mock_get_team_object.assert_called_once()
+    assert mock_get_team_object.call_args.kwargs["check_db_only"] == True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_model, should_pass",
+    [
+        ("gpt-4o", True),  # Should pass - exact match in aliases
+        ("gpt-4o-team1", True),  # Should pass - team has access to this deployment
+        ("gpt-4o-mini", False),  # Should fail - not in aliases
+        ("o-3", False),  # Should fail - not in aliases
+    ],
+)
+async def test_team_model_alias(prisma_client, requested_model, should_pass):
+    """
+    Test team model alias functionality:
+    1. Create team with model alias = `{gpt-4o: gpt-4o-team1}`
+    2. Generate key for that team with model = `gpt-4o`
+    3. Verify chat completion request works with aliased model = `gpt-4o`
+    """
+    litellm.set_verbose = True
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # Create team with model alias
+    team_id = f"test_team_{uuid.uuid4()}"
+    await new_team(
+        data=NewTeamRequest(
+            team_id=team_id,
+            team_alias=f"test_team_alias_{uuid.uuid4()}",
+            models=["gpt-4o-team1"],
+            model_aliases={"gpt-4o": "gpt-4o-team1"},
+        ),
+        http_request=Request(scope={"type": "http"}),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"
+        ),
+    )
+
+    # Generate key for the team
+    new_key = await generate_key_fn(
+        data=GenerateKeyRequest(
+            team_id=team_id,
+            models=["gpt-4o-team1"],
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"
+        ),
+    )
+
+    generated_key = new_key.key
+
+    # Test chat completion request
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    async def return_body():
+        return_string = f'{{"model": "{requested_model}"}}'
+        return return_string.encode()
+
+    request.body = return_body
+
+    if should_pass:
+        # Verify the key works with the aliased model
+        result = await user_api_key_auth(
+            request=request, api_key=f"Bearer {generated_key}"
+        )
+
+        assert result.models == [
+            "gpt-4o-team1"
+        ], "Expected model list to contain aliased model"
+        assert result.team_model_aliases == {
+            "gpt-4o": "gpt-4o-team1"
+        }, "Expected model aliases to be present"
+    else:
+        # Verify the key fails with non-aliased models
+        with pytest.raises(Exception) as exc_info:
+            await user_api_key_auth(request=request, api_key=f"Bearer {generated_key}")
+        assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied

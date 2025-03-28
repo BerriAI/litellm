@@ -21,7 +21,7 @@ test('view internal user page', async ({ page }) => {
   // Optionally, you can click the login button to submit the form
   await loginButton.click();
 
-  const tabElement = page.locator('p.text-tremor-default.text-tremor-content.dark\\:text-dark-tremor-content', { hasText: 'Internal User' });
+  const tabElement = page.locator('span.ant-menu-title-content', { hasText: 'Internal User' });
   await tabElement.click();
 
   // try to click on button 
@@ -38,9 +38,9 @@ test('view internal user page', async ({ page }) => {
   expect(hasNonZeroKeys).toBe(true);
 
   // test pagination
-  const prevButton = page.locator('button.bg-blue-500.hover\\:bg-blue-700.text-white.font-bold.py-2.px-4.rounded-l.focus\\:outline-none', { hasText: 'Prev' });
+  const prevButton = page.locator('button.px-3.py-1.text-sm.border.rounded-md.hover\\:bg-gray-50.disabled\\:opacity-50.disabled\\:cursor-not-allowed', { hasText: 'Previous' });
   await expect(prevButton).toBeDisabled();
 
-  const nextButton = page.locator('button.bg-blue-500.hover\\:bg-blue-700.text-white.font-bold.py-2.px-4.rounded-r.focus\\:outline-none', { hasText: 'Next' });
+  const nextButton = page.locator('button.px-3.py-1.text-sm.border.rounded-md.hover\\:bg-gray-50.disabled\\:opacity-50.disabled\\:cursor-not-allowed', { hasText: 'Next' });
   await expect(nextButton).toBeEnabled();
 });
