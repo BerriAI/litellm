@@ -23,7 +23,10 @@ from litellm.proxy._types import (
     SpendLogsPayload,
 )
 from litellm.proxy.db.pod_leader_manager import PodLockManager
-from litellm.proxy.db.redis_update_buffer import RedisUpdateBuffer
+from litellm.proxy.db.redis_update_buffer import (
+    DBSpendUpdateTransactions,
+    RedisUpdateBuffer,
+)
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -406,17 +409,31 @@ class DBSpendUpdateWriter:
             )
 
             if await self.pod_leader_manager.acquire_lock():
-                await DBSpendUpdateWriter._commit_spend_updates_to_db(
-                    prisma_client=prisma_client,
-                    n_retry_times=n_retry_times,
-                    proxy_logging_obj=proxy_logging_obj,
+                db_spend_update_transactions = (
+                    await self.redis_update_buffer.get_all_update_transactions_from_redis()
                 )
+                if db_spend_update_transactions is not None:
+                    await DBSpendUpdateWriter._commit_spend_updates_to_db(
+                        prisma_client=prisma_client,
+                        n_retry_times=n_retry_times,
+                        proxy_logging_obj=proxy_logging_obj,
+                        db_spend_update_transactions=db_spend_update_transactions,
+                    )
                 await self.pod_leader_manager.release_lock()
         else:
+            db_spend_update_transactions = DBSpendUpdateTransactions(
+                user_list_transactons=prisma_client.user_list_transactons,
+                end_user_list_transactons=prisma_client.end_user_list_transactons,
+                key_list_transactons=prisma_client.key_list_transactons,
+                team_list_transactons=prisma_client.team_list_transactons,
+                team_member_list_transactons=prisma_client.team_member_list_transactons,
+                org_list_transactons=prisma_client.org_list_transactons,
+            )
             await DBSpendUpdateWriter._commit_spend_updates_to_db(
                 prisma_client=prisma_client,
                 n_retry_times=n_retry_times,
                 proxy_logging_obj=proxy_logging_obj,
+                db_spend_update_transactions=db_spend_update_transactions,
             )
 
     @staticmethod
@@ -424,6 +441,7 @@ class DBSpendUpdateWriter:
         prisma_client: PrismaClient,
         n_retry_times: int,
         proxy_logging_obj: ProxyLogging,
+        db_spend_update_transactions: DBSpendUpdateTransactions,
     ):
         """
         Commits all the spend `UPDATE` transactions to the Database
@@ -435,7 +453,8 @@ class DBSpendUpdateWriter:
         )
 
         ### UPDATE USER TABLE ###
-        if len(prisma_client.user_list_transactons.keys()) > 0:
+        user_list_transactons = db_spend_update_transactions["user_list_transactons"]
+        if len(user_list_transactons.keys()) > 0:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
@@ -446,7 +465,7 @@ class DBSpendUpdateWriter:
                             for (
                                 user_id,
                                 response_cost,
-                            ) in prisma_client.user_list_transactons.items():
+                            ) in user_list_transactons.items():
                                 batcher.litellm_usertable.update_many(
                                     where={"user_id": user_id},
                                     data={"spend": {"increment": response_cost}},
@@ -477,19 +496,21 @@ class DBSpendUpdateWriter:
                 len(prisma_client.end_user_list_transactons.keys())
             )
         )
-        if len(prisma_client.end_user_list_transactons.keys()) > 0:
+        end_user_list_transactons = db_spend_update_transactions[
+            "end_user_list_transactons"
+        ]
+        if len(end_user_list_transactons.keys()) > 0:
             await ProxyUpdateSpend.update_end_user_spend(
                 n_retry_times=n_retry_times,
                 prisma_client=prisma_client,
                 proxy_logging_obj=proxy_logging_obj,
             )
         ### UPDATE KEY TABLE ###
+        key_list_transactons = db_spend_update_transactions["key_list_transactons"]
         verbose_proxy_logger.debug(
-            "KEY Spend transactions: {}".format(
-                len(prisma_client.key_list_transactons.keys())
-            )
+            "KEY Spend transactions: {}".format(len(key_list_transactons.keys()))
         )
-        if len(prisma_client.key_list_transactons.keys()) > 0:
+        if len(key_list_transactons.keys()) > 0:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
@@ -500,7 +521,7 @@ class DBSpendUpdateWriter:
                             for (
                                 token,
                                 response_cost,
-                            ) in prisma_client.key_list_transactons.items():
+                            ) in key_list_transactons.items():
                                 batcher.litellm_verificationtoken.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"token": token},
                                     data={"spend": {"increment": response_cost}},
@@ -531,7 +552,8 @@ class DBSpendUpdateWriter:
                 len(prisma_client.team_list_transactons.keys())
             )
         )
-        if len(prisma_client.team_list_transactons.keys()) > 0:
+        team_list_transactons = db_spend_update_transactions["team_list_transactons"]
+        if len(team_list_transactons.keys()) > 0:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
@@ -542,7 +564,7 @@ class DBSpendUpdateWriter:
                             for (
                                 team_id,
                                 response_cost,
-                            ) in prisma_client.team_list_transactons.items():
+                            ) in team_list_transactons.items():
                                 verbose_proxy_logger.debug(
                                     "Updating spend for team id={} by {}".format(
                                         team_id, response_cost
@@ -573,7 +595,10 @@ class DBSpendUpdateWriter:
                     )
 
         ### UPDATE TEAM Membership TABLE with spend ###
-        if len(prisma_client.team_member_list_transactons.keys()) > 0:
+        team_member_list_transactons = db_spend_update_transactions[
+            "team_member_list_transactons"
+        ]
+        if len(team_member_list_transactons.keys()) > 0:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
@@ -584,7 +609,7 @@ class DBSpendUpdateWriter:
                             for (
                                 key,
                                 response_cost,
-                            ) in prisma_client.team_member_list_transactons.items():
+                            ) in team_member_list_transactons.items():
                                 # key is "team_id::<value>::user_id::<value>"
                                 team_id = key.split("::")[1]
                                 user_id = key.split("::")[3]
@@ -614,7 +639,8 @@ class DBSpendUpdateWriter:
                     )
 
         ### UPDATE ORG TABLE ###
-        if len(prisma_client.org_list_transactons.keys()) > 0:
+        org_list_transactons = db_spend_update_transactions["org_list_transactons"]
+        if len(org_list_transactons.keys()) > 0:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
@@ -625,7 +651,7 @@ class DBSpendUpdateWriter:
                             for (
                                 org_id,
                                 response_cost,
-                            ) in prisma_client.org_list_transactons.items():
+                            ) in org_list_transactons.items():
                                 batcher.litellm_organizationtable.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"organization_id": org_id},
                                     data={"spend": {"increment": response_cost}},
