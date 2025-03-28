@@ -25,47 +25,57 @@ class PodLockManager:
 
     async def acquire_lock(self) -> bool:
         """
-        Attempt to acquire the lock for a specific cron job.
+        Attempt to acquire the lock for a specific cron job using database locking.
         """
         from litellm.proxy.proxy_server import prisma_client
 
-        verbose_proxy_logger.debug("acquiring lock for cronjob_id=%s", self.cronjob_id)
+        verbose_proxy_logger.debug(
+            "Pod %s acquiring lock for cronjob_id=%s", self.pod_id, self.cronjob_id
+        )
         if not prisma_client:
             verbose_proxy_logger.debug("prisma is None, returning False")
             return False
+
         try:
             current_time = datetime.now(timezone.utc)
-            # Lease expiry time
             ttl_expiry = current_time + timedelta(
                 seconds=DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
             )
 
-            # Attempt to acquire the lock by upserting the record in the `cronjob_locks` table
-            cronjob_lock = await prisma_client.db.litellm_cronjob.upsert(
+            # Use Prisma's findUnique with FOR UPDATE lock to prevent race conditions
+            lock_record = await prisma_client.db.litellm_cronjob.find_unique(
                 where={"cronjob_id": self.cronjob_id},
-                data={
-                    "create": {
-                        "cronjob_id": self.cronjob_id,
+            )
+
+            if lock_record:
+                # If record exists, only update if it's inactive or expired
+                if lock_record.status == "ACTIVE" and lock_record.ttl > current_time:
+                    return lock_record.pod_id == self.pod_id
+
+                # Update existing record
+                updated_lock = await prisma_client.db.litellm_cronjob.update(
+                    where={"cronjob_id": self.cronjob_id},
+                    data={
                         "pod_id": self.pod_id,
                         "status": "ACTIVE",
                         "last_updated": current_time,
                         "ttl": ttl_expiry,
                     },
-                    "update": {
+                )
+            else:
+                # Create new record if none exists
+                updated_lock = await prisma_client.db.litellm_cronjob.create(
+                    data={
+                        "cronjob_id": self.cronjob_id,
+                        "pod_id": self.pod_id,
                         "status": "ACTIVE",
                         "last_updated": current_time,
                         "ttl": ttl_expiry,
-                    },
-                },
-            )
-            verbose_proxy_logger.debug("cronjob_lock=%s", cronjob_lock)
-
-            if cronjob_lock.status == "ACTIVE" and cronjob_lock.pod_id == self.pod_id:
-                verbose_proxy_logger.debug(
-                    f"Pod {self.pod_id} has acquired the lock for {self.cronjob_id}."
+                    }
                 )
-                return True  # Lock successfully acquired
-            return False
+
+            return updated_lock.pod_id == self.pod_id
+
         except Exception as e:
             verbose_proxy_logger.error(
                 f"Error acquiring the lock for {self.cronjob_id}: {e}"
@@ -112,7 +122,7 @@ class PodLockManager:
             return False
         try:
             verbose_proxy_logger.debug(
-                "releasing lock for cronjob_id=%s", self.cronjob_id
+                "Pod %s releasing lock for cronjob_id=%s", self.pod_id, self.cronjob_id
             )
             await prisma_client.db.litellm_cronjob.update(
                 where={"cronjob_id": self.cronjob_id, "pod_id": self.pod_id},
