@@ -5,6 +5,7 @@ import httpx
 
 import litellm
 from litellm import supports_response_schema, supports_system_messages, verbose_logger
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.vertex_ai import PartType
 
@@ -228,7 +229,11 @@ def unpack_defs(schema, defs):
                 continue
 
 
-def convert_anyof_null_to_nullable(schema):
+def convert_anyof_null_to_nullable(schema, depth=0):
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(
+            f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
+        )
     """ Converts null objects within anyOf by removing them and adding nullable to all remaining objects """
     anyof = schema.get("anyOf", None)
     if anyof is not None:
@@ -256,11 +261,11 @@ def convert_anyof_null_to_nullable(schema):
     properties = schema.get("properties", None)
     if properties is not None:
         for name, value in properties.items():
-            convert_anyof_null_to_nullable(value)
+            convert_anyof_null_to_nullable(value, depth=depth + 1)
 
     items = schema.get("items", None)
     if items is not None:
-        convert_anyof_null_to_nullable(items)
+        convert_anyof_null_to_nullable(items, depth=depth + 1)
 
 
 def add_object_type(schema):
