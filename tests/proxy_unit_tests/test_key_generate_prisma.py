@@ -3883,7 +3883,7 @@ async def test_get_paginated_teams(prisma_client):
 
 
 @pytest.mark.asyncio
-@pytest.mark.flaky(reruns=3)
+@pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.parametrize("entity_type", ["key", "user", "team"])
 async def test_reset_budget_job(prisma_client, entity_type):
     """
