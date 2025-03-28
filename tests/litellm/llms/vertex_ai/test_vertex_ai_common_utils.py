@@ -153,3 +153,71 @@ async def test_get_supports_system_message():
         model="random-model-name", custom_llm_provider="vertex_ai"
     )
     assert result == False
+def test_basic_anyof_conversion():
+    """Test basic conversion of anyOf with 'null'."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "example": {
+                "anyOf": [
+                    {"type": "string"},
+                    {"type": "null"}
+                ]
+            }
+        }
+    }
+
+    convert_anyof_null_to_nullable(schema)
+
+    expected = {
+        "type": "object",
+        "properties": {
+            "example": {
+                "anyOf": [
+                    {"type": "string", "nullable": True}
+                ]
+            }
+        }
+    }
+    assert schema == expected
+
+
+def test_nested_anyof_conversion():
+    """Test nested conversion with 'anyOf' inside properties."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "outer": {
+                "type": "object",
+                "properties": {
+                    "inner": {
+                        "anyOf": [
+                            {"type": "array", "items": {"type": "string"}},
+                            {"type": "string"},
+                            {"type": "null"}
+                        ]
+                    }
+                }
+            }
+        }
+    }
+
+    convert_anyof_null_to_nullable(schema)
+
+    expected = {
+        "type": "object",
+        "properties": {
+            "outer": {
+                "type": "object",
+                "properties": {
+                    "inner": {
+                        "anyOf": [
+                            {"type": "array", "items": {"type": "string"}, "nullable": True},
+                            {"type": "string", "nullable": True}
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    assert schema == expected
