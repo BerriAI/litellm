@@ -2,7 +2,7 @@
 This file contains common utils for anthropic calls.
 """
 
-from typing import Optional, Union
+from typing import List, Optional, Union
 
 import httpx
 
@@ -41,7 +41,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     def get_models(
         self, api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> list[str]:
+    ) -> List[str]:
         api_base = AnthropicModelInfo.get_api_base(api_base)
         api_key = AnthropicModelInfo.get_api_key(api_key)
         if api_base is None or api_key is None:
