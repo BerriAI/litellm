@@ -16,7 +16,7 @@ import traceback
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, List, Optional, Union, cast
+from typing import Any, Dict, List, Optional, TypedDict, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -1263,10 +1263,22 @@ class SpendMetrics(BaseModel):
     api_requests: int = Field(default=0)
 
 
+class BreakdownMetrics(BaseModel):
+    """Breakdown of spend by different dimensions"""
+
+    models: Dict[str, SpendMetrics] = Field(default_factory=dict)  # model -> metrics
+    providers: Dict[str, SpendMetrics] = Field(
+        default_factory=dict
+    )  # provider -> metrics
+    api_keys: Dict[str, SpendMetrics] = Field(
+        default_factory=dict
+    )  # api_key -> metrics
+
+
 class DailySpendData(BaseModel):
     date: date
     metrics: SpendMetrics
-    breakdown: Dict[str, float] = Field(default_factory=dict)
+    breakdown: BreakdownMetrics = Field(default_factory=BreakdownMetrics)
 
 
 class DailySpendMetadata(BaseModel):
@@ -1282,6 +1294,66 @@ class DailySpendMetadata(BaseModel):
 class SpendAnalyticsPaginatedResponse(BaseModel):
     results: List[DailySpendData]
     metadata: DailySpendMetadata = Field(default_factory=DailySpendMetadata)
+
+
+class LiteLLM_DailyUserSpend(BaseModel):
+    id: str
+    user_id: str
+    date: str
+    api_key: str
+    model: str
+    model_group: Optional[str] = None
+    custom_llm_provider: Optional[str] = None
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    spend: float = 0.0
+    api_requests: int = 0
+
+
+class GroupedData(TypedDict):
+    metrics: SpendMetrics
+    breakdown: BreakdownMetrics
+
+
+def update_metrics(
+    group_metrics: SpendMetrics, record: LiteLLM_DailyUserSpend
+) -> SpendMetrics:
+    group_metrics.spend += record.spend
+    group_metrics.prompt_tokens += record.prompt_tokens
+    group_metrics.completion_tokens += record.completion_tokens
+    group_metrics.total_tokens += record.prompt_tokens + record.completion_tokens
+    group_metrics.api_requests += record.api_requests
+    return group_metrics
+
+
+def update_breakdown_metrics(
+    breakdown: BreakdownMetrics, record: LiteLLM_DailyUserSpend
+) -> BreakdownMetrics:
+    """Updates breakdown metrics for a single record using the existing update_metrics function"""
+
+    # Update model breakdown
+    if record.model not in breakdown.models:
+        breakdown.models[record.model] = SpendMetrics()
+    breakdown.models[record.model] = update_metrics(
+        breakdown.models[record.model], record
+    )
+
+    # Update provider breakdown
+    provider = record.custom_llm_provider or "unknown"
+    if provider not in breakdown.providers:
+        breakdown.providers[provider] = SpendMetrics()
+    breakdown.providers[provider] = update_metrics(
+        breakdown.providers[provider], record
+    )
+
+    # Update api key breakdown
+    if record.api_key not in breakdown.api_keys:
+        breakdown.api_keys[record.api_key] = SpendMetrics()
+    breakdown.api_keys[record.api_key] = update_metrics(
+        breakdown.api_keys[record.api_key], record
+    )
+
+    return breakdown
 
 
 @router.get(
@@ -1397,28 +1469,24 @@ async def get_user_daily_activity(
         total_metrics = SpendMetrics()
 
         # Group data by date and other dimensions
-        grouped_data = {}
+
+        grouped_data: Dict[str, Dict[str, Any]] = {}
         for record in daily_spend_data:
             date_str = record.date
             if date_str not in grouped_data:
                 grouped_data[date_str] = {
                     "metrics": SpendMetrics(),
-                    "breakdown": {
-                        dim.value: {}
-                        for dim in group_by
-                        if dim != GroupByDimension.DATE
-                    },
+                    "breakdown": BreakdownMetrics(),
                 }
 
             # Update metrics
-            group_metrics = grouped_data[date_str]["metrics"]
-            group_metrics.spend += record.spend
-            group_metrics.prompt_tokens += record.prompt_tokens
-            group_metrics.completion_tokens += record.completion_tokens
-            group_metrics.total_tokens += (
-                record.prompt_tokens + record.completion_tokens
+            grouped_data[date_str]["metrics"] = update_metrics(
+                grouped_data[date_str]["metrics"], record
             )
-            group_metrics.api_requests += 1
+            # Update breakdowns
+            grouped_data[date_str]["breakdown"] = update_breakdown_metrics(
+                grouped_data[date_str]["breakdown"], record
+            )
 
             # Update total metrics
             total_metrics.spend += record.spend
@@ -1428,18 +1496,6 @@ async def get_user_daily_activity(
                 record.prompt_tokens + record.completion_tokens
             )
             total_metrics.api_requests += 1
-
-            # Update breakdowns
-            for dim in group_by:
-                if dim != GroupByDimension.DATE:
-                    dim_value = getattr(record, dim.value, None)
-                    if dim_value:
-                        if (
-                            dim_value
-                            not in grouped_data[date_str]["breakdown"][dim.value]
-                        ):
-                            grouped_data[date_str]["breakdown"][dim.value] = 0
-                        grouped_data[date_str]["breakdown"][dim.value] += record.spend
 
         # Convert grouped data to response format
         for date_str, data in grouped_data.items():
