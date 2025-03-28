@@ -326,6 +326,7 @@ model LiteLLM_DailyUserSpend {
   prompt_tokens       Int      @default(0)
   completion_tokens   Int      @default(0)
   spend               Float    @default(0.0)
+  api_requests        Int      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
