@@ -14,6 +14,15 @@ from unittest.mock import MagicMock, patch
 import litellm
 
 
+@pytest.fixture(autouse=True)
+def add_api_keys_to_env(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-1234567890")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-api03-1234567890")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "my-fake-aws-access-key-id")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "my-fake-aws-secret-access-key")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+
+
 @pytest.fixture
 def openai_api_response():
     mock_response_data = {
@@ -130,7 +139,8 @@ def test_completion_missing_role(openai_api_response):
 )
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_url_with_format_param(model, sync_mode):
+async def test_url_with_format_param(model, sync_mode, monkeypatch):
+
     from litellm import acompletion, completion
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
