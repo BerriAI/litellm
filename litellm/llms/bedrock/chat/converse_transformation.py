@@ -211,6 +211,9 @@ class AmazonConverseConfig(BaseConfig):
         messages: Optional[List[AllMessageValues]] = None,
     ) -> dict:
         is_thinking_enabled = self.is_thinking_enabled(non_default_params)
+        self.update_optional_params_with_thinking_tokens(
+            non_default_params=non_default_params, optional_params=optional_params
+        )
         for param, value in non_default_params.items():
             if param == "response_format" and isinstance(value, dict):
 
@@ -288,9 +291,7 @@ class AmazonConverseConfig(BaseConfig):
                     optional_params["tool_choice"] = _tool_choice_value
             if param == "thinking":
                 optional_params["thinking"] = value
-        self.update_optional_params_with_thinking_tokens(
-            optional_params=optional_params
-        )
+
         return optional_params
 
     @overload

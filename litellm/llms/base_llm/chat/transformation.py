@@ -106,13 +106,19 @@ class BaseConfig(ABC):
     def is_thinking_enabled(self, non_default_params: dict) -> bool:
         return non_default_params.get("thinking", {}).get("type", None) == "enabled"
 
-    def update_optional_params_with_thinking_tokens(self, optional_params: dict):
+    def update_optional_params_with_thinking_tokens(
+        self, non_default_params: dict, optional_params: dict
+    ):
         """
         Handles scenario where max tokens is not specified. For anthropic models (anthropic api/bedrock/vertex ai), this requires having the max tokens being set and being greater than the thinking token budget.
+
+        Checks 'non_default_params' for 'thinking' and 'max_tokens'
+
+        if 'thinking' is enabled and 'max_tokens' is not specified, set 'max_tokens' to the thinking token budget + DEFAULT_MAX_TOKENS
         """
-        is_thinking_enabled = self.is_thinking_enabled(optional_params)
-        if is_thinking_enabled and "max_tokens" not in optional_params:
-            thinking_token_budget = cast(dict, optional_params["thinking"]).get(
+        is_thinking_enabled = self.is_thinking_enabled(non_default_params)
+        if is_thinking_enabled and "max_tokens" not in non_default_params:
+            thinking_token_budget = cast(dict, non_default_params["thinking"]).get(
                 "budget_tokens", None
             )
             if thinking_token_budget is not None:
