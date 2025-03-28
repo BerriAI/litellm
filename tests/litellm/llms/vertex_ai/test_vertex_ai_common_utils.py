@@ -1,6 +1,7 @@
 import os
 import sys
 from unittest.mock import MagicMock, call, patch
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
 import pytest
 
@@ -111,6 +112,30 @@ def test_nested_anyof_conversion():
         }
     }
     assert schema == expected
+
+def test_anyof_with_excessive_nesting():
+    """Test conversion with excessive nesting > max levels +1 deep."""
+    # generate a schema with excessive nesting
+    schema = {"type": "object", "properties": {}}
+    current = schema
+    for _ in range(DEFAULT_MAX_RECURSE_DEPTH + 1):
+        current["properties"] = {
+            "nested": {
+                "anyOf": [
+                    {"type": "string"},
+                    {"type": "null"}
+                ],
+                "properties": {}
+            }
+        }
+        current = current["properties"]["nested"]
+       
+
+    # running the conversion will raise an error
+    with pytest.raises(ValueError, match=f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."):
+        convert_anyof_null_to_nullable(schema)
+
+    
 
 @pytest.mark.asyncio
 async def test_get_supports_system_message():
