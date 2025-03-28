@@ -41,7 +41,9 @@ def pod_lock_manager():
 
 @pytest.mark.asyncio
 async def test_acquire_lock_success(pod_lock_manager, mock_prisma):
-    # Mock successful lock acquisition
+    """
+    Test that the lock is acquired successfully if the DB response is successful
+    """
     mock_response = AsyncMock()
     mock_response.status = "ACTIVE"
     mock_response.pod_id = pod_lock_manager.pod_id
@@ -75,7 +77,9 @@ async def test_acquire_lock_failure(pod_lock_manager, mock_prisma):
 
 @pytest.mark.asyncio
 async def test_renew_lock(pod_lock_manager, mock_prisma):
-    # Mock successful lock renewal
+    """
+    Test that the renew lock calls the DB update method with the correct parameters
+    """
     mock_prisma.db.litellm_cronjob.update.return_value = AsyncMock()
 
     await pod_lock_manager.renew_lock()
@@ -91,7 +95,11 @@ async def test_renew_lock(pod_lock_manager, mock_prisma):
 
 @pytest.mark.asyncio
 async def test_release_lock(pod_lock_manager, mock_prisma):
-    # Mock successful lock release
+    """
+    Test that the release lock calls the DB update method with the correct parameters
+
+    specifically, the status should be set to INACTIVE
+    """
     mock_prisma.db.litellm_cronjob.update.return_value = AsyncMock()
 
     await pod_lock_manager.release_lock()
