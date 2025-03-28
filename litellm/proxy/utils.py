@@ -2675,7 +2675,7 @@ async def update_spend(  # noqa: PLR0915
     spend_logs: list,
     """
     n_retry_times = 3
-    await DBSpendUpdateWriter.commit_update_transactions_to_db(
+    await DBSpendUpdateWriter._commit_spend_updates_to_db(
         prisma_client=prisma_client,
         n_retry_times=n_retry_times,
         proxy_logging_obj=proxy_logging_obj,
