@@ -12,8 +12,10 @@ import {
   Grid, Col, TabGroup, TabList, Tab, 
   TabPanel, TabPanels, DonutChart,
   Table, TableHead, TableRow, 
-  TableHeaderCell, TableBody, TableCell
+  TableHeaderCell, TableBody, TableCell,
+  Subtitle
 } from "@tremor/react";
+import { AreaChart } from "@tremor/react";
 
 import { userDailyActivityCall } from "./networking";
 import ViewUserSpend from "./view_user_spend";
@@ -168,171 +170,299 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
   return (
     <div style={{ width: "100%" }} className="p-8">
-        <Text>Experimental Usage page, using new `/user/daily/activity` endpoint.</Text>
-      <Grid numItems={2} className="gap-2 h-[100vh] w-full">
-        {/* Total Spend Card */}
-        <Col numColSpan={2}>
-          <Text className="text-tremor-default text-tremor-content dark:text-dark-tremor-content mb-2 mt-2 text-lg">
-            Project Spend {new Date().toLocaleString('default', { month: 'long' })} 1 - {new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()}
-          </Text>
-          <ViewUserSpend
-            userID={userID}
-            userRole={userRole}
-            accessToken={accessToken}
-            userSpend={totalSpend}
-            selectedTeam={null}
-            userMaxBudget={null}
-          />
-        </Col>
-
-        {/* Daily Spend Chart */}
-        <Col numColSpan={2}>
-          <Card>
-            <Title>Daily Spend</Title>
-            <BarChart
-              data={userSpendData.results}
-              index="date"
-              categories={["metrics.spend"]}
-              colors={["cyan"]}
-              valueFormatter={(value) => `$${value.toFixed(2)}`}
-              yAxisWidth={100}
-              showLegend={false}
-              customTooltip={({ payload, active }) => {
-                if (!active || !payload?.[0]) return null;
-                const data = payload[0].payload;
-                return (
-                  <div className="bg-white p-4 shadow-lg rounded-lg border">
-                    <p className="font-bold">{data.date}</p>
-                    <p className="text-cyan-500">Spend: ${data.metrics.spend.toFixed(2)}</p>
-                    <p className="text-gray-600">Requests: {data.metrics.api_requests}</p>
-                    <p className="text-gray-600">Tokens: {data.metrics.total_tokens}</p>
-                  </div>
-                );
-              }}
-            />
-          </Card>
-        </Col>
-
-        {/* Top API Keys */}
-        <Col numColSpan={1}>
-          <Card className="h-full">
-            <Title>Top API Keys</Title>
-            <TopKeyView
-              topKeys={getTopKeys()}
-              accessToken={accessToken}
-              userID={userID}
-              userRole={userRole}
-              teams={null}
-            />
-          </Card>
-        </Col>
-
-        {/* Top Models */}
-        <Col numColSpan={1}>
-          <Card className="h-full">
-            <Title>Top Models</Title>
-            <BarChart
-              className="mt-4 h-40"
-              data={getTopModels()}
-              index="key"
-              categories={["spend"]}
-              colors={["cyan"]}
-              valueFormatter={(value) => `$${value.toFixed(2)}`}
-              layout="vertical"
-              yAxisWidth={200}
-              showLegend={false}
-              customTooltip={({ payload, active }) => {
-                if (!active || !payload?.[0]) return null;
-                const data = payload[0].payload;
-                return (
-                  <div className="bg-white p-4 shadow-lg rounded-lg border">
-                    <p className="font-bold">{data.key}</p>
-                    <p className="text-cyan-500">Spend: ${data.spend.toFixed(2)}</p>
-                    <p className="text-gray-600">Requests: {data.requests.toLocaleString()}</p>
-                    <p className="text-gray-600">Tokens: {data.tokens.toLocaleString()}</p>
-                  </div>
-                );
-              }}
-            />
-          </Card>
-        </Col>
-
-        {/* Spend by Provider */}
-        <Col numColSpan={2}>
-          <Card className="h-full">
-            <Title>Spend by Provider</Title>
-            <Grid numItems={2}>
-              <Col numColSpan={1}>
-                <DonutChart
-                  className="mt-4 h-40"
-                  data={getProviderSpend()}
-                  index="provider"
-                  category="spend"
-                  valueFormatter={(value) => `$${value.toFixed(2)}`}
-                  colors={["cyan"]}
+      <Text>Experimental Usage page, using new `/user/daily/activity` endpoint.</Text>
+      <TabGroup>
+        <TabList variant="solid" className="mt-1">
+          <Tab>Cost</Tab>
+          <Tab>Activity</Tab>
+        </TabList>
+        <TabPanels>
+          {/* Cost Panel */}
+          <TabPanel>
+            <Grid numItems={2} className="gap-2 h-[100vh] w-full">
+              {/* Total Spend Card */}
+              <Col numColSpan={2}>
+                <Text className="text-tremor-default text-tremor-content dark:text-dark-tremor-content mb-2 mt-2 text-lg">
+                  Project Spend {new Date().toLocaleString('default', { month: 'long' })} 1 - {new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()}
+                </Text>
+                <ViewUserSpend
+                  userID={userID}
+                  userRole={userRole}
+                  accessToken={accessToken}
+                  userSpend={totalSpend}
+                  selectedTeam={null}
+                  userMaxBudget={null}
                 />
               </Col>
+
+              {/* Daily Spend Chart */}
+              <Col numColSpan={2}>
+                <Card>
+                  <Title>Daily Spend</Title>
+                  <BarChart
+                    data={userSpendData.results}
+                    index="date"
+                    categories={["metrics.spend"]}
+                    colors={["cyan"]}
+                    valueFormatter={(value) => `$${value.toFixed(2)}`}
+                    yAxisWidth={100}
+                    showLegend={false}
+                    customTooltip={({ payload, active }) => {
+                      if (!active || !payload?.[0]) return null;
+                      const data = payload[0].payload;
+                      return (
+                        <div className="bg-white p-4 shadow-lg rounded-lg border">
+                          <p className="font-bold">{data.date}</p>
+                          <p className="text-cyan-500">Spend: ${data.metrics.spend.toFixed(2)}</p>
+                          <p className="text-gray-600">Requests: {data.metrics.api_requests}</p>
+                          <p className="text-gray-600">Tokens: {data.metrics.total_tokens}</p>
+                        </div>
+                      );
+                    }}
+                  />
+                </Card>
+              </Col>
+
+              {/* Top API Keys */}
               <Col numColSpan={1}>
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableHeaderCell>Provider</TableHeaderCell>
-                      <TableHeaderCell>Spend</TableHeaderCell>
-                      <TableHeaderCell>Requests</TableHeaderCell>
-                      <TableHeaderCell>Tokens</TableHeaderCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {getProviderSpend().map((provider) => (
-                      <TableRow key={provider.provider}>
-                        <TableCell>{provider.provider}</TableCell>
-                        <TableCell>
-                          ${provider.spend < 0.00001 
-                            ? "less than 0.00" 
-                            : provider.spend.toFixed(2)}
-                        </TableCell>
-                        <TableCell>{provider.requests.toLocaleString()}</TableCell>
-                        <TableCell>{provider.tokens.toLocaleString()}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                <Card className="h-full">
+                  <Title>Top API Keys</Title>
+                  <TopKeyView
+                    topKeys={getTopKeys()}
+                    accessToken={accessToken}
+                    userID={userID}
+                    userRole={userRole}
+                    teams={null}
+                  />
+                </Card>
+              </Col>
+
+              {/* Top Models */}
+              <Col numColSpan={1}>
+                <Card className="h-full">
+                  <Title>Top Models</Title>
+                  <BarChart
+                    className="mt-4 h-40"
+                    data={getTopModels()}
+                    index="key"
+                    categories={["spend"]}
+                    colors={["cyan"]}
+                    valueFormatter={(value) => `$${value.toFixed(2)}`}
+                    layout="vertical"
+                    yAxisWidth={200}
+                    showLegend={false}
+                    customTooltip={({ payload, active }) => {
+                      if (!active || !payload?.[0]) return null;
+                      const data = payload[0].payload;
+                      return (
+                        <div className="bg-white p-4 shadow-lg rounded-lg border">
+                          <p className="font-bold">{data.key}</p>
+                          <p className="text-cyan-500">Spend: ${data.spend.toFixed(2)}</p>
+                          <p className="text-gray-600">Requests: {data.requests.toLocaleString()}</p>
+                          <p className="text-gray-600">Tokens: {data.tokens.toLocaleString()}</p>
+                        </div>
+                      );
+                    }}
+                  />
+                </Card>
+              </Col>
+
+              {/* Spend by Provider */}
+              <Col numColSpan={2}>
+                <Card className="h-full">
+                  <Title>Spend by Provider</Title>
+                  <Grid numItems={2}>
+                    <Col numColSpan={1}>
+                      <DonutChart
+                        className="mt-4 h-40"
+                        data={getProviderSpend()}
+                        index="provider"
+                        category="spend"
+                        valueFormatter={(value) => `$${value.toFixed(2)}`}
+                        colors={["cyan"]}
+                      />
+                    </Col>
+                    <Col numColSpan={1}>
+                      <Table>
+                        <TableHead>
+                          <TableRow>
+                            <TableHeaderCell>Provider</TableHeaderCell>
+                            <TableHeaderCell>Spend</TableHeaderCell>
+                            <TableHeaderCell>Requests</TableHeaderCell>
+                            <TableHeaderCell>Tokens</TableHeaderCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {getProviderSpend().map((provider) => (
+                            <TableRow key={provider.provider}>
+                              <TableCell>{provider.provider}</TableCell>
+                              <TableCell>
+                                ${provider.spend < 0.00001 
+                                  ? "less than 0.00" 
+                                  : provider.spend.toFixed(2)}
+                              </TableCell>
+                              <TableCell>{provider.requests.toLocaleString()}</TableCell>
+                              <TableCell>{provider.tokens.toLocaleString()}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </Col>
+                  </Grid>
+                </Card>
+              </Col>
+
+              {/* Usage Metrics */}
+              <Col numColSpan={2}>
+                <Card>
+                  <Title>Usage Metrics</Title>
+                  <Grid numItems={3} className="gap-4 mt-4">
+                    <Card>
+                      <Title>Total Requests</Title>
+                      <Text className="text-2xl font-bold mt-2">
+                        {userSpendData.metadata?.total_api_requests?.toLocaleString() || 0}
+                      </Text>
+                    </Card>
+                    <Card>
+                      <Title>Total Tokens</Title>
+                      <Text className="text-2xl font-bold mt-2">
+                        {userSpendData.metadata?.total_tokens?.toLocaleString() || 0}
+                      </Text>
+                    </Card>
+                    <Card>
+                      <Title>Average Cost per Request</Title>
+                      <Text className="text-2xl font-bold mt-2">
+                        ${((totalSpend || 0) / (userSpendData.metadata?.total_api_requests || 1)).toFixed(4)}
+                      </Text>
+                    </Card>
+                  </Grid>
+                </Card>
               </Col>
             </Grid>
-          </Card>
-        </Col>
+          </TabPanel>
 
-        {/* Usage Metrics */}
-        <Col numColSpan={2}>
-          <Card>
-            <Title>Usage Metrics</Title>
-            <Grid numItems={3} className="gap-4 mt-4">
+          {/* Activity Panel */}
+          <TabPanel>
+            <Grid numItems={1} className="gap-2 h-[75vh] w-full">
               <Card>
-                <Title>Total Requests</Title>
-                <Text className="text-2xl font-bold mt-2">
-                  {userSpendData.metadata?.total_api_requests?.toLocaleString() || 0}
-                </Text>
+                <Title>All Up</Title>
+                <Grid numItems={2}>
+                  <Col>
+                    <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>
+                      API Requests {valueFormatterNumbers(userSpendData.metadata?.total_api_requests || 0)}
+                    </Subtitle>
+                    <AreaChart
+                      className="h-40"
+                      data={userSpendData.results}
+                      valueFormatter={valueFormatterNumbers}
+                      index="date"
+                      colors={['cyan']}
+                      categories={['metrics.api_requests']}
+                    />
+                  </Col>
+                  <Col>
+                    <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>
+                      Tokens {valueFormatterNumbers(userSpendData.metadata?.total_tokens || 0)}
+                    </Subtitle>
+                    <BarChart
+                      className="h-40"
+                      data={userSpendData.results}
+                      valueFormatter={valueFormatterNumbers}
+                      index="date"
+                      colors={['cyan']}
+                      categories={['metrics.total_tokens']}
+                    />
+                  </Col>
+                </Grid>
               </Card>
-              <Card>
-                <Title>Total Tokens</Title>
-                <Text className="text-2xl font-bold mt-2">
-                  {userSpendData.metadata?.total_tokens?.toLocaleString() || 0}
-                </Text>
-              </Card>
-              <Card>
-                <Title>Average Cost per Request</Title>
-                <Text className="text-2xl font-bold mt-2">
-                  ${((totalSpend || 0) / (userSpendData.metadata?.total_api_requests || 1)).toFixed(4)}
-                </Text>
-              </Card>
+
+              {/* Per Model Activity */}
+              {Object.entries(getModelActivityData(userSpendData)).map(([model, data], index) => (
+                <Card key={index}>
+                  <Title>{model}</Title>
+                  <Grid numItems={2}>
+                    <Col>
+                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>
+                        API Requests {valueFormatterNumbers(data.total_requests)}
+                      </Subtitle>
+                      <AreaChart
+                        className="h-40"
+                        data={data.daily_data}
+                        index="date"
+                        colors={['cyan']}
+                        categories={['api_requests']}
+                        valueFormatter={valueFormatterNumbers}
+                      />
+                    </Col>
+                    <Col>
+                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>
+                        Tokens {valueFormatterNumbers(data.total_tokens)}
+                      </Subtitle>
+                      <BarChart
+                        className="h-40"
+                        data={data.daily_data}
+                        index="date"
+                        colors={['cyan']}
+                        categories={['total_tokens']}
+                        valueFormatter={valueFormatterNumbers}
+                      />
+                    </Col>
+                  </Grid>
+                </Card>
+              ))}
             </Grid>
-          </Card>
-        </Col>
-
-        
-      </Grid>
+          </TabPanel>
+        </TabPanels>
+      </TabGroup>
     </div>
   );
 };
+
+// Add this helper function to process model-specific activity data
+const getModelActivityData = (userSpendData: any) => {
+  const modelData: {
+    [key: string]: {
+      total_requests: number;
+      total_tokens: number;
+      daily_data: Array<{
+        date: string;
+        api_requests: number;
+        total_tokens: number;
+      }>;
+    };
+  } = {};
+
+  userSpendData.results.forEach(day => {
+    Object.entries(day.breakdown.models || {}).forEach(([model, metrics]) => {
+      if (!modelData[model]) {
+        modelData[model] = {
+          total_requests: 0,
+          total_tokens: 0,
+          daily_data: []
+        };
+      }
+      
+      modelData[model].total_requests += metrics.api_requests;
+      modelData[model].total_tokens += metrics.total_tokens;
+      modelData[model].daily_data.push({
+        date: day.date,
+        api_requests: metrics.api_requests,
+        total_tokens: metrics.total_tokens
+      });
+    });
+  });
+
+  return modelData;
+};
+
+// Add this helper function for number formatting
+function valueFormatterNumbers(number: number) {
+  const formatter = new Intl.NumberFormat('en-US', {
+    maximumFractionDigits: 0,
+    notation: 'compact',
+    compactDisplay: 'short',
+  });
+  return formatter.format(number);
+}
 
 export default NewUsagePage;
