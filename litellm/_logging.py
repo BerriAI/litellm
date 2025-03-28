@@ -41,7 +41,7 @@ class JsonFormatter(Formatter):
         return json.dumps(json_record)
 
 
-# Function to set up exception handlers for JSON logging
+# # Function to set up exception handlers for JSON logging
 def _setup_json_exception_handlers(formatter):
     # Setup excepthook for uncaught exceptions
     def json_excepthook(exc_type, exc_value, exc_traceback):
@@ -52,9 +52,8 @@ def _setup_json_exception_handlers(formatter):
             lineno=0,
             msg=str(exc_value),
             args=(),
-            exc_info=(exc_type, exc_value, exc_traceback)
+            exc_info=(exc_type, exc_value, exc_traceback),
         )
-        print(formatter.format(record))
 
     sys.excepthook = json_excepthook
 
@@ -72,9 +71,8 @@ def _setup_json_exception_handlers(formatter):
                     lineno=0,
                     msg=str(exception),
                     args=(),
-                    exc_info=None
+                    exc_info=None,
                 )
-                print(formatter.format(record))
             else:
                 loop.default_exception_handler(context)
 
@@ -109,26 +107,24 @@ def _turn_on_json():
     handler = logging.StreamHandler()
     handler.setFormatter(JsonFormatter())
 
-    root_logger = logging.getLogger()
-    for h in root_logger.handlers[:]:
-        root_logger.removeHandler(h)
-    root_logger.addHandler(handler)
-    root_logger.setLevel(numeric_level)
-
-    # Define a list of the loggers to update
-    loggers = [verbose_router_logger, verbose_proxy_logger, verbose_logger]
+    # Define all loggers to update, including root logger
+    loggers = [logging.getLogger()] + [
+        verbose_router_logger,
+        verbose_proxy_logger,
+        verbose_logger,
+    ]
 
     # Iterate through each logger and update its handlers
     for logger in loggers:
         # Remove all existing handlers
         for h in logger.handlers[:]:
             logger.removeHandler(h)
-
         # Add the new handler
         logger.addHandler(handler)
 
     # Set up exception handlers
     _setup_json_exception_handlers(JsonFormatter())
+
 
 def _turn_on_debug():
     verbose_logger.setLevel(level=logging.DEBUG)  # set package log to debug
