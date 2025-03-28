@@ -24,7 +24,7 @@ class AnthropicError(BaseLLMException):
 
 class AnthropicModelInfo(BaseLLMModelInfo):
     @staticmethod
-    def get_api_base(api_base: str | None = None) -> str | None:
+    def get_api_base(api_base: Optional[str] = None) -> str | None:
         return (
             api_base
             or get_secret_str("ANTHROPIC_API_BASE")
