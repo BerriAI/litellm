@@ -41,8 +41,12 @@ class JsonFormatter(Formatter):
         return json.dumps(json_record)
 
 
-# # Function to set up exception handlers for JSON logging
+# Function to set up exception handlers for JSON logging
 def _setup_json_exception_handlers(formatter):
+    # Create a handler with JSON formatting for exceptions
+    error_handler = logging.StreamHandler()
+    error_handler.setFormatter(formatter)
+
     # Setup excepthook for uncaught exceptions
     def json_excepthook(exc_type, exc_value, exc_traceback):
         record = logging.LogRecord(
@@ -54,6 +58,7 @@ def _setup_json_exception_handlers(formatter):
             args=(),
             exc_info=(exc_type, exc_value, exc_traceback),
         )
+        error_handler.handle(record)
 
     sys.excepthook = json_excepthook
 
@@ -73,6 +78,7 @@ def _setup_json_exception_handlers(formatter):
                     args=(),
                     exc_info=None,
                 )
+                error_handler.handle(record)
             else:
                 loop.default_exception_handler(context)
 
