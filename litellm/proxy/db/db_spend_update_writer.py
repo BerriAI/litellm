@@ -201,7 +201,7 @@ class DBSpendUpdateWriter:
             await DBSpendUpdateWriter._update_transaction_list(
                 response_cost=response_cost,
                 entity_id=hashed_token,
-                transaction_list=prisma_client.key_list_transactons,
+                transaction_list=prisma_client.key_list_transactions,
                 entity_type=Litellm_EntityType.KEY,
                 debug_msg=f"adding spend to key db. Response cost: {response_cost}. Token: {hashed_token}.",
             )
@@ -241,7 +241,7 @@ class DBSpendUpdateWriter:
                         await DBSpendUpdateWriter._update_transaction_list(
                             response_cost=response_cost,
                             entity_id=_id,
-                            transaction_list=prisma_client.user_list_transactons,
+                            transaction_list=prisma_client.user_list_transactions,
                             entity_type=Litellm_EntityType.USER,
                         )
 
@@ -249,7 +249,7 @@ class DBSpendUpdateWriter:
                     await DBSpendUpdateWriter._update_transaction_list(
                         response_cost=response_cost,
                         entity_id=end_user_id,
-                        transaction_list=prisma_client.end_user_list_transactons,
+                        transaction_list=prisma_client.end_user_list_transactions,
                         entity_type=Litellm_EntityType.END_USER,
                     )
         except Exception as e:
@@ -275,7 +275,7 @@ class DBSpendUpdateWriter:
             await DBSpendUpdateWriter._update_transaction_list(
                 response_cost=response_cost,
                 entity_id=team_id,
-                transaction_list=prisma_client.team_list_transactons,
+                transaction_list=prisma_client.team_list_transactions,
                 entity_type=Litellm_EntityType.TEAM,
             )
 
@@ -287,7 +287,7 @@ class DBSpendUpdateWriter:
                     await DBSpendUpdateWriter._update_transaction_list(
                         response_cost=response_cost,
                         entity_id=team_member_key,
-                        transaction_list=prisma_client.team_member_list_transactons,
+                        transaction_list=prisma_client.team_member_list_transactions,
                         entity_type=Litellm_EntityType.TEAM_MEMBER,
                     )
             except Exception:
@@ -314,7 +314,7 @@ class DBSpendUpdateWriter:
             await DBSpendUpdateWriter._update_transaction_list(
                 response_cost=response_cost,
                 entity_id=org_id,
-                transaction_list=prisma_client.org_list_transactons,
+                transaction_list=prisma_client.org_list_transactions,
                 entity_type=Litellm_EntityType.ORGANIZATION,
             )
         except Exception as e:
@@ -424,12 +424,12 @@ class DBSpendUpdateWriter:
                 await self.pod_leader_manager.release_lock()
         else:
             db_spend_update_transactions = DBSpendUpdateTransactions(
-                user_list_transactons=prisma_client.user_list_transactons,
-                end_user_list_transactons=prisma_client.end_user_list_transactons,
-                key_list_transactons=prisma_client.key_list_transactons,
-                team_list_transactons=prisma_client.team_list_transactons,
-                team_member_list_transactons=prisma_client.team_member_list_transactons,
-                org_list_transactons=prisma_client.org_list_transactons,
+                user_list_transactions=prisma_client.user_list_transactions,
+                end_user_list_transactions=prisma_client.end_user_list_transactions,
+                key_list_transactions=prisma_client.key_list_transactions,
+                team_list_transactions=prisma_client.team_list_transactions,
+                team_member_list_transactions=prisma_client.team_member_list_transactions,
+                org_list_transactions=prisma_client.org_list_transactions,
             )
             await DBSpendUpdateWriter._commit_spend_updates_to_db(
                 prisma_client=prisma_client,
@@ -455,8 +455,8 @@ class DBSpendUpdateWriter:
         )
 
         ### UPDATE USER TABLE ###
-        user_list_transactons = db_spend_update_transactions["user_list_transactons"]
-        if len(user_list_transactons.keys()) > 0:
+        user_list_transactions = db_spend_update_transactions["user_list_transactions"]
+        if len(user_list_transactions.keys()) > 0:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
@@ -467,12 +467,12 @@ class DBSpendUpdateWriter:
                             for (
                                 user_id,
                                 response_cost,
-                            ) in user_list_transactons.items():
+                            ) in user_list_transactions.items():
                                 batcher.litellm_usertable.update_many(
                                     where={"user_id": user_id},
                                     data={"spend": {"increment": response_cost}},
                                 )
-                    prisma_client.user_list_transactons = (
+                    prisma_client.user_list_transactions = (
                         {}
                     )  # Clear the remaining transactions after processing all batches in the loop.
                     break
@@ -495,24 +495,24 @@ class DBSpendUpdateWriter:
         ### UPDATE END-USER TABLE ###
         verbose_proxy_logger.debug(
             "End-User Spend transactions: {}".format(
-                len(prisma_client.end_user_list_transactons.keys())
+                len(prisma_client.end_user_list_transactions.keys())
             )
         )
-        end_user_list_transactons = db_spend_update_transactions[
-            "end_user_list_transactons"
+        end_user_list_transactions = db_spend_update_transactions[
+            "end_user_list_transactions"
         ]
-        if len(end_user_list_transactons.keys()) > 0:
+        if len(end_user_list_transactions.keys()) > 0:
             await ProxyUpdateSpend.update_end_user_spend(
                 n_retry_times=n_retry_times,
                 prisma_client=prisma_client,
                 proxy_logging_obj=proxy_logging_obj,
             )
         ### UPDATE KEY TABLE ###
-        key_list_transactons = db_spend_update_transactions["key_list_transactons"]
+        key_list_transactions = db_spend_update_transactions["key_list_transactions"]
         verbose_proxy_logger.debug(
-            "KEY Spend transactions: {}".format(len(key_list_transactons.keys()))
+            "KEY Spend transactions: {}".format(len(key_list_transactions.keys()))
         )
-        if len(key_list_transactons.keys()) > 0:
+        if len(key_list_transactions.keys()) > 0:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
@@ -523,12 +523,12 @@ class DBSpendUpdateWriter:
                             for (
                                 token,
                                 response_cost,
-                            ) in key_list_transactons.items():
+                            ) in key_list_transactions.items():
                                 batcher.litellm_verificationtoken.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"token": token},
                                     data={"spend": {"increment": response_cost}},
                                 )
-                    prisma_client.key_list_transactons = (
+                    prisma_client.key_list_transactions = (
                         {}
                     )  # Clear the remaining transactions after processing all batches in the loop.
                     break
@@ -551,11 +551,11 @@ class DBSpendUpdateWriter:
         ### UPDATE TEAM TABLE ###
         verbose_proxy_logger.debug(
             "Team Spend transactions: {}".format(
-                len(prisma_client.team_list_transactons.keys())
+                len(prisma_client.team_list_transactions.keys())
             )
         )
-        team_list_transactons = db_spend_update_transactions["team_list_transactons"]
-        if len(team_list_transactons.keys()) > 0:
+        team_list_transactions = db_spend_update_transactions["team_list_transactions"]
+        if len(team_list_transactions.keys()) > 0:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
@@ -566,7 +566,7 @@ class DBSpendUpdateWriter:
                             for (
                                 team_id,
                                 response_cost,
-                            ) in team_list_transactons.items():
+                            ) in team_list_transactions.items():
                                 verbose_proxy_logger.debug(
                                     "Updating spend for team id={} by {}".format(
                                         team_id, response_cost
@@ -576,7 +576,7 @@ class DBSpendUpdateWriter:
                                     where={"team_id": team_id},
                                     data={"spend": {"increment": response_cost}},
                                 )
-                    prisma_client.team_list_transactons = (
+                    prisma_client.team_list_transactions = (
                         {}
                     )  # Clear the remaining transactions after processing all batches in the loop.
                     break
@@ -597,10 +597,10 @@ class DBSpendUpdateWriter:
                     )
 
         ### UPDATE TEAM Membership TABLE with spend ###
-        team_member_list_transactons = db_spend_update_transactions[
-            "team_member_list_transactons"
+        team_member_list_transactions = db_spend_update_transactions[
+            "team_member_list_transactions"
         ]
-        if len(team_member_list_transactons.keys()) > 0:
+        if len(team_member_list_transactions.keys()) > 0:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
@@ -611,7 +611,7 @@ class DBSpendUpdateWriter:
                             for (
                                 key,
                                 response_cost,
-                            ) in team_member_list_transactons.items():
+                            ) in team_member_list_transactions.items():
                                 # key is "team_id::<value>::user_id::<value>"
                                 team_id = key.split("::")[1]
                                 user_id = key.split("::")[3]
@@ -620,7 +620,7 @@ class DBSpendUpdateWriter:
                                     where={"team_id": team_id, "user_id": user_id},
                                     data={"spend": {"increment": response_cost}},
                                 )
-                    prisma_client.team_member_list_transactons = (
+                    prisma_client.team_member_list_transactions = (
                         {}
                     )  # Clear the remaining transactions after processing all batches in the loop.
                     break
@@ -641,8 +641,8 @@ class DBSpendUpdateWriter:
                     )
 
         ### UPDATE ORG TABLE ###
-        org_list_transactons = db_spend_update_transactions["org_list_transactons"]
-        if len(org_list_transactons.keys()) > 0:
+        org_list_transactions = db_spend_update_transactions["org_list_transactions"]
+        if len(org_list_transactions.keys()) > 0:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
@@ -653,12 +653,12 @@ class DBSpendUpdateWriter:
                             for (
                                 org_id,
                                 response_cost,
-                            ) in org_list_transactons.items():
+                            ) in org_list_transactions.items():
                                 batcher.litellm_organizationtable.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"organization_id": org_id},
                                     data={"spend": {"increment": response_cost}},
                                 )
-                    prisma_client.org_list_transactons = (
+                    prisma_client.org_list_transactions = (
                         {}
                     )  # Clear the remaining transactions after processing all batches in the loop.
                     break

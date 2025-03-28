@@ -1101,12 +1101,12 @@ def jsonify_object(data: dict) -> dict:
 
 
 class PrismaClient:
-    user_list_transactons: dict = {}
-    end_user_list_transactons: dict = {}
-    key_list_transactons: dict = {}
-    team_list_transactons: dict = {}
-    team_member_list_transactons: dict = {}  # key is ["team_id" + "user_id"]
-    org_list_transactons: dict = {}
+    user_list_transactions: dict = {}
+    end_user_list_transactions: dict = {}
+    key_list_transactions: dict = {}
+    team_list_transactions: dict = {}
+    team_member_list_transactions: dict = {}  # key is ["team_id" + "user_id"]
+    org_list_transactions: dict = {}
     spend_log_transactions: List = []
     daily_user_spend_transactions: Dict[str, DailyUserSpendTransaction] = {}
 
@@ -2433,7 +2433,7 @@ class ProxyUpdateSpend:
                         for (
                             end_user_id,
                             response_cost,
-                        ) in prisma_client.end_user_list_transactons.items():
+                        ) in prisma_client.end_user_list_transactions.items():
                             if litellm.max_end_user_budget is not None:
                                 pass
                             batcher.litellm_endusertable.upsert(
@@ -2461,7 +2461,7 @@ class ProxyUpdateSpend:
                     e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                 )
             finally:
-                prisma_client.end_user_list_transactons = (
+                prisma_client.end_user_list_transactions = (
                     {}
                 )  # reset the end user list transactions - prevent bad data from causing issues
 
