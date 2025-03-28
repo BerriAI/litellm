@@ -1,12 +1,14 @@
 #### SPEND MANAGEMENT #####
 import collections
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from enum import Enum
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -2855,3 +2857,228 @@ async def ui_get_spend_by_tags(
         )
 
     return {"spend_per_tag": ui_tags}
+
+
+class GroupByDimension(str, Enum):
+    DATE = "date"
+    MODEL = "model"
+    API_KEY = "api_key"
+    TEAM = "team"
+    ORGANIZATION = "organization"
+    MODEL_GROUP = "model_group"
+    PROVIDER = "custom_llm_provider"
+
+
+class SpendMetrics(BaseModel):
+    spend: float = Field(default=0.0)
+    prompt_tokens: int = Field(default=0)
+    completion_tokens: int = Field(default=0)
+    total_tokens: int = Field(default=0)
+    api_requests: int = Field(default=0)
+
+
+class DailySpendData(BaseModel):
+    date: date
+    metrics: SpendMetrics
+    breakdown: Dict[str, float] = Field(default_factory=dict)
+
+
+class DailySpendMetadata(BaseModel):
+    total_spend: float = Field(default=0.0)
+    total_prompt_tokens: int = Field(default=0)
+    total_completion_tokens: int = Field(default=0)
+    total_api_requests: int = Field(default=0)
+    page: int = Field(default=1)
+    total_pages: int = Field(default=1)
+    has_more: bool = Field(default=False)
+
+
+class SpendAnalyticsPaginatedResponse(BaseModel):
+    results: List[DailySpendData]
+    metadata: DailySpendMetadata = Field(default_factory=DailySpendMetadata)
+
+
+@router.get(
+    "/spend/daily/user/analytics",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=SpendAnalyticsPaginatedResponse,
+)
+async def get_user_daily_spend_analytics(
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Start date in YYYY-MM-DD format",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="End date in YYYY-MM-DD format",
+    ),
+    group_by: List[GroupByDimension] = fastapi.Query(
+        default=[GroupByDimension.DATE],
+        description="Dimensions to group by. Can combine multiple (e.g. date,team)",
+    ),
+    view_by: Literal["team", "organization", "user"] = fastapi.Query(
+        default="user",
+        description="View spend at team/org/user level",
+    ),
+    team_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by specific team",
+    ),
+    org_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by specific organization",
+    ),
+    model: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by specific model",
+    ),
+    api_key: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by specific API key",
+    ),
+    page: int = fastapi.Query(
+        default=1, description="Page number for pagination", ge=1
+    ),
+    page_size: int = fastapi.Query(
+        default=50, description="Items per page", ge=1, le=100
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> SpendAnalyticsPaginatedResponse:
+    """
+    [BETA] This is a beta endpoint. It will change.
+
+    Meant to optimize querying spend data for analytics for a user.
+    Get detailed spend analytics with hierarchical viewing (org -> team -> user)
+    and flexible grouping options.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if start_date is None or end_date is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "Please provide start_date and end_date"},
+        )
+
+    try:
+        # Build filter conditions
+        where_conditions: Dict[str, Any] = {
+            "date": {
+                "gte": start_date,
+                "lte": end_date,
+            }
+        }
+
+        if team_id:
+            where_conditions["team_id"] = team_id
+        if org_id:
+            where_conditions["organization_id"] = org_id
+        if model:
+            where_conditions["model"] = model
+        if api_key:
+            where_conditions["api_key"] = api_key
+
+        # Get total count for pagination
+        total_count = await prisma_client.db.litellm_dailyuserspend.count(
+            where=where_conditions
+        )
+
+        # Fetch paginated results
+        daily_spend_data = await prisma_client.db.litellm_dailyuserspend.find_many(
+            where=where_conditions,
+            order=[
+                {"date": "desc"},
+            ],
+            skip=(page - 1) * page_size,
+            take=page_size,
+        )
+
+        # Process results
+        results = []
+        total_metrics = SpendMetrics()
+
+        # Group data by date and other dimensions
+        grouped_data = {}
+        for record in daily_spend_data:
+            date_str = record.date
+            if date_str not in grouped_data:
+                grouped_data[date_str] = {
+                    "metrics": SpendMetrics(),
+                    "breakdown": {
+                        dim.value: {}
+                        for dim in group_by
+                        if dim != GroupByDimension.DATE
+                    },
+                }
+
+            # Update metrics
+            group_metrics = grouped_data[date_str]["metrics"]
+            group_metrics.spend += record.spend
+            group_metrics.prompt_tokens += record.prompt_tokens
+            group_metrics.completion_tokens += record.completion_tokens
+            group_metrics.total_tokens += (
+                record.prompt_tokens + record.completion_tokens
+            )
+            group_metrics.api_requests += 1
+
+            # Update total metrics
+            total_metrics.spend += record.spend
+            total_metrics.prompt_tokens += record.prompt_tokens
+            total_metrics.completion_tokens += record.completion_tokens
+            total_metrics.total_tokens += (
+                record.prompt_tokens + record.completion_tokens
+            )
+            total_metrics.api_requests += 1
+
+            # Update breakdowns
+            for dim in group_by:
+                if dim != GroupByDimension.DATE:
+                    dim_value = getattr(record, dim.value, None)
+                    if dim_value:
+                        if (
+                            dim_value
+                            not in grouped_data[date_str]["breakdown"][dim.value]
+                        ):
+                            grouped_data[date_str]["breakdown"][dim.value] = 0
+                        grouped_data[date_str]["breakdown"][dim.value] += record.spend
+
+        # Convert grouped data to response format
+        for date_str, data in grouped_data.items():
+            results.append(
+                DailySpendData(
+                    date=datetime.strptime(date_str, "%Y-%m-%d").date(),
+                    metrics=data["metrics"],
+                    breakdown=data["breakdown"],
+                )
+            )
+
+        # Sort results by date
+        results.sort(key=lambda x: x.date, reverse=True)
+
+        return SpendAnalyticsPaginatedResponse(
+            results=results,
+            metadata=DailySpendMetadata(
+                total_spend=total_metrics.spend,
+                total_prompt_tokens=total_metrics.prompt_tokens,
+                total_completion_tokens=total_metrics.completion_tokens,
+                total_api_requests=total_metrics.api_requests,
+                page=page,
+                total_pages=-(-total_count // page_size),  # Ceiling division
+                has_more=(page * page_size) < total_count,
+            ),
+        )
+
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "/spend/daily/analytics: Exception occured - {}".format(str(e))
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": f"Failed to fetch analytics: {str(e)}"},
+        )
