@@ -67,12 +67,10 @@ class AmazonConverseConfig(BaseConfig):
         return "bedrock_converse"
 
     @classmethod
-    def get_inference_params(cls) -> dict:
+    def get_config_blocks(cls) -> dict:
         return {
-            "topK": 10,
-            "topP": 0.95,
-            "temperature": 0.7,
-            "maxTokens": 1000,
+            "guardrailConfig": GuardrailConfigBlock,
+            "performanceConfig": PerformanceConfigBlock,
         }
 
     @classmethod
@@ -420,10 +418,7 @@ class AmazonConverseConfig(BaseConfig):
             AmazonConverseConfig.__annotations__.keys()
         ) + ["top_k"]
         supported_tool_call_params = ["tools", "tool_choice"]
-        supported_config_params = [
-            "guardrailConfig",
-            "performanceConfig",
-        ]  # Add all config params here
+        supported_config_params = list(self.get_config_blocks().keys())
         total_supported_params = (
             supported_converse_params
             + supported_tool_call_params
@@ -466,20 +461,8 @@ class AmazonConverseConfig(BaseConfig):
             ),
         }
 
-        # Guardrail Config
-        # guardrail_config: Optional[GuardrailConfigBlock] = None
-        # request_guardrails_config = inference_params.pop("guardrailConfig", None)
-        # if request_guardrails_config is not None:
-        #     guardrail_config = GuardrailConfigBlock(**request_guardrails_config)
-        #     data["guardrailConfig"] = guardrail_config
-
         # Handle all config blocks
-        config_blocks = {
-            "guardrailConfig": GuardrailConfigBlock,
-            "performanceConfig": PerformanceConfigBlock,
-        }
-
-        for config_name, config_class in config_blocks.items():
+        for config_name, config_class in self.get_config_blocks().items():
             config_value = inference_params.pop(config_name, None)
             if config_value is not None:
                 data[config_name] = config_class(**config_value)  # type: ignore
