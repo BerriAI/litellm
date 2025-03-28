@@ -22,6 +22,7 @@ import {
 } from "antd";
 
 import {
+  userDailyActivityCall,
   userSpendLogsCall,
   keyInfoCall,
   adminSpendLogsCall,
@@ -148,6 +149,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
 }) => {
   const currentDate = new Date();
   const [keySpendData, setKeySpendData] = useState<any[]>([]);
+  const [userSpendData, setUserSpendData] = useState<any[]>([]);
   const [topKeys, setTopKeys] = useState<any[]>([]);
   const [topModels, setTopModels] = useState<any[]>([]);
   const [topUsers, setTopUsers] = useState<any[]>([]);
@@ -195,6 +197,14 @@ const UsagePage: React.FC<UsagePageProps> = ({
     return formatter.format(number);
   }
 
+
+  const fetchUserSpendData = async () => {
+    if (!accessToken) return;
+    let startTime = new Date(Date.now() - 28 * 24 * 60 * 60 * 1000);
+    let endTime = new Date(Date.now());
+    const userSpendData = await userDailyActivityCall(accessToken, startTime, endTime);
+    setUserSpendData(userSpendData);
+  };
 
   const fetchProxySettings = async () => {
     if (accessToken) {
@@ -558,7 +568,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
         console.log("fetching data - valiue of proxySettings", proxySettings);
 
-
+        fetchUserSpendData();
         fetchOverallSpend();
         fetchProviderSpend();
         fetchTopKeys();
@@ -645,14 +655,26 @@ const UsagePage: React.FC<UsagePageProps> = ({
                 <Card>
                   <Title>Monthly Spend</Title>
                   <BarChart
-                    data={keySpendData}
+                    data={userSpendData.results || []}
                     index="date"
-                    categories={["spend"]}
+                    categories={["metrics.spend"]}
                     colors={["cyan"]}
-                    valueFormatter={valueFormatter}
+                    valueFormatter={(value) => `$${value.toFixed(2)}`}
                     yAxisWidth={100}
                     tickGap={5}
-                    // customTooltip={customTooltip}
+                    showLegend={false}
+                    customTooltip={({ payload, active }) => {
+                      if (!active || !payload?.[0]) return null;
+                      const data = payload[0].payload;
+                      return (
+                        <div className="bg-white p-4 shadow-lg rounded-lg border">
+                          <p className="font-bold">{data.date}</p>
+                          <p className="text-cyan-500">Spend: ${data.metrics.spend.toFixed(2)}</p>
+                          <p className="text-gray-600">Requests: {data.metrics.api_requests}</p>
+                          <p className="text-gray-600">Tokens: {data.metrics.total_tokens}</p>
+                        </div>
+                      );
+                    }}
                   />
                 </Card>
               </Col>
