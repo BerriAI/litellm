@@ -10,26 +10,24 @@ import os
 import time
 import traceback
 from datetime import datetime, timedelta
-from typing import Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import DualCache
+from litellm.caching import DualCache, RedisCache, RedisClusterCache
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
     Litellm_EntityType,
     LiteLLM_UserTable,
     SpendLogsPayload,
 )
-from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
-from litellm.proxy.utils import (
-    PrismaClient,
-    ProxyLogging,
-    ProxyUpdateSpend,
-    _raise_failed_update_spend_exception,
-    hash_token,
-)
-from litellm.secret_managers.main import str_to_bool
+from litellm.proxy.db.redis_update_buffer import RedisUpdateBuffer
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient, ProxyLogging
+else:
+    PrismaClient = Any
+    ProxyLogging = Any
 
 
 class DBSpendUpdateWriter:
@@ -39,6 +37,12 @@ class DBSpendUpdateWriter:
     1. Writing spend increments to either in memory list of transactions or to redis
     2. Reading increments from redis or in memory list of transactions and committing them to db
     """
+
+    def __init__(
+        self, redis_cache: Optional[Union[RedisCache, RedisClusterCache]] = None
+    ):
+        self.redis_cache = redis_cache
+        self.redis_update_buffer = RedisUpdateBuffer(redis_cache=redis_cache)
 
     @staticmethod
     async def update_database(
@@ -61,6 +65,7 @@ class DBSpendUpdateWriter:
             prisma_client,
             user_api_key_cache,
         )
+        from litellm.proxy.utils import ProxyUpdateSpend, hash_token
 
         try:
             verbose_proxy_logger.debug(
@@ -315,6 +320,10 @@ class DBSpendUpdateWriter:
         response_cost: Optional[float],
         prisma_client: Optional[PrismaClient],
     ):
+        from litellm.proxy.spend_tracking.spend_tracking_utils import (
+            get_logging_payload,
+        )
+
         try:
             if prisma_client:
                 payload = get_logging_payload(
@@ -360,8 +369,8 @@ class DBSpendUpdateWriter:
         )
         return prisma_client
 
-    @staticmethod
-    async def db_spend_transaction_handler(
+    async def db_update_spend_transaction_handler(
+        self,
         prisma_client: PrismaClient,
         n_retry_times: int,
         proxy_logging_obj: ProxyLogging,
@@ -383,8 +392,10 @@ class DBSpendUpdateWriter:
         else:
             - Regular flow of this method
         """
-        if DBSpendUpdateWriter._should_commit_spend_updates_to_redis():
-            pass
+        if RedisUpdateBuffer._should_commit_spend_updates_to_redis():
+            await self.redis_update_buffer.store_in_memory_spend_updates_in_redis(
+                prisma_client=prisma_client,
+            )
 
         if DBSpendUpdateWriter._should_commit_spend_updates_to_db():
             await DBSpendUpdateWriter._commit_spend_updates_to_db(
@@ -394,25 +405,6 @@ class DBSpendUpdateWriter:
             )
 
         pass
-
-    @staticmethod
-    def _should_commit_spend_updates_to_redis() -> bool:
-        """
-        Checks if the Pod should commit spend updates to Redis
-
-        This setting enables buffering database transactions in Redis
-        to improve reliability and reduce database contention
-        """
-        from litellm.proxy.proxy_server import general_settings
-
-        _use_redis_transaction_buffer: Optional[Union[bool, str]] = (
-            general_settings.get("use_redis_transaction_buffer", False)
-        )
-        if isinstance(_use_redis_transaction_buffer, str):
-            _use_redis_transaction_buffer = str_to_bool(_use_redis_transaction_buffer)
-        if _use_redis_transaction_buffer is None:
-            return False
-        return _use_redis_transaction_buffer
 
     @staticmethod
     async def _commit_spend_updates_to_redis(
@@ -439,8 +431,14 @@ class DBSpendUpdateWriter:
         proxy_logging_obj: ProxyLogging,
     ):
         """
-        Commits all the spend updates to the Database
+        Commits all the spend `UPDATE` transactions to the Database
+
         """
+        from litellm.proxy.utils import (
+            ProxyUpdateSpend,
+            _raise_failed_update_spend_exception,
+        )
+
         ### UPDATE USER TABLE ###
         if len(prisma_client.user_list_transactons.keys()) > 0:
             for i in range(n_retry_times + 1):
