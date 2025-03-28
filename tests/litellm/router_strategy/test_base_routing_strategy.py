@@ -19,7 +19,7 @@ from litellm.router_strategy.base_routing_strategy import BaseRoutingStrategy
 
 
 @pytest.fixture
-async def mock_dual_cache():
+def mock_dual_cache():
     dual_cache = MagicMock(spec=DualCache)
     dual_cache.in_memory_cache = MagicMock()
     dual_cache.redis_cache = MagicMock()
