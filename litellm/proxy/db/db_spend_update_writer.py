@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import DualCache, RedisCache, RedisClusterCache
+from litellm.caching import DualCache, RedisCache
 from litellm.constants import DB_SPEND_UPDATE_JOB_NAME
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
@@ -44,12 +44,13 @@ class DBSpendUpdateWriter:
     """
 
     def __init__(
-        self, redis_cache: Optional[Union[RedisCache, RedisClusterCache]] = None
+        self,
+        redis_cache: Optional[RedisCache] = None,
     ):
         from litellm.proxy.proxy_server import prisma_client
 
         self.redis_cache = redis_cache
-        self.redis_update_buffer = RedisUpdateBuffer(redis_cache=redis_cache)
+        self.redis_update_buffer = RedisUpdateBuffer(redis_cache=self.redis_cache)
         self.pod_leader_manager = PodLockManager(
             cronjob_id=DB_SPEND_UPDATE_JOB_NAME,
             prisma_client=prisma_client,
@@ -408,6 +409,7 @@ class DBSpendUpdateWriter:
                 prisma_client=prisma_client,
             )
 
+            # Only commit from redis to db if this pod is the leader
             if await self.pod_leader_manager.acquire_lock():
                 db_spend_update_transactions = (
                     await self.redis_update_buffer.get_all_update_transactions_from_redis()
