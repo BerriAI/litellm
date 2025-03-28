@@ -106,5 +106,30 @@ class RedisUpdateBuffer:
                 value=transaction_amount,
             )
 
-    async def get_all_update_transactions_from_redis(self):
-        pass
+    async def get_all_update_transactions_from_redis(
+        self,
+    ) -> Optional[DBSpendUpdateTransactions]:
+        """
+        Gets all the update transactions from Redis
+        """
+        if self.redis_cache is None:
+            return None
+        expected_keys = [
+            "user_list_transactons",
+            "end_user_list_transactons",
+            "key_list_transactons",
+            "team_list_transactons",
+            "team_member_list_transactons",
+            "org_list_transactons",
+        ]
+        result = await self.redis_cache.async_batch_get_cache(expected_keys)
+        if result is None:
+            return None
+        return DBSpendUpdateTransactions(
+            user_list_transactons=result.get("user_list_transactons", {}),
+            end_user_list_transactons=result.get("end_user_list_transactons", {}),
+            key_list_transactons=result.get("key_list_transactons", {}),
+            team_list_transactons=result.get("team_list_transactons", {}),
+            team_member_list_transactons=result.get("team_member_list_transactons", {}),
+            org_list_transactons=result.get("org_list_transactons", {}),
+        )
