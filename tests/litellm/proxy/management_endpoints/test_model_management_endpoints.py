@@ -23,8 +23,9 @@ from litellm.types.router import Deployment, LiteLLM_Params, updateDeployment
 
 
 class MockPrismaClient:
-    def __init__(self, team_exists: bool = True):
+    def __init__(self, team_exists: bool = True, user_admin: bool = True):
         self.team_exists = team_exists
+        self.user_admin = user_admin
         self.db = self
 
     async def find_unique(self, where):
@@ -32,7 +33,11 @@ class MockPrismaClient:
             return LiteLLM_TeamTable(
                 team_id=where["team_id"],
                 team_alias="test_team",
-                members_with_roles=[Member(user_id="test_user", role="admin")],
+                members_with_roles=[
+                    Member(
+                        user_id="test_user", role="admin" if self.user_admin else "user"
+                    )
+                ],
             )
         return None
 
@@ -164,7 +169,7 @@ class TestModelManagementAuthChecks:
             ),
             model_info={"team_id": "test_team"},
         )
-        prisma_client = MockPrismaClient()
+        prisma_client = MockPrismaClient(team_exists=True)
 
         result = await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=model_params,
@@ -184,7 +189,7 @@ class TestModelManagementAuthChecks:
             ),
             model_info={"team_id": "test_team"},
         )
-        prisma_client = MockPrismaClient()
+        prisma_client = MockPrismaClient(team_exists=True, user_admin=False)
 
         with pytest.raises(Exception) as exc_info:
             await ModelManagementAuthChecks.can_user_make_model_call(

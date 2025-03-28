@@ -3436,6 +3436,7 @@ async def model_list(
     else:
         proxy_model_list = llm_router.get_model_names()
         model_access_groups = llm_router.get_model_access_groups()
+
     key_models = get_key_models(
         user_api_key_dict=user_api_key_dict,
         proxy_model_list=proxy_model_list,
@@ -3445,6 +3446,7 @@ async def model_list(
     team_models: List[str] = user_api_key_dict.team_models
 
     if team_id:
+        key_models = []
         team_object = await get_team_object(
             team_id=team_id,
             prisma_client=prisma_client,
@@ -3461,7 +3463,7 @@ async def model_list(
     )
 
     all_models = get_complete_model_list(
-        key_models=key_models if not team_models else [],
+        key_models=key_models,
         team_models=team_models,
         proxy_model_list=proxy_model_list,
         user_model=user_model,
@@ -6894,6 +6896,14 @@ async def login(request: Request):  # noqa: PLR0915
         )
         user_email = getattr(_user_row, "user_email", "unknown")
         _password = getattr(_user_row, "password", "unknown")
+
+        if _password is None:
+            raise ProxyException(
+                message="User has no password set. Please set a password for the user via `/user/update`.",
+                type=ProxyErrorTypes.auth_error,
+                param="password",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
 
         # check if password == _user_row.password
         hash_password = hash_token(token=password)
