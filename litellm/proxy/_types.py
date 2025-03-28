@@ -2733,3 +2733,12 @@ class DailyUserSpendTransaction(TypedDict):
     prompt_tokens: int
     completion_tokens: int
     spend: float
+
+
+class DBSpendUpdateTransactions(TypedDict):
+    user_list_transactions: Optional[Dict[str, float]]
+    end_user_list_transactions: Optional[Dict[str, float]]
+    key_list_transactions: Optional[Dict[str, float]]
+    team_list_transactions: Optional[Dict[str, float]]
+    team_member_list_transactions: Optional[Dict[str, float]]
+    org_list_transactions: Optional[Dict[str, float]]

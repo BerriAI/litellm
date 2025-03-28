@@ -4,25 +4,17 @@ Handles buffering database `UPDATE` transactions in Redis before committing them
 This is to prevent deadlocks and improve reliability
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Optional, TypedDict, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
+from litellm.proxy._types import DBSpendUpdateTransactions
 from litellm.secret_managers.main import str_to_bool
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 else:
     PrismaClient = Any
-
-
-class DBSpendUpdateTransactions(TypedDict):
-    user_list_transactions: Optional[Dict[str, float]]
-    end_user_list_transactions: Optional[Dict[str, float]]
-    key_list_transactions: Optional[Dict[str, float]]
-    team_list_transactions: Optional[Dict[str, float]]
-    team_member_list_transactions: Optional[Dict[str, float]]
-    org_list_transactions: Optional[Dict[str, float]]
 
 
 class RedisUpdateBuffer:
