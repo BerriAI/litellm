@@ -14,7 +14,6 @@ from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSet
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import log_db_metrics
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
-from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.types.utils import (
     StandardLoggingPayload,
     StandardLoggingUserAPIKeyMetadata,
@@ -231,7 +230,7 @@ def _should_track_cost_callback(
     """
 
     # don't run track cost callback if user opted into disabling spend
-    if ProxyUpdateSpend.disable_spend_updates() is True:
+    if DBSpendUpdateWriter.disable_spend_updates() is True:
         return False
 
     if (

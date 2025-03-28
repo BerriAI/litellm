@@ -176,6 +176,7 @@ from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
+from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
@@ -265,7 +266,6 @@ from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
-    ProxyUpdateSpend,
     _cache_user_row,
     _get_docs_url,
     _get_projected_spend_over_limit,
@@ -274,7 +274,6 @@ from litellm.proxy.utils import (
     _is_valid_team_configs,
     get_error_message_str,
     hash_token,
-    update_spend,
 )
 from litellm.proxy.vertex_ai_endpoints.langfuse_endpoints import (
     router as langfuse_router,
@@ -3065,7 +3064,7 @@ class ProxyStartupEvent:
 
         ### UPDATE SPEND ###
         scheduler.add_job(
-            update_spend,
+            DBSpendUpdateWriter.update_spend,
             "interval",
             seconds=batch_writing_interval,
             args=[prisma_client, db_writer_client, proxy_logging_obj],

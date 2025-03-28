@@ -1502,7 +1502,7 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock
 import asyncio
 from datetime import timedelta
-from litellm.proxy.utils import ProxyUpdateSpend
+from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 
 
 @pytest.mark.asyncio
@@ -1514,7 +1514,7 @@ async def test_end_user_transactions_reset():
 
     # Call function - should raise error
     with pytest.raises(Exception):
-        await ProxyUpdateSpend.update_end_user_spend(
+        await DBSpendUpdateWriter.update_end_user_spend(
             n_retry_times=0, prisma_client=mock_client, proxy_logging_obj=MagicMock()
         )
 
@@ -1542,7 +1542,7 @@ async def test_spend_logs_cleanup_after_error():
 
     # Call function - should raise error
     with pytest.raises(Exception):
-        await ProxyUpdateSpend.update_spend_logs(
+        await DBSpendUpdateWriter.update_spend_logs(
             n_retry_times=0,
             prisma_client=mock_client,
             db_writer_client=None,  # Test DB write path
