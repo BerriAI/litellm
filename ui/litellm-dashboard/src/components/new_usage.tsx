@@ -400,7 +400,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                       </Subtitle>
                       <BarChart
                         className="h-40"
-                        data={[...data.daily_data].reverse()}
+                        data={data.daily_data}  
                         index="date"
                         colors={['cyan']}
                         categories={['total_tokens']}
@@ -419,7 +419,10 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 };
 
 // Add this helper function to process model-specific activity data
-const getModelActivityData = (userSpendData: any) => {
+const getModelActivityData = (userSpendData: {
+  results: DailyData[];
+  metadata: any;
+}) => {
   const modelData: {
     [key: string]: {
       total_requests: number;
@@ -432,7 +435,7 @@ const getModelActivityData = (userSpendData: any) => {
     };
   } = {};
 
-  userSpendData.results.forEach(day => {
+  userSpendData.results.forEach((day: DailyData) => {
     Object.entries(day.breakdown.models || {}).forEach(([model, metrics]) => {
       if (!modelData[model]) {
         modelData[model] = {
