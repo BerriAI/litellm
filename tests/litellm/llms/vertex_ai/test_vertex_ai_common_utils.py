@@ -12,6 +12,7 @@ import litellm
 from litellm.llms.vertex_ai.common_utils import (
     get_vertex_location_from_url,
     get_vertex_project_id_from_url,
+    convert_anyof_null_to_nullable
 )
 
 
@@ -42,6 +43,74 @@ async def test_get_vertex_location_from_url():
     location = get_vertex_location_from_url(url)
     assert location is None
 
+def test_basic_anyof_conversion():
+    """Test basic conversion of anyOf with 'null'."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "example": {
+                "anyOf": [
+                    {"type": "string"},
+                    {"type": "null"}
+                ]
+            }
+        }
+    }
+
+    convert_anyof_null_to_nullable(schema)
+
+    expected = {
+        "type": "object",
+        "properties": {
+            "example": {
+                "anyOf": [
+                    {"type": "string", "nullable": True}
+                ]
+            }
+        }
+    }
+    assert schema == expected
+
+
+def test_nested_anyof_conversion():
+    """Test nested conversion with 'anyOf' inside properties."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "outer": {
+                "type": "object",
+                "properties": {
+                    "inner": {
+                        "anyOf": [
+                            {"type": "array", "items": {"type": "string"}},
+                            {"type": "string"},
+                            {"type": "null"}
+                        ]
+                    }
+                }
+            }
+        }
+    }
+
+    convert_anyof_null_to_nullable(schema)
+
+    expected = {
+        "type": "object",
+        "properties": {
+            "outer": {
+                "type": "object",
+                "properties": {
+                    "inner": {
+                        "anyOf": [
+                            {"type": "array", "items": {"type": "string"}, "nullable": True},
+                            {"type": "string", "nullable": True}
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    assert schema == expected
 
 @pytest.mark.asyncio
 async def test_get_supports_system_message():
