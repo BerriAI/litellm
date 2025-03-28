@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import List, Optional
 
 import httpx
 
@@ -22,7 +22,7 @@ class XAIModelInfo(BaseLLMModelInfo):
 
     def get_models(
         self, api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> list[str]:
+    ) -> List[str]:
         api_base = self.get_api_base(api_base)
         api_key = self.get_api_key(api_key)
         if api_base is None or api_key is None:
