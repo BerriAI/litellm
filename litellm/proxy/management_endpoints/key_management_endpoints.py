@@ -25,7 +25,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds, max_duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
@@ -484,10 +484,10 @@ async def generate_key_fn(  # noqa: PLR0915
                                 )
                         # Compare durations
                         elif key in ["budget_duration", "duration"]:
-                            upperbound_duration = duration_in_seconds(
+                            upperbound_duration = max_duration_in_seconds(
                                 duration=upperbound_value
                             )
-                            user_duration = duration_in_seconds(duration=value)
+                            user_duration = max_duration_in_seconds(duration=value)
                             if user_duration > upperbound_duration:
                                 raise HTTPException(
                                     status_code=400,

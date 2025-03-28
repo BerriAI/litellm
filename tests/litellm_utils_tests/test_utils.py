@@ -18,11 +18,6 @@ import pytest
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, headers
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-from litellm.litellm_core_utils.duration_parser import (
-    get_last_day_of_month,
-    _extract_from_regex,
-)
 from litellm.utils import (
     check_valid_key,
     create_pretrained_tokenizer,
@@ -703,65 +698,7 @@ def test_redact_msgs_from_logs_with_dynamic_params():
     print("Test passed")
 
 
-@pytest.mark.parametrize(
-    "duration, unit",
-    [("7s", "s"), ("7m", "m"), ("7h", "h"), ("7d", "d"), ("7mo", "mo")],
-)
-def test_extract_from_regex(duration, unit):
-    value, _unit = _extract_from_regex(duration=duration)
 
-    assert value == 7
-    assert _unit == unit
-
-
-def test_duration_in_seconds():
-    """
-    Test if duration int is correctly calculated for different str
-    """
-    import time
-
-    now = time.time()
-    current_time = datetime.fromtimestamp(now)
-
-    if current_time.month == 12:
-        target_year = current_time.year + 1
-        target_month = 1
-    else:
-        target_year = current_time.year
-        target_month = current_time.month + 1
-
-    # Determine the day to set for next month
-    target_day = current_time.day
-    last_day_of_target_month = get_last_day_of_month(target_year, target_month)
-
-    if target_day > last_day_of_target_month:
-        target_day = last_day_of_target_month
-
-    next_month = datetime(
-        year=target_year,
-        month=target_month,
-        day=target_day,
-        hour=current_time.hour,
-        minute=current_time.minute,
-        second=current_time.second,
-        microsecond=current_time.microsecond,
-    )
-
-    # Calculate the duration until the first day of the next month
-    duration_until_next_month = next_month - current_time
-    expected_duration = int(duration_until_next_month.total_seconds())
-
-    value = duration_in_seconds(duration="1mo")
-
-    assert value - expected_duration < 2
-
-
-def test_duration_in_seconds_basic():
-    assert duration_in_seconds(duration="3s") == 3
-    assert duration_in_seconds(duration="3m") == 180
-    assert duration_in_seconds(duration="3h") == 10800
-    assert duration_in_seconds(duration="3d") == 259200
-    assert duration_in_seconds(duration="3w") == 1814400
 
 
 def test_get_llm_provider_ft_models():

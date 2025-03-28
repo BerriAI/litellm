@@ -89,3 +89,23 @@ def duration_in_seconds(duration: str) -> int:
 
     else:
         raise ValueError(f"Unsupported duration unit, passed duration: {duration}")
+
+def max_duration_in_seconds(duration: str) -> int:
+    """
+    Returns the maximum duration in seconds for a given duration string.
+    """
+    value, unit = _extract_from_regex(duration=duration)
+    if unit == "s":
+        return value
+    elif unit == "m":
+        return value * 60
+    elif unit == "h":
+        return value * 3600
+    elif unit == "d":
+        return value * 86400
+    elif unit == "w":
+        return value * 604800
+    elif unit == "mo":
+        return value * 2678400
+    else:
+        raise ValueError(f"Unsupported duration unit, passed duration: {duration}")
