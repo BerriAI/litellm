@@ -7,7 +7,6 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-import respx
 from fastapi.testclient import TestClient
 
 sys.path.insert(
