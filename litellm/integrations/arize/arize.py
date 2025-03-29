@@ -26,7 +26,6 @@ else:
 
 
 class ArizeLogger(OpenTelemetry):
-
     def set_attributes(self, span: Span, kwargs, response_obj: Optional[Any]):
         ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
         return

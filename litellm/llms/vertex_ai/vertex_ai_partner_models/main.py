@@ -110,7 +110,6 @@ class VertexAIPartnerModels(VertexBase):
                 message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
             )
         try:
-
             vertex_httpx_logic = VertexLLM()
 
             access_token, project_id = vertex_httpx_logic._ensure_access_token(

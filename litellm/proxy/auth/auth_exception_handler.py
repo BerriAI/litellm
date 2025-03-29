@@ -23,7 +23,6 @@ else:
 
 
 class UserAPIKeyAuthExceptionHandler:
-
     @staticmethod
     async def _handle_authentication_error(
         e: Exception,

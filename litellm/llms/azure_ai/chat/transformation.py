@@ -145,7 +145,6 @@ class AzureAIStudioConfig(OpenAIConfig):
             2. If message contains an image or audio, send as is (user-intended)
         """
         for message in messages:
-
             # Do nothing if the message contains an image or audio
             if _audio_or_image_in_message_content(message):
                 continue

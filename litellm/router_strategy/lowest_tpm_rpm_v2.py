@@ -69,7 +69,6 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         Raises - RateLimitError if deployment over defined RPM limit
         """
         try:
-
             # ------------
             # Setup values
             # ------------

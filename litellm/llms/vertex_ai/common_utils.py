@@ -243,7 +243,7 @@ def convert_anyof_null_to_nullable(schema, depth=0):
                 # remove null type
                 anyof.remove(atype)
                 contains_null = True
-        
+
         if len(anyof) == 0:
             # Edge case: response schema with only null type present is invalid in Vertex AI
             raise ValueError(
@@ -251,12 +251,10 @@ def convert_anyof_null_to_nullable(schema, depth=0):
                 "Please provide a non-null type."
             )
 
-            
         if contains_null:
             # set all types to nullable following guidance found here: https://cloud.google.com/vertex-ai/generative-ai/docs/samples/generativeaionvertexai-gemini-controlled-generation-response-schema-3#generativeaionvertexai_gemini_controlled_generation_response_schema_3-python
             for atype in anyof:
                 atype["nullable"] = True
-            
 
     properties = schema.get("properties", None)
     if properties is not None:

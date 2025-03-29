@@ -85,7 +85,6 @@ def _process_gemini_image(image_url: str, format: Optional[str] = None) -> PartT
             and (image_type := format or _get_image_mime_type_from_url(image_url))
             is not None
         ):
-
             file_data = FileDataType(file_uri=image_url, mime_type=image_type)
             return PartType(file_data=file_data)
         elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
@@ -414,18 +413,19 @@ async def async_transform_request_body(
     context_caching_endpoints = ContextCachingEndpoints()
 
     if gemini_api_key is not None:
-        messages, cached_content = (
-            await context_caching_endpoints.async_check_and_create_cache(
-                messages=messages,
-                api_key=gemini_api_key,
-                api_base=api_base,
-                model=model,
-                client=client,
-                timeout=timeout,
-                extra_headers=extra_headers,
-                cached_content=optional_params.pop("cached_content", None),
-                logging_obj=logging_obj,
-            )
+        (
+            messages,
+            cached_content,
+        ) = await context_caching_endpoints.async_check_and_create_cache(
+            messages=messages,
+            api_key=gemini_api_key,
+            api_base=api_base,
+            model=model,
+            client=client,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            cached_content=optional_params.pop("cached_content", None),
+            logging_obj=logging_obj,
         )
     else:  # [TODO] implement context caching for gemini as well
         cached_content = optional_params.pop("cached_content", None)

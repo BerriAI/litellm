@@ -491,7 +491,6 @@ class ProxyLogging:
 
         try:
             for callback in litellm.callbacks:
-
                 _callback = None
                 if isinstance(callback, str):
                     _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
@@ -1197,9 +1196,9 @@ class PrismaClient:
                     api_requests=1,
                 )
 
-            self.daily_user_spend_transactions[daily_transaction_key] = (
-                daily_transaction
-            )
+            self.daily_user_spend_transactions[
+                daily_transaction_key
+            ] = daily_transaction
         except Exception as e:
             raise e
 

@@ -55,7 +55,6 @@ class ModelResponseIterator:
 
             usage_chunk: Optional[Usage] = getattr(processed_chunk, "usage", None)
             if usage_chunk is not None:
-
                 usage = ChatCompletionUsageBlock(
                     prompt_tokens=usage_chunk.prompt_tokens,
                     completion_tokens=usage_chunk.completion_tokens,
