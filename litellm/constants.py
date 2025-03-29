@@ -418,6 +418,7 @@ RESPONSE_FORMAT_TOOL_NAME = "json_tool_call"  # default tool name used when conv
 
 ########################### Logging Callback Constants ###########################
 AZURE_STORAGE_MSFT_VERSION = "2019-07-07"
+MCP_TOOL_NAME_PREFIX = "mcp_tool"
 
 ########################### LiteLLM Proxy Specific Constants ###########################
 ########################################################################################

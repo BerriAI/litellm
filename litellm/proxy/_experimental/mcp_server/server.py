@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.constants import MCP_TOOL_NAME_PREFIX
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -138,6 +139,12 @@ if MCP_AVAILABLE:
         if litellm_logging_obj:
             litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
                 standard_logging_mcp_tool_call
+            )
+            litellm_logging_obj.model_call_details["model"] = (
+                f"{MCP_TOOL_NAME_PREFIX}: {standard_logging_mcp_tool_call.get('name') or ''}"
+            )
+            litellm_logging_obj.model_call_details["custom_llm_provider"] = (
+                standard_logging_mcp_tool_call.get("mcp_server_name")
             )
 
         # Try managed server tool first
