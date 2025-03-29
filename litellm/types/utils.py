@@ -779,6 +779,24 @@ class PromptTokensDetailsWrapper(
     image_tokens: Optional[int] = None
     """Image tokens sent to the model."""
 
+    character_count: Optional[int] = None
+    """Character count sent to the model. Used for Vertex AI multimodal embeddings."""
+
+    image_count: Optional[int] = None
+    """Number of images sent to the model. Used for Vertex AI multimodal embeddings."""
+
+    video_length_seconds: Optional[float] = None
+    """Length of videos sent to the model. Used for Vertex AI multimodal embeddings."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.character_count is None:
+            del self.character_count
+        if self.image_count is None:
+            del self.image_count
+        if self.video_length_seconds is None:
+            del self.video_length_seconds
+
 
 class Usage(CompletionUsage):
     _cache_creation_input_tokens: int = PrivateAttr(
