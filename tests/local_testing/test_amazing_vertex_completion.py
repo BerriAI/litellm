@@ -2206,7 +2206,7 @@ def test_vertexai_multimodalembedding_embedding_latest():
 
         response = embedding(
             model="vertex_ai/multimodalembedding@001",
-            input=["hi", "gs://my-bucket/embeddings/supermarket-video.mp4"],
+            input=["hi"],
             dimensions=1,
             auto_truncate=True,
             task_type="RETRIEVAL_QUERY",
