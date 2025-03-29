@@ -3304,6 +3304,12 @@ async def chat_completion(  # noqa: PLR0915
             from litellm.proxy.raga.workday_gateway import call_workday_gateway
             return await call_workday_gateway(data)
 
+
+        # handle api gateway
+        if "api_gateway" in data.get("model", ""):
+            from litellm.proxy.raga.api_gateway import call_api_gateway
+            return await call_api_gateway(data)
+
         # add api keys to request based on model and user_id
         from litellm.proxy.raga.raga_utils import modify_user_request
         data = modify_user_request(data)
