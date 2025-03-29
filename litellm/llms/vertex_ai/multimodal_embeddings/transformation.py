@@ -25,7 +25,7 @@ from ...base_llm.embedding.transformation import BaseEmbeddingConfig
 from ..common_utils import VertexAIError
 
 
-class VertexAIMultimodalEmbedding(BaseEmbeddingConfig):
+class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
     def get_supported_openai_params(self, model: str) -> list:
         return ["dimensions"]
 

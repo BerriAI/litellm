@@ -2199,12 +2199,14 @@ def test_vertexai_embedding_embedding_latest():
 
 def test_vertexai_multimodalembedding_embedding_latest():
     try:
+        import requests, base64
+
         load_vertex_ai_credentials()
-        # litellm._turn_on_debug()
+        litellm._turn_on_debug()
 
         response = embedding(
             model="vertex_ai/multimodalembedding@001",
-            input=["hi"],
+            input=["hi", "gs://my-bucket/embeddings/supermarket-video.mp4"],
             dimensions=1,
             auto_truncate=True,
             task_type="RETRIEVAL_QUERY",

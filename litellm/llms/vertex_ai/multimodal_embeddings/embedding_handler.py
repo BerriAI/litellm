@@ -16,9 +16,9 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
 )
 from litellm.types.utils import EmbeddingResponse
 
-from .transformation import VertexAIMultimodalEmbedding
+from .transformation import VertexAIMultimodalEmbeddingConfig
 
-vertex_multimodal_embedding_handler = VertexAIMultimodalEmbedding()
+vertex_multimodal_embedding_handler = VertexAIMultimodalEmbeddingConfig()
 
 
 class VertexMultimodalEmbedding(VertexLLM):
