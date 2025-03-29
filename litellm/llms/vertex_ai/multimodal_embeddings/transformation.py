@@ -1,4 +1,4 @@
-from typing import List, Optional, Union, cast
+from typing import Dict, List, Optional, Union, cast
 
 from httpx import Headers, Response
 
@@ -111,7 +111,7 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
 
             # If current is a text and next is a GCS URI, or current is a GCS URI
             if isinstance(current, str):
-                instance_args = {}
+                instance_args: Instance = {}
 
                 # Process current element
                 if "gs://" not in current:
@@ -131,7 +131,7 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
                 else:
                     i += 1  # Move to next element
 
-                processed_instances.append(Instance(**instance_args))
+                processed_instances.append(instance_args)
                 continue
 
             # Handle dict or other types
