@@ -34,7 +34,7 @@ class HashicorpSecretManager(BaseSecretManager):
         # Validate environment
         if not self.vault_token:
             raise ValueError(
-                "Missing Vault token. Please set VAULT_TOKEN in your environment."
+                "Missing Vault token. Please set HCP_VAULT_TOKEN in your environment."
             )
 
         litellm.secret_manager_client = self
