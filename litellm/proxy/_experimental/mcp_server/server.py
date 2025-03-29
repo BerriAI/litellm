@@ -11,11 +11,13 @@ from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.mcp_server.mcp_server_manager import (
     ListMCPToolsRestAPIResponseObject,
 )
+from litellm.types.utils import StandardLoggingMCPToolCall
 from litellm.utils import client
 
 # Check if MCP is available
@@ -124,12 +126,45 @@ if MCP_AVAILABLE:
                 status_code=400, detail="Request arguments are required"
             )
 
+        standard_logging_mcp_tool_call: StandardLoggingMCPToolCall = (
+            _get_standard_logging_mcp_tool_call(
+                name=name,
+                arguments=arguments,
+            )
+        )
+        litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get(
+            "litellm_logging_obj", None
+        )
+        if litellm_logging_obj:
+            litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
+                standard_logging_mcp_tool_call
+            )
+
         # Try managed server tool first
         if name in global_mcp_server_manager.tool_name_to_mcp_server_name_mapping:
             return await _handle_managed_mcp_tool(name, arguments)
 
         # Fall back to local tool registry
         return await _handle_local_mcp_tool(name, arguments)
+
+    def _get_standard_logging_mcp_tool_call(
+        name: str,
+        arguments: Dict[str, Any],
+    ) -> StandardLoggingMCPToolCall:
+        mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+        if mcp_server:
+            mcp_info = mcp_server.mcp_info or {}
+            return StandardLoggingMCPToolCall(
+                name=name,
+                arguments=arguments,
+                mcp_server_name=mcp_info.get("server_name"),
+                mcp_server_logo_url=mcp_info.get("logo_url"),
+            )
+        else:
+            return StandardLoggingMCPToolCall(
+                name=name,
+                arguments=arguments,
+            )
 
     async def _handle_managed_mcp_tool(
         name: str, arguments: Dict[str, Any]
