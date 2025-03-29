@@ -839,7 +839,9 @@ class OpenTelemetry(CustomLogger):
             headers=dynamic_headers or self.OTEL_HEADERS
         )
 
-        if hasattr(self.OTEL_EXPORTER, "export"):  # Check if it has the export method that SpanExporter requires
+        if hasattr(
+            self.OTEL_EXPORTER, "export"
+        ):  # Check if it has the export method that SpanExporter requires
             verbose_logger.debug(
                 "OpenTelemetry: intiializing SpanExporter. Value of OTEL_EXPORTER: %s",
                 self.OTEL_EXPORTER,

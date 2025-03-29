@@ -74,8 +74,8 @@ class AmazonNovaCanvasConfig:
             text_to_image_params = {"text": text, **text_to_image_params}
             try:
                 text_to_image_params_typed = AmazonNovaCanvasTextToImageParams(
-                    **text_to_image_params # type: ignore
-                )  
+                    **text_to_image_params  # type: ignore
+                )
             except Exception as e:
                 raise ValueError(
                     f"Error transforming text to image params: {e}. Got params: {text_to_image_params}, Expected params: {AmazonNovaCanvasTextToImageParams.__annotations__}"
@@ -104,10 +104,8 @@ class AmazonNovaCanvasConfig:
                 **color_guided_generation_params,
             }
             try:
-                color_guided_generation_params_typed = (
-                    AmazonNovaCanvasColorGuidedGenerationParams(  
-                        **color_guided_generation_params # type: ignore
-                    )
+                color_guided_generation_params_typed = AmazonNovaCanvasColorGuidedGenerationParams(
+                    **color_guided_generation_params  # type: ignore
                 )
             except Exception as e:
                 raise ValueError(
