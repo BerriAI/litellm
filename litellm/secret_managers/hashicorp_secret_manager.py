@@ -90,9 +90,9 @@ class HashicorpSecretManager(BaseSecretManager):
             headers["X-Vault-Namespace"] = self.vault_namespace
         try:
             # We use the client cert and key for mutual TLS
-            resp = httpx.post(
+            client = httpx.Client(cert=(self.tls_cert_path, self.tls_key_path))
+            resp = client.post(
                 login_url,
-                cert=(self.tls_cert_path, self.tls_key_path),
                 headers=headers,
                 json=self._get_tls_cert_auth_body(),
             )
