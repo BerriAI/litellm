@@ -36,7 +36,6 @@ RUN pip install dist/*.whl
 
 # install dependencies as wheels
 RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
-RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.raga.txt
 
 # ensure pyjwt is used, not jwt
 RUN pip uninstall jwt -y

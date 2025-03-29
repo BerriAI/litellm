@@ -54,3 +54,4 @@ jsonschema==4.22.0 # validating json schema
 websockets==13.1.0 # for realtime API
 ####
 
+hvac==2.3.0
