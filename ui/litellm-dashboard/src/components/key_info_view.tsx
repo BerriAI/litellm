@@ -62,6 +62,11 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
       const currentKey = formValues.token;
       formValues.key = currentKey;
 
+      // Explicitly set user_id to null if not present
+      // if (!('user_id' in formValues)) {
+      //   formValues.user_id = null;
+      // }
+
       // Convert metadata back to an object if it exists and is a string
       if (formValues.metadata && typeof formValues.metadata === "string") {
         try {
