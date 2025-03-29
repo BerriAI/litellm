@@ -4124,4 +4124,4 @@ proxy = ["PyJWT", "apscheduler", "backoff", "boto3", "cryptography", "fastapi", 
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.8.1,<4.0, !=3.9.7"
-content-hash = "0beef7d83165f7e0e1608f7877ef6c268ccd37ab6bf796c5b3b57d220c3cf538"
+content-hash = "36792478ff4afec5c8e748caf9b2ae6bebf3dd223e78bea2626b6589ef3277e4"

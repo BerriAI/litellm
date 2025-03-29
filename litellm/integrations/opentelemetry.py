@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -24,9 +24,9 @@ if TYPE_CHECKING:
     from litellm.proxy.proxy_server import UserAPIKeyAuth as _UserAPIKeyAuth
 
     Span = Union[_Span, Any]
-    SpanExporter = _SpanExporter
-    UserAPIKeyAuth = _UserAPIKeyAuth
-    ManagementEndpointLoggingPayload = _ManagementEndpointLoggingPayload
+    SpanExporter = Union[_SpanExporter, Any]
+    UserAPIKeyAuth = Union[_UserAPIKeyAuth, Any]
+    ManagementEndpointLoggingPayload = Union[_ManagementEndpointLoggingPayload, Any]
 else:
     Span = Any
     SpanExporter = Any
@@ -839,12 +839,12 @@ class OpenTelemetry(CustomLogger):
             headers=dynamic_headers or self.OTEL_HEADERS
         )
 
-        if isinstance(self.OTEL_EXPORTER, SpanExporter):
+        if hasattr(self.OTEL_EXPORTER, "export"):  # Check if it has the export method that SpanExporter requires
             verbose_logger.debug(
                 "OpenTelemetry: intiializing SpanExporter. Value of OTEL_EXPORTER: %s",
                 self.OTEL_EXPORTER,
             )
-            return SimpleSpanProcessor(self.OTEL_EXPORTER)
+            return SimpleSpanProcessor(cast(SpanExporter, self.OTEL_EXPORTER))
 
         if self.OTEL_EXPORTER == "console":
             verbose_logger.debug(
