@@ -1,5 +1,5 @@
 import json
-from typing import List, Literal, Union
+from typing import Dict, List, Literal, Union
 
 from mcp import ClientSession
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
@@ -77,7 +77,7 @@ def _get_function_arguments(function: FunctionDefinition) -> dict:
 
 
 def transform_openai_tool_call_request_to_mcp_tool_call_request(
-    openai_tool: ChatCompletionMessageToolCall,
+    openai_tool: Union[ChatCompletionMessageToolCall, Dict],
 ) -> MCPCallToolRequestParams:
     """Convert an OpenAI ChatCompletionMessageToolCall to an MCP CallToolRequestParams."""
     function = openai_tool["function"]
