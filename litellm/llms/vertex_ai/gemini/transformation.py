@@ -28,6 +28,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
     ChatCompletionAudioObject,
+    ChatCompletionFileObject,
     ChatCompletionImageObject,
     ChatCompletionTextObject,
 )
@@ -184,6 +185,20 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                         mime_type="audio/{}".format(
                                             audio_element["input_audio"]["format"]
                                         ),
+                                    )
+                                )
+                                _parts.append(_part)
+                        elif element["type"] == "file":
+                            file_element = cast(ChatCompletionFileObject, element)
+                            file_id = file_element["file"].get("file_id")
+                            if not file_id:
+                                continue
+                            mime_type = _get_image_mime_type_from_url(file_id)
+                            if mime_type is not None:
+                                _part = PartType(
+                                    file_data=FileDataType(
+                                        file_uri=file_id,
+                                        mime_type=mime_type,
                                     )
                                 )
                                 _parts.append(_part)
