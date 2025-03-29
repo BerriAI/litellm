@@ -2,7 +2,7 @@
 ## File for 'response_cost' calculation in Logging
 import time
 from functools import lru_cache
-from typing import Any, List, Literal, Optional, Tuple, Union
+from typing import Any, List, Literal, Optional, Tuple, Union, cast
 
 from pydantic import BaseModel
 
@@ -462,16 +462,27 @@ def _model_contains_known_llm_provider(model: str) -> bool:
 def _get_usage_object(
     completion_response: Any,
 ) -> Optional[Usage]:
-    usage_obj = (
-        completion_response.get("usage")
-        if isinstance(completion_response, dict)
-        else getattr(completion_response, "get", lambda x: None)("usage")
+    usage_obj = cast(
+        Union[Usage, ResponseAPIUsage, dict, BaseModel],
+        (
+            completion_response.get("usage")
+            if isinstance(completion_response, dict)
+            else getattr(completion_response, "get", lambda x: None)("usage")
+        ),
     )
 
     if usage_obj is None:
         return None
     if isinstance(usage_obj, Usage):
         return usage_obj
+    elif (
+        usage_obj is not None
+        and (isinstance(usage_obj, dict) or isinstance(usage_obj, ResponseAPIUsage))
+        and ResponseAPILoggingUtils._is_response_api_usage(usage_obj)
+    ):
+        return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage_obj
+        )
     elif isinstance(usage_obj, dict):
         return Usage(**usage_obj)
     elif isinstance(usage_obj, BaseModel):
