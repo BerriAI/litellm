@@ -50,6 +50,8 @@ class FileType(Enum):
     WMV = "WMV"
     XLS = "XLS"
     XLSX = "XLSX"
+    MARKDOWN = "MARKDOWN" # Markdown support
+    XML = "XML" #XML Support
 
 
 FILE_EXTENSIONS: Mapping[FileType, List[str]] = MappingProxyType(
@@ -96,6 +98,8 @@ FILE_EXTENSIONS: Mapping[FileType, List[str]] = MappingProxyType(
         FileType.WMV: ["wmv"],
         FileType.XLS: ["xls"],
         FileType.XLSX: ["xlsx"],
+        FileType.MARKDOWN: ["md", "markdown"],
+        FileType.XML: ["xml"],
     }
 )
 
@@ -143,6 +147,8 @@ FILE_MIME_TYPES: Mapping[FileType, str] = MappingProxyType(
         FileType.WMV: "video/wmv",
         FileType.XLS: "application/vnd.ms-excel",
         FileType.XLSX: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        FileType.MARKDOWN: "text/markdown",
+        FileType.XML: "application/xml",
     }
 )
 
@@ -178,11 +184,21 @@ def get_file_mime_type_from_extension(extension: str) -> str:
     file_type = get_file_type_from_extension(extension)
     return get_file_mime_type_for_file_type(file_type)
 
+def requires_base64_encoding(mime_type: str) -> bool:
+    return mime_type not in TEXT_BASED_MIME_TYPES
 
 """
 FileType Type Groupings (Videos, Images, etc)
 """
-
+# Text-based MIME types that are not base64 encoded
+TEXT_BASED_MIME_TYPES = {
+    "text/plain",
+    "text/markdown",
+    "text/csv",
+    "text/html",
+    "application/json",
+    "application/xml",
+}
 # Images
 IMAGE_FILE_TYPES = {
     FileType.PNG,
@@ -235,7 +251,13 @@ def is_audio_file_type(file_type):
 
 
 # Text
-TEXT_FILE_TYPES = {FileType.CSV, FileType.HTML, FileType.RTF, FileType.TXT}
+TEXT_FILE_TYPES = {FileType.CSV, 
+                   FileType.HTML, 
+                   FileType.RTF, 
+                   FileType.TXT,
+                   FileType.JSON,
+                   FileType.XML,
+                   FileType.MARKDOWN}
 
 
 def is_text_file_type(file_type):
@@ -276,6 +298,11 @@ GEMINI_1_5_ACCEPTED_FILE_TYPES: Set[FileType] = {
     # PDF
     FileType.PDF,
     FileType.TXT,
+    FileType.MARKDOWN,
+    FileType.XML,
+    FileType.JSON,
+    FileType.CSV,
+    FileType.HTML,
 }
 
 
