@@ -500,6 +500,12 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - run:
+          name: Install PostgreSQL
+          command: |
+            sudo apt-get update
+            sudo apt-get install postgresql postgresql-contrib
+            echo 'export PATH=/usr/lib/postgresql/*/bin:$PATH' >> $BASH_ENV
       - setup_google_dns
       - run:
           name: Show git commit hash

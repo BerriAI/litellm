@@ -19,11 +19,19 @@ class BaseLLMModelInfo(ABC):
         self,
         model: str,
     ) -> Optional[ProviderSpecificModelInfo]:
+        """
+        Default values all models of this provider support.
+        """
         return None
 
     @abstractmethod
-    def get_models(self) -> List[str]:
-        pass
+    def get_models(
+        self, api_key: Optional[str] = None, api_base: Optional[str] = None
+    ) -> List[str]:
+        """
+        Returns a list of models supported by this provider.
+        """
+        return []
 
     @staticmethod
     @abstractmethod

@@ -2733,6 +2733,7 @@ class DailyUserSpendTransaction(TypedDict):
     prompt_tokens: int
     completion_tokens: int
     spend: float
+    api_requests: int
 
 
 class DBSpendUpdateTransactions(TypedDict):
