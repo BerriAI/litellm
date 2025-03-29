@@ -1099,7 +1099,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             standard_built_in_tools_params=self.standard_built_in_tools_params,
                         )
                     )
-                elif isinstance(result, dict):  # pass-through endpoints
+                elif isinstance(result, dict) or isinstance(result, list):
                     ## STANDARDIZED LOGGING PAYLOAD
                     self.model_call_details["standard_logging_object"] = (
                         get_standard_logging_object_payload(

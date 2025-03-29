@@ -6,6 +6,7 @@ This class is responsible for managing MCP SSE clients.
 This is a Proxy 
 """
 
+import asyncio
 import json
 from typing import Any, Dict, List, Optional
 
@@ -60,6 +61,8 @@ class MCPServerManager:
             f"Loaded MCP Servers: {json.dumps(self.mcp_servers, indent=4, default=str)}"
         )
 
+        self.initialize_tool_name_to_mcp_server_name_mapping()
+
     async def list_tools(self) -> List[MCPTool]:
         """
         List all tools available across all MCP Servers.
@@ -101,6 +104,29 @@ class MCPServerManager:
                     self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
 
                 return tools_result.tools
+
+    def initialize_tool_name_to_mcp_server_name_mapping(self):
+        """
+        On startup, initialize the tool name to MCP server name mapping
+        """
+        try:
+            if asyncio.get_running_loop():
+                asyncio.create_task(
+                    self._initialize_tool_name_to_mcp_server_name_mapping()
+                )
+        except RuntimeError as e:  # no running event loop
+            verbose_logger.exception(
+                f"No running event loop - skipping tool name to MCP server name mapping initialization: {str(e)}"
+            )
+
+    async def _initialize_tool_name_to_mcp_server_name_mapping(self):
+        """
+        Call list_tools for each server and update the tool name to MCP server name mapping
+        """
+        for server in self.mcp_servers:
+            tools = await self._get_tools_from_server(server)
+            for tool in tools:
+                self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
 
     async def call_tool(self, name: str, arguments: Dict[str, Any]):
         """
