@@ -5,10 +5,11 @@ This is to prevent deadlocks and improve reliability
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
+from litellm.constants import MAX_REDIS_BUFFER_DEQUEUE_COUNT, REDIS_UPDATE_BUFFER_KEY
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import DBSpendUpdateTransactions
 from litellm.secret_managers.main import str_to_bool
@@ -17,9 +18,6 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 else:
     PrismaClient = Any
-
-REDIS_UPDATE_BUFFER_KEY = "litellm_spend_update_buffer"
-MAX_REDIS_BUFFER_DEQUEUE_COUNT = 100
 
 
 class RedisUpdateBuffer:
@@ -245,9 +243,9 @@ class RedisUpdateBuffer:
             # Process each field type
             for field in transaction_fields:
                 if transaction.get(field):
-                    for entity_id, amount in transaction[field].items():
-                        combined_transaction[field][entity_id] = (
-                            combined_transaction[field].get(entity_id, 0) + amount
+                    for entity_id, amount in transaction[field].items():  # type: ignore
+                        combined_transaction[field][entity_id] = (  # type: ignore
+                            combined_transaction[field].get(entity_id, 0) + amount  # type: ignore
                         )
 
         return combined_transaction
