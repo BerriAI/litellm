@@ -4135,8 +4135,8 @@ export const callMCPTool = async (accessToken: string, toolName: string, toolArg
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        tool_name: toolName,
-        tool_arguments: toolArguments,
+        name: toolName,
+        arguments: toolArguments,
       }),
     });
 
