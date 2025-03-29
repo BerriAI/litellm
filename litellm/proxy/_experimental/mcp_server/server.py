@@ -179,50 +179,45 @@ if MCP_AVAILABLE:
     ############ MCP Server REST API Routes #################
     ########################################################
     @router.get("/tools/list", dependencies=[Depends(user_api_key_auth)])
-    async def list_tool_rest_api() -> (
-        List[Dict[str, ListMCPToolsRestAPIResponseObject]]
-    ):
+    async def list_tool_rest_api() -> List[ListMCPToolsRestAPIResponseObject]:
         """
         List all available tools with information about the server they belong to.
 
         Example response:
         Tools:
         [
-            "zapier": {
-                "tools": [
-                    {
-                        "name": "create_zap",
-                        "description": "Create a new zap",
-                        "inputSchema": "tool_input_schema",
-                    }
-                ],
+            {
+                "name": "create_zap",
+                "description": "Create a new zap",
+                "inputSchema": "tool_input_schema",
                 "mcp_info": {
+                    "server_name": "zapier",
                     "logo_url": "https://www.zapier.com/logo.png",
                 }
             },
-            "fetch": {
-                "tools": [
-                    {
-                        "name": "fetch_data",
-                        "description": "Fetch data from a URL",
-                    }
-                ],
+            {
+                "name": "fetch_data",
+                "description": "Fetch data from a URL",
+                "inputSchema": "tool_input_schema",
                 "mcp_info": {
+                    "server_name": "fetch",
                     "logo_url": "https://www.fetch.com/logo.png",
                 }
             }
+        ]
         """
-        list_tools_result: List[Dict[str, ListMCPToolsRestAPIResponseObject]] = []
+        list_tools_result: List[ListMCPToolsRestAPIResponseObject] = []
         for server in global_mcp_server_manager.mcp_servers:
             tools = await global_mcp_server_manager._get_tools_from_server(server)
-            list_tools_result.append(
-                {
-                    server.name: ListMCPToolsRestAPIResponseObject(
-                        tools=tools,
+            for tool in tools:
+                list_tools_result.append(
+                    ListMCPToolsRestAPIResponseObject(
+                        name=tool.name,
+                        description=tool.description,
+                        inputSchema=tool.inputSchema,
                         mcp_info=server.mcp_info,
                     )
-                }
-            )
+                )
         return list_tools_result
 
     @router.post("/tools/call", dependencies=[Depends(user_api_key_auth)])
