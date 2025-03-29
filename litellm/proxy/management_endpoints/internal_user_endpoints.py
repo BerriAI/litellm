@@ -82,9 +82,9 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
         data_json["user_id"] = str(uuid.uuid4())
     auto_create_key = data_json.pop("auto_create_key", True)
     if auto_create_key is False:
-        data_json["table_name"] = (
-            "user"  # only create a user, don't create key if 'auto_create_key' set to False
-        )
+        data_json[
+            "table_name"
+        ] = "user"  # only create a user, don't create key if 'auto_create_key' set to False
 
     is_internal_user = False
     if data.user_role and data.user_role.is_internal_user_role:
@@ -370,7 +370,6 @@ async def ui_get_available_role(
 
     _data_to_return = {}
     for role in LitellmUserRoles:
-
         # We only show a subset of roles on UI
         if role in [
             LitellmUserRoles.PROXY_ADMIN,
@@ -652,9 +651,9 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest) -> di
         "budget_duration" not in non_default_values
     ):  # applies internal user limits, if user role updated
         if is_internal_user and litellm.internal_user_budget_duration is not None:
-            non_default_values["budget_duration"] = (
-                litellm.internal_user_budget_duration
-            )
+            non_default_values[
+                "budget_duration"
+            ] = litellm.internal_user_budget_duration
             duration_s = duration_in_seconds(
                 duration=non_default_values["budget_duration"]
             )
@@ -965,13 +964,13 @@ async def get_users(
             "in": user_id_list,  # Now passing a list of strings as required by Prisma
         }
 
-    users: Optional[List[LiteLLM_UserTable]] = (
-        await prisma_client.db.litellm_usertable.find_many(
-            where=where_conditions,
-            skip=skip,
-            take=page_size,
-            order={"created_at": "desc"},
-        )
+    users: Optional[
+        List[LiteLLM_UserTable]
+    ] = await prisma_client.db.litellm_usertable.find_many(
+        where=where_conditions,
+        skip=skip,
+        take=page_size,
+        order={"created_at": "desc"},
     )
 
     # Get total count of user rows
@@ -1226,13 +1225,13 @@ async def ui_view_users(
             }
 
         # Query users with pagination and filters
-        users: Optional[List[BaseModel]] = (
-            await prisma_client.db.litellm_usertable.find_many(
-                where=where_conditions,
-                skip=skip,
-                take=page_size,
-                order={"created_at": "desc"},
-            )
+        users: Optional[
+            List[BaseModel]
+        ] = await prisma_client.db.litellm_usertable.find_many(
+            where=where_conditions,
+            skip=skip,
+            take=page_size,
+            order={"created_at": "desc"},
         )
 
         if not users:

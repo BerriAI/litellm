@@ -88,9 +88,9 @@ class SagemakerConfig(BaseConfig):
                 optional_params["top_p"] = value
             if param == "n":
                 optional_params["best_of"] = value
-                optional_params["do_sample"] = (
-                    True  # Need to sample if you want best of for hf inference endpoints
-                )
+                optional_params[
+                    "do_sample"
+                ] = True  # Need to sample if you want best of for hf inference endpoints
             if param == "stream":
                 optional_params["stream"] = value
             if param == "stop":

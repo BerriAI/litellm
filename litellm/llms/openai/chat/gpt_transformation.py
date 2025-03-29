@@ -391,7 +391,6 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
 
 class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
-
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
             return ModelResponseStream(

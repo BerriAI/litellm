@@ -482,7 +482,6 @@ from openai.types.chat.chat_completion_audio import ChatCompletionAudio
 
 
 class ChatCompletionAudioResponse(ChatCompletionAudio):
-
     def __init__(
         self,
         data: str,
@@ -927,7 +926,6 @@ class StreamingChoices(OpenAIObject):
             self.finish_reason = None
         self.index = index
         if delta is not None:
-
             if isinstance(delta, Delta):
                 self.delta = delta
             elif isinstance(delta, dict):
@@ -961,7 +959,6 @@ class StreamingChoices(OpenAIObject):
 
 class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
     def __init__(self, **kwargs):
-
         new_choices = []
         for choice in kwargs["choices"]:
             new_choice = StreamingChoices(**choice).model_dump()

@@ -260,7 +260,6 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
     def transform_embedding_response_to_openai(
         self, predictions: MultimodalPredictions
     ) -> List[Embedding]:
-
         openai_embeddings: List[Embedding] = []
         if "predictions" in predictions:
             for idx, _prediction in enumerate(predictions["predictions"]):

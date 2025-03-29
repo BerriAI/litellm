@@ -218,7 +218,6 @@ class BaseConfig(ABC):
             json_schema = value["json_schema"]["schema"]
 
         if json_schema and not is_response_format_supported:
-
             _tool_choice = ChatCompletionToolChoiceObjectParam(
                 type="function",
                 function=ChatCompletionToolChoiceFunctionParam(
