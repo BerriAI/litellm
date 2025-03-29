@@ -12,3 +12,4 @@ litellm_settings:
   cache: true
   cache_params:
     type: redis
+    supported_call_types: []
