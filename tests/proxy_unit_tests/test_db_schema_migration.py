@@ -24,7 +24,7 @@ def test_aaaasschema_migration_check(schema_setup, monkeypatch):
     # test_db_url = "postgresql://neondb_owner:npg_JiZPS0DAhRn4@ep-delicate-wave-a55cvbuc.us-east-2.aws.neon.tech/neondb?sslmode=require"
     monkeypatch.setenv("DATABASE_URL", test_db_url)
 
-    deploy_dir = Path("./deploy")
+    deploy_dir = Path("./litellm-proxy-extras/litellm_proxy_extras")
     source_migrations_dir = deploy_dir / "migrations"
     schema_path = Path("./schema.prisma")
 
