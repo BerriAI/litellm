@@ -142,6 +142,7 @@ class DBSpendUpdateWriter:
         transaction_list: dict,
         entity_type: Litellm_EntityType,
         debug_msg: Optional[str] = None,
+        prisma_client: Optional[PrismaClient] = None,
     ) -> bool:
         """
         Common helper method to update a transaction list for an entity
@@ -163,16 +164,18 @@ class DBSpendUpdateWriter:
                 verbose_proxy_logger.debug(
                     f"adding spend to {entity_type.value} db. Response cost: {response_cost}. {entity_type.value}_id: {entity_id}."
                 )
+            if prisma_client is None:
+                return False
 
             if entity_id is None:
                 verbose_proxy_logger.debug(
                     f"track_cost_callback: {entity_type.value}_id is None. Not tracking spend for {entity_type.value}"
                 )
                 return False
-
-            transaction_list[entity_id] = response_cost + transaction_list.get(
-                entity_id, 0
-            )
+            async with prisma_client.in_memory_transaction_lock:
+                transaction_list[entity_id] = response_cost + transaction_list.get(
+                    entity_id, 0
+                )
             return True
 
         except Exception as e:
@@ -197,6 +200,7 @@ class DBSpendUpdateWriter:
                 transaction_list=prisma_client.key_list_transactions,
                 entity_type=Litellm_EntityType.KEY,
                 debug_msg=f"adding spend to key db. Response cost: {response_cost}. Token: {hashed_token}.",
+                prisma_client=prisma_client,
             )
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -236,6 +240,7 @@ class DBSpendUpdateWriter:
                             entity_id=_id,
                             transaction_list=prisma_client.user_list_transactions,
                             entity_type=Litellm_EntityType.USER,
+                            prisma_client=prisma_client,
                         )
 
                 if end_user_id is not None:
@@ -244,6 +249,7 @@ class DBSpendUpdateWriter:
                         entity_id=end_user_id,
                         transaction_list=prisma_client.end_user_list_transactions,
                         entity_type=Litellm_EntityType.END_USER,
+                        prisma_client=prisma_client,
                     )
         except Exception as e:
             verbose_proxy_logger.info(
@@ -270,6 +276,7 @@ class DBSpendUpdateWriter:
                 entity_id=team_id,
                 transaction_list=prisma_client.team_list_transactions,
                 entity_type=Litellm_EntityType.TEAM,
+                prisma_client=prisma_client,
             )
 
             try:
@@ -282,6 +289,7 @@ class DBSpendUpdateWriter:
                         entity_id=team_member_key,
                         transaction_list=prisma_client.team_member_list_transactions,
                         entity_type=Litellm_EntityType.TEAM_MEMBER,
+                        prisma_client=prisma_client,
                     )
             except Exception:
                 pass
@@ -309,6 +317,7 @@ class DBSpendUpdateWriter:
                 entity_id=org_id,
                 transaction_list=prisma_client.org_list_transactions,
                 entity_type=Litellm_EntityType.ORGANIZATION,
+                prisma_client=prisma_client,
             )
         except Exception as e:
             verbose_proxy_logger.info(
