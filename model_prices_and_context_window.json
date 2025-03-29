@@ -5409,6 +5409,23 @@
         "supported_modalities": ["text", "image", "video"],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models"
     },
+    "multimodalembedding@001": {
+        "max_tokens": 2048,
+        "max_input_tokens": 2048,
+        "output_vector_size": 768,
+        "input_cost_per_character": 0.0000002,
+        "input_cost_per_image": 0.0001,
+        "input_cost_per_video_per_second": 0.0005,
+        "input_cost_per_video_per_second_above_8s_interval": 0.0010,
+        "input_cost_per_video_per_second_above_15s_interval": 0.0020,
+        "input_cost_per_token": 0.0000008,
+        "output_cost_per_token": 0,
+        "litellm_provider": "vertex_ai-embedding-models",
+        "mode": "embedding",
+        "supported_endpoints": ["/v1/embeddings"],
+        "supported_modalities": ["text", "image", "video"],
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models"
+    },
     "text-embedding-large-exp-03-07": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,

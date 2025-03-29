@@ -239,3 +239,23 @@ async def test_url_with_format_param_openai(model, sync_mode):
         json_str = json.dumps(mock_client.call_args.kwargs)
 
         assert "format" not in json_str
+
+
+def test_bedrock_latency_optimized_inference():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    with patch.object(client, "post") as mock_post:
+        try:
+            response = litellm.completion(
+                model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                performanceConfig={"latency": "optimized"},
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        mock_post.assert_called_once()
+        json_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert json_data["performanceConfig"]["latency"] == "optimized"
