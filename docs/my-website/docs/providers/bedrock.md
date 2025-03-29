@@ -664,6 +664,56 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+## Usage - Latency Optimized Inference
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    performanceConfig={"latency": "optimized"},
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: bedrock-claude-3-7
+    litellm_params:
+      model: bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0
+      performanceConfig: {"latency": "optimized"} # 👈 EITHER HERE OR ON REQUEST
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "bedrock-claude-3-7",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "performanceConfig": {"latency": "optimized"} # 👈 EITHER HERE OR ON CONFIG.YAML
+  }'
+```
+
+</TabItem>
+</Tabs>
+
 ## Usage - Bedrock Guardrails
 
 Example of using [Bedrock Guardrails with LiteLLM](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html)
