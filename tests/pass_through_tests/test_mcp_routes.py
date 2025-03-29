@@ -10,7 +10,7 @@ from mcp import ClientSession
 from mcp.client.sse import sse_client
 from litellm.experimental_mcp_client.tools import (
     transform_mcp_tool_to_openai_tool,
-    _transform_openai_tool_call_to_mcp_tool_call_request,
+    transform_openai_tool_call_request_to_mcp_tool_call_request,
 )
 import json
 
@@ -73,7 +73,7 @@ async def test_mcp_routes_with_vertex_ai():
 
             # Call the tool using MCP client
             mcp_tool_call_request = (
-                _transform_openai_tool_call_to_mcp_tool_call_request(
+                transform_openai_tool_call_request_to_mcp_tool_call_request(
                     openai_tool.model_dump()
                 )
             )
