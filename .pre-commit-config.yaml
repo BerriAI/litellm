@@ -31,6 +31,7 @@ repos:
     rev: 1.8.0
     hooks:
       - id: poetry-check
+        files: ^(pyproject.toml|litellm-proxy-extras/pyproject.toml)$
 -   repo: local
     hooks:
     -   id: check-files-match
