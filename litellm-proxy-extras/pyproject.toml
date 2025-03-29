@@ -24,5 +24,7 @@ build-backend = "poetry.core.masonry.api"
 [tool.commitizen]
 version = "0.1.1"
 version_files = [
-    "pyproject.toml:^version"
+    "pyproject.toml:version",
+    "../requirements.txt:litellm-proxy-extras==",
+    "../pyproject.toml:litellm-proxy-extras = {version = \""
 ]
