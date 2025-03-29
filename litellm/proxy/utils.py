@@ -1182,6 +1182,7 @@ class PrismaClient:
                 daily_transaction["spend"] += payload["spend"]
                 daily_transaction["prompt_tokens"] += payload["prompt_tokens"]
                 daily_transaction["completion_tokens"] += payload["completion_tokens"]
+                daily_transaction["api_requests"] += 1
             else:
                 daily_transaction = DailyUserSpendTransaction(
                     user_id=payload["user"],
@@ -1193,6 +1194,7 @@ class PrismaClient:
                     prompt_tokens=payload["prompt_tokens"],
                     completion_tokens=payload["completion_tokens"],
                     spend=payload["spend"],
+                    api_requests=1,
                 )
 
             self.daily_user_spend_transactions[daily_transaction_key] = (
@@ -2601,6 +2603,7 @@ class ProxyUpdateSpend:
                                             "completion_tokens"
                                         ],
                                         "spend": transaction["spend"],
+                                        "api_requests": transaction["api_requests"],
                                     },
                                     "update": {
                                         "prompt_tokens": {
@@ -2612,6 +2615,9 @@ class ProxyUpdateSpend:
                                             ]
                                         },
                                         "spend": {"increment": transaction["spend"]},
+                                        "api_requests": {
+                                            "increment": transaction["api_requests"]
+                                        },
                                     },
                                 },
                             )

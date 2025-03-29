@@ -22,12 +22,13 @@ class MockPrismaClient:
     def __init__(self):
         self.db = MagicMock()
         self.spend_log_transactions = []
-        self.user_list_transactions = {}
-        self.end_user_list_transactions = {}
-        self.key_list_transactions = {}
-        self.team_list_transactions = {}
-        self.team_member_list_transactions = {}
-        self.org_list_transactions = {}
+        self.user_list_transactons = {}
+        self.end_user_list_transactons = {}
+        self.key_list_transactons = {}
+        self.team_list_transactons = {}
+        self.team_member_list_transactons = {}
+        self.org_list_transactons = {}
+        self.daily_user_spend_transactions = {}
 
     def jsonify_object(self, obj):
         return obj

@@ -405,9 +405,24 @@ class ModelManagementAuthChecks:
             model_params.model_info is not None
             and model_params.model_info.team_id is not None
         ):
+            team_obj_row = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": model_params.model_info.team_id}
+            )
+            if team_obj_row is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Team id={} does not exist in db".format(
+                            model_params.model_info.team_id
+                        )
+                    },
+                )
+            team_obj = LiteLLM_TeamTable(**team_obj_row.model_dump())
+
             return ModelManagementAuthChecks.can_user_make_team_model_call(
                 team_id=model_params.model_info.team_id,
                 user_api_key_dict=user_api_key_dict,
+                team_obj=team_obj,
                 premium_user=premium_user,
             )
         ## Check non-team model auth
