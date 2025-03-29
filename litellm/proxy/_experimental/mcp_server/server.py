@@ -6,11 +6,15 @@ import asyncio
 from typing import Any, Dict, List, Union
 
 from anyio import BrokenResourceError
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.types.mcp_server.mcp_server_manager import (
+    ListMCPToolsRestAPIResponseObject,
+)
 
 # Check if MCP is available
 # "mcp" requires python 3.10 or higher, but several litellm users use python 3.8
@@ -53,9 +57,14 @@ if MCP_AVAILABLE:
     ########################################################
     ############### MCP Server Routes #######################
     ########################################################
-
     @server.list_tools()
     async def list_tools() -> list[MCPTool]:
+        """
+        List all available tools
+        """
+        return await _list_mcp_tools()
+
+    async def _list_mcp_tools() -> List[MCPTool]:
         """
         List all available tools
         """
@@ -95,6 +104,18 @@ if MCP_AVAILABLE:
             HTTPException: If tool not found or arguments missing
         """
         # Validate arguments
+        response = await call_mcp_tool(
+            name=name,
+            arguments=arguments,
+        )
+        return response
+
+    async def call_mcp_tool(
+        name: str, arguments: Dict[str, Any] | None
+    ) -> List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]:
+        """
+        Call a specific tool with the provided arguments
+        """
         if arguments is None:
             raise HTTPException(
                 status_code=400, detail="Request arguments are required"
@@ -153,6 +174,63 @@ if MCP_AVAILABLE:
         verbose_logger.info("incoming SSE message received")
         await sse.handle_post_message(request.scope, request.receive, request._send)
         await request.close()
+
+    ########################################################
+    ############ MCP Server REST API Routes #################
+    ########################################################
+    @router.get("/tools/list", dependencies=[Depends(user_api_key_auth)])
+    async def list_tool_rest_api() -> (
+        List[Dict[str, ListMCPToolsRestAPIResponseObject]]
+    ):
+        """
+        List all available tools with information about the server they belong to.
+
+        Example response:
+        Tools:
+        [
+            "zapier": {
+                "tools": [
+                    {
+                        "name": "create_zap",
+                        "description": "Create a new zap",
+                        "inputSchema": "tool_input_schema",
+                    }
+                ],
+                "mcp_info": {
+                    "logo_url": "https://www.zapier.com/logo.png",
+                }
+            },
+            "fetch": {
+                "tools": [
+                    {
+                        "name": "fetch_data",
+                        "description": "Fetch data from a URL",
+                    }
+                ],
+                "mcp_info": {
+                    "logo_url": "https://www.fetch.com/logo.png",
+                }
+            }
+        """
+        list_tools_result: List[Dict[str, ListMCPToolsRestAPIResponseObject]] = []
+        for server in global_mcp_server_manager.mcp_servers:
+            tools = await global_mcp_server_manager._get_tools_from_server(server)
+            list_tools_result.append(
+                {
+                    server.name: ListMCPToolsRestAPIResponseObject(
+                        tools=tools,
+                        mcp_info=server.mcp_info,
+                    )
+                }
+            )
+        return list_tools_result
+
+    @router.post("/tools/call", dependencies=[Depends(user_api_key_auth)])
+    async def call_tool_rest_api(name: str, arguments: Dict[str, Any]):
+        return await call_mcp_tool(
+            name=name,
+            arguments=arguments,
+        )
 
     options = InitializationOptions(
         server_name="litellm-mcp-server",
