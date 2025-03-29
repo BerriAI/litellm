@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     cluster_pipeline = ClusterPipeline
     async_redis_client = Redis
     async_redis_cluster_client = RedisCluster
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     pipeline = Any
     cluster_pipeline = Any

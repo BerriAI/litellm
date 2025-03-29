@@ -1,5 +1,5 @@
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Union
 
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
     Protocol = _Protocol
     OpenTelemetryConfig = _OpenTelemetryConfig
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     Protocol = Any
     OpenTelemetryConfig = Any

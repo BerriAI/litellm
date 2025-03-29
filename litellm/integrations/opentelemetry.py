@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     )
     from litellm.proxy.proxy_server import UserAPIKeyAuth as _UserAPIKeyAuth
 
-    Span = _Span
+    Span = Union[_Span, Any]
     SpanExporter = _SpanExporter
     UserAPIKeyAuth = _UserAPIKeyAuth
     ManagementEndpointLoggingPayload = _ManagementEndpointLoggingPayload

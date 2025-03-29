@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
     from litellm.integrations.opentelemetry import OpenTelemetry
 
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     Span = Any
     OpenTelemetry = Any

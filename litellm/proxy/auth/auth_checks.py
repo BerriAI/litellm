@@ -11,7 +11,7 @@ Run checks for:
 import asyncio
 import re
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
 from fastapi import Request, status
 from pydantic import BaseModel
@@ -49,7 +49,7 @@ from .auth_checks_organization import organization_role_based_access_check
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     Span = Any
 

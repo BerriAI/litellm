@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from litellm.types.integrations.arize import Protocol as _Protocol
 
     Protocol = _Protocol
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     Protocol = Any
     Span = Any

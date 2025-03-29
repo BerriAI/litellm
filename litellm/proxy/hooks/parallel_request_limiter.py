@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
 
-    Span = _Span
+    Span = Union[_Span, Any]
     InternalUsageCache = _InternalUsageCache
 else:
     Span = Any
