@@ -1,13 +1,17 @@
 import os
-import time
 import random
 import subprocess
+import time
 from typing import Optional
+
+from litellm_proxy_extras._logging import logger
+
 
 def str_to_bool(value: Optional[str]) -> bool:
     if value is None:
         return False
-    return value.lower() in ('true', '1', 't', 'y', 'yes')
+    return value.lower() in ("true", "1", "t", "y", "yes")
+
 
 class ProxyExtrasDBManager:
     @staticmethod
@@ -31,7 +35,7 @@ class ProxyExtrasDBManager:
 
             try:
                 if use_migrate:
-                    print("Running prisma migrate deploy")
+                    logger.info("Running prisma migrate deploy")
                     try:
                         # Set migrations directory for Prisma
                         subprocess.run(
@@ -41,12 +45,15 @@ class ProxyExtrasDBManager:
                             capture_output=True,
                             text=True,
                         )
-                        print("prisma migrate deploy completed")
+                        logger.info("prisma migrate deploy completed")
                         return True
                     except subprocess.CalledProcessError as e:
-                        print(f"prisma db error: {e.stderr}, e: {e.stdout}")
-                        if "P3005" in e.stderr and "database schema is not empty" in e.stderr:
-                            print("Error: Database schema is not empty")
+                        logger.info(f"prisma db error: {e.stderr}, e: {e.stdout}")
+                        if (
+                            "P3005" in e.stderr
+                            and "database schema is not empty" in e.stderr
+                        ):
+                            logger.info("Error: Database schema is not empty")
                             return False
                 else:
                     # Use prisma db push with increased timeout
@@ -57,13 +64,17 @@ class ProxyExtrasDBManager:
                     )
                     return True
             except subprocess.TimeoutExpired:
-                print(f"Attempt {attempt + 1} timed out")
+                logger.info(f"Attempt {attempt + 1} timed out")
                 time.sleep(random.randrange(5, 15))
             except subprocess.CalledProcessError as e:
                 attempts_left = 3 - attempt
-                retry_msg = f" Retrying... ({attempts_left} attempts left)" if attempts_left > 0 else ""
-                print(f"The process failed to execute. Details: {e}.{retry_msg}")
+                retry_msg = (
+                    f" Retrying... ({attempts_left} attempts left)"
+                    if attempts_left > 0
+                    else ""
+                )
+                logger.info(f"The process failed to execute. Details: {e}.{retry_msg}")
                 time.sleep(random.randrange(5, 15))
             finally:
                 os.chdir(original_dir)
-        return False 
+        return False
