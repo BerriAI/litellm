@@ -172,10 +172,9 @@ class DBSpendUpdateWriter:
                     f"track_cost_callback: {entity_type.value}_id is None. Not tracking spend for {entity_type.value}"
                 )
                 return False
-            async with prisma_client.in_memory_transaction_lock:
-                transaction_list[entity_id] = response_cost + transaction_list.get(
-                    entity_id, 0
-                )
+            transaction_list[entity_id] = response_cost + transaction_list.get(
+                entity_id, 0
+            )
             return True
 
         except Exception as e:

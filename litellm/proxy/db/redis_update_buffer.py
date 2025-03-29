@@ -80,35 +80,32 @@ class RedisUpdateBuffer:
                 "redis_cache is None, skipping store_in_memory_spend_updates_in_redis"
             )
             return
-        async with prisma_client.in_memory_transaction_lock:
-            db_spend_update_transactions: DBSpendUpdateTransactions = (
-                DBSpendUpdateTransactions(
-                    user_list_transactions=prisma_client.user_list_transactions,
-                    end_user_list_transactions=prisma_client.end_user_list_transactions,
-                    key_list_transactions=prisma_client.key_list_transactions,
-                    team_list_transactions=prisma_client.team_list_transactions,
-                    team_member_list_transactions=prisma_client.team_member_list_transactions,
-                    org_list_transactions=prisma_client.org_list_transactions,
-                )
+        db_spend_update_transactions: DBSpendUpdateTransactions = (
+            DBSpendUpdateTransactions(
+                user_list_transactions=prisma_client.user_list_transactions,
+                end_user_list_transactions=prisma_client.end_user_list_transactions,
+                key_list_transactions=prisma_client.key_list_transactions,
+                team_list_transactions=prisma_client.team_list_transactions,
+                team_member_list_transactions=prisma_client.team_member_list_transactions,
+                org_list_transactions=prisma_client.org_list_transactions,
             )
+        )
 
-            # only store in redis if there are any updates to commit
-            if (
-                self._number_of_transactions_to_store_in_redis(
-                    db_spend_update_transactions
-                )
-                == 0
-            ):
-                return
+        # only store in redis if there are any updates to commit
+        if (
+            self._number_of_transactions_to_store_in_redis(db_spend_update_transactions)
+            == 0
+        ):
+            return
 
-            list_of_transactions = [safe_dumps(db_spend_update_transactions)]
-            await self.redis_cache.async_rpush(
-                key=REDIS_UPDATE_BUFFER_KEY,
-                values=list_of_transactions,
-            )
+        list_of_transactions = [safe_dumps(db_spend_update_transactions)]
+        await self.redis_cache.async_rpush(
+            key=REDIS_UPDATE_BUFFER_KEY,
+            values=list_of_transactions,
+        )
 
-            # clear the in-memory spend updates
-            RedisUpdateBuffer._clear_all_in_memory_spend_updates(prisma_client)
+        # clear the in-memory spend updates
+        RedisUpdateBuffer._clear_all_in_memory_spend_updates(prisma_client)
 
     @staticmethod
     def _number_of_transactions_to_store_in_redis(
