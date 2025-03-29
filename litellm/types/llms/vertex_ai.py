@@ -369,9 +369,15 @@ class ResponseTuningJob(TypedDict):
     updateTime: Optional[str]
 
 
+class VideoSegmentConfig(TypedDict, total=False):
+    startOffsetSec: int
+    endOffsetSec: int
+    intervalSec: int
+
+
 class InstanceVideo(TypedDict, total=False):
     gcsUri: str
-    videoSegmentConfig: Tuple[float, float, float]
+    videoSegmentConfig: VideoSegmentConfig
 
 
 class InstanceImage(TypedDict, total=False):
@@ -386,7 +392,7 @@ class Instance(TypedDict, total=False):
     video: InstanceVideo
 
 
-class VertexMultimodalEmbeddingRequest(TypedDict, total=False):
+class VertexMultimodalEmbeddingRequest(TypedDict):
     instances: List[Instance]
 
 
@@ -402,7 +408,7 @@ class MultimodalPrediction(TypedDict, total=False):
     videoEmbeddings: List[VideoEmbedding]
 
 
-class MultimodalPredictions(TypedDict, total=False):
+class MultimodalPredictions(TypedDict):
     predictions: List[MultimodalPrediction]
 
 

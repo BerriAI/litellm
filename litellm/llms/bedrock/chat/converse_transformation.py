@@ -67,6 +67,13 @@ class AmazonConverseConfig(BaseConfig):
         return "bedrock_converse"
 
     @classmethod
+    def get_config_blocks(cls) -> dict:
+        return {
+            "guardrailConfig": GuardrailConfigBlock,
+            "performanceConfig": PerformanceConfigBlock,
+        }
+
+    @classmethod
     def get_config(cls):
         return {
             k: v
@@ -394,7 +401,6 @@ class AmazonConverseConfig(BaseConfig):
         optional_params: dict,
         messages: Optional[List[AllMessageValues]] = None,
     ) -> CommonRequestObject:
-
         ## VALIDATE REQUEST
         """
         Bedrock doesn't support tool calling without `tools=` param specified.
@@ -420,11 +426,11 @@ class AmazonConverseConfig(BaseConfig):
             AmazonConverseConfig.__annotations__.keys()
         ) + ["top_k"]
         supported_tool_call_params = ["tools", "tool_choice"]
-        supported_guardrail_params = ["guardrailConfig"]
+        supported_config_params = list(self.get_config_blocks().keys())
         total_supported_params = (
             supported_converse_params
             + supported_tool_call_params
-            + supported_guardrail_params
+            + supported_config_params
         )
         inference_params.pop("json_mode", None)  # used for handling json_schema
 
@@ -463,12 +469,11 @@ class AmazonConverseConfig(BaseConfig):
             ),
         }
 
-        # Guardrail Config
-        guardrail_config: Optional[GuardrailConfigBlock] = None
-        request_guardrails_config = inference_params.pop("guardrailConfig", None)
-        if request_guardrails_config is not None:
-            guardrail_config = GuardrailConfigBlock(**request_guardrails_config)
-            data["guardrailConfig"] = guardrail_config
+        # Handle all config blocks
+        for config_name, config_class in self.get_config_blocks().items():
+            config_value = inference_params.pop(config_name, None)
+            if config_value is not None:
+                data[config_name] = config_class(**config_value)  # type: ignore
 
         # Tool Config
         if bedrock_tool_config is not None:
