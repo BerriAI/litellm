@@ -2080,7 +2080,12 @@ print(response)
 
 ## **Multi-Modal Embeddings**
 
-Usage
+
+Known Limitations:
+- Only supports 1 image / video / image per request
+- Only supports GCS or base64 encoded images / videos
+
+### Usage
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -2290,6 +2295,115 @@ embeddings = model.get_embeddings(
 )
 print(f"Image Embedding: {embeddings.image_embedding}")
 print(f"Text Embedding: {embeddings.text_embedding}")
+```
+
+</TabItem>
+</Tabs>
+
+
+### Text + Image + Video Embeddings
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+Text + Image 
+
+```python
+response = await litellm.aembedding(
+    model="vertex_ai/multimodalembedding@001",
+    input=["hey", "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"] # will be sent as a gcs image
+)
+```
+
+Text + Video 
+
+```python
+response = await litellm.aembedding(
+    model="vertex_ai/multimodalembedding@001",
+    input=["hey", "gs://my-bucket/embeddings/supermarket-video.mp4"] # will be sent as a gcs image
+)
+```
+
+Image + Video 
+
+```python
+response = await litellm.aembedding(
+    model="vertex_ai/multimodalembedding@001",
+    input=["gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png", "gs://my-bucket/embeddings/supermarket-video.mp4"] # will be sent as a gcs image
+)
+```
+
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM PROXY (Unified Endpoint)">
+
+1. Add model to config.yaml
+```yaml
+model_list:
+  - model_name: multimodalembedding@001
+    litellm_params:
+      model: vertex_ai/multimodalembedding@001
+      vertex_project: "adroit-crow-413218"
+      vertex_location: "us-central1"
+      vertex_credentials: adroit-crow-413218-a956eef1a2a8.json 
+
+litellm_settings:
+  drop_params: True
+```
+
+2. Start Proxy 
+
+```
+$ litellm --config /path/to/config.yaml
+```
+
+3. Make Request use OpenAI Python SDK, Langchain Python SDK
+
+
+Text + Image 
+
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+# # request sent to model set on litellm proxy, `litellm --model`
+response = client.embeddings.create(
+    model="multimodalembedding@001", 
+    input = ["hey", "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"],
+)
+
+print(response)
+```
+
+Text + Video 
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+# # request sent to model set on litellm proxy, `litellm --model`
+response = client.embeddings.create(
+    model="multimodalembedding@001", 
+    input = ["hey", "gs://my-bucket/embeddings/supermarket-video.mp4"],
+)
+
+print(response)
+```
+
+Image + Video 
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+# # request sent to model set on litellm proxy, `litellm --model`
+response = client.embeddings.create(
+    model="multimodalembedding@001", 
+    input = ["gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png", "gs://my-bucket/embeddings/supermarket-video.mp4"],
+)
+
+print(response)
 ```
 
 </TabItem>
