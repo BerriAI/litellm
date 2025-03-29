@@ -347,7 +347,3 @@ model LiteLLM_CronJob {
   ttl           DateTime // Time when the leader's lease expires
 }
 
-enum JobStatus {
-  ACTIVE
-  INACTIVE
-}
