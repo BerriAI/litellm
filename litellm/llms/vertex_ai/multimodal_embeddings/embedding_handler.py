@@ -1,5 +1,5 @@
 import json
-from typing import List, Literal, Optional, Union
+from typing import Literal, Optional, Union
 
 import httpx
 
@@ -14,15 +14,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexAIError,
     VertexLLM,
 )
-from litellm.types.llms.vertex_ai import (
-    Instance,
-    InstanceImage,
-    InstanceVideo,
-    MultimodalPredictions,
-    VertexMultimodalEmbeddingRequest,
-)
-from litellm.types.utils import Embedding, EmbeddingResponse
-from litellm.utils import is_base64_encoded
+from litellm.types.utils import EmbeddingResponse
 
 from .transformation import VertexAIMultimodalEmbedding
 
