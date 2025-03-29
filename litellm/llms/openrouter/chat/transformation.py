@@ -84,5 +84,11 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
                 model=chunk["model"],
                 choices=new_choices,
             )
+        except KeyError as e:
+            raise OpenRouterException(
+                message=f"KeyError: {e}, Got unexpected response from OpenRouter: {chunk}",
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
         except Exception as e:
             raise e

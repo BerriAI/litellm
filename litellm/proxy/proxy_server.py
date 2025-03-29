@@ -29,6 +29,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     TextCompletionResponse,
 )
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -215,7 +216,6 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
     _add_team_model_to_db,
-    check_if_team_id_matches_key,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     router as model_management_router,
@@ -463,6 +463,8 @@ async def proxy_startup_event(app: FastAPI):
     if premium_user is False:
         premium_user = _license_check.is_premium()
 
+    ## CHECK MASTER KEY IN ENVIRONMENT ##
+    master_key = get_secret_str("LITELLM_MASTER_KEY")
     ### LOAD CONFIG ###
     worker_config: Optional[Union[str, dict]] = get_secret("WORKER_CONFIG")  # type: ignore
     env_config_yaml: Optional[str] = get_secret_str("CONFIG_FILE_PATH")
@@ -510,9 +512,6 @@ async def proxy_startup_event(app: FastAPI):
             if isinstance(worker_config, dict):
                 await initialize(**worker_config)
 
-    ### LOAD MASTER KEY ###
-    # check if master key set in environment - load from there
-    master_key = get_secret("LITELLM_MASTER_KEY", None)  # type: ignore
     # check if DATABASE_URL in environment - load from there
     if prisma_client is None:
         _db_url: Optional[str] = get_secret("DATABASE_URL", None)  # type: ignore
@@ -1526,7 +1525,7 @@ class ProxyConfig:
                 yaml.dump(new_config, config_file, default_flow_style=False)
 
     def _check_for_os_environ_vars(
-        self, config: dict, depth: int = 0, max_depth: int = 10
+        self, config: dict, depth: int = 0, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH
     ) -> dict:
         """
         Check for os.environ/ variables in the config and replace them with the actual values.
@@ -1975,6 +1974,7 @@ class ProxyConfig:
 
             if master_key and master_key.startswith("os.environ/"):
                 master_key = get_secret(master_key)  # type: ignore
+
                 if not isinstance(master_key, str):
                     raise Exception(
                         "Master key must be a string. Current type - {}".format(
@@ -3437,6 +3437,7 @@ async def model_list(
     else:
         proxy_model_list = llm_router.get_model_names()
         model_access_groups = llm_router.get_model_access_groups()
+
     key_models = get_key_models(
         user_api_key_dict=user_api_key_dict,
         proxy_model_list=proxy_model_list,
@@ -3446,6 +3447,7 @@ async def model_list(
     team_models: List[str] = user_api_key_dict.team_models
 
     if team_id:
+        key_models = []
         team_object = await get_team_object(
             team_id=team_id,
             prisma_client=prisma_client,
@@ -3462,7 +3464,7 @@ async def model_list(
     )
 
     all_models = get_complete_model_list(
-        key_models=key_models if not team_models else [],
+        key_models=key_models,
         team_models=team_models,
         proxy_model_list=proxy_model_list,
         user_model=user_model,
@@ -5494,9 +5496,40 @@ async def transform_request(request: TransformRequestBody):
     return return_raw_request(endpoint=request.call_type, kwargs=request.request_body)
 
 
+async def _check_if_model_is_user_added(
+    models: List[Dict],
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: Optional[PrismaClient],
+) -> List[Dict]:
+    """
+    Check if model is in db
+
+    Check if db model is 'created_by' == user_api_key_dict.user_id
+
+    Only return models that match
+    """
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+    filtered_models = []
+    for model in models:
+        id = model.get("model_info", {}).get("id", None)
+        if id is None:
+            continue
+        db_model = await prisma_client.db.litellm_proxymodeltable.find_unique(
+            where={"model_id": id}
+        )
+        if db_model is not None:
+            if db_model.created_by == user_api_key_dict.user_id:
+                filtered_models.append(model)
+    return filtered_models
+
+
 @router.get(
     "/v2/model/info",
-    description="v2 - returns all the models set on the config.yaml, shows 'user_access' = True if the user has access to the model. Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)",
+    description="v2 - returns models available to the user based on their API key permissions. Shows model info from config.yaml (except api key and api base). Filter to just user-added models with ?user_models_only=true",
     tags=["model management"],
     dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
@@ -5505,6 +5538,9 @@ async def model_info_v2(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     model: Optional[str] = fastapi.Query(
         None, description="Specify the model name (optional)"
+    ),
+    user_models_only: Optional[bool] = fastapi.Query(
+        False, description="Only return models added by this user"
     ),
     debug: Optional[bool] = False,
 ):
@@ -5535,6 +5571,20 @@ async def model_info_v2(
 
     if model is not None:
         all_models = [m for m in all_models if m["model_name"] == model]
+
+    if user_models_only is True:
+        """
+        Check if model is in db
+
+        Check if db model is 'created_by' == user_api_key_dict.user_id
+
+        Only return models that match
+        """
+        all_models = await _check_if_model_is_user_added(
+            models=all_models,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        )
 
     # fill in model info based on config.yaml and litellm model_prices_and_context_window.json
     for _model in all_models:
@@ -6847,6 +6897,14 @@ async def login(request: Request):  # noqa: PLR0915
         )
         user_email = getattr(_user_row, "user_email", "unknown")
         _password = getattr(_user_row, "password", "unknown")
+
+        if _password is None:
+            raise ProxyException(
+                message="User has no password set. Please set a password for the user via `/user/update`.",
+                type=ProxyErrorTypes.auth_error,
+                param="password",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
 
         # check if password == _user_row.password
         hash_password = hash_token(token=password)

@@ -5744,13 +5744,15 @@ def trim_messages(
         return messages
 
 
-def get_valid_models(check_provider_endpoint: bool = False) -> List[str]:
+def get_valid_models(
+    check_provider_endpoint: bool = False, custom_llm_provider: Optional[str] = None
+) -> List[str]:
     """
     Returns a list of valid LLMs based on the set environment variables
 
     Args:
         check_provider_endpoint: If True, will check the provider's endpoint for valid models.
-
+        custom_llm_provider: If provided, will only check the provider's endpoint for valid models.
     Returns:
         A list of valid LLMs
     """
@@ -5762,6 +5764,9 @@ def get_valid_models(check_provider_endpoint: bool = False) -> List[str]:
         valid_models = []
 
         for provider in litellm.provider_list:
+            if custom_llm_provider and provider != custom_llm_provider:
+                continue
+
             # edge case litellm has together_ai as a provider, it should be togetherai
             env_provider_1 = provider.replace("_", "")
             env_provider_2 = provider
@@ -5783,10 +5788,17 @@ def get_valid_models(check_provider_endpoint: bool = False) -> List[str]:
                 provider=LlmProviders(provider),
             )
 
+            if custom_llm_provider and provider != custom_llm_provider:
+                continue
+
             if provider == "azure":
                 valid_models.append("Azure-LLM")
             elif provider_config is not None and check_provider_endpoint:
-                valid_models.extend(provider_config.get_models())
+                try:
+                    models = provider_config.get_models()
+                    valid_models.extend(models)
+                except Exception as e:
+                    verbose_logger.debug(f"Error getting valid models: {e}")
             else:
                 models_for_provider = litellm.models_by_provider.get(provider, [])
                 valid_models.extend(models_for_provider)
@@ -6364,6 +6376,11 @@ class ProviderConfigManager:
             return litellm.FireworksAIAudioTranscriptionConfig()
         elif litellm.LlmProviders.DEEPGRAM == provider:
             return litellm.DeepgramAudioTranscriptionConfig()
+        elif litellm.LlmProviders.OPENAI == provider:
+            if "gpt-4o" in model:
+                return litellm.OpenAIGPTAudioTranscriptionConfig()
+            else:
+                return litellm.OpenAIWhisperAudioTranscriptionConfig()
         return None
 
     @staticmethod
@@ -6395,10 +6412,16 @@ class ProviderConfigManager:
             return litellm.FireworksAIConfig()
         elif LlmProviders.OPENAI == provider:
             return litellm.OpenAIGPTConfig()
+        elif LlmProviders.GEMINI == provider:
+            return litellm.GeminiModelInfo()
         elif LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyChatConfig()
         elif LlmProviders.TOPAZ == provider:
             return litellm.TopazModelInfo()
+        elif LlmProviders.ANTHROPIC == provider:
+            return litellm.AnthropicModelInfo()
+        elif LlmProviders.XAI == provider:
+            return litellm.XAIModelInfo()
 
         return None
 
