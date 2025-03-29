@@ -14,7 +14,7 @@ from mcp.client.sse import sse_client
 from mcp.types import Tool as MCPTool
 
 from litellm._logging import verbose_logger
-from litellm.types.mcp_server.mcp_server_manager import MCPSSEServer
+from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPSSEServer
 
 
 class MCPServerManager:
@@ -46,11 +46,14 @@ class MCPServerManager:
         Load the MCP Servers from the config
         """
         for server_name, server_config in mcp_servers_config.items():
+            _mcp_info: dict = server_config.get("mcp_info", None) or {}
+            mcp_info = MCPInfo(**_mcp_info)
+            mcp_info["server_name"] = server_name
             self.mcp_servers.append(
                 MCPSSEServer(
                     name=server_name,
                     url=server_config["url"],
-                    mcp_info=server_config.get("mcp_info", None),
+                    mcp_info=mcp_info,
                 )
             )
         verbose_logger.debug(
