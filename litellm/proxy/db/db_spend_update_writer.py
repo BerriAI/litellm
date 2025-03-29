@@ -436,7 +436,7 @@ class DBSpendUpdateWriter:
 
             try:
                 db_spend_update_transactions = (
-                    await self.redis_update_buffer.get_all_update_transactions_from_redis()
+                    await self.redis_update_buffer.get_all_update_transactions_from_redis_buffer()
                 )
                 if db_spend_update_transactions is not None:
                     await DBSpendUpdateWriter._commit_spend_updates_to_db(
