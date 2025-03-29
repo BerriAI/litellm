@@ -13,7 +13,7 @@ sys.path.insert(
 from litellm.llms.vertex_ai.multimodal_embeddings.transformation import (
     VertexAIMultimodalEmbeddingConfig,
 )
-from litellm.types.llms.vertex_ai import Instance, InstanceImage
+from litellm.types.llms.vertex_ai import Instance, InstanceImage, InstanceVideo
 
 
 class TestVertexMultimodalEmbedding:
@@ -35,3 +35,44 @@ class TestVertexMultimodalEmbedding:
         ]
         assert self.config._process_input_element(input_data[0]) == expected_output[0]
         assert self.config._process_input_element(input_data[1]) == expected_output[1]
+
+    def test_process_str_and_video_input(self):
+        input_data = ["hi", "gs://my-bucket/embeddings/supermarket-video.mp4"]
+        expected_output = [
+            Instance(
+                text="hi",
+                video=InstanceVideo(
+                    gcsUri="gs://my-bucket/embeddings/supermarket-video.mp4"
+                ),
+            ),
+        ]
+        assert self.config.process_openai_embedding_input(input_data) == expected_output
+
+    def test_process_list_of_str_and_str_input(self):
+        input_data = ["hi", "hello"]
+        expected_output = [
+            Instance(text="hi"),
+            Instance(text="hello"),
+        ]
+        assert self.config.process_openai_embedding_input(input_data) == expected_output
+
+    def test_process_list_of_str_and_video_input(self):
+        input_data = [
+            "hi",
+            "hello",
+            "gs://my-bucket/embeddings/supermarket-video.mp4",
+            "hey",
+        ]
+        expected_output = [
+            Instance(text="hi"),
+            Instance(
+                text="hello",
+                video=InstanceVideo(
+                    gcsUri="gs://my-bucket/embeddings/supermarket-video.mp4"
+                ),
+            ),
+            Instance(text="hey"),
+        ]
+        assert (
+            self.config.process_openai_embedding_input(input_data) == expected_output
+        ), f"Expected {expected_output}, but got {self.config.process_openai_embedding_input(input_data)}"

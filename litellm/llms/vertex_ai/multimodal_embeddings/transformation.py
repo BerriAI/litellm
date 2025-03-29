@@ -97,24 +97,50 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
             _input (Union[list, str]): The input data to process.
 
         Returns:
-            List[Instance]: A list of processed VertexAI Instance objects.
+            Union[Instance, List[Instance]]: Either a single Instance or list of Instance objects.
         """
-
-        _input_list = None
-        if not isinstance(_input, list):
-            _input_list = [_input]
-        else:
-            _input_list = _input
-
+        _input_list = [_input] if not isinstance(_input, list) else _input
         processed_instances = []
-        for element in _input_list:
-            if isinstance(element, str):
-                instance = Instance(**self._process_input_element(element))
-            elif isinstance(element, dict):
-                instance = Instance(**element)
+
+        i = 0
+        while i < len(_input_list):
+            current = _input_list[i]
+
+            # Look ahead for potential media elements
+            next_elem = _input_list[i + 1] if i + 1 < len(_input_list) else None
+
+            # If current is a text and next is a GCS URI, or current is a GCS URI
+            if isinstance(current, str):
+                instance_args = {}
+
+                # Process current element
+                if "gs://" not in current:
+                    instance_args["text"] = current
+                elif "mp4" in current:
+                    instance_args["video"] = InstanceVideo(gcsUri=current)
+                else:
+                    instance_args["image"] = InstanceImage(gcsUri=current)
+
+                # Check next element if it's a GCS URI
+                if next_elem and isinstance(next_elem, str) and "gs://" in next_elem:
+                    if "mp4" in next_elem:
+                        instance_args["video"] = InstanceVideo(gcsUri=next_elem)
+                    else:
+                        instance_args["image"] = InstanceImage(gcsUri=next_elem)
+                    i += 2  # Skip next element since we processed it
+                else:
+                    i += 1  # Move to next element
+
+                processed_instances.append(Instance(**instance_args))
+                continue
+
+            # Handle dict or other types
+            if isinstance(current, dict):
+                instance = Instance(**current)
+                processed_instances.append(instance)
             else:
-                raise ValueError(f"Unsupported input type: {type(element)}")
-            processed_instances.append(instance)
+                raise ValueError(f"Unsupported input type: {type(current)}")
+            i += 1
 
         return processed_instances
 
