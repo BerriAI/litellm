@@ -39,7 +39,9 @@ def test_aaaasschema_migration_check(schema_setup, monkeypatch):
 
         if not temp_migrations_dir.exists() or not any(temp_migrations_dir.iterdir()):
             print("No existing migrations found - first migration needed")
-            pytest.fail("No existing migrations found - first migration needed")
+            pytest.fail(
+                "No existing migrations found - first migration needed. Run `litellm/ci_cd/baseline_db.py` to create new migration -E.g. `python litellm/ci_cd/baseline_db_migration.py`."
+            )
 
         # Apply all existing migrations
         subprocess.run(
@@ -72,7 +74,7 @@ def test_aaaasschema_migration_check(schema_setup, monkeypatch):
             print("Schema differences:")
             print(diff_result.stdout)
             pytest.fail(
-                "Schema changes detected - new migration required. Run 'prisma migrate dev' to create new migration."
+                "Schema changes detected - new migration required. Run `litellm/ci_cd/run_migration.py` to create new migration -E.g. `python litellm/ci_cd/run_migration.py <migration_name>`."
             )
         else:
             print("No schema changes detected. Migration not needed.")
