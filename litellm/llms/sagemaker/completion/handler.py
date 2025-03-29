@@ -627,7 +627,7 @@ class SagemakerLLM(BaseAWSLLM):
         response = client.invoke_endpoint(
             EndpointName={model},
             ContentType="application/json",
-            Body={data}, # type: ignore
+            Body=f"{data!r}",  # Use !r for safe representation
             CustomAttributes="accept_eula=true",
         )"""  # type: ignore
         logging_obj.pre_call(
