@@ -18,6 +18,7 @@ from typing import (
     List,
     Optional,
     Tuple,
+    Union,
     cast,
     get_args,
     get_origin,
@@ -36,7 +37,7 @@ if TYPE_CHECKING:
 
     from litellm.integrations.opentelemetry import OpenTelemetry
 
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     Span = Any
     OpenTelemetry = Any
@@ -763,9 +764,9 @@ model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
     dual_cache=user_api_key_cache
 )
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
-redis_usage_cache: Optional[RedisCache] = (
-    None  # redis cache used for tracking spend, tpm/rpm limits
-)
+redis_usage_cache: Optional[
+    RedisCache
+] = None  # redis cache used for tracking spend, tpm/rpm limits
 user_custom_auth = None
 user_custom_key_generate = None
 user_custom_sso = None
@@ -818,7 +819,6 @@ async def check_request_disconnection(request: Request, llm_api_call_task):
     while time.time() - start_time < 600:
         await asyncio.sleep(1)
         if await request.is_disconnected():
-
             # cancel the LLM API Call task if any passed - this is passed from individual providers
             # Example OpenAI, Azure, VertexAI etc
             llm_api_call_task.cancel()
@@ -1092,9 +1092,9 @@ async def update_cache(  # noqa: PLR0915
         _id = "team_id:{}".format(team_id)
         try:
             # Fetch the existing cost for the given user
-            existing_spend_obj: Optional[LiteLLM_TeamTable] = (
-                await user_api_key_cache.async_get_cache(key=_id)
-            )
+            existing_spend_obj: Optional[
+                LiteLLM_TeamTable
+            ] = await user_api_key_cache.async_get_cache(key=_id)
             if existing_spend_obj is None:
                 # do nothing if team not in api key cache
                 return
@@ -1589,7 +1589,7 @@ class ProxyConfig:
 
                     # users can pass os.environ/ variables on the proxy - we should read them from the env
                     for key, value in cache_params.items():
-                        if type(value) is str and value.startswith("os.environ/"):
+                        if isinstance(value, str) and value.startswith("os.environ/"):
                             cache_params[key] = get_secret(value)
 
                     ## to pass a complete url, or set ssl=True, etc. just set it as `os.environ[REDIS_URL] = <your-redis-url>`, _redis.py checks for REDIS specific environment variables
@@ -1610,7 +1610,6 @@ class ProxyConfig:
 
                     litellm.guardrail_name_config_map = guardrail_name_config_map
                 elif key == "callbacks":
-
                     initialize_callbacks_on_proxy(
                         value=value,
                         premium_user=premium_user,
@@ -2765,9 +2764,9 @@ async def initialize(  # noqa: PLR0915
         user_api_base = api_base
         dynamic_config[user_model]["api_base"] = api_base
     if api_version:
-        os.environ["AZURE_API_VERSION"] = (
-            api_version  # set this for azure - litellm can read this from the env
-        )
+        os.environ[
+            "AZURE_API_VERSION"
+        ] = api_version  # set this for azure - litellm can read this from the env
     if max_tokens:  # model-specific param
         dynamic_config[user_model]["max_tokens"] = max_tokens
     if temperature:  # model-specific param
@@ -2810,7 +2809,6 @@ async def async_assistants_data_generator(
     try:
         time.time()
         async with response as chunk:
-
             ### CALL HOOKS ### - modify outgoing data
             chunk = await proxy_logging_obj.async_post_call_streaming_hook(
                 user_api_key_dict=user_api_key_dict, response=chunk
@@ -4675,7 +4673,6 @@ async def get_thread(
     global proxy_logging_obj
     data: Dict = {}
     try:
-
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
             data=data,
@@ -6385,7 +6382,6 @@ async def alerting_settings(
 
     for field_name, field_info in SlackAlertingArgs.model_fields.items():
         if field_name in allowed_args:
-
             _stored_in_db: Optional[bool] = None
             if field_name in alerting_args_dict:
                 _stored_in_db = True
@@ -7333,7 +7329,6 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
                 "success_callback" in updated_litellm_settings
                 and "success_callback" in config["litellm_settings"]
             ):
-
                 # check both success callback are lists
                 if isinstance(
                     config["litellm_settings"]["success_callback"], list
@@ -7588,7 +7583,6 @@ async def get_config_list(
 
     for field_name, field_info in ConfigGeneralSettings.model_fields.items():
         if field_name in allowed_args:
-
             ## HANDLE TYPED DICT
 
             typed_dict_type = allowed_args[field_name]["type"]
@@ -7621,9 +7615,9 @@ async def get_config_list(
                             hasattr(sub_field_info, "description")
                             and sub_field_info.description is not None
                         ):
-                            nested_fields[idx].field_description = (
-                                sub_field_info.description
-                            )
+                            nested_fields[
+                                idx
+                            ].field_description = sub_field_info.description
                         idx += 1
 
                     _stored_in_db = None

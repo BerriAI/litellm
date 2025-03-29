@@ -180,7 +180,6 @@ class CohereChatConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-
         ## Load Config
         for k, v in litellm.CohereChatConfig.get_config().items():
             if (
@@ -222,7 +221,6 @@ class CohereChatConfig(BaseConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-
         try:
             raw_response_json = raw_response.json()
             model_response.choices[0].message.content = raw_response_json["text"]  # type: ignore

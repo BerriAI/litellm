@@ -16,7 +16,6 @@ def _is_user_team_admin(
         if (
             member.user_id is not None and member.user_id == user_api_key_dict.user_id
         ) and member.role == "admin":
-
             return True
 
     return False

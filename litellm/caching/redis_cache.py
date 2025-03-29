@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     cluster_pipeline = ClusterPipeline
     async_redis_client = Redis
     async_redis_cluster_client = RedisCluster
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     pipeline = Any
     cluster_pipeline = Any
@@ -57,7 +57,6 @@ class RedisCache(BaseCache):
         socket_timeout: Optional[float] = 5.0,  # default 5 second timeout
         **kwargs,
     ):
-
         from litellm._service_logger import ServiceLogging
 
         from .._redis import get_redis_client, get_redis_connection_pool

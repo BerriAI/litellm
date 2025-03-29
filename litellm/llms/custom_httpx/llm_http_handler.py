@@ -41,7 +41,6 @@ else:
 
 
 class BaseLLMHTTPHandler:
-
     async def _make_common_async_call(
         self,
         async_httpx_client: AsyncHTTPHandler,
@@ -109,7 +108,6 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj,
         stream: bool = False,
     ) -> httpx.Response:
-
         max_retry_on_unprocessable_entity_error = (
             provider_config.max_retry_on_unprocessable_entity_error
         )
@@ -599,7 +597,6 @@ class BaseLLMHTTPHandler:
         aembedding: bool = False,
         headers={},
     ) -> EmbeddingResponse:
-
         provider_config = ProviderConfigManager.get_provider_embedding_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
         )
@@ -742,7 +739,6 @@ class BaseLLMHTTPHandler:
         api_base: Optional[str] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ) -> RerankResponse:
-
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
             api_key=api_key,
@@ -828,7 +824,6 @@ class BaseLLMHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ) -> RerankResponse:
-
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider)

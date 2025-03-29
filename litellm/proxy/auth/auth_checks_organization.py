@@ -44,9 +44,10 @@ def organization_role_based_access_check(
 
     # Checks if route is an Org Admin Only Route
     if route in LiteLLMRoutes.org_admin_only_routes.value:
-        _user_organizations, _user_organization_role_mapping = (
-            get_user_organization_info(user_object)
-        )
+        (
+            _user_organizations,
+            _user_organization_role_mapping,
+        ) = get_user_organization_info(user_object)
 
         if user_object.organization_memberships is None:
             raise ProxyException(
@@ -84,9 +85,10 @@ def organization_role_based_access_check(
             )
     elif route == "/team/new":
         # if user is part of multiple teams, then they need to specify the organization_id
-        _user_organizations, _user_organization_role_mapping = (
-            get_user_organization_info(user_object)
-        )
+        (
+            _user_organizations,
+            _user_organization_role_mapping,
+        ) = get_user_organization_info(user_object)
         if (
             user_object.organization_memberships is not None
             and len(user_object.organization_memberships) > 0

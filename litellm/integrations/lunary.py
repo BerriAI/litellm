@@ -20,7 +20,6 @@ def parse_tool_calls(tool_calls):
         return None
 
     def clean_tool_call(tool_call):
-
         serialized = {
             "type": tool_call.type,
             "id": tool_call.id,
@@ -36,7 +35,6 @@ def parse_tool_calls(tool_calls):
 
 
 def parse_messages(input):
-
     if input is None:
         return None
 

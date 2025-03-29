@@ -14,7 +14,6 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class DeepSeekChatConfig(OpenAIGPTConfig):
-
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str
     ) -> List[AllMessageValues]:

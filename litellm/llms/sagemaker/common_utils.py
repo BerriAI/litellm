@@ -34,7 +34,6 @@ class AWSEventStreamDecoder:
     def _chunk_parser_messages_api(
         self, chunk_data: dict
     ) -> StreamingChatCompletionChunk:
-
         openai_chunk = StreamingChatCompletionChunk(**chunk_data)
 
         return openai_chunk
@@ -192,7 +191,6 @@ class AWSEventStreamDecoder:
 def get_response_stream_shape():
     global _response_stream_shape_cache
     if _response_stream_shape_cache is None:
-
         from botocore.loaders import Loader
         from botocore.model import ServiceModel
 

@@ -399,7 +399,6 @@ class ModelManagementAuthChecks:
         prisma_client: PrismaClient,
         premium_user: bool,
     ) -> Literal[True]:
-
         ## Check team model auth
         if (
             model_params.model_info is not None
@@ -579,7 +578,6 @@ async def add_new_model(
     )
 
     try:
-
         if prisma_client is None:
             raise HTTPException(
                 status_code=500,
@@ -717,7 +715,6 @@ async def update_model(
     )
 
     try:
-
         if prisma_client is None:
             raise HTTPException(
                 status_code=500,
