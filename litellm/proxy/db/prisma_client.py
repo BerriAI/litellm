@@ -180,42 +180,6 @@ class PrismaManager:
             return False
 
     @staticmethod
-    def _copy_spend_tracking_migrations(prisma_dir: str) -> bool:
-        import shutil
-        from pathlib import Path
-
-        """
-        Check for and copy over spend tracking migrations if they exist in the deploy directory.
-        Returns True if migrations were found and copied, False otherwise.
-        """
-        try:
-            # Get the current file's directory
-            current_dir = Path(__file__).parent
-
-            # Check for migrations in the deploy directory (../../deploy/migrations)
-            deploy_migrations_dir = (
-                current_dir.parent.parent.parent / "deploy" / "migrations"
-            )
-
-            # Local migrations directory
-            local_migrations_dir = Path(prisma_dir + "/migrations")
-
-            if deploy_migrations_dir.exists():
-                # Create local migrations directory if it doesn't exist
-                local_migrations_dir.mkdir(parents=True, exist_ok=True)
-
-                # Copy all migration files
-                # Copy entire migrations folder recursively
-                shutil.copytree(
-                    deploy_migrations_dir, local_migrations_dir, dirs_exist_ok=True
-                )
-
-                return True
-            return False
-        except Exception:
-            return False
-
-    @staticmethod
     def _get_migration_names(migrations_dir: str) -> list:
         """Get all migration directory names from the migrations folder"""
         migration_paths = glob.glob(f"{migrations_dir}/*/migration.sql")
@@ -259,44 +223,20 @@ class PrismaManager:
             os.chdir(prisma_dir)
             try:
                 if use_migrate:
-                    PrismaManager._copy_spend_tracking_migrations(
-                        prisma_dir
-                    )  # place a migration in the migrations directory
-                    verbose_proxy_logger.info("Running prisma migrate deploy")
                     try:
-                        subprocess.run(
-                            ["prisma", "migrate", "deploy"],
-                            timeout=60,
-                            check=True,
-                            capture_output=True,
-                            text=True,
+                        from litellm_proxy_extras.utils import ProxyExtrasDBManager
+                    except ImportError as e:
+                        verbose_proxy_logger.error(
+                            f"\033[1;31mLiteLLM: Failed to import proxy extras. Got {e}\033[0m"
                         )
-                        verbose_proxy_logger.info("prisma migrate deploy completed")
+                        return False
 
-                        # Resolve all migrations in the migrations directory
-                        migrations_dir = os.path.join(prisma_dir, "migrations")
-                        PrismaManager._resolve_all_migrations(migrations_dir)
+                    prisma_dir = PrismaManager._get_prisma_dir()
+                    schema_path = prisma_dir + "/schema.prisma"
 
-                        return True
-                    except subprocess.CalledProcessError as e:
-                        verbose_proxy_logger.warning(
-                            f"prisma db error: {e.stderr}, e: {e.stdout}"
-                        )
-                        if (
-                            "P3005" in e.stderr
-                            and "database schema is not empty" in e.stderr
-                        ):
-                            verbose_proxy_logger.info("Creating baseline migration")
-                            if PrismaManager._create_baseline_migration(schema_path):
-                                verbose_proxy_logger.info(
-                                    "Resolving all migrations after baseline"
-                                )
-
-                                # Resolve all migrations after baseline
-                                migrations_dir = os.path.join(prisma_dir, "migrations")
-                                PrismaManager._resolve_all_migrations(migrations_dir)
-
-                                return True
+                    return ProxyExtrasDBManager.setup_database(
+                        schema_path=schema_path, use_migrate=use_migrate
+                    )
                 else:
                     # Use prisma db push with increased timeout
                     subprocess.run(
