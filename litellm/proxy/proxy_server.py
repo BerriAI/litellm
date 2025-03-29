@@ -127,6 +127,9 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    global_mcp_server_manager,
+)
 from litellm.proxy._experimental.mcp_server.server import router as mcp_router
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
@@ -1960,6 +1963,10 @@ class ProxyConfig:
         mcp_tools_config = config.get("mcp_tools", None)
         if mcp_tools_config:
             global_mcp_tool_registry.load_tools_from_config(mcp_tools_config)
+
+        mcp_servers_config = config.get("mcp_servers", None)
+        if mcp_servers_config:
+            global_mcp_server_manager.load_servers_from_config(mcp_servers_config)
 
         ## CREDENTIALS
         credential_list_dict = self.load_credential_list(config=config)
