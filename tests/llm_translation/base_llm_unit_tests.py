@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, Mock, patch
 import os
 import uuid
 import time
+import base64
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -890,6 +891,50 @@ class BaseLLMChatTest(ABC):
         assert cost > 0
 
 
+    def test_supports_audio_input(self):
+        from litellm.utils import return_raw_request, supports_audio_input
+        from litellm.types.utils import CallTypes
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+
+        litellm.drop_params = True
+        base_completion_call_args = self.get_base_completion_call_args()
+        if not supports_audio_input(base_completion_call_args["model"], None):
+            print("Model does not support audio input")
+            pytest.skip("Model does not support audio input")
+
+        url = "https://openaiassets.blob.core.windows.net/$web/API/docs/audio/alloy.wav"
+        response = httpx.get(url)
+        response.raise_for_status()
+        wav_data = response.content
+        audio_format = "wav"
+        encoded_string = base64.b64encode(wav_data).decode("utf-8")
+
+        raw_request = return_raw_request(
+            endpoint=CallTypes.completion,
+            kwargs={
+                **base_completion_call_args, 
+                "modalities": ["text", "audio"],
+                "audio": {"voice": "alloy", "format": audio_format},
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "What is in this recording?"},
+                            {
+                                "type": "input_audio",
+                                "input_audio": {"data": encoded_string, "format": "wav"},
+                            },
+                        ],
+                    },
+                ]
+            }
+        )
+        print("raw_request: ", raw_request)
+
+        assert encoded_string in json.dumps(raw_request), "Audio data not sent to gemini"
+
 class BaseOSeriesModelsTest(ABC):  # test across azure/openai
     @abstractmethod
     def get_base_completion_call_args(self):
@@ -1089,3 +1134,5 @@ class BaseAnthropicChatTest(ABC):
         )
 
         print(response)
+
+ 
