@@ -49,10 +49,11 @@ class VertexAIFilesHandler(GCSBucketBase):
             service_account_json=gcs_logging_config["path_service_account"],
         )
         bucket_name = gcs_logging_config["bucket_name"]
-        logging_payload, object_name = (
-            vertex_ai_files_transformation.transform_openai_file_content_to_vertex_ai_file_content(
-                openai_file_content=create_file_data.get("file")
-            )
+        (
+            logging_payload,
+            object_name,
+        ) = vertex_ai_files_transformation.transform_openai_file_content_to_vertex_ai_file_content(
+            openai_file_content=create_file_data.get("file")
         )
         gcs_upload_response = await self._log_json_data_on_gcs(
             headers=headers,

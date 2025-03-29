@@ -196,7 +196,6 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             return data
 
         except HTTPException as e:
-
             if (
                 e.status_code == 400
                 and isinstance(e.detail, dict)

@@ -43,9 +43,9 @@ class RedisUpdateBuffer:
         """
         from litellm.proxy.proxy_server import general_settings
 
-        _use_redis_transaction_buffer: Optional[Union[bool, str]] = (
-            general_settings.get("use_redis_transaction_buffer", False)
-        )
+        _use_redis_transaction_buffer: Optional[
+            Union[bool, str]
+        ] = general_settings.get("use_redis_transaction_buffer", False)
         if isinstance(_use_redis_transaction_buffer, str):
             _use_redis_transaction_buffer = str_to_bool(_use_redis_transaction_buffer)
         if _use_redis_transaction_buffer is None:
@@ -78,15 +78,13 @@ class RedisUpdateBuffer:
                 "redis_cache is None, skipping store_in_memory_spend_updates_in_redis"
             )
             return
-        db_spend_update_transactions: DBSpendUpdateTransactions = (
-            DBSpendUpdateTransactions(
-                user_list_transactions=prisma_client.user_list_transactions,
-                end_user_list_transactions=prisma_client.end_user_list_transactions,
-                key_list_transactions=prisma_client.key_list_transactions,
-                team_list_transactions=prisma_client.team_list_transactions,
-                team_member_list_transactions=prisma_client.team_member_list_transactions,
-                org_list_transactions=prisma_client.org_list_transactions,
-            )
+        db_spend_update_transactions: DBSpendUpdateTransactions = DBSpendUpdateTransactions(
+            user_list_transactions=prisma_client.user_list_transactions,
+            end_user_list_transactions=prisma_client.end_user_list_transactions,
+            key_list_transactions=prisma_client.key_list_transactions,
+            team_list_transactions=prisma_client.team_list_transactions,
+            team_member_list_transactions=prisma_client.team_member_list_transactions,
+            org_list_transactions=prisma_client.org_list_transactions,
         )
 
         # only store in redis if there are any updates to commit

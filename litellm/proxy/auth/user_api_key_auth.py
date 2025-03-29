@@ -206,7 +206,6 @@ def get_rbac_role(jwt_handler: JWTHandler, scopes: List[str]) -> str:
 
 
 def get_model_from_request(request_data: dict, route: str) -> Optional[str]:
-
     # First try to get model from request_data
     model = request_data.get("model")
 
@@ -229,7 +228,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
     azure_apim_header: Optional[str],
     request_data: dict,
 ) -> UserAPIKeyAuth:
-
     from litellm.proxy.proxy_server import (
         general_settings,
         jwt_handler,
@@ -251,7 +249,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
     valid_token: Optional[UserAPIKeyAuth] = None
 
     try:
-
         # get the request body
 
         await pre_db_read_auth_checks(
@@ -514,23 +511,23 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     proxy_logging_obj=proxy_logging_obj,
                 )
                 if _end_user_object is not None:
-                    end_user_params["allowed_model_region"] = (
-                        _end_user_object.allowed_model_region
-                    )
+                    end_user_params[
+                        "allowed_model_region"
+                    ] = _end_user_object.allowed_model_region
                     if _end_user_object.litellm_budget_table is not None:
                         budget_info = _end_user_object.litellm_budget_table
                         if budget_info.tpm_limit is not None:
-                            end_user_params["end_user_tpm_limit"] = (
-                                budget_info.tpm_limit
-                            )
+                            end_user_params[
+                                "end_user_tpm_limit"
+                            ] = budget_info.tpm_limit
                         if budget_info.rpm_limit is not None:
-                            end_user_params["end_user_rpm_limit"] = (
-                                budget_info.rpm_limit
-                            )
+                            end_user_params[
+                                "end_user_rpm_limit"
+                            ] = budget_info.rpm_limit
                         if budget_info.max_budget is not None:
-                            end_user_params["end_user_max_budget"] = (
-                                budget_info.max_budget
-                            )
+                            end_user_params[
+                                "end_user_max_budget"
+                            ] = budget_info.max_budget
             except Exception as e:
                 if isinstance(e, litellm.BudgetExceededError):
                     raise e
@@ -801,7 +798,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             # Check 3. Check if user is in their team budget
             if valid_token.team_member_spend is not None:
                 if prisma_client is not None:
-
                     _cache_key = f"{valid_token.team_id}_{valid_token.user_id}"
 
                     team_member_info = await user_api_key_cache.async_get_cache(

@@ -394,7 +394,6 @@ class PredibaseChatCompletion:
         logger_fn=None,
         headers={},
     ) -> ModelResponse:
-
         async_handler = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.PREDIBASE,
             params={"timeout": timeout},

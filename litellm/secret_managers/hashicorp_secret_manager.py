@@ -34,7 +34,7 @@ class HashicorpSecretManager(BaseSecretManager):
         # Validate environment
         if not self.vault_token:
             raise ValueError(
-                "Missing Vault token. Please set VAULT_TOKEN in your environment."
+                "Missing Vault token. Please set HCP_VAULT_TOKEN in your environment."
             )
 
         litellm.secret_manager_client = self
@@ -90,9 +90,9 @@ class HashicorpSecretManager(BaseSecretManager):
             headers["X-Vault-Namespace"] = self.vault_namespace
         try:
             # We use the client cert and key for mutual TLS
-            resp = httpx.post(
+            client = httpx.Client(cert=(self.tls_cert_path, self.tls_key_path))
+            resp = client.post(
                 login_url,
-                cert=(self.tls_cert_path, self.tls_key_path),
                 headers=headers,
                 json=self._get_tls_cert_auth_body(),
             )
