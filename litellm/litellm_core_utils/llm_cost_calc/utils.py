@@ -136,7 +136,12 @@ def calculate_cost_component(
         float: The calculated cost
     """
     cost_per_unit = model_info.get(cost_key)
-    if cost_per_unit is not None and usage_value is not None and usage_value > 0:
+    if (
+        cost_per_unit is not None
+        and isinstance(cost_per_unit, float)
+        and usage_value is not None
+        and usage_value > 0
+    ):
         return float(usage_value) * cost_per_unit
     return 0.0
 
