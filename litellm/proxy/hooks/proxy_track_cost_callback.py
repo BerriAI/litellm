@@ -10,6 +10,9 @@ from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
 )
+from litellm.litellm_core_utils.openai_realtime_tracking import (
+    OpenAIRealtimeCostTracking,
+)
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import log_db_metrics
@@ -89,6 +92,10 @@ class _ProxyDBLogger(CustomLogger):
         start_time=None,
         end_time=None,  # start/end time for completion
     ):
+        if OpenAIRealtimeCostTracking.model_is_openai_realtime(kwargs.get("model")):
+            # Skipping cost tracking for OpenAI realtime models,
+            # Cost calculations for OpenAI realtime models done in OpenAIRealtimeCostTracking
+            return
         from litellm.proxy.proxy_server import (
             prisma_client,
             proxy_logging_obj,
