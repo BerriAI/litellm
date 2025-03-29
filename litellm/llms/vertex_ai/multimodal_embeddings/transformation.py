@@ -13,8 +13,13 @@ from litellm.types.llms.vertex_ai import (
     MultimodalPredictions,
     VertexMultimodalEmbeddingRequest,
 )
-from litellm.types.utils import Embedding, EmbeddingResponse
-from litellm.utils import is_base64_encoded
+from litellm.types.utils import (
+    Embedding,
+    EmbeddingResponse,
+    PromptTokensDetailsWrapper,
+    Usage,
+)
+from litellm.utils import _count_characters, is_base64_encoded
 
 from ...base_llm.embedding.transformation import BaseEmbeddingConfig
 from ..common_utils import VertexAIError
@@ -122,7 +127,7 @@ class VertexAIMultimodalEmbedding(BaseEmbeddingConfig):
     ) -> dict:
         optional_params = optional_params or {}
 
-        request_data = VertexMultimodalEmbeddingRequest()
+        request_data = VertexMultimodalEmbeddingRequest(instances=[])
 
         if "instances" in optional_params:
             request_data["instances"] = optional_params["instances"]
@@ -171,7 +176,60 @@ class VertexAIMultimodalEmbedding(BaseEmbeddingConfig):
         )
         model_response.model = model
 
+        model_response.usage = self.calculate_usage(
+            request_data=cast(VertexMultimodalEmbeddingRequest, request_data),
+            vertex_predictions=vertex_predictions,
+        )
+
         return model_response
+
+    def calculate_usage(
+        self,
+        request_data: VertexMultimodalEmbeddingRequest,
+        vertex_predictions: MultimodalPredictions,
+    ) -> Usage:
+        ## Calculate text embeddings usage
+        prompt: Optional[str] = None
+        character_count: Optional[int] = None
+
+        for instance in request_data["instances"]:
+            text = instance.get("text")
+            if text:
+                if prompt is None:
+                    prompt = text
+                else:
+                    prompt += text
+
+        if prompt is not None:
+            character_count = _count_characters(prompt)
+
+        ## Calculate image embeddings usage
+        image_count = 0
+        for instance in request_data["instances"]:
+            if instance.get("image"):
+                image_count += 1
+
+        ## Calculate video embeddings usage
+        video_length_seconds = 0
+        for prediction in vertex_predictions["predictions"]:
+            video_embeddings = prediction.get("videoEmbeddings")
+            if video_embeddings:
+                for embedding in video_embeddings:
+                    duration = embedding["endOffsetSec"] - embedding["startOffsetSec"]
+                    video_length_seconds += duration
+
+        prompt_tokens_details = PromptTokensDetailsWrapper(
+            character_count=character_count,
+            image_count=image_count,
+            video_length_seconds=video_length_seconds,
+        )
+
+        return Usage(
+            prompt_tokens=0,
+            completion_tokens=0,
+            total_tokens=0,
+            prompt_tokens_details=prompt_tokens_details,
+        )
 
     def transform_embedding_response_to_openai(
         self, predictions: MultimodalPredictions
