@@ -294,6 +294,52 @@ class ProxyInitializationHelpers:
         return "uvloop"
 
 
+def setup_proxy_extras():
+    """
+    Sets up the proxy extras by copying over necessary files from litellm-proxy-extras
+    Only copies specified folders like migrations
+    """
+    try:
+        # Get paths
+        import shutil
+        from pathlib import Path
+
+        # Folders to copy
+        EXPECTED_FOLDERS = ["migrations"]
+
+        try:
+            import litellm_proxy_extras
+        except ImportError:
+            print(  # noqa
+                "\033[1;31mLiteLLM: Failed to set up proxy extras. Run `pip install 'litellm-proxy-extras'`\033[0m"
+            )
+            return
+
+        # Get the source directory from litellm-proxy-extras
+        source_dir = Path(litellm_proxy_extras.__file__).parent
+        # Get the target directory in litellm proxy
+        proxy_dir = Path(__file__).parent
+
+        # Copy expected folders, overwriting if they exist
+        for folder in EXPECTED_FOLDERS:
+            source_path = source_dir / folder
+            if source_path.exists() and source_path.is_dir():
+                target_path = proxy_dir / folder
+                if target_path.exists():
+                    shutil.rmtree(target_path)
+                shutil.copytree(source_path, target_path)
+
+        print("\033[1;32mLiteLLM: Successfully set up proxy extras\033[0m")  # noqa
+    except FileExistsError as e:
+        print(f"\033[1;31mLiteLLM Error: {str(e)}\033[0m")  # noqa
+        raise
+    except Exception as e:
+        print(  # noqa
+            f"\033[1;31mLiteLLM Warning: Failed to set up proxy extras - {str(e)}\033[0m"
+        )
+        raise
+
+
 @click.command()
 @click.option(
     "--host", default="0.0.0.0", help="Host for the server to listen on.", envvar="HOST"
@@ -495,6 +541,7 @@ def run_server(  # noqa: PLR0915
     use_prisma_migrate,
 ):
     args = locals()
+    setup_proxy_extras()
     if local:
         from proxy_server import (
             KeyManagementSettings,
@@ -672,7 +719,7 @@ def run_server(  # noqa: PLR0915
                 LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value,
             )
             db_connection_timeout = general_settings.get(
-                "database_connection_timeout",
+                "database_connection_pool_timeout",
                 LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value,
             )
             if database_url and database_url.startswith("os.environ/"):

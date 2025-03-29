@@ -251,6 +251,7 @@ class PrismaManager:
             bool: True if setup was successful, False otherwise
         """
 
+        use_migrate = str_to_bool(os.getenv("USE_PRISMA_MIGRATE")) or use_migrate
         for attempt in range(4):
             original_dir = os.getcwd()
             prisma_dir = PrismaManager._get_prisma_dir()
