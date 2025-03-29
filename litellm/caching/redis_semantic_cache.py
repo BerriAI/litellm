@@ -143,11 +143,14 @@ class RedisSemanticCache(BaseCache):
             List[float]: The embedding vector
         """
         # Create an embedding from prompt
-        embedding_response = cast(EmbeddingResponse, litellm.embedding(
-            model=self.embedding_model,
-            input=prompt,
-            cache={"no-store": True, "no-cache": True},
-        ))
+        embedding_response = cast(
+            EmbeddingResponse,
+            litellm.embedding(
+                model=self.embedding_model,
+                input=prompt,
+                cache={"no-store": True, "no-cache": True},
+            ),
+        )
         embedding = embedding_response["data"][0]["embedding"]
         return embedding
 

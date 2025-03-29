@@ -68,19 +68,27 @@ class AmazonNovaCanvasConfig:
         image_generation_config = optional_params.pop("imageGenerationConfig", {})
         image_generation_config = {**image_generation_config, **optional_params}
         if task_type == "TEXT_IMAGE":
-            text_to_image_params: Dict[str, Any] = image_generation_config.pop("textToImageParams", {})
+            text_to_image_params: Dict[str, Any] = image_generation_config.pop(
+                "textToImageParams", {}
+            )
             text_to_image_params = {"text": text, **text_to_image_params}
-            try: 
+            try:
                 text_to_image_params_typed = AmazonNovaCanvasTextToImageParams(
-                    **text_to_image_params 
+                    **text_to_image_params
                 )
             except Exception as e:
-                raise ValueError(f"Error transforming text to image params: {e}. Got params: {text_to_image_params}, Expected params: {AmazonNovaCanvasTextToImageParams.__annotations__}")
-            
-            try: 
-                image_generation_config_typed = AmazonNovaCanvasImageGenerationConfig(**image_generation_config)
+                raise ValueError(
+                    f"Error transforming text to image params: {e}. Got params: {text_to_image_params}, Expected params: {AmazonNovaCanvasTextToImageParams.__annotations__}"
+                )
+
+            try:
+                image_generation_config_typed = AmazonNovaCanvasImageGenerationConfig(
+                    **image_generation_config
+                )
             except Exception as e:
-                raise ValueError(f"Error transforming image generation config: {e}. Got params: {image_generation_config}, Expected params: {AmazonNovaCanvasImageGenerationConfig.__annotations__}")
+                raise ValueError(
+                    f"Error transforming image generation config: {e}. Got params: {image_generation_config}, Expected params: {AmazonNovaCanvasImageGenerationConfig.__annotations__}"
+                )
 
             return AmazonNovaCanvasTextToImageRequest(
                 textToImageParams=text_to_image_params_typed,
@@ -88,24 +96,32 @@ class AmazonNovaCanvasConfig:
                 imageGenerationConfig=image_generation_config_typed,
             )
         if task_type == "COLOR_GUIDED_GENERATION":
-            color_guided_generation_params: Dict[str, Any] = image_generation_config.pop(
-                "colorGuidedGenerationParams", {}
-            )
+            color_guided_generation_params: Dict[
+                str, Any
+            ] = image_generation_config.pop("colorGuidedGenerationParams", {})
             color_guided_generation_params = {
                 "text": text,
                 **color_guided_generation_params,
             }
-            try: 
-                color_guided_generation_params_typed = AmazonNovaCanvasColorGuidedGenerationParams(
-                    **color_guided_generation_params
+            try:
+                color_guided_generation_params_typed = (
+                    AmazonNovaCanvasColorGuidedGenerationParams(
+                        **color_guided_generation_params
+                    )
                 )
             except Exception as e:
-                raise ValueError(f"Error transforming color guided generation params: {e}. Got params: {color_guided_generation_params}, Expected params: {AmazonNovaCanvasColorGuidedGenerationParams.__annotations__}")
+                raise ValueError(
+                    f"Error transforming color guided generation params: {e}. Got params: {color_guided_generation_params}, Expected params: {AmazonNovaCanvasColorGuidedGenerationParams.__annotations__}"
+                )
 
-            try: 
-                image_generation_config_typed = AmazonNovaCanvasImageGenerationConfig(**image_generation_config)
+            try:
+                image_generation_config_typed = AmazonNovaCanvasImageGenerationConfig(
+                    **image_generation_config
+                )
             except Exception as e:
-                raise ValueError(f"Error transforming image generation config: {e}. Got params: {image_generation_config}, Expected params: {AmazonNovaCanvasImageGenerationConfig.__annotations__}")
+                raise ValueError(
+                    f"Error transforming image generation config: {e}. Got params: {image_generation_config}, Expected params: {AmazonNovaCanvasImageGenerationConfig.__annotations__}"
+                )
 
             return AmazonNovaCanvasColorGuidedRequest(
                 taskType=task_type,
