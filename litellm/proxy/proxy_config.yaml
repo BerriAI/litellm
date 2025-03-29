@@ -5,5 +5,3 @@ model_list:
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
-general_settings:
-  allow_requests_on_db_unavailable: True
