@@ -666,6 +666,8 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 ## Usage - Latency Optimized Inference
 
+Valid from v1.65.1+
+
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
