@@ -8,6 +8,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Union, cast
 
 import httpx
+from datetime import datetime
 from pydantic import BaseModel
 
 import litellm
@@ -1722,6 +1723,11 @@ class CustomStreamWrapper:
                     )
                     if processed_chunk is None:
                         continue
+
+                    if self.logging_obj.completion_start_time is None:
+                        completion_start_time = datetime.now()
+                        self.logging_obj.completion_start_time = completion_start_time
+                        self.logging_obj.model_call_details["completion_start_time"] = completion_start_time
 
                     choice = processed_chunk.choices[0]
                     if isinstance(choice, StreamingChoices):
