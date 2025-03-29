@@ -18,6 +18,7 @@ from typing import (
     List,
     Optional,
     Tuple,
+    Union,
     cast,
     get_args,
     get_origin,
