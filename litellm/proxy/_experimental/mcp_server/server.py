@@ -3,7 +3,7 @@ LiteLLM MCP Server Routes
 """
 
 import asyncio
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
 from anyio import BrokenResourceError
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -11,10 +11,12 @@ from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.mcp_server.mcp_server_manager import (
     ListMCPToolsRestAPIResponseObject,
 )
+from litellm.utils import client
 
 # Check if MCP is available
 # "mcp" requires python 3.10 or higher, but several litellm users use python 3.8
@@ -110,8 +112,9 @@ if MCP_AVAILABLE:
         )
         return response
 
+    @client
     async def call_mcp_tool(
-        name: str, arguments: Dict[str, Any] | None
+        name: str, arguments: Optional[Dict[str, Any]] = None, **kwargs: Any
     ) -> List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]:
         """
         Call a specific tool with the provided arguments
@@ -221,14 +224,23 @@ if MCP_AVAILABLE:
         return list_tools_result
 
     @router.post("/tools/call", dependencies=[Depends(user_api_key_auth)])
-    async def call_tool_rest_api(request: Request):
+    async def call_tool_rest_api(
+        request: Request,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """
+        REST API to call a specific MCP tool with the provided arguments
+        """
+        from litellm.proxy.proxy_server import add_litellm_data_to_request, proxy_config
+
         data = await request.json()
-        name = data.get("name")
-        arguments = data.get("arguments")
-        return await call_mcp_tool(
-            name=name,
-            arguments=arguments,
+        data = await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            user_api_key_dict=user_api_key_dict,
+            proxy_config=proxy_config,
         )
+        return await call_mcp_tool(**data)
 
     options = InitializationOptions(
         server_name="litellm-mcp-server",
