@@ -221,7 +221,10 @@ if MCP_AVAILABLE:
         return list_tools_result
 
     @router.post("/tools/call", dependencies=[Depends(user_api_key_auth)])
-    async def call_tool_rest_api(name: str, arguments: Dict[str, Any]):
+    async def call_tool_rest_api(request: Request):
+        data = await request.json()
+        name = data.get("name")
+        arguments = data.get("arguments")
         return await call_mcp_tool(
             name=name,
             arguments=arguments,
