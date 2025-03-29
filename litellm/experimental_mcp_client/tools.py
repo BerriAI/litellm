@@ -76,7 +76,7 @@ def _get_function_arguments(function: FunctionDefinition) -> dict:
     return arguments if isinstance(arguments, dict) else {}
 
 
-def _transform_openai_tool_call_to_mcp_tool_call_request(
+def transform_openai_tool_call_request_to_mcp_tool_call_request(
     openai_tool: ChatCompletionMessageToolCall,
 ) -> MCPCallToolRequestParams:
     """Convert an OpenAI ChatCompletionMessageToolCall to an MCP CallToolRequestParams."""
@@ -100,8 +100,10 @@ async def call_openai_tool(
     Returns:
         The result of the MCP tool call.
     """
-    mcp_tool_call_request_params = _transform_openai_tool_call_to_mcp_tool_call_request(
-        openai_tool=openai_tool,
+    mcp_tool_call_request_params = (
+        transform_openai_tool_call_request_to_mcp_tool_call_request(
+            openai_tool=openai_tool,
+        )
     )
     return await call_mcp_tool(
         session=session,
