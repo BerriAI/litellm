@@ -245,6 +245,18 @@ class CallTypes(Enum):
     aresponses = "aresponses"
 
 
+CustomLoggerCallTypes = Literal[
+    "completion",
+    "text_completion",
+    "embeddings",
+    "image_generation",
+    "moderation",
+    "audio_transcription",
+    "pass_through_endpoint",
+    "rerank",
+    "responses",
+]
+
 CallTypesLiteral = Literal[
     "embedding",
     "aembedding",
