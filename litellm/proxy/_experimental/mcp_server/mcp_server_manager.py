@@ -50,6 +50,7 @@ class MCPServerManager:
                 MCPSSEServer(
                     name=server_name,
                     url=server_config["url"],
+                    mcp_info=server_config.get("mcp_info", None),
                 )
             )
         verbose_logger.debug(
