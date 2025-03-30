@@ -26,6 +26,10 @@ class GeminiModelInfo(BaseLLMModelInfo):
         """Google AI Studio sends api key in query params"""
         return headers
 
+    @property
+    def api_version(self) -> str:
+        return "v1beta"
+
     @staticmethod
     def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
         return (
@@ -47,13 +51,14 @@ class GeminiModelInfo(BaseLLMModelInfo):
     ) -> List[str]:
         api_base = GeminiModelInfo.get_api_base(api_base)
         api_key = GeminiModelInfo.get_api_key(api_key)
+        endpoint = f"/{self.api_version}/models"
         if api_base is None or api_key is None:
             raise ValueError(
                 "GEMINI_API_BASE or GEMINI_API_KEY is not set. Please set the environment variable, to query Gemini's `/models` endpoint."
             )
 
         response = litellm.module_level_client.get(
-            url=f"{api_base}/models?key={api_key}",
+            url=f"{api_base}{endpoint}?key={api_key}",
         )
 
         if response.status_code != 200:
