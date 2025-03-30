@@ -4,12 +4,11 @@ Supports writing files to Google AI Studio Files API.
 For vertex ai, check out the vertex_ai/files/handler.py file.
 """
 import time
-from typing import List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 import httpx
 
 from litellm._logging import verbose_logger
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     LiteLLMLoggingObj,
@@ -17,7 +16,6 @@ from litellm.llms.base_llm.files.transformation import (
 from litellm.types.llms.gemini import GeminiCreateFilesResponseObject
 from litellm.types.llms.openai import (
     CreateFileRequest,
-    FileObject,
     OpenAICreateFileRequestOptionalParams,
     OpenAIFileObject,
 )
@@ -97,7 +95,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         filename = None
         file_content = None
         content_type = None
-        file_headers = {}
+        file_headers: Mapping[str, str] = {}
 
         if isinstance(file_data, tuple):
             if len(file_data) == 2:
