@@ -1,6 +1,7 @@
 import React from "react";
 import { ColumnDef } from "@tanstack/react-table";
 import { MCPTool, InputSchema } from "./types";
+import { Button } from "@tremor/react"
 
 export const columns: ColumnDef<MCPTool>[] = [
   {
@@ -56,16 +57,18 @@ export const columns: ColumnDef<MCPTool>[] = [
       
       return (
         <div className="flex items-center space-x-2">
-          <button
+          <Button 
+            size="xs"
+            variant="light"
+            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
             onClick={() => {
-              if (typeof row.original.onToolSelect === 'function') {
+            if (typeof row.original.onToolSelect === 'function') {
                 row.original.onToolSelect(tool);
-              }
+            }
             }}
-            className="px-3 py-1 text-xs rounded-md bg-blue-600 text-white hover:bg-blue-700"
           >
             Test Tool
-          </button>
+          </Button>
         </div>
       );
     },
@@ -220,13 +223,13 @@ export function ToolTestPanel({
             )}
             
             <div className="mt-6">
-              <button
+              <Button
                 type="submit"
                 disabled={isLoading}
-                className="w-full px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+                className="w-full px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white"
               >
                 {isLoading ? "Calling..." : "Call Tool"}
-              </button>
+              </Button>
             </div>
           </form>
         </div>
