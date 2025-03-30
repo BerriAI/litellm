@@ -21,6 +21,7 @@ from litellm.types.llms.openai import (
     OpenAICreateFileRequestOptionalParams,
     OpenAIFileObject,
 )
+from litellm.types.utils import LlmProviders
 
 from ..common_utils import GeminiModelInfo
 
@@ -28,6 +29,10 @@ from ..common_utils import GeminiModelInfo
 class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
     def __init__(self):
         pass
+
+    @property
+    def custom_llm_provider(self) -> LlmProviders:
+        return LlmProviders.GEMINI
 
     def get_complete_url(
         self,
@@ -175,7 +180,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
             response_json = raw_response.json()
 
             response_object = GeminiCreateFilesResponseObject(
-                **response_json.get("file", {})
+                **response_json.get("file", {})  # type: ignore
             )
 
             # Extract file information from Gemini response

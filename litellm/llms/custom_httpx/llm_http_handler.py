@@ -7,6 +7,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
@@ -1204,7 +1205,7 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
-    ) -> OpenAIFileObject:
+    ) -> Union[OpenAIFileObject, Coroutine[Any, Any, OpenAIFileObject]]:
         """
         Creates a file using Gemini's two-step upload process
         """
@@ -1224,8 +1225,6 @@ class BaseLLMHTTPHandler:
             optional_params={},
             litellm_params=litellm_params,
         )
-        # if _is_async:
-        #     raise NotImplementedError("Async file upload not implemented for Gemini")
 
         # Get the transformed request data for both steps
         transformed_request = provider_config.transform_create_file_request(
@@ -1234,6 +1233,18 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             optional_params={},
         )
+
+        if _is_async:
+            return self.async_create_file(
+                transformed_request=transformed_request,
+                litellm_params=litellm_params,
+                provider_config=provider_config,
+                headers=headers,
+                api_base=api_base,
+                logging_obj=logging_obj,
+                client=client,
+                timeout=timeout,
+            )
 
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = _get_httpx_client()
@@ -1274,6 +1285,67 @@ class BaseLLMHTTPHandler:
             )
 
         except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=provider_config,
+            )
+
+    async def async_create_file(
+        self,
+        transformed_request: dict,
+        litellm_params: dict,
+        provider_config: BaseFilesConfig,
+        headers: dict,
+        api_base: str,
+        logging_obj: LiteLLMLoggingObj,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ):
+        """
+        Creates a file using Gemini's two-step upload process
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=provider_config.custom_llm_provider
+            )
+        else:
+            async_httpx_client = client
+
+        try:
+            # Step 1: Initial request to get upload URL
+            initial_response = await async_httpx_client.post(
+                url=api_base,
+                headers={
+                    **headers,
+                    **transformed_request["initial_request"]["headers"],
+                },
+                data=json.dumps(transformed_request["initial_request"]["data"]),
+                timeout=timeout,
+            )
+
+            # Extract upload URL from response headers
+            upload_url = initial_response.headers.get("X-Goog-Upload-URL")
+
+            if not upload_url:
+                raise ValueError("Failed to get upload URL from initial request")
+
+            # Step 2: Upload the actual file
+            upload_response = await async_httpx_client.post(
+                url=upload_url,
+                headers=transformed_request["upload_request"]["headers"],
+                data=transformed_request["upload_request"]["data"],
+                timeout=timeout,
+            )
+
+            return provider_config.transform_create_file_response(
+                model=None,
+                raw_response=upload_response,
+                logging_obj=logging_obj,
+                litellm_params=litellm_params,
+            )
+
+        except Exception as e:
+            verbose_logger.exception(f"Error creating file: {e}")
             raise self._handle_error(
                 e=e,
                 provider_config=provider_config,

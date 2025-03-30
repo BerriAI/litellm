@@ -9,7 +9,7 @@ from litellm.types.llms.openai import (
     OpenAICreateFileRequestOptionalParams,
     OpenAIFileObject,
 )
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import LlmProviders, ModelResponse
 
 from ..chat.transformation import BaseConfig
 
@@ -22,6 +22,11 @@ else:
 
 
 class BaseFilesConfig(BaseConfig):
+    @property
+    @abstractmethod
+    def custom_llm_provider(self) -> LlmProviders:
+        pass
+
     @abstractmethod
     def get_supported_openai_params(
         self, model: str
