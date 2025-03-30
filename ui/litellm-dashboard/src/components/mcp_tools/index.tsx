@@ -5,6 +5,31 @@ import { columns, ToolTestPanel } from './columns';
 import { MCPTool, MCPToolsViewerProps, CallMCPToolResponse } from './types';
 import { listMCPTools, callMCPTool } from '../networking';
 
+// Wrapper to handle the type mismatch between MCPTool and DataTable's expected type
+function DataTableWrapper({
+  columns,
+  data,
+  isLoading,
+}: {
+  columns: any;
+  data: MCPTool[];
+  isLoading: boolean;
+}) {
+  // Create a dummy renderSubComponent and getRowCanExpand function
+  const renderSubComponent = () => <div />;
+  const getRowCanExpand = () => false;
+
+  return (
+    <DataTable
+      columns={columns as any}
+      data={data as any}
+      isLoading={isLoading}
+      renderSubComponent={renderSubComponent}
+      getRowCanExpand={getRowCanExpand}
+    />
+  );
+}
+
 export default function MCPToolsViewer({
   accessToken,
   userRole,
@@ -49,7 +74,7 @@ export default function MCPToolsViewer({
   const toolsData = React.useMemo(() => {
     if (!mcpTools) return [];
     
-    return mcpTools.map(tool => ({
+    return mcpTools.map((tool: MCPTool) => ({
       ...tool,
       onToolSelect: (tool: MCPTool) => {
         setSelectedTool(tool);
@@ -61,7 +86,7 @@ export default function MCPToolsViewer({
 
   // Filter tools based on search term
   const filteredTools = React.useMemo(() => {
-    return toolsData.filter(tool => {
+    return toolsData.filter((tool: MCPTool) => {
       const searchLower = searchTerm.toLowerCase();
       return (
         tool.name.toLowerCase().includes(searchLower) ||
@@ -122,7 +147,7 @@ export default function MCPToolsViewer({
           </div>
         </div>
 
-        <DataTable
+        <DataTableWrapper
           columns={columns}
           data={filteredTools}
           isLoading={isLoadingTools}
