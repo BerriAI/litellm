@@ -1262,6 +1262,7 @@ def client(original_function):  # noqa: PLR0915
                 logging_obj, kwargs = function_setup(
                     original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
+
             kwargs["litellm_logging_obj"] = logging_obj
             ## LOAD CREDENTIALS
             load_credentials_from_list(kwargs)
@@ -6430,7 +6431,7 @@ class ProviderConfigManager:
         provider: LlmProviders,
     ) -> Optional[BaseFilesConfig]:
         if LlmProviders.GEMINI == provider:
-            from litellm.llms.gemini.files.handler import (
+            from litellm.llms.gemini.files.transformation import (
                 GoogleAIStudioFilesHandler,  # experimental approach, to reduce bloat on __init__.py
             )
 

@@ -1,17 +1,37 @@
-from typing import List, Optional
+from typing import List, Optional, Union
+
+import httpx
 
 import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import AllMessageValues
+
+
+class GeminiError(BaseLLMException):
+    pass
 
 
 class GeminiModelInfo(BaseLLMModelInfo):
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        """Google AI Studio sends api key in query params"""
+        return headers
+
     @staticmethod
     def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
         return (
             api_base
             or get_secret_str("GEMINI_API_BASE")
-            or "https://generativelanguage.googleapis.com/v1beta"
+            or "https://generativelanguage.googleapis.com"
         )
 
     @staticmethod
@@ -49,3 +69,10 @@ class GeminiModelInfo(BaseLLMModelInfo):
             litellm_model_name = "gemini/" + stripped_model_name
             litellm_model_names.append(litellm_model_name)
         return litellm_model_names
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
+        return GeminiError(
+            status_code=status_code, message=error_message, headers=headers
+        )

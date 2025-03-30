@@ -234,6 +234,9 @@ class Thread(BaseModel):
     """The object type, which is always `thread`."""
 
 
+OpenAICreateFileRequestOptionalParams = Literal["purpose",]
+
+
 # OpenAI Files Types
 class CreateFileRequest(TypedDict, total=False):
     """
