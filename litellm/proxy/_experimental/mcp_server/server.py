@@ -265,7 +265,7 @@ if MCP_AVAILABLE:
                         )
                     )
             except Exception as e:
-                verbose_logger.error(f"Error getting tools from {server.name}: {e}")
+                verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
                 continue
         return list_tools_result
 

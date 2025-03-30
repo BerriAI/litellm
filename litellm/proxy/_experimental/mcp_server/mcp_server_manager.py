@@ -8,17 +8,11 @@ This is a Proxy
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-if TYPE_CHECKING:
-    from mcp import ClientSession
-    from mcp.client.sse import sse_client
-    from mcp.types import Tool as MCPTool
-else:
-    # Provide fallback types for runtime incase `mcp` is not installed
-    ClientSession = None
-    MCPTool = object
-    sse_client = None
+from mcp import ClientSession
+from mcp.client.sse import sse_client
+from mcp.types import Tool as MCPTool
 
 from litellm._logging import verbose_logger
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPSSEServer
