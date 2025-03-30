@@ -35,7 +35,7 @@ from litellm import (
 from litellm.llms.bedrock.chat import BedrockLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
-from base_llm_unit_tests import BaseLLMChatTest
+from base_llm_unit_tests import BaseLLMChatTest, BaseAnthropicChatTest
 from base_rerank_unit_tests import BaseLLMRerankTest
 from base_embedding_unit_tests import BaseLLMEmbeddingTest
 
@@ -2189,6 +2189,19 @@ class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
         cost = completion_cost(response)
 
         assert cost > 0
+
+
+class TestBedrockConverseAnthropicUnitTests(BaseAnthropicChatTest):
+    def get_base_completion_call_args(self) -> dict:
+        return {
+            "model": "bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+        }
+
+    def get_base_completion_call_args_with_thinking(self) -> dict:
+        return {
+            "model": "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "thinking": {"type": "enabled", "budget_tokens": 16000},
+        }
 
 
 class TestBedrockConverseChatNormal(BaseLLMChatTest):

@@ -26,6 +26,11 @@ def client():
     return TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def add_anthropic_api_key_to_env(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-1234567890")
+
+
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
     # Mock data for the test
@@ -416,7 +421,8 @@ class TestSpendLogsPayload:
         # litellm._turn_on_debug()
 
         with patch.object(
-            litellm.proxy.proxy_server, "_set_spend_logs_payload"
+            litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter,
+            "_set_spend_logs_payload",
         ) as mock_client, patch.object(litellm.proxy.proxy_server, "prisma_client"):
             response = await litellm.acompletion(
                 model="gpt-4o",
@@ -451,7 +457,7 @@ class TestSpendLogsPayload:
                     "model": "gpt-4o",
                     "user": "",
                     "team_id": "",
-                    "metadata": '{"applied_guardrails": [], "batch_models": null, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": null}}',
+                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": null}}',
                     "cache_key": "Cache OFF",
                     "spend": 0.00022500000000000002,
                     "total_tokens": 30,
@@ -500,7 +506,7 @@ class TestSpendLogsPayload:
         return mock_response
 
     @pytest.mark.asyncio
-    async def test_spend_logs_payload_success_log_with_api_base(self):
+    async def test_spend_logs_payload_success_log_with_api_base(self, monkeypatch):
         from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
         litellm.callbacks = [_ProxyDBLogger(message_logging=False)]
@@ -509,7 +515,8 @@ class TestSpendLogsPayload:
         client = AsyncHTTPHandler()
 
         with patch.object(
-            litellm.proxy.proxy_server, "_set_spend_logs_payload"
+            litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter,
+            "_set_spend_logs_payload",
         ) as mock_client, patch.object(
             litellm.proxy.proxy_server, "prisma_client"
         ), patch.object(
@@ -548,7 +555,7 @@ class TestSpendLogsPayload:
                     "model": "claude-3-7-sonnet-20250219",
                     "user": "",
                     "team_id": "",
-                    "metadata": '{"applied_guardrails": [], "batch_models": null, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
+                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
                     "cache_key": "Cache OFF",
                     "spend": 0.01383,
                     "total_tokens": 2598,
@@ -604,7 +611,8 @@ class TestSpendLogsPayload:
         )
 
         with patch.object(
-            litellm.proxy.proxy_server, "_set_spend_logs_payload"
+            litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter,
+            "_set_spend_logs_payload",
         ) as mock_client, patch.object(
             litellm.proxy.proxy_server, "prisma_client"
         ), patch.object(
@@ -643,7 +651,7 @@ class TestSpendLogsPayload:
                     "model": "claude-3-7-sonnet-20250219",
                     "user": "",
                     "team_id": "",
-                    "metadata": '{"applied_guardrails": [], "batch_models": null, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
+                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
                     "cache_key": "Cache OFF",
                     "spend": 0.01383,
                     "total_tokens": 2598,

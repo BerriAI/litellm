@@ -19,7 +19,6 @@ from ..common_utils import OpenRouterException
 
 
 class OpenrouterConfig(OpenAIGPTConfig):
-
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -42,9 +41,9 @@ class OpenrouterConfig(OpenAIGPTConfig):
             extra_body["models"] = models
         if route is not None:
             extra_body["route"] = route
-        mapped_openai_params["extra_body"] = (
-            extra_body  # openai client supports `extra_body` param
-        )
+        mapped_openai_params[
+            "extra_body"
+        ] = extra_body  # openai client supports `extra_body` param
         return mapped_openai_params
 
     def get_error_class(
@@ -70,7 +69,6 @@ class OpenrouterConfig(OpenAIGPTConfig):
 
 
 class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
-
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
             new_choices = []
@@ -83,6 +81,12 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
                 created=chunk["created"],
                 model=chunk["model"],
                 choices=new_choices,
+            )
+        except KeyError as e:
+            raise OpenRouterException(
+                message=f"KeyError: {e}, Got unexpected response from OpenRouter: {chunk}",
+                status_code=400,
+                headers={"Content-Type": "application/json"},
             )
         except Exception as e:
             raise e

@@ -239,6 +239,7 @@ def cost_per_token(
     Raises:
         Exception if model requires >128k pricing, but model cost not mapped
     """
+
     ## GET MODEL INFO
     model_info = litellm.get_model_info(
         model=model, custom_llm_provider=custom_llm_provider
