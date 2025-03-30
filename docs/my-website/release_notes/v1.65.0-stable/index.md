@@ -16,7 +16,14 @@ hide_table_of_contents: false
 ---
 import Image from '@theme/IdealImage';
 
-LiteLLM v1.65.0 introduces significant enhancements including Model Context Protocol (MCP) tools, new models, and various performance improvements.
+v1.65.0-stable is live now. Here are the key highlights of this release:
+- **MCP Support**: Support for adding and using MCP servers on the LiteLLM proxy.
+- **Custom Prompt Management**: Connect LiteLLM to your prompt management system with custom hooks.
+
+
+
+
+
 
 ## Model Context Protocol (MCP)
 
