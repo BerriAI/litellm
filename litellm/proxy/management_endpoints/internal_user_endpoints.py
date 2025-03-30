@@ -1370,22 +1370,6 @@ async def get_user_daily_activity(
         default=None,
         description="End date in YYYY-MM-DD format",
     ),
-    group_by: List[GroupByDimension] = fastapi.Query(
-        default=[GroupByDimension.DATE],
-        description="Dimensions to group by. Can combine multiple (e.g. date,team)",
-    ),
-    view_by: Literal["team", "organization", "user"] = fastapi.Query(
-        default="user",
-        description="View spend at team/org/user level",
-    ),
-    team_id: Optional[str] = fastapi.Query(
-        default=None,
-        description="Filter by specific team",
-    ),
-    org_id: Optional[str] = fastapi.Query(
-        default=None,
-        description="Filter by specific organization",
-    ),
     model: Optional[str] = fastapi.Query(
         default=None,
         description="Filter by specific model",
@@ -1408,13 +1392,13 @@ async def get_user_daily_activity(
     Meant to optimize querying spend data for analytics for a user.
 
     Returns:
-    (by date/team/org/user/model/api_key/model_group/provider)
+    (by date)
     - spend
     - prompt_tokens
     - completion_tokens
     - total_tokens
     - api_requests
-    - breakdown by team, organization, user, model, api_key, model_group, provider
+    - breakdown by model, api_key, provider
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -1439,10 +1423,6 @@ async def get_user_daily_activity(
             }
         }
 
-        if team_id:
-            where_conditions["team_id"] = team_id
-        if org_id:
-            where_conditions["organization_id"] = org_id
         if model:
             where_conditions["model"] = model
         if api_key:

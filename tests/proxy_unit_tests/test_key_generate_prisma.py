@@ -2285,10 +2285,10 @@ def test_update_logs_with_spend_logs_url(prisma_client):
     """
     Unit test for making sure spend logs list is still updated when url passed in
     """
-    from litellm.proxy.proxy_server import _set_spend_logs_payload
+    from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 
     payload = {"startTime": datetime.now(), "endTime": datetime.now()}
-    _set_spend_logs_payload(payload=payload, prisma_client=prisma_client)
+    DBSpendUpdateWriter._set_spend_logs_payload(payload=payload, prisma_client=prisma_client)
 
     assert len(prisma_client.spend_log_transactions) > 0
 
@@ -2296,7 +2296,7 @@ def test_update_logs_with_spend_logs_url(prisma_client):
 
     spend_logs_url = ""
     payload = {"startTime": datetime.now(), "endTime": datetime.now()}
-    _set_spend_logs_payload(
+    DBSpendUpdateWriter._set_spend_logs_payload(
         payload=payload, spend_logs_url=spend_logs_url, prisma_client=prisma_client
     )
 
