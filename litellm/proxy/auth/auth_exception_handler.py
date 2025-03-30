@@ -3,7 +3,7 @@ Handles Authentication Errors
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from fastapi import HTTPException, Request, status
 
@@ -17,13 +17,12 @@ from litellm.types.services import ServiceTypes
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     Span = Any
 
 
 class UserAPIKeyAuthExceptionHandler:
-
     @staticmethod
     async def _handle_authentication_error(
         e: Exception,

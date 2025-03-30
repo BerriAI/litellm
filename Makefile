@@ -14,6 +14,9 @@ help:
 install-dev:
 	poetry install --with dev
 
+install-proxy-dev:
+	poetry install --with dev,proxy-dev
+
 lint: install-dev
 	poetry run pip install types-requests types-setuptools types-redis types-PyYAML
 	cd litellm && poetry run mypy . --ignore-missing-imports

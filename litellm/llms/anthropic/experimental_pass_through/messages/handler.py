@@ -25,7 +25,6 @@ from litellm.utils import ProviderConfigManager, client
 
 
 class AnthropicMessagesHandler:
-
     @staticmethod
     async def _handle_anthropic_streaming(
         response: httpx.Response,
@@ -74,19 +73,22 @@ async def anthropic_messages(
     """
     # Use provided client or create a new one
     optional_params = GenericLiteLLMParams(**kwargs)
-    model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = (
-        litellm.get_llm_provider(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            api_base=optional_params.api_base,
-            api_key=optional_params.api_key,
-        )
+    (
+        model,
+        _custom_llm_provider,
+        dynamic_api_key,
+        dynamic_api_base,
+    ) = litellm.get_llm_provider(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=optional_params.api_base,
+        api_key=optional_params.api_key,
     )
-    anthropic_messages_provider_config: Optional[BaseAnthropicMessagesConfig] = (
-        ProviderConfigManager.get_provider_anthropic_messages_config(
-            model=model,
-            provider=litellm.LlmProviders(_custom_llm_provider),
-        )
+    anthropic_messages_provider_config: Optional[
+        BaseAnthropicMessagesConfig
+    ] = ProviderConfigManager.get_provider_anthropic_messages_config(
+        model=model,
+        provider=litellm.LlmProviders(_custom_llm_provider),
     )
     if anthropic_messages_provider_config is None:
         raise ValueError(

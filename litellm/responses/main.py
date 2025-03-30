@@ -165,21 +165,24 @@ def responses(
 
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
-        model, custom_llm_provider, dynamic_api_key, dynamic_api_base = (
-            litellm.get_llm_provider(
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                api_base=litellm_params.api_base,
-                api_key=litellm_params.api_key,
-            )
+        (
+            model,
+            custom_llm_provider,
+            dynamic_api_key,
+            dynamic_api_base,
+        ) = litellm.get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=litellm_params.api_base,
+            api_key=litellm_params.api_key,
         )
 
         # get provider config
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
-            ProviderConfigManager.get_provider_responses_api_config(
-                model=model,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        responses_api_provider_config: Optional[
+            BaseResponsesAPIConfig
+        ] = ProviderConfigManager.get_provider_responses_api_config(
+            model=model,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if responses_api_provider_config is None:
