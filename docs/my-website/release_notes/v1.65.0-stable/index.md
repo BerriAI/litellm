@@ -14,16 +14,25 @@ authors:
 tags: [mcp]
 hide_table_of_contents: false
 ---
+import Image from '@theme/IdealImage';
 
 LiteLLM v1.65.0 introduces significant enhancements including Model Context Protocol (MCP) tools, new models, and various performance improvements.
 
 ## Model Context Protocol (MCP)
 
-This release introduces support for centrally adding MCP servers on LiteLLM. This allows you to add MCP endpoints and your developers can `list` and `call` MCP tools through LiteLLM.
+This release introduces support for centrally adding MCP servers on LiteLLM. This allows you to add MCP server endpoints and your developers can `list` and `call` MCP tools through LiteLLM.
+
+<Image img={require('../../img/release_notes/mcp_ui.png')} />
 
 ## Custom Prompt Management
 
 This release allows you to connect LiteLLM to any prompt management service through our custom prompt management hooks. As proxy admin all you need to do is implement a `get_chat_completion_prompt` hook which accepts a prompt_id and prompt_variables and returns a formatted prompt.
+
+<Image 
+  img={require('../../img/custom_prompt_management.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
 
 
 ## Categorized Improvements and Fixes
