@@ -57,9 +57,10 @@ Read more about custom prompt management [here](https://docs.litellm.ai/docs/pro
 ## LLM Translation
 - OpenAI Web Search Tool Call Support [PR](https://github.com/BerriAI/litellm/pull/9465)
 - Vertex AI topLogprobs support [PR](https://github.com/BerriAI/litellm/pull/9518) 
-- Fixed Vertex AI multimodal embedding translation [PR](https://github.com/BerriAI/litellm/pull/9471)
+- Support for sending images and video to Vertex AI multimodal embedding [Doc](https://docs.litellm.ai/docs/providers/vertex#multi-modal-embeddings)
 - Support litellm.api_base for Vertex AI + Gemini across completion, embedding, image_generation [PR](https://github.com/BerriAI/litellm/pull/9516)
-- Fixed Mistral chat transformation [PR](https://github.com/BerriAI/litellm/pull/9606)
+- Bug fix for returning `response_cost` when using litellm python SDK with LiteLLM Proxy [PR](https://github.com/BerriAI/litellm/commit/6fd18651d129d606182ff4b980e95768fc43ca3d)
+- Support for `max_completion_tokens` on Mistral API [PR](https://github.com/BerriAI/litellm/pull/9606)
 - Refactored Vertex AI passthrough routes - fixes unpredictable behaviour with auto-setting default_vertex_region on router model add [PR](https://github.com/BerriAI/litellm/pull/9467)
 
 ## Spend Tracking Improvements
