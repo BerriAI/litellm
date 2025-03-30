@@ -28,6 +28,9 @@ Read more about MCP [here](https://docs.litellm.ai/docs/mcp).
   img={require('../../img/release_notes/mcp_ui.png')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
+<p style={{textAlign: 'left', color: '#666'}}>
+  Expose and use MCP servers through LiteLLM
+</p>
 
 ## Custom Prompt Management
 
@@ -39,6 +42,9 @@ Read more about custom prompt management [here](https://docs.litellm.ai/docs/pro
   img={require('../../img/custom_prompt_management.png')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
+<p style={{textAlign: 'left', color: '#666'}}>
+  Connect LiteLLM to your prompt management service through custom hooks
+</p>
 
 
 
@@ -49,7 +55,6 @@ Read more about custom prompt management [here](https://docs.litellm.ai/docs/pro
 - Nova Canvas image generation support [PR](https://github.com/BerriAI/litellm/pull/9525)
 - OpenAI gpt-4o-transcribe support [PR](https://github.com/BerriAI/litellm/pull/9517)
 - Added new Vertex AI text embedding model [PR](https://github.com/BerriAI/litellm/pull/9476)
-- Updated model prices and context windows [PR](https://github.com/BerriAI/litellm/pull/9459)
 
 ### LLM Translation
 - OpenAI Web Search Tool Call Support [PR](https://github.com/BerriAI/litellm/pull/9465)
@@ -62,15 +67,20 @@ Read more about custom prompt management [here](https://docs.litellm.ai/docs/pro
 - Log 'api_base' on spend logs [PR](https://github.com/BerriAI/litellm/pull/9509)
 - Support for Gemini audio token cost tracking [PR](https://github.com/BerriAI/litellm/pull/9535)
 - Fixed OpenAI audio input token cost tracking [PR](https://github.com/BerriAI/litellm/pull/9535)
-- Added Daily User Spend Aggregate view - allows UI Usage tab to work > 1m rows [PR](https://github.com/BerriAI/litellm/pull/9538)
-- Connected UI to "LiteLLM_DailyUserSpend" spend table [PR](https://github.com/BerriAI/litellm/pull/9603)
 
 ### UI
+
+#### Model Management
 - Allowed team admins to add/update/delete models on UI [PR](https://github.com/BerriAI/litellm/pull/9572)
+- Added render supports_web_search on model hub [PR](https://github.com/BerriAI/litellm/pull/9469)
+
+#### Request Logs
 - Show API base and model ID on request logs [PR](https://github.com/BerriAI/litellm/pull/9572)
 - Allow viewing keyinfo on request logs [PR](https://github.com/BerriAI/litellm/pull/9568)
-- Enabled viewing all wildcard models on /model/info [PR](https://github.com/BerriAI/litellm/pull/9473)
-- Added render supports_web_search on model hub [PR](https://github.com/BerriAI/litellm/pull/9469)
+
+#### Usage Tab
+- Added Daily User Spend Aggregate view - allows UI Usage tab to work > 1m rows [PR](https://github.com/BerriAI/litellm/pull/9538)
+- Connected UI to "LiteLLM_DailyUserSpend" spend table [PR](https://github.com/BerriAI/litellm/pull/9603)
 
 ### Logging Integrations
 - Fixed StandardLoggingPayload for GCS Pub Sub Logging Integration [PR](https://github.com/BerriAI/litellm/pull/9508)
