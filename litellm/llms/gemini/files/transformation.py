@@ -4,7 +4,7 @@ Supports writing files to Google AI Studio Files API.
 For vertex ai, check out the vertex_ai/files/handler.py file.
 """
 import time
-from typing import Any, Dict, List, Mapping, Optional
+from typing import List, Mapping, Optional
 
 import httpx
 
