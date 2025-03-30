@@ -306,7 +306,6 @@ class BaseAzureLLM(BaseOpenAILLM):
         api_version: Optional[str],
         is_async: bool,
     ) -> dict:
-
         azure_ad_token_provider: Optional[Callable[[], str]] = None
         # If we have api_key, then we have higher priority
         azure_ad_token = litellm_params.get("azure_ad_token")

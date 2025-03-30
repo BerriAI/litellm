@@ -11,10 +11,9 @@ Run checks for:
 import asyncio
 import re
 import time
-import traceback
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
-from fastapi import status
+from fastapi import Request, status
 from pydantic import BaseModel
 
 import litellm
@@ -23,7 +22,6 @@ from litellm.caching.caching import DualCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.proxy._types import (
-    DB_CONNECTION_ERROR_TYPES,
     RBAC_ROLES,
     CallInfo,
     LiteLLM_EndUserTable,
@@ -45,14 +43,13 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.router import Router
-from litellm.types.services import ServiceTypes
 
 from .auth_checks_organization import organization_role_based_access_check
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     Span = Any
 
@@ -74,6 +71,7 @@ async def common_checks(
     llm_router: Optional[Router],
     proxy_logging_obj: ProxyLogging,
     valid_token: Optional[UserAPIKeyAuth],
+    request: Request,
 ) -> bool:
     """
     Common checks across jwt + key-based auth.
@@ -198,7 +196,132 @@ async def common_checks(
         user_object=user_object, route=route, request_body=request_body
     )
 
+    token_team = getattr(valid_token, "team_id", None)
+    token_type: Literal["ui", "api"] = (
+        "ui" if token_team is not None and token_team == "litellm-dashboard" else "api"
+    )
+    _is_route_allowed = _is_allowed_route(
+        route=route,
+        token_type=token_type,
+        user_obj=user_object,
+        request=request,
+        request_data=request_body,
+        valid_token=valid_token,
+    )
+
     return True
+
+
+def _is_ui_route(
+    route: str,
+    user_obj: Optional[LiteLLM_UserTable] = None,
+) -> bool:
+    """
+    - Check if the route is a UI used route
+    """
+    # this token is only used for managing the ui
+    allowed_routes = LiteLLMRoutes.ui_routes.value
+    # check if the current route startswith any of the allowed routes
+    if (
+        route is not None
+        and isinstance(route, str)
+        and any(route.startswith(allowed_route) for allowed_route in allowed_routes)
+    ):
+        # Do something if the current route starts with any of the allowed routes
+        return True
+    elif any(
+        RouteChecks._route_matches_pattern(route=route, pattern=allowed_route)
+        for allowed_route in allowed_routes
+    ):
+        return True
+    return False
+
+
+def _get_user_role(
+    user_obj: Optional[LiteLLM_UserTable],
+) -> Optional[LitellmUserRoles]:
+    if user_obj is None:
+        return None
+
+    _user = user_obj
+
+    _user_role = _user.user_role
+    try:
+        role = LitellmUserRoles(_user_role)
+    except ValueError:
+        return LitellmUserRoles.INTERNAL_USER
+
+    return role
+
+
+def _is_api_route_allowed(
+    route: str,
+    request: Request,
+    request_data: dict,
+    valid_token: Optional[UserAPIKeyAuth],
+    user_obj: Optional[LiteLLM_UserTable] = None,
+) -> bool:
+    """
+    - Route b/w api token check and normal token check
+    """
+    _user_role = _get_user_role(user_obj=user_obj)
+
+    if valid_token is None:
+        raise Exception("Invalid proxy server token passed. valid_token=None.")
+
+    if not _is_user_proxy_admin(user_obj=user_obj):  # if non-admin
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=_user_role,
+            route=route,
+            request=request,
+            request_data=request_data,
+            valid_token=valid_token,
+        )
+    return True
+
+
+def _is_user_proxy_admin(user_obj: Optional[LiteLLM_UserTable]):
+    if user_obj is None:
+        return False
+
+    if (
+        user_obj.user_role is not None
+        and user_obj.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        return True
+
+    if (
+        user_obj.user_role is not None
+        and user_obj.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        return True
+
+    return False
+
+
+def _is_allowed_route(
+    route: str,
+    token_type: Literal["ui", "api"],
+    request: Request,
+    request_data: dict,
+    valid_token: Optional[UserAPIKeyAuth],
+    user_obj: Optional[LiteLLM_UserTable] = None,
+) -> bool:
+    """
+    - Route b/w ui token check and normal token check
+    """
+
+    if token_type == "ui" and _is_ui_route(route=route, user_obj=user_obj):
+        return True
+    else:
+        return _is_api_route_allowed(
+            route=route,
+            request=request,
+            request_data=request_data,
+            valid_token=valid_token,
+            user_obj=user_obj,
+        )
 
 
 def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
@@ -428,7 +551,6 @@ def _get_role_based_permissions(
         return None
 
     for role_based_permission in role_based_permissions:
-
         if role_based_permission.role == rbac_role:
             return getattr(role_based_permission, key)
 
@@ -744,7 +866,6 @@ async def _get_team_object_from_cache(
         proxy_logging_obj is not None
         and proxy_logging_obj.internal_usage_cache.dual_cache
     ):
-
         cached_team_obj = (
             await proxy_logging_obj.internal_usage_cache.dual_cache.async_get_cache(
                 key=key, parent_otel_span=parent_otel_span
@@ -861,75 +982,34 @@ async def get_key_object(
         )
 
     # else, check db
-    try:
-        _valid_token: Optional[BaseModel] = await prisma_client.get_data(
-            token=hashed_token,
-            table_name="combined_view",
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-
-        if _valid_token is None:
-            raise Exception
-
-        _response = UserAPIKeyAuth(**_valid_token.model_dump(exclude_none=True))
-
-        # save the key object to cache
-        await _cache_key_object(
-            hashed_token=hashed_token,
-            user_api_key_obj=_response,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-
-        return _response
-    except DB_CONNECTION_ERROR_TYPES as e:
-        return await _handle_failed_db_connection_for_get_key_object(e=e)
-    except Exception:
-        traceback.print_exc()
-        raise Exception(
-            f"Key doesn't exist in db. key={hashed_token}. Create key via `/key/generate` call."
-        )
-
-
-async def _handle_failed_db_connection_for_get_key_object(
-    e: Exception,
-) -> UserAPIKeyAuth:
-    """
-    Handles httpx.ConnectError when reading a Virtual Key from LiteLLM DB
-
-    Use this if you don't want failed DB queries to block LLM API reqiests
-
-    Returns:
-        - UserAPIKeyAuth: If general_settings.allow_requests_on_db_unavailable is True
-
-    Raises:
-        - Orignal Exception in all other cases
-    """
-    from litellm.proxy.proxy_server import (
-        general_settings,
-        litellm_proxy_admin_name,
-        proxy_logging_obj,
+    _valid_token: Optional[BaseModel] = await prisma_client.get_data(
+        token=hashed_token,
+        table_name="combined_view",
+        parent_otel_span=parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
     )
 
-    # If this flag is on, requests failing to connect to the DB will be allowed
-    if general_settings.get("allow_requests_on_db_unavailable", False) is True:
-        # log this as a DB failure on prometheus
-        proxy_logging_obj.service_logging_obj.service_failure_hook(
-            service=ServiceTypes.DB,
-            call_type="get_key_object",
-            error=e,
-            duration=0.0,
+    if _valid_token is None:
+        raise ProxyException(
+            message="Authentication Error, Invalid proxy server token passed. key={}, not found in db. Create key via `/key/generate` call.".format(
+                hashed_token
+            ),
+            type=ProxyErrorTypes.token_not_found_in_db,
+            param="key",
+            code=status.HTTP_401_UNAUTHORIZED,
         )
 
-        return UserAPIKeyAuth(
-            key_name="failed-to-connect-to-db",
-            token="failed-to-connect-to-db",
-            user_id=litellm_proxy_admin_name,
-        )
-    else:
-        # raise the original exception, the wrapper on `get_key_object` handles logging db failure to prometheus
-        raise e
+    _response = UserAPIKeyAuth(**_valid_token.model_dump(exclude_none=True))
+
+    # save the key object to cache
+    await _cache_key_object(
+        hashed_token=hashed_token,
+        user_api_key_obj=_response,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    return _response
 
 
 @log_db_metrics
@@ -1120,7 +1200,6 @@ async def can_user_call_model(
     llm_router: Optional[Router],
     user_object: Optional[LiteLLM_UserTable],
 ) -> Literal[True]:
-
     if user_object is None:
         return True
 

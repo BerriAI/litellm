@@ -65,10 +65,12 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         response_api_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> ResponsesAPIRequestParams:
+    ) -> Dict:
         """No transform applied since inputs are in OpenAI spec already"""
-        return ResponsesAPIRequestParams(
-            model=model, input=input, **response_api_optional_request_params
+        return dict(
+            ResponsesAPIRequestParams(
+                model=model, input=input, **response_api_optional_request_params
+            )
         )
 
     def transform_response_api_response(
@@ -188,3 +190,27 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             raise ValueError(f"Unknown event type: {event_type}")
 
         return model_class
+
+    def should_fake_stream(
+        self,
+        model: Optional[str],
+        stream: Optional[bool],
+        custom_llm_provider: Optional[str] = None,
+    ) -> bool:
+        if stream is not True:
+            return False
+        if model is not None:
+            try:
+                if (
+                    litellm.utils.supports_native_streaming(
+                        model=model,
+                        custom_llm_provider=custom_llm_provider,
+                    )
+                    is False
+                ):
+                    return True
+            except Exception as e:
+                verbose_logger.debug(
+                    f"Error getting model info in OpenAIResponsesAPIConfig: {e}"
+                )
+        return False

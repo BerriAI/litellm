@@ -28,14 +28,7 @@ class OpenAIFineTuningAPI:
         _is_async: bool = False,
         api_version: Optional[str] = None,
         litellm_params: Optional[dict] = None,
-    ) -> Optional[
-        Union[
-            OpenAI,
-            AsyncOpenAI,
-            AzureOpenAI,
-            AsyncAzureOpenAI,
-        ]
-    ]:
+    ) -> Optional[Union[OpenAI, AsyncOpenAI, AzureOpenAI, AsyncAzureOpenAI,]]:
         received_args = locals()
         openai_client: Optional[
             Union[OpenAI, AsyncOpenAI, AzureOpenAI, AsyncAzureOpenAI]
