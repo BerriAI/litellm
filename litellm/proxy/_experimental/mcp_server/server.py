@@ -224,7 +224,7 @@ if MCP_AVAILABLE:
     ############ MCP Server REST API Routes #################
     ########################################################
     @router.get("/tools/list", dependencies=[Depends(user_api_key_auth)])
-    async def list_tool_rest_api() -> List[ListMCPToolsRestAPIResponseObject]:
+    async def list_tool_rest_api():
         """
         List all available tools with information about the server they belong to.
 
