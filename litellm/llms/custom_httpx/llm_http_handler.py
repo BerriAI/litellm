@@ -29,7 +29,7 @@ from litellm.responses.streaming_iterator import (
 )
 from litellm.types.llms.openai import (
     CreateFileRequest,
-    FileObject,
+    OpenAIFileObject,
     ResponseInputParam,
     ResponsesAPIResponse,
 )
@@ -1204,7 +1204,7 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
-    ) -> FileObject:
+    ) -> OpenAIFileObject:
         """
         Creates a file using Gemini's two-step upload process
         """

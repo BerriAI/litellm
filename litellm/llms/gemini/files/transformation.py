@@ -4,19 +4,22 @@ Supports writing files to Google AI Studio Files API.
 For vertex ai, check out the vertex_ai/files/handler.py file.
 """
 import time
-from typing import List, Optional, Union
+from typing import List, Optional
 
 import httpx
 
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     LiteLLMLoggingObj,
 )
+from litellm.types.llms.gemini import GeminiCreateFilesResponseObject
 from litellm.types.llms.openai import (
     CreateFileRequest,
     FileObject,
     OpenAICreateFileRequestOptionalParams,
+    OpenAIFileObject,
 )
 
 from ..common_utils import GeminiModelInfo
@@ -164,25 +167,38 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-    ) -> FileObject:
+    ) -> OpenAIFileObject:
         """
         Transform Gemini's file upload response into OpenAI-style FileObject
         """
         try:
             response_json = raw_response.json()
 
-            # Extract file information from Gemini response
-            file_info = response_json.get("file", {})
+            response_object = GeminiCreateFilesResponseObject(
+                **response_json.get("file", {})
+            )
 
-            return FileObject(
-                id=file_info.get("uri", ""),  # Gemini uses URI as identifier
-                bytes=234,  # Gemini doesn't return file size
-                created_at=int(time.time()),  # Gemini doesn't return creation time
-                filename=file_info.get("display_name", ""),
+            # Extract file information from Gemini response
+
+            return OpenAIFileObject(
+                id=response_object["name"],  # Gemini uses URI as identifier
+                bytes=int(
+                    response_object["sizeBytes"]
+                ),  # Gemini doesn't return file size
+                created_at=int(
+                    time.mktime(
+                        time.strptime(
+                            response_object["createTime"].replace("Z", "+00:00"),
+                            "%Y-%m-%dT%H:%M:%S.%f%z",
+                        )
+                    )
+                ),
+                filename=response_object["displayName"],
                 object="file",
-                purpose="batch",  # Default to assistants as that's the main use case
+                purpose="user_data",  # Default to assistants as that's the main use case
                 status="uploaded",
                 status_details=None,
             )
         except Exception as e:
+            verbose_logger.exception(f"Error parsing file upload response: {str(e)}")
             raise ValueError(f"Error parsing file upload response: {str(e)}")

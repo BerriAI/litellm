@@ -25,6 +25,7 @@ from litellm.types.llms.openai import (
     FileContentRequest,
     FileTypes,
     HttpxBinaryResponseContent,
+    OpenAIFileObject,
 )
 from litellm.types.router import *
 from litellm.types.utils import LlmProviders
@@ -52,7 +53,7 @@ async def acreate_file(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-) -> FileObject:
+) -> OpenAIFileObject:
     """
     Async: Files are used to upload documents that can be used with features like Assistants, Fine-tuning, and Batch API.
 
@@ -95,7 +96,7 @@ def create_file(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-) -> Union[FileObject, Coroutine[Any, Any, FileObject]]:
+) -> Union[OpenAIFileObject, Coroutine[Any, Any, OpenAIFileObject]]:
     """
     Files are used to upload documents that can be used with features like Assistants, Fine-tuning, and Batch API.
 

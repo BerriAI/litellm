@@ -6,8 +6,8 @@ import httpx
 from litellm.types.llms.openai import (
     AllMessageValues,
     CreateFileRequest,
-    FileObject,
     OpenAICreateFileRequestOptionalParams,
+    OpenAIFileObject,
 )
 from litellm.types.utils import ModelResponse
 
@@ -63,7 +63,7 @@ class BaseFilesConfig(BaseConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-    ) -> FileObject:
+    ) -> OpenAIFileObject:
         pass
 
     def transform_request(

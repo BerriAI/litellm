@@ -8,7 +8,7 @@ from litellm.integrations.gcs_bucket.gcs_bucket_base import (
     GCSLoggingConfig,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.types.llms.openai import CreateFileRequest, FileObject
+from litellm.types.llms.openai import CreateFileRequest, OpenAIFileObject
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 
 from .transformation import VertexAIFilesTransformation
@@ -38,7 +38,7 @@ class VertexAIFilesHandler(GCSBucketBase):
         vertex_location: Optional[str],
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
-    ):
+    ) -> OpenAIFileObject:
         gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
             kwargs={}
         )
@@ -75,7 +75,7 @@ class VertexAIFilesHandler(GCSBucketBase):
         vertex_location: Optional[str],
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
-    ) -> Union[FileObject, Coroutine[Any, Any, FileObject]]:
+    ) -> Union[OpenAIFileObject, Coroutine[Any, Any, OpenAIFileObject]]:
         """
         Creates a file on VertexAI GCS Bucket
 
