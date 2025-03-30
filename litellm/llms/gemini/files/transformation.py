@@ -181,7 +181,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
             # Extract file information from Gemini response
 
             return OpenAIFileObject(
-                id=response_object["name"],  # Gemini uses URI as identifier
+                id=response_object["uri"],  # Gemini uses URI as identifier
                 bytes=int(
                     response_object["sizeBytes"]
                 ),  # Gemini doesn't return file size
