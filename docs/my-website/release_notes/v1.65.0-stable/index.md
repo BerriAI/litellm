@@ -1,5 +1,5 @@
 ---
-title: v1.65.0-stable - Model Context Protocol (MCP)
+title: v1.65.0-stable - Model Context Protocol
 slug: v1.65.0-stable
 date: 2025-03-30T10:00:00
 authors:
@@ -11,7 +11,7 @@ authors:
     title: CTO, LiteLLM
     url: https://www.linkedin.com/in/reffajnaahsi/
     image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
-tags: [mcp]
+tags: [mcp, custom_prompt_management]
 hide_table_of_contents: false
 ---
 import Image from '@theme/IdealImage';
@@ -22,11 +22,18 @@ LiteLLM v1.65.0 introduces significant enhancements including Model Context Prot
 
 This release introduces support for centrally adding MCP servers on LiteLLM. This allows you to add MCP server endpoints and your developers can `list` and `call` MCP tools through LiteLLM.
 
-<Image img={require('../../img/release_notes/mcp_ui.png')} />
+Read more about MCP [here](https://docs.litellm.ai/docs/mcp).
+
+<Image 
+  img={require('../../img/release_notes/mcp_ui.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
 
 ## Custom Prompt Management
 
 This release allows you to connect LiteLLM to any prompt management service through our custom prompt management hooks. As proxy admin all you need to do is implement a `get_chat_completion_prompt` hook which accepts a prompt_id and prompt_variables and returns a formatted prompt.
+
+Read more about custom prompt management [here](https://docs.litellm.ai/docs/proxy/custom_prompt_management).
 
 <Image 
   img={require('../../img/custom_prompt_management.png')}
