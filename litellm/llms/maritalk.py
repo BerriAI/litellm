@@ -17,7 +17,6 @@ class MaritalkError(BaseLLMException):
 
 
 class MaritalkConfig(OpenAIGPTConfig):
-
     def __init__(
         self,
         frequency_penalty: Optional[float] = None,

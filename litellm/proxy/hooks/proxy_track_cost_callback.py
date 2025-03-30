@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import log_db_metrics
+from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.types.utils import (
     StandardLoggingPayload,
@@ -33,8 +34,6 @@ class _ProxyDBLogger(CustomLogger):
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
     ):
-        from litellm.proxy.proxy_server import update_database
-
         if _ProxyDBLogger._should_track_errors_in_db() is False:
             return
 
@@ -52,10 +51,10 @@ class _ProxyDBLogger(CustomLogger):
         )
         _metadata["user_api_key"] = user_api_key_dict.api_key
         _metadata["status"] = "failure"
-        _metadata["error_information"] = (
-            StandardLoggingPayloadSetup.get_error_information(
-                original_exception=original_exception,
-            )
+        _metadata[
+            "error_information"
+        ] = StandardLoggingPayloadSetup.get_error_information(
+            original_exception=original_exception,
         )
 
         existing_metadata: dict = request_data.get("metadata", None) or {}
@@ -67,7 +66,7 @@ class _ProxyDBLogger(CustomLogger):
             request_data.get("proxy_server_request") or {}
         )
         request_data["litellm_params"]["metadata"] = existing_metadata
-        await update_database(
+        await DBSpendUpdateWriter.update_database(
             token=user_api_key_dict.api_key,
             response_cost=0.0,
             user_id=user_api_key_dict.user_id,
@@ -94,7 +93,6 @@ class _ProxyDBLogger(CustomLogger):
             prisma_client,
             proxy_logging_obj,
             update_cache,
-            update_database,
         )
 
         verbose_proxy_logger.debug("INSIDE _PROXY_track_cost_callback")
@@ -138,7 +136,7 @@ class _ProxyDBLogger(CustomLogger):
                     end_user_id=end_user_id,
                 ):
                     ## UPDATE DATABASE
-                    await update_database(
+                    await DBSpendUpdateWriter.update_database(
                         token=user_api_key,
                         response_cost=response_cost,
                         user_id=user_id,
