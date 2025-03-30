@@ -272,11 +272,10 @@ async with stdio_client(server_params) as (read, write):
 </TabItem>
 </Tabs>
 
-## Advanced Usage
-
+## Advanced
 ### Expose MCP tools on LiteLLM Proxy Server
 
-This allows you to define tools that can be called by any MCP compatible client. Define your mcp_tools with LiteLLM and all your clients can list and call available tools.
+This allows you to define tools that can be called by any MCP compatible client. Define your `mcp_servers` with LiteLLM and all your clients can list and call available tools.
 
 #### How it works
 
@@ -301,7 +300,7 @@ When MCP clients connect to LiteLLM they can follow this workflow:
 
 LiteLLM allows you to define your tools on the `mcp_servers` section in your config.yaml file. All tools listed here will be available to MCP clients (when they connect to LiteLLM and call `list_tools`).
 
-```yaml
+```yaml title="config.yaml" showLineNumbers
 model_list:
   - model_name: gpt-4o
     litellm_params:
@@ -311,13 +310,12 @@ model_list:
 mcp_servers:
   {
     "zapier_mcp": {
-      "url": "https://actions.zapier.com/mcp/sk-akxxxxx/sse",
+      "url": "https://actions.zapier.com/mcp/sk-akxxxxx/sse"
     },
-    "fetch" {
-      "url": "http://localhost:8000/sse",
+    "fetch": {
+      "url": "http://localhost:8000/sse"
     }
   }
-
 ```
 
 
@@ -326,7 +324,7 @@ mcp_servers:
 <Tabs>
 <TabItem value="docker" label="Docker Run">
 
-```shell
+```shell title="Docker Run" showLineNumbers
 docker run -d \
   -p 4000:4000 \
   -e OPENAI_API_KEY=$OPENAI_API_KEY \
@@ -342,7 +340,7 @@ docker run -d \
 
 <TabItem value="py" label="litellm pip">
 
-```shell
+```shell title="litellm pip" showLineNumbers
 litellm --config config.yaml --detailed_debug
 ```
 
@@ -350,48 +348,87 @@ litellm --config config.yaml --detailed_debug
 </Tabs>
 
 
-#### 4. Make an LLM API request 
+#### 3. Make an LLM API request 
 
+In this example we will do the following:
 
+1. Use MCP client to list MCP tools on LiteLLM Proxy
+2. Use `transform_mcp_tool_to_openai_tool` to convert MCP tools to OpenAI tools
+3. Provide the MCP tools to `gpt-4o`
+4. Handle tool call from `gpt-4o`
+5. Convert OpenAI tool call to MCP tool call
+6. Execute tool call on MCP server
 
-```python
+```python title="MCP Client List Tools" showLineNumbers
 import asyncio
-from langchain_mcp_adapters.tools import load_mcp_tools
-from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import create_react_agent
+from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletionUserMessageParam
 from mcp import ClientSession
 from mcp.client.sse import sse_client
+from litellm.experimental_mcp_client.tools import (
+    transform_mcp_tool_to_openai_tool,
+    transform_openai_tool_call_request_to_mcp_tool_call_request,
+)
 
 
 async def main():
-    # Initialize the model with your API key
-    model = ChatOpenAI(model="gpt-4o")
+    # Initialize clients
     
-    # Connect to the MCP server
-    async with sse_client(url="http://localhost:4000/mcp/") as (read, write):
+    # point OpenAI client to LiteLLM Proxy
+    client = AsyncOpenAI(api_key="sk-1234", base_url="http://localhost:4000")
+
+    # Point MCP client to LiteLLM Proxy
+    async with sse_client("http://localhost:4000/mcp/") as (read, write):
         async with ClientSession(read, write) as session:
-            # Initialize the session
-            print("Initializing session...")
             await session.initialize()
-            print("Session initialized")
 
-            # Load available tools from MCP
-            print("Loading tools...")
-            tools = await load_mcp_tools(session)
-            print(f"Loaded {len(tools)} tools")
+            # 1. List MCP tools on LiteLLM Proxy
+            mcp_tools = await session.list_tools()
+            print("List of MCP tools for MCP server:", mcp_tools.tools)
 
-            # Create a ReAct agent with the model and tools
-            agent = create_react_agent(model, tools)
-            
-            # Run the agent with a user query
-            user_query = "What's the weather in Tokyo?"
-            print(f"Asking: {user_query}")
-            agent_response = await agent.ainvoke({"messages": user_query})
-            print("Agent response:")
-            print(agent_response)
+            # Create message
+            messages = [
+                ChatCompletionUserMessageParam(
+                    content="Send an email about LiteLLM supporting MCP", role="user"
+                )
+            ]
+
+            # 2. Use `transform_mcp_tool_to_openai_tool` to convert MCP tools to OpenAI tools
+            # Since OpenAI only supports tools in the OpenAI format, we need to convert the MCP tools to the OpenAI format.
+            openai_tools = [
+                transform_mcp_tool_to_openai_tool(tool) for tool in mcp_tools.tools
+            ]
+
+            # 3. Provide the MCP tools to `gpt-4o`
+            response = await client.chat.completions.create(
+                model="gpt-4o",
+                messages=messages,
+                tools=openai_tools,
+                tool_choice="auto",
+            )
+
+            # 4. Handle tool call from `gpt-4o`
+            if response.choices[0].message.tool_calls:
+                tool_call = response.choices[0].message.tool_calls[0]
+                if tool_call:
+
+                    # 5. Convert OpenAI tool call to MCP tool call
+                    # Since MCP servers expect tools in the MCP format, we need to convert the OpenAI tool call to the MCP format.
+                    # This is done using litellm.experimental_mcp_client.tools.transform_openai_tool_call_request_to_mcp_tool_call_request
+                    mcp_call = (
+                        transform_openai_tool_call_request_to_mcp_tool_call_request(
+                            openai_tool=tool_call.model_dump()
+                        )
+                    )
+
+                    # 6. Execute tool call on MCP server
+                    result = await session.call_tool(
+                        name=mcp_call.name, arguments=mcp_call.arguments
+                    )
+
+                    print("Result:", result)
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
-
+# Run it
+asyncio.run(main())
 ```
