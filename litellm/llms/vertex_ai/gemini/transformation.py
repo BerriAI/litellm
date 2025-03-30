@@ -154,7 +154,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 _message_content = messages[msg_i].get("content")
                 if _message_content is not None and isinstance(_message_content, list):
                     _parts: List[PartType] = []
-                    for element in _message_content:
+                    for element_idx, element in enumerate(_message_content):
                         if (
                             element["type"] == "text"
                             and "text" in element
@@ -191,9 +191,12 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                         elif element["type"] == "file":
                             file_element = cast(ChatCompletionFileObject, element)
                             file_id = file_element["file"].get("file_id")
+                            format = file_element["file"].get("format")
+
                             if not file_id:
                                 continue
-                            mime_type = _get_image_mime_type_from_url(file_id)
+                            mime_type = format or _get_image_mime_type_from_url(file_id)
+
                             if mime_type is not None:
                                 _part = PartType(
                                     file_data=FileDataType(
@@ -202,6 +205,12 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                     )
                                 )
                                 _parts.append(_part)
+                            else:
+                                raise Exception(
+                                    "Unable to determine mime type for file_id: {}, set this explicitly using message[{}].content[{}].file.format".format(
+                                        file_id, msg_i, element_idx
+                                    )
+                                )
                     user_content.extend(_parts)
                 elif (
                     _message_content is not None

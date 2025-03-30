@@ -505,10 +505,11 @@ class ChatCompletionDocumentObject(TypedDict):
     citations: Optional[CitationsObject]
 
 
-class ChatCompletionFileObjectFile(TypedDict):
-    file_data: Optional[str]
-    file_id: Optional[str]
-    filename: Optional[str]
+class ChatCompletionFileObjectFile(TypedDict, total=False):
+    file_data: str
+    file_id: str
+    filename: str
+    format: str
 
 
 class ChatCompletionFileObject(TypedDict):
