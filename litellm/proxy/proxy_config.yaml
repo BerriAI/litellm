@@ -2,13 +2,14 @@ model_list:
   - model_name: gpt-4o
     litellm_params:
       model: openai/gpt-4o
+      api_key: sk-xxxxxxx
 
 mcp_servers:
   {
-    "Zapier_MCP": {
-      "url": "os.environ/ZAPIER_MCP_SERVER_URL",
-      "mcp_info": {
-        "logo_url": "https://espysys.com/wp-content/uploads/2024/08/zapier-logo.webp",
-      }
+    "zapier_mcp": {
+      "url": "https://actions.zapier.com/mcp/sk-akxxxxx/sse"
+    },
+    "fetch": {
+      "url": "http://localhost:8000/sse"
     }
   }
