@@ -60,6 +60,7 @@ Read more about custom prompt management [here](https://docs.litellm.ai/docs/pro
 - Fixed Vertex AI multimodal embedding translation [PR](https://github.com/BerriAI/litellm/pull/9471)
 - Support litellm.api_base for Vertex AI + Gemini across completion, embedding, image_generation [PR](https://github.com/BerriAI/litellm/pull/9516)
 - Fixed Mistral chat transformation [PR](https://github.com/BerriAI/litellm/pull/9606)
+- Refactored Vertex AI passthrough routes - fixes unpredictable behaviour with auto-setting default_vertex_region on router model add [PR](https://github.com/BerriAI/litellm/pull/9467)
 
 ## Spend Tracking Improvements
 - Log 'api_base' on spend logs [PR](https://github.com/BerriAI/litellm/pull/9509)
@@ -82,18 +83,21 @@ Read more about custom prompt management [here](https://docs.litellm.ai/docs/pro
 
 ## Logging Integrations
 - Fixed StandardLoggingPayload for GCS Pub Sub Logging Integration [PR](https://github.com/BerriAI/litellm/pull/9508)
+- Track `litellm_model_name` on `StandardLoggingPayload` [Docs](https://docs.litellm.ai/docs/proxy/logging_spec#standardlogginghiddenparams)
 
 ## Performance / Reliability Improvements
 - LiteLLM Redis semantic caching implementation [PR](https://github.com/BerriAI/litellm/pull/9356)
 - Gracefully handle exceptions when DB is having an outage [PR](https://github.com/BerriAI/litellm/pull/9533)
 - Allow Pods to startup + passing /health/readiness when allow_requests_on_db_unavailable: True and DB is down [PR](https://github.com/BerriAI/litellm/pull/9569)
-- Refactored Vertex AI passthrough routes - fixes unpredictable behaviour with auto-setting default_vertex_region on router model add [PR](https://github.com/BerriAI/litellm/pull/9467)
+
 
 ## General Improvements
 - Support for exposing MCP tools on litellm proxy [PR](https://github.com/BerriAI/litellm/pull/9426)
 - Support discovering Gemini, Anthropic, xAI models by calling their /v1/model endpoint [PR](https://github.com/BerriAI/litellm/pull/9530)
 - Fixed route check for non-proxy admins on JWT auth [PR](https://github.com/BerriAI/litellm/pull/9454)
 - Added baseline Prisma database migrations [PR](https://github.com/BerriAI/litellm/pull/9565)
+- View all wildcard models on /model/info [PR](https://github.com/BerriAI/litellm/pull/9572)
+
 
 ## Security
 - Bumped next from 14.2.21 to 14.2.25 in UI dashboard [PR](https://github.com/BerriAI/litellm/pull/9458)
