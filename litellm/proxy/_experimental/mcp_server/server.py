@@ -8,16 +8,14 @@ from typing import Any, Dict, List, Optional, Union
 from anyio import BrokenResourceError
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import ValidationError
+from pydantic import ConfigDict, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_TOOL_NAME_PREFIX
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.types.mcp_server.mcp_server_manager import (
-    ListMCPToolsRestAPIResponseObject,
-)
+from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.utils import StandardLoggingMCPToolCall
 from litellm.utils import client
 
@@ -48,6 +46,19 @@ if MCP_AVAILABLE:
     from .mcp_server_manager import global_mcp_server_manager
     from .sse_transport import SseServerTransport
     from .tool_registry import global_mcp_tool_registry
+
+    ######################################################
+    ############ MCP Tools List REST API Response Object #
+    # Defined here because we don't want to add `mcp` as a
+    # required dependency for `litellm` pip package
+    ######################################################
+    class ListMCPToolsRestAPIResponseObject(MCPTool):
+        """
+        Object returned by the /tools/list REST API route.
+        """
+
+        mcp_info: Optional[MCPInfo] = None
+        model_config = ConfigDict(arbitrary_types_allowed=True)
 
     ########################################################
     ############ Initialize the MCP Server #################
@@ -224,7 +235,7 @@ if MCP_AVAILABLE:
     ############ MCP Server REST API Routes #################
     ########################################################
     @router.get("/tools/list", dependencies=[Depends(user_api_key_auth)])
-    async def list_tool_rest_api():
+    async def list_tool_rest_api() -> List[ListMCPToolsRestAPIResponseObject]:
         """
         List all available tools with information about the server they belong to.
 
