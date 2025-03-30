@@ -8,11 +8,17 @@ This is a Proxy
 
 import asyncio
 import json
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from mcp import ClientSession
-from mcp.client.sse import sse_client
-from mcp.types import Tool as MCPTool
+if TYPE_CHECKING:
+    from mcp import ClientSession
+    from mcp.client.sse import sse_client
+    from mcp.types import Tool as MCPTool
+else:
+    # Provide fallback types for runtime incase `mcp` is not installed
+    ClientSession = None
+    MCPTool = object
+    sse_client = None
 
 from litellm._logging import verbose_logger
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPSSEServer
@@ -93,10 +99,9 @@ class MCPServerManager:
 
         async with sse_client(url=server.url) as (read, write):
             async with ClientSession(read, write) as session:
-                server.client_session = session
-                await server.client_session.initialize()
+                await session.initialize()
 
-                tools_result = await server.client_session.list_tools()
+                tools_result = await session.list_tools()
                 verbose_logger.debug(f"Tools from {server.name}: {tools_result}")
 
                 # Update tool to server mapping
@@ -137,9 +142,8 @@ class MCPServerManager:
             raise ValueError(f"Tool {name} not found")
         async with sse_client(url=mcp_server.url) as (read, write):
             async with ClientSession(read, write) as session:
-                mcp_server.client_session = session
-                await mcp_server.client_session.initialize()
-                return await mcp_server.client_session.call_tool(name, arguments)
+                await session.initialize()
+                return await session.call_tool(name, arguments)
 
     def _get_mcp_server_from_tool_name(self, tool_name: str) -> Optional[MCPSSEServer]:
         """
