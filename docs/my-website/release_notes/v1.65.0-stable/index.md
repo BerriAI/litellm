@@ -87,7 +87,6 @@ Read more about custom prompt management [here](https://docs.litellm.ai/docs/pro
 - LiteLLM Redis semantic caching implementation [PR](https://github.com/BerriAI/litellm/pull/9356)
 - Gracefully handle exceptions when DB is having an outage [PR](https://github.com/BerriAI/litellm/pull/9533)
 - Allow Pods to startup + passing /health/readiness when allow_requests_on_db_unavailable: True and DB is down [PR](https://github.com/BerriAI/litellm/pull/9569)
-- Removed hard coded final usage chunk on Bedrock streaming usage [PR](https://github.com/BerriAI/litellm/pull/9512)
 - Refactored Vertex AI passthrough routes - fixes unpredictable behaviour with auto-setting default_vertex_region on router model add [PR](https://github.com/BerriAI/litellm/pull/9467)
 
 ## General Improvements
@@ -95,11 +94,6 @@ Read more about custom prompt management [here](https://docs.litellm.ai/docs/pro
 - Support discovering Gemini, Anthropic, xAI models by calling their /v1/model endpoint [PR](https://github.com/BerriAI/litellm/pull/9530)
 - Fixed route check for non-proxy admins on JWT auth [PR](https://github.com/BerriAI/litellm/pull/9454)
 - Added baseline Prisma database migrations [PR](https://github.com/BerriAI/litellm/pull/9565)
-- Get master key from environment, if not set [PR](https://github.com/BerriAI/litellm/pull/9617)
-
-## Documentation
-- Fixed Predibase typo [PR](https://github.com/BerriAI/litellm/pull/9464)
-- Updated README.md [PR](https://github.com/BerriAI/litellm/pull/9616)
 
 ## Security
 - Bumped next from 14.2.21 to 14.2.25 in UI dashboard [PR](https://github.com/BerriAI/litellm/pull/9458)
