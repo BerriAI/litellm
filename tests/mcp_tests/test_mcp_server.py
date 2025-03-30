@@ -17,6 +17,7 @@ mcp_server_manager = MCPServerManager()
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Local only test")
 async def test_mcp_server_manager():
     mcp_server_manager.load_servers_from_config(
         {
