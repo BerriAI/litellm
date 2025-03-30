@@ -291,8 +291,8 @@ When MCP clients connect to LiteLLM they can follow this workflow:
 2. List all available tools on LiteLLM
 3. Client makes LLM API request with tool call(s)
 4. LLM API returns which tools to call and with what arguments
-5. MCP client makes tool calls to LiteLLM
-6. LiteLLM makes the tool calls to the appropriate handlers
+5. MCP client makes MCP tool calls to LiteLLM
+6. LiteLLM makes the tool calls to the appropriate MCP server
 7. LiteLLM returns the tool call results to the MCP client
 
 #### Usage
@@ -394,51 +394,4 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 
-```
-
-
-### Specification for `mcp_tools`
-
-The `mcp_tools` section in your LiteLLM config defines tools that can be called by MCP-compatible clients.
-
-#### Tool Definition Format
-
-```yaml
-mcp_tools:
-  - name: string                # Required: Name of the tool
-    description: string         # Required: Description of what the tool does
-    input_schema: object        # Required: JSON Schema defining the tool's input parameters
-    handler: string             # Required: Path to the function that implements the tool
-```
-
-#### Field Details
-
-- `name`: A unique identifier for the tool
-- `description`: A clear description of what the tool does, used by LLMs to determine when to call it
-- `input_schema`: JSON Schema object defining the expected input parameters
-- `handler`: String path to the Python function that implements the tool (e.g., "module.submodule.function_name")
-
-#### Example Tool Definition
-
-```yaml
-mcp_tools:
-  - name: "get_current_time"
-    description: "Get the current time in a specified format"
-    input_schema: {
-      "type": "object",
-      "properties": {
-        "format": {
-          "type": "string",
-          "description": "The format of the time to return",
-          "enum": ["short", "long", "iso"]
-        },
-        "timezone": {
-          "type": "string",
-          "description": "The timezone to use (e.g., 'UTC', 'America/New_York')",
-          "default": "UTC"
-        }
-      },
-      "required": ["format"]
-    }
-    handler: "mcp_tools.get_current_time"
 ```
