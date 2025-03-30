@@ -53,7 +53,7 @@ const sidebars = {
         {
           type: "category",
           label: "Architecture",
-          items: ["proxy/architecture", "proxy/db_info", "router_architecture", "proxy/user_management_heirarchy", "proxy/jwt_auth_arch"],
+          items: ["proxy/architecture", "proxy/db_info", "router_architecture", "proxy/user_management_heirarchy", "proxy/jwt_auth_arch", "proxy/image_handling"],
         },
         {
           type: "link",
@@ -243,7 +243,9 @@ const sidebars = {
         "exception_mapping",
         "completion/provider_specific_params",
         "guides/finetuned_models",
+        "guides/security_settings",
         "completion/audio",
+        "completion/web_search",
         "completion/document_understanding",
         "completion/vision",
         "completion/json_mode",
@@ -293,6 +295,7 @@ const sidebars = {
         "text_completion",
         "embedding/supported_embedding",
         "anthropic_unified",
+        "mcp",
         {
           type: "category",
           label: "/images",
@@ -396,6 +399,7 @@ const sidebars = {
         "observability/logfire_integration",
         "observability/argilla",
         "observability/arize_integration",
+        "observability/phoenix_integration",
         "debugging/local_debugging",
         "observability/raw_request_response",
         "observability/custom_callback",

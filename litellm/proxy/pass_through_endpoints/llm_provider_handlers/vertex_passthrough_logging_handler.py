@@ -3,6 +3,7 @@ import re
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
+
 import httpx
 
 import litellm
@@ -222,7 +223,9 @@ class VertexPassthroughLoggingHandler:
     @staticmethod
     def _get_custom_llm_provider_from_url(url: str) -> str:
         parsed_url = urlparse(url)
-        if parsed_url.hostname and parsed_url.hostname.endswith("generativelanguage.googleapis.com"):
+        if parsed_url.hostname and parsed_url.hostname.endswith(
+            "generativelanguage.googleapis.com"
+        ):
             return litellm.LlmProviders.GEMINI.value
         return litellm.LlmProviders.VERTEX_AI.value
 

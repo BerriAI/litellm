@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.types.llms.openai import (
+    ResponseCompletedEvent,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
 )
@@ -206,4 +207,64 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             cache_hit=None,
             start_time=self.start_time,
             end_time=datetime.now(),
+        )
+
+
+class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
+    """
+    mock iterator - some models like o1-pro do not support streaming, we need to fake a stream
+    """
+
+    def __init__(
+        self,
+        response: httpx.Response,
+        model: str,
+        responses_api_provider_config: BaseResponsesAPIConfig,
+        logging_obj: LiteLLMLoggingObj,
+    ):
+        self.raw_http_response = response
+        super().__init__(
+            response=response,
+            model=model,
+            responses_api_provider_config=responses_api_provider_config,
+            logging_obj=logging_obj,
+        )
+        self.is_done = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> ResponsesAPIStreamingResponse:
+        if self.is_done:
+            raise StopAsyncIteration
+        self.is_done = True
+        transformed_response = (
+            self.responses_api_provider_config.transform_response_api_response(
+                model=self.model,
+                raw_response=self.raw_http_response,
+                logging_obj=self.logging_obj,
+            )
+        )
+        return ResponseCompletedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            response=transformed_response,
+        )
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> ResponsesAPIStreamingResponse:
+        if self.is_done:
+            raise StopIteration
+        self.is_done = True
+        transformed_response = (
+            self.responses_api_provider_config.transform_response_api_response(
+                model=self.model,
+                raw_response=self.raw_http_response,
+                logging_obj=self.logging_obj,
+            )
+        )
+        return ResponseCompletedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            response=transformed_response,
         )
