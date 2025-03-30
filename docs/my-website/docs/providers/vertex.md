@@ -1793,6 +1793,12 @@ response = completion(
                         "file_data": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
                     }  
                 },
+                {
+                    "type": "audio_input",
+                    "audio_input {
+                        "audio_input": f"data:audio/mp3;base64,{encoded_file}", # 👈 AUDIO File ('file' message works as too)
+                    }  
+                },
             ],
         }
     ],
@@ -1871,9 +1877,15 @@ curl http://0.0.0.0:4000/v1/chat/completions \
                 "type": "file",
                 "file": {
                     "file_data": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+                },
+            },
+            {
+                "type": "audio_input",
+                "audio_input {
+                    "audio_input": f"data:audio/mp3;base64,{encoded_file}", # 👈 AUDIO File ('file' message works as too)
                 }  
             },
-        ]
+    ]
       }
     ],
     "max_tokens": 300
