@@ -29,7 +29,7 @@ class FileDataType(TypedDict):
 
 
 class BlobType(TypedDict):
-    mime_type: Required[str]
+    mimeType: Required[str]
     data: Required[str]
 
 
@@ -58,10 +58,10 @@ class HttpxCodeExecutionResult(TypedDict):
 
 class HttpxPartType(TypedDict, total=False):
     text: str
-    inline_data: BlobType
-    file_data: FileDataType
+    inlineData: BlobType
+    fileData: FileDataType
     functionCall: HttpxFunctionCall
-    function_response: FunctionResponse
+    functionResponse: FunctionResponse
     executableCode: HttpxExecutableCode
     codeExecutionResult: HttpxCodeExecutionResult
 
@@ -160,6 +160,7 @@ class GenerationConfig(TypedDict, total=False):
     seed: int
     responseLogprobs: bool
     logprobs: int
+    responseModalities: List[Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]]
 
 
 class Tools(TypedDict, total=False):
