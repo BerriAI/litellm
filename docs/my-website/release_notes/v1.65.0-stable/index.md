@@ -72,4 +72,6 @@ LiteLLM v1.65.0 introduces significant enhancements including Model Context Prot
 
 
 
+## Complete Git Diff
 
+[Here's the complete git diff](https://github.com/BerriAI/litellm/compare/v1.63.14-stable.patch1...v1.65.0-stable)
