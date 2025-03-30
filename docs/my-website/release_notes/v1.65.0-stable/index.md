@@ -18,12 +18,7 @@ import Image from '@theme/IdealImage';
 
 v1.65.0-stable is live now. Here are the key highlights of this release:
 - **MCP Support**: Support for adding and using MCP servers on the LiteLLM proxy.
-- **Custom Prompt Management**: Connect LiteLLM to your prompt management system with custom hooks.
-
-
-
-
-
+- **UI view total usage after 1M+ logs**: You can now view usage analytics after crossing 1M+ logs in DB. 
 
 ## Model Context Protocol (MCP)
 
@@ -39,19 +34,69 @@ Read more about MCP [here](https://docs.litellm.ai/docs/mcp).
   Expose and use MCP servers through LiteLLM
 </p>
 
-## Custom Prompt Management
+## UI view total usage after 1M+ logs
 
-This release allows you to connect LiteLLM to any prompt management service through our custom prompt management hooks. As proxy admin all you need to do is implement a `get_chat_completion_prompt` hook which accepts a prompt_id and prompt_variables and returns a formatted prompt.
+This release brings the ability to view total usage analytics even after exceeding 1M+ logs in your database. We've implemented a scalable architecture that stores only aggregate usage data, resulting in significantly more efficient queries and reduced database CPU utilization.
 
-Read more about custom prompt management [here](https://docs.litellm.ai/docs/proxy/custom_prompt_management).
 
 <Image 
-  img={require('../../img/custom_prompt_management.png')}
+  img={require('../../img/release_notes/ui_usage.png')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 <p style={{textAlign: 'left', color: '#666'}}>
-  Connect LiteLLM to your prompt management service through custom hooks
+  View total usage after 1M+ logs
 </p>
+
+
+- How this works:
+    - We now aggregate usage data into a dedicated DailyUserSpend table, significantly reducing query load and CPU usage even beyond 1M+ logs.
+
+- Daily Spend Breakdown API:
+
+    - Retrieve granular daily usage data (by model, provider, and API key) with a single endpoint.
+    Example Request:
+
+    ```shell title="Daily Spend Breakdown API" showLineNumbers
+    curl -L -X GET 'http://localhost:4000/user/daily/activity?start_date=2025-03-20&end_date=2025-03-27' \
+    -H 'Authorization: Bearer sk-...'
+    ```
+
+    ```json title="Daily Spend Breakdown API Response" showLineNumbers
+    {
+        "results": [
+            {
+                "date": "2025-03-27",
+                "metrics": {
+                    "spend": 0.0177072,
+                    "prompt_tokens": 111,
+                    "completion_tokens": 1711,
+                    "total_tokens": 1822,
+                    "api_requests": 11
+                },
+                "breakdown": {
+                    "models": {
+                        "gpt-4o-mini": {
+                            "spend": 1.095e-05,
+                            "prompt_tokens": 37,
+                            "completion_tokens": 9,
+                            "total_tokens": 46,
+                            "api_requests": 1
+                    },
+                    "providers": { "openai": { ... }, "azure_ai": { ... } },
+                    "api_keys": { "3126b6eaf1...": { ... } }
+                }
+            }
+        ],
+        "metadata": {
+            "total_spend": 0.7274667,
+            "total_prompt_tokens": 280990,
+            "total_completion_tokens": 376674,
+            "total_api_requests": 14
+        }
+    }
+    ```
+
+
 
 
 ## New Models / Updated Models
