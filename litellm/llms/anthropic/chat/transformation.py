@@ -141,9 +141,15 @@ class AnthropicConfig(BaseConfig):
         if user_anthropic_beta_headers is not None:
             betas.update(user_anthropic_beta_headers)
 
-        # Don't send any beta headers to Vertex, Vertex has failed requests when they are sent
+        # Handle beta headers for Vertex AI
+        # We allow prompt caching beta header for Vertex, but exclude other beta headers that might cause issues
         if is_vertex_request is True:
-            pass
+            vertex_safe_betas = set()
+            # Allow prompt caching beta header for Vertex
+            if "prompt-caching-2024-07-31" in betas:
+                vertex_safe_betas.add("prompt-caching-2024-07-31")
+            if len(vertex_safe_betas) > 0:
+                headers["anthropic-beta"] = ",".join(vertex_safe_betas)
         elif len(betas) > 0:
             headers["anthropic-beta"] = ",".join(betas)
 
