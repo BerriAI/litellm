@@ -32,6 +32,7 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
         optional_params: dict,
         litellm_params: dict,
         stream: Optional[bool] = None,
+        api_key: Optional[str] = None,
     ) -> str:
         """
         OPTIONAL
