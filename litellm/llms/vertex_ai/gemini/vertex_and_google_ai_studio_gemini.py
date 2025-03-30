@@ -208,6 +208,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "seed",
             "logprobs",
             "top_logprobs",  # Added this to list of supported openAI params
+            "modalities",
         ]
 
     def map_tool_choice_values(
@@ -383,7 +384,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     optional_params["tool_choice"] = _tool_choice_value
             if param == "seed":
                 optional_params["seed"] = value
-
+            if param == "modalities" and isinstance(value, list):
+                response_modalities = []
+                for modality in value:
+                    if modality == "text":
+                        response_modalities.append("TEXT")
+                    elif modality == "image":
+                        response_modalities.append("IMAGE")
+                    elif modality == "audio":
+                        response_modalities.append("AUDIO")
+                    else:
+                        response_modalities.append("MODALITY_UNSPECIFIED")
+                optional_params["responseModalities"] = response_modalities
         if litellm.vertex_ai_safety_settings is not None:
             optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
         return optional_params

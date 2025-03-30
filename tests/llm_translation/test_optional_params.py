@@ -1379,3 +1379,13 @@ def test_azure_modalities_param():
     )
     assert optional_params["modalities"] == ["text", "audio"]
     assert optional_params["audio"] == {"type": "audio_input", "input": "test.wav"}
+
+def test_gemini_modalities_param():
+    optional_params = get_optional_params(
+        model="gemini-1.5-pro",
+        custom_llm_provider="gemini",
+        modalities=["text", "image"],
+    )
+
+    assert optional_params["responseModalities"] == ["TEXT", "IMAGE"]
+    
