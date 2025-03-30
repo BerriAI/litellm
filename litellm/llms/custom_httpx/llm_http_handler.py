@@ -619,6 +619,7 @@ class BaseLLMHTTPHandler:
 
         api_base = provider_config.get_complete_url(
             api_base=api_base,
+            api_key=api_key,
             model=model,
             optional_params=optional_params,
             litellm_params=litellm_params,
@@ -892,6 +893,7 @@ class BaseLLMHTTPHandler:
 
         complete_url = provider_config.get_complete_url(
             api_base=api_base,
+            api_key=api_key,
             model=model,
             optional_params=optional_params,
             litellm_params=litellm_params,
