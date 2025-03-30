@@ -25,7 +25,12 @@ from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
 )
 from litellm.types.router import *
-from litellm.utils import get_litellm_params, supports_httpx_timeout
+from litellm.types.utils import LlmProviders
+from litellm.utils import (
+    ProviderConfigManager,
+    get_litellm_params,
+    supports_httpx_timeout,
+)
 
 ####### ENVIRONMENT VARIABLES ###################
 openai_files_instance = OpenAIFilesAPI()
@@ -570,7 +575,17 @@ def create_file(
             extra_headers=extra_headers,
             extra_body=extra_body,
         )
-        if custom_llm_provider == "openai":
+
+        provider_files_config = ProviderConfigManager.get_provider_files_config(
+            model="",
+            provider=LlmProviders(custom_llm_provider),
+        )
+        if provider_files_config is not None:
+            response = provider_files_config.create_file(
+                _create_file_request,
+                litellm_params_dict,
+            )
+        elif custom_llm_provider == "openai":
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
                 optional_params.api_base

@@ -57,6 +57,8 @@ import litellm._service_logger  # for storing API inputs, outputs, and metadata
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.audio_utils.utils
 import litellm.litellm_core_utils.json_validation_rule
+import litellm.llms
+import litellm.llms.gemini
 from litellm.caching._internal_lru_cache import lru_cache_wrapper
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
@@ -207,6 +209,7 @@ from litellm.llms.base_llm.base_utils import (
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
+from litellm.llms.base_llm.files.transformation import BaseFilesConfig
 from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
 )
@@ -6419,6 +6422,19 @@ class ProviderConfigManager:
             return litellm.OpenAIImageVariationConfig()
         elif LlmProviders.TOPAZ == provider:
             return litellm.TopazImageVariationConfig()
+        return None
+
+    @staticmethod
+    def get_provider_files_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseFilesConfig]:
+        if LlmProviders.GEMINI == provider:
+            from litellm.llms.gemini.files.handler import (
+                GoogleAIStudioFilesHandler,  # experimental approach, to reduce bloat on __init__.py
+            )
+
+            return GoogleAIStudioFilesHandler()
         return None
 
 

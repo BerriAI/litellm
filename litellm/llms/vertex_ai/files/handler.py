@@ -29,8 +29,6 @@ class VertexAIFilesHandler(GCSBucketBase):
             llm_provider=LlmProviders.VERTEX_AI,
         )
 
-    pass
-
     async def async_create_file(
         self,
         create_file_data: CreateFileRequest,
