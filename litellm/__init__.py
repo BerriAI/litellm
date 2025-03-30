@@ -302,7 +302,7 @@ context_window_fallbacks: Optional[List] = None
 content_policy_fallbacks: Optional[List] = None
 allowed_fails: int = 3
 num_retries_per_request: Optional[int] = (
-    None  # for the request overall (incl. fallbacks + model retries)
+    None  # for the request overall (incl. fallbacks + model retries.)
 )
 ####### SECRET MANAGERS #####################
 secret_manager_client: Optional[Any] = (
