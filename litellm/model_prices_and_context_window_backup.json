@@ -4696,6 +4696,8 @@
         "supports_vision": true,
         "supports_response_schema": true,
         "supports_audio_output": true,
+        "supports_audio_input": true,
+        "supported_modalities": ["text", "image", "audio", "video"],
         "supports_tool_choice": true,
         "source": "https://ai.google.dev/pricing#2_0flash"
     },
