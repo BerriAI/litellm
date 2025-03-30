@@ -1,7 +1,14 @@
 model_list:
-  - model_name: fake-openai-endpoint
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/fake
-      api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      model: openai/gpt-4o
 
+mcp_servers:
+  {
+    "Zapier MCP": {
+      "url": "os.environ/ZAPIER_MCP_SERVER_URL",
+      "mcp_info": {
+        "logo_url": "https://espysys.com/wp-content/uploads/2024/08/zapier-logo.webp",
+      }
+    }
+  }
