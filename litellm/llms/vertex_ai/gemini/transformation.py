@@ -105,24 +105,53 @@ def _get_image_mime_type_from_url(url: str) -> Optional[str]:
     See gemini mime types: https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/image-understanding#image-requirements
 
     Supported by Gemini:
-     - PNG (`image/png`)
-     - JPEG (`image/jpeg`)
-     - WebP (`image/webp`)
-    Example:
-        url = https://example.com/image.jpg
-        Returns: image/jpeg
+     application/pdf
+    audio/mpeg
+    audio/mp3
+    audio/wav
+    image/png
+    image/jpeg
+    image/webp
+    text/plain
+    video/mov
+    video/mpeg
+    video/mp4
+    video/mpg
+    video/avi
+    video/wmv
+    video/mpegps
+    video/flv
     """
     url = url.lower()
-    if url.endswith((".jpg", ".jpeg")):
-        return "image/jpeg"
-    elif url.endswith(".png"):
-        return "image/png"
-    elif url.endswith(".webp"):
-        return "image/webp"
-    elif url.endswith(".mp4"):
-        return "video/mp4"
-    elif url.endswith(".pdf"):
-        return "application/pdf"
+
+    # Map file extensions to mime types
+    mime_types = {
+        # Images
+        (".jpg", ".jpeg"): "image/jpeg",
+        (".png",): "image/png",
+        (".webp",): "image/webp",
+        # Videos
+        (".mp4",): "video/mp4",
+        (".mov",): "video/mov",
+        (".mpeg", ".mpg"): "video/mpeg",
+        (".avi",): "video/avi",
+        (".wmv",): "video/wmv",
+        (".mpegps",): "video/mpegps",
+        (".flv",): "video/flv",
+        # Audio
+        (".mp3",): "audio/mp3",
+        (".wav",): "audio/wav",
+        (".mpeg",): "audio/mpeg",
+        # Documents
+        (".pdf",): "application/pdf",
+        (".txt",): "text/plain",
+    }
+
+    # Check each extension group against the URL
+    for extensions, mime_type in mime_types.items():
+        if any(url.endswith(ext) for ext in extensions):
+            return mime_type
+
     return None
 
 
