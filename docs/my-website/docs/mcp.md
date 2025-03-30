@@ -282,8 +282,8 @@ This allows you to define tools that can be called by any MCP compatible client.
 
 LiteLLM exposes the following MCP endpoints:
 
-- `/mcp/list_tools` - List all available tools
-- `/mcp/call_tool` - Call a specific tool with the provided arguments
+- `/mcp/tools/list` - List all available tools
+- `/mcp/tools/call` - Call a specific tool with the provided arguments
 
 When MCP clients connect to LiteLLM they can follow this workflow:
 
@@ -297,9 +297,9 @@ When MCP clients connect to LiteLLM they can follow this workflow:
 
 #### Usage
 
-#### 1. Define your tools on mcp_tools
+#### 1. Define your tools on under `mcp_servers` in your config.yaml file.
 
-LiteLLM allows you to define your tools on the `mcp_tools` section in your config.yaml file. All tools listed here will be available to MCP clients (when they connect to LiteLLM and call `list_tools`).
+LiteLLM allows you to define your tools on the `mcp_servers` section in your config.yaml file. All tools listed here will be available to MCP clients (when they connect to LiteLLM and call `list_tools`).
 
 ```yaml
 model_list:
@@ -308,56 +308,23 @@ model_list:
       model: openai/gpt-4o
       api_key: sk-xxxxxxx
 
-
-
-mcp_tools:
-  - name: "get_current_time"
-    description: "Get the current time"
-    input_schema: {
-      "type": "object",
-      "properties": {
-        "format": {
-          "type": "string",
-          "description": "The format of the time to return",
-          "enum": ["short"]
-        }
-      }
+mcp_servers:
+  {
+    "zapier_mcp": {
+      "url": "https://actions.zapier.com/mcp/sk-akxxxxx/sse",
+    },
+    "fetch" {
+      "url": "http://localhost:8000/sse",
     }
-    handler: "mcp_tools.get_current_time"
+  }
+
 ```
 
-#### 2. Define a handler for your tool
 
-Create a new file called `mcp_tools.py` and add this code. The key method here is `get_current_time` which gets executed when the `get_current_time` tool is called.
-
-```python
-# mcp_tools.py
-
-from datetime import datetime
-
-def get_current_time(format: str = "short"):
-    """
-    Simple handler for the 'get_current_time' tool.
-    
-    Args:
-        format (str): The format of the time to return ('short').
-    
-    Returns:
-        str: The current time formatted as 'HH:MM'.
-    """
-    # Get the current time
-    current_time = datetime.now()
-    
-    # Format the time as 'HH:MM'
-    return current_time.strftime('%H:%M')
-```
-
-#### 3. Start LiteLLM Gateway
+#### 2. Start LiteLLM Gateway
 
 <Tabs>
 <TabItem value="docker" label="Docker Run">
-
-Mount your `mcp_tools.py` on the LiteLLM Docker container.
 
 ```shell
 docker run -d \
@@ -365,7 +332,6 @@ docker run -d \
   -e OPENAI_API_KEY=$OPENAI_API_KEY \
   --name my-app \
   -v $(pwd)/my_config.yaml:/app/config.yaml \
-  -v $(pwd)/mcp_tools.py:/app/mcp_tools.py \
   my-app:latest \
   --config /app/config.yaml \
   --port 4000 \

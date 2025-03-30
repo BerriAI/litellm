@@ -5,7 +5,7 @@ model_list:
 
 mcp_servers:
   {
-    "Zapier MCP": {
+    "Zapier_MCP": {
       "url": "os.environ/ZAPIER_MCP_SERVER_URL",
       "mcp_info": {
         "logo_url": "https://espysys.com/wp-content/uploads/2024/08/zapier-logo.webp",
