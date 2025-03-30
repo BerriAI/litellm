@@ -661,7 +661,7 @@ def create_file(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'create_batch'. Only 'openai' is supported.".format(
+                message="LiteLLM doesn't support {} for 'create_file'. Only ['openai', 'azure', 'vertex_ai'] are supported.".format(
                     custom_llm_provider
                 ),
                 model="n/a",
@@ -669,7 +669,7 @@ def create_file(
                 response=httpx.Response(
                     status_code=400,
                     content="Unsupported provider",
-                    request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    request=httpx.Request(method="create_file", url="https://github.com/BerriAI/litellm"),  # type: ignore
                 ),
             )
         return response
