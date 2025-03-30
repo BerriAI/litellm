@@ -1,9 +1,15 @@
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Optional
 
-from mcp import ClientSession
-from mcp.types import Tool as MCPTool
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import TypedDict
+
+if TYPE_CHECKING:
+    from mcp import ClientSession
+    from mcp.types import Tool as MCPTool
+else:
+    # Provide fallback types for runtime incase `mcp` is not installed
+    ClientSession = None
+    MCPTool = object
 
 
 class MCPInfo(TypedDict, total=False):
@@ -14,7 +20,6 @@ class MCPInfo(TypedDict, total=False):
 class MCPSSEServer(BaseModel):
     name: str
     url: str
-    client_session: Optional[ClientSession] = None
     mcp_info: Optional[MCPInfo] = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
