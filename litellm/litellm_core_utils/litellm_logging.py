@@ -67,6 +67,7 @@ from litellm.types.utils import (
     StandardCallbackDynamicParams,
     StandardLoggingAdditionalHeaders,
     StandardLoggingHiddenParams,
+    StandardLoggingMCPToolCall,
     StandardLoggingMetadata,
     StandardLoggingModelCostFailureDebugInformation,
     StandardLoggingModelInformation,
@@ -1095,7 +1096,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         status="success",
                         standard_built_in_tools_params=self.standard_built_in_tools_params,
                     )
-                elif isinstance(result, dict):  # pass-through endpoints
+                elif isinstance(result, dict) or isinstance(result, list):
                     ## STANDARDIZED LOGGING PAYLOAD
                     self.model_call_details[
                         "standard_logging_object"
@@ -3106,6 +3107,7 @@ class StandardLoggingPayloadSetup:
         litellm_params: Optional[dict] = None,
         prompt_integration: Optional[str] = None,
         applied_guardrails: Optional[List[str]] = None,
+        mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall] = None,
     ) -> StandardLoggingMetadata:
         """
         Clean and filter the metadata dictionary to include only the specified keys in StandardLoggingMetadata.
@@ -3152,6 +3154,7 @@ class StandardLoggingPayloadSetup:
             user_api_key_end_user_id=None,
             prompt_management_metadata=prompt_management_metadata,
             applied_guardrails=applied_guardrails,
+            mcp_tool_call_metadata=mcp_tool_call_metadata,
         )
         if isinstance(metadata, dict):
             # Filter the metadata dictionary to include only the specified keys
@@ -3478,6 +3481,7 @@ def get_standard_logging_object_payload(
             litellm_params=litellm_params,
             prompt_integration=kwargs.get("prompt_integration", None),
             applied_guardrails=kwargs.get("applied_guardrails", None),
+            mcp_tool_call_metadata=kwargs.get("mcp_tool_call_metadata", None),
         )
 
         _request_body = proxy_server_request.get("body", {})
@@ -3617,6 +3621,7 @@ def get_standard_logging_metadata(
         user_api_key_end_user_id=None,
         prompt_management_metadata=None,
         applied_guardrails=None,
+        mcp_tool_call_metadata=None,
     )
     if isinstance(metadata, dict):
         # Filter the metadata dictionary to include only the specified keys

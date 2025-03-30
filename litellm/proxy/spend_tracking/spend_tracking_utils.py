@@ -13,7 +13,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import StandardLoggingMCPToolCall, StandardLoggingPayload
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 
@@ -38,6 +38,7 @@ def _get_spend_logs_metadata(
     metadata: Optional[dict],
     applied_guardrails: Optional[List[str]] = None,
     batch_models: Optional[List[str]] = None,
+    mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall] = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -55,6 +56,7 @@ def _get_spend_logs_metadata(
             error_information=None,
             proxy_server_request=None,
             batch_models=None,
+            mcp_tool_call_metadata=None,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -71,6 +73,7 @@ def _get_spend_logs_metadata(
     )
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
+    clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
     return clean_metadata
 
 
@@ -197,6 +200,11 @@ def get_logging_payload(  # noqa: PLR0915
         ),
         batch_models=(
             standard_logging_payload.get("hidden_params", {}).get("batch_models", None)
+            if standard_logging_payload is not None
+            else None
+        ),
+        mcp_tool_call_metadata=(
+            standard_logging_payload["metadata"].get("mcp_tool_call_metadata", None)
             if standard_logging_payload is not None
             else None
         ),
