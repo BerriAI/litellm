@@ -84,7 +84,7 @@ async def test_anthropic_messages_non_streaming():
     messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
 
     # Call the handler
-    response = await litellm.messages.acreate(
+    response = await litellm.anthropic.messages.acreate(
         messages=messages,
         api_key=api_key,
         model="claude-3-haiku-20240307",
@@ -116,7 +116,7 @@ async def test_anthropic_messages_streaming():
 
     # Call the handler
     async_httpx_client = AsyncHTTPHandler()
-    response = await litellm.messages.acreate(
+    response = await litellm.anthropic.messages.acreate(
         messages=messages,
         api_key=api_key,
         model="claude-3-haiku-20240307",
@@ -136,7 +136,7 @@ async def test_anthropic_messages_streaming_with_bad_request():
     Test the anthropic_messages with streaming request
     """
     try:
-        response = await litellm.messages.acreate(
+        response = await litellm.anthropic.messages.acreate(
             messages=["hi"],
             api_key=os.getenv("ANTHROPIC_API_KEY"),
             model="claude-3-haiku-20240307",
@@ -460,7 +460,7 @@ async def test_anthropic_messages_with_extra_headers():
     mock_client.post = AsyncMock(return_value=mock_response)
 
     # Call the handler with extra_headers and our mocked client
-    response = await litellm.messages.acreate(
+    response = await litellm.anthropic.messages.acreate(
         messages=messages,
         api_key=api_key,
         model="claude-3-haiku-20240307",
