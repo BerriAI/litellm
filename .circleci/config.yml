@@ -3,6 +3,18 @@ orbs:
   codecov: codecov/codecov@4.0.1
   node: circleci/node@5.1.0  # Add this line to declare the node orb
 
+commands:
+  setup_google_dns:
+    steps:
+      - run:
+          name: "Configure Google DNS"
+          command: |
+            # Backup original resolv.conf
+            sudo cp /etc/resolv.conf /etc/resolv.conf.backup
+            # Add both local and Google DNS servers
+            echo "nameserver 127.0.0.11" | sudo tee /etc/resolv.conf
+            echo "nameserver 8.8.8.8" | sudo tee -a /etc/resolv.conf
+            echo "nameserver 8.8.4.4" | sudo tee -a /etc/resolv.conf
 
 jobs:
   local_testing:
@@ -15,7 +27,7 @@ jobs:
 
     steps:
       - checkout
-
+      - setup_google_dns
       - run:
           name: Show git commit hash
           command: |
@@ -134,7 +146,7 @@ jobs:
 
     steps:
       - checkout
-
+      - setup_google_dns
       - run:
           name: Show git commit hash
           command: |
@@ -234,7 +246,13 @@ jobs:
 
     steps:
       - checkout
-
+      - setup_google_dns
+      - run:
+          name: DNS lookup for Redis host
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y dnsutils
+            dig redis-19899.c239.us-east-1-2.ec2.redns.redis-cloud.com +short
       - run:
           name: Show git commit hash
           command: |
@@ -334,6 +352,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -388,6 +407,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -429,6 +449,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Show git commit hash
           command: |
@@ -479,7 +500,13 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
-
+      - run:
+          name: Install PostgreSQL
+          command: |
+            sudo apt-get update
+            sudo apt-get install postgresql postgresql-contrib
+            echo 'export PATH=/usr/lib/postgresql/*/bin:$PATH' >> $BASH_ENV
+      - setup_google_dns
       - run:
           name: Show git commit hash
           command: |
@@ -534,6 +561,7 @@ jobs:
             pip install "diskcache==5.6.1"
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
+            pip install "pytest-postgresql==7.0.1"
       - save_cache:
           paths:
             - ./venv
@@ -569,7 +597,7 @@ jobs:
             - litellm_proxy_unit_tests_coverage
   litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.13.1
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -577,6 +605,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -618,6 +647,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -654,6 +684,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -696,6 +727,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -740,6 +772,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -782,6 +815,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -828,6 +862,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -872,6 +907,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -918,6 +954,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -960,6 +997,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -1002,6 +1040,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -1048,6 +1087,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -1080,6 +1120,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -1104,6 +1145,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       # Install Helm
       - run:
           name: Install Helm
@@ -1173,6 +1215,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -1209,6 +1252,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Python 3.9
           command: |
@@ -1283,6 +1327,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
@@ -1418,6 +1463,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
@@ -1542,6 +1588,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
@@ -1704,6 +1751,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
@@ -1815,6 +1863,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
@@ -1897,6 +1946,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       # Remove Docker CLI installation since it's already available in machine executor
       - run:
           name: Install Python 3.13
@@ -1994,6 +2044,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
@@ -2039,6 +2090,8 @@ jobs:
             pip install "google-cloud-aiplatform==1.59.0"
             pip install "anthropic==0.49.0"
             pip install "langchain_mcp_adapters==0.0.5"
+            pip install "langchain_openai==0.2.1"
+            pip install "langgraph==0.3.18"
       # Run pytest and generate JUnit XML report
       - run:
           name: Build Docker image
@@ -2251,6 +2304,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Build UI
           command: |
@@ -2365,6 +2419,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Build Docker image
           command: |
@@ -2387,6 +2442,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Build Docker image
           command: |

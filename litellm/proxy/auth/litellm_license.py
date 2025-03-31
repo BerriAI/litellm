@@ -45,7 +45,6 @@ class LicenseCheck:
             verbose_proxy_logger.error(f"Error reading public key: {str(e)}")
 
     def _verify(self, license_str: str) -> bool:
-
         verbose_proxy_logger.debug(
             "litellm.proxy.auth.litellm_license.py::_verify - Checking license against {}/verify_license - {}".format(
                 self.base_url, license_str
