@@ -22,6 +22,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
     ChatCompletionAssistantToolCall,
+    ChatCompletionFileObject,
     ChatCompletionFunctionMessage,
     ChatCompletionImageObject,
     ChatCompletionTextObject,
@@ -1455,6 +1456,25 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             user_content.append(_content_element)
                         elif m.get("type", "") == "document":
                             user_content.append(cast(AnthropicMessagesDocumentParam, m))
+                        elif m.get("type", "") == "file":
+                            file_message = cast(ChatCompletionFileObject, m)
+                            file_data = file_message["file"].get("file_data")
+                            if file_data:
+                                image_chunk = convert_to_anthropic_image_obj(
+                                    openai_image_url=file_data,
+                                    format=file_message["file"].get("format"),
+                                )
+                                anthropic_document_param = (
+                                    AnthropicMessagesDocumentParam(
+                                        type="document",
+                                        source=AnthropicContentParamSource(
+                                            type="base64",
+                                            media_type=image_chunk["media_type"],
+                                            data=image_chunk["data"],
+                                        ),
+                                    )
+                                )
+                                user_content.append(anthropic_document_param)
                 elif isinstance(user_message_types_block["content"], str):
                     _anthropic_content_text_element: AnthropicMessagesTextParam = {
                         "type": "text",

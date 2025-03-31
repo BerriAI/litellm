@@ -198,6 +198,42 @@ class BaseLLMChatTest(ABC):
             messages=image_messages,
         )
         assert response is not None
+    
+    def test_file_data_unit_test(self, pdf_messages):
+        from litellm.utils import supports_pdf_input, return_raw_request
+        from litellm.types.utils import CallTypes
+        from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_image_obj
+
+        media_chunk = convert_to_anthropic_image_obj(
+            openai_image_url=pdf_messages,
+            format=None,
+        )
+
+        file_content = [
+            {"type": "text", "text": "What's this file about?"},
+            {
+                "type": "file",
+                "file": {
+                    "file_data": pdf_messages,
+                }
+            },
+        ]
+
+        image_messages = [{"role": "user", "content": file_content}]
+
+        base_completion_call_args = self.get_base_completion_call_args()
+
+        if not supports_pdf_input(base_completion_call_args["model"], None):
+            pytest.skip("Model does not support image input")
+
+        raw_request = return_raw_request(
+            endpoint=CallTypes.completion,
+            kwargs={**base_completion_call_args, "messages": image_messages},
+        )
+
+        print("RAW REQUEST", raw_request)
+
+        assert media_chunk["data"] in json.dumps(raw_request)
 
     def test_message_with_name(self):
         try:
