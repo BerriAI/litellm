@@ -326,6 +326,7 @@ model LiteLLM_DailyUserSpend {
   prompt_tokens       Int      @default(0)
   completion_tokens   Int      @default(0)
   spend               Float    @default(0.0)
+  api_requests        Int      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
@@ -334,4 +335,19 @@ model LiteLLM_DailyUserSpend {
   @@index([user_id])
   @@index([api_key])
   @@index([model])
+}
+
+
+// Track the status of cron jobs running. Only allow one pod to run the job at a time
+model LiteLLM_CronJob {
+  cronjob_id            String   @id @default(cuid()) // Unique ID for the record
+  pod_id         String   // Unique identifier for the pod acting as the leader
+  status        JobStatus @default(INACTIVE) // Status of the cron job (active or inactive)
+  last_updated   DateTime @default(now()) // Timestamp for the last update of the cron job record
+  ttl           DateTime // Time when the leader's lease expires
+}
+
+enum JobStatus {
+  ACTIVE
+  INACTIVE
 }

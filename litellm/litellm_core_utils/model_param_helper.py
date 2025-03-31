@@ -17,7 +17,6 @@ from litellm.types.rerank import RerankRequest
 
 
 class ModelParamHelper:
-
     @staticmethod
     def get_standard_logging_model_parameters(
         model_parameters: dict,

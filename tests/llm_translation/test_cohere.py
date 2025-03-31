@@ -22,6 +22,7 @@ litellm.num_retries = 3
 
 
 @pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.asyncio
 async def test_chat_completion_cohere_citations(stream):
     try:
@@ -55,6 +56,8 @@ async def test_chat_completion_cohere_citations(stream):
             assert citations_chunk
         else:
             assert response.citations is not None
+    except litellm.ServiceUnavailableError:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

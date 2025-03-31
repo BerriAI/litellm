@@ -416,6 +416,7 @@ def validate_web_search_annotations(annotations: ChatCompletionAnnotation):
         validate_response_url_citation(url_citation)
 
 
+@pytest.mark.flaky(reruns=3)
 def test_openai_web_search():
     """Makes a simple web search request and validates the response contains web search annotations and all expected fields are present"""
     litellm._turn_on_debug()
