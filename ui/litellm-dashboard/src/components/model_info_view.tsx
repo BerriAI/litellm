@@ -58,7 +58,7 @@ export default function ModelInfoView({
   const [isEditing, setIsEditing] = useState(false);
   const [existingCredential, setExistingCredential] = useState<CredentialItem | null>(null);
 
-  const canEditModel = userRole === "Admin";
+  const canEditModel = userRole === "Admin" || modelData.model_info.created_by === userID;
   const isAdmin = userRole === "Admin";
 
   const usingExistingCredential = modelData.litellm_params?.litellm_credential_name != null && modelData.litellm_params?.litellm_credential_name != undefined;
@@ -209,8 +209,8 @@ export default function ModelInfoView({
           <Title>Public Model Name: {getDisplayModelName(modelData)}</Title>
           <Text className="text-gray-500 font-mono">{modelData.model_info.id}</Text>
         </div>
-        {isAdmin && (
-          <div className="flex gap-2">
+        <div className="flex gap-2">
+          {isAdmin && (
             <TremorButton
               icon={KeyIcon}
               variant="secondary"
@@ -219,6 +219,8 @@ export default function ModelInfoView({
             >
               Re-use Credentials
             </TremorButton>
+          )}
+          {canEditModel && (
             <TremorButton
               icon={TrashIcon}
               variant="secondary"
@@ -227,8 +229,8 @@ export default function ModelInfoView({
             >
               Delete Model
             </TremorButton>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       <TabGroup>

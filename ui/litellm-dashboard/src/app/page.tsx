@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { defaultOrg } from "@/components/common_components/default_org";
-import { Team } from "@/components/key_team_helpers/key_list";
+import { KeyResponse, Team } from "@/components/key_team_helpers/key_list";
 import Navbar from "@/components/navbar";
 import UserDashboard from "@/components/user_dashboard";
 import ModelDashboard from "@/components/model_dashboard";
@@ -20,6 +20,7 @@ import PassThroughSettings from "@/components/pass_through_settings";
 import BudgetPanel from "@/components/budgets/budget_panel";
 import SpendLogsTable from "@/components/view_logs";
 import ModelHub from "@/components/model_hub";
+import NewUsagePage from "@/components/new_usage";
 import APIRef from "@/components/api_ref";
 import ChatUI from "@/components/chat_ui";
 import Sidebar from "@/components/leftnav";
@@ -31,6 +32,8 @@ import GuardrailsPanel from "@/components/guardrails";
 import TransformRequestPanel from "@/components/transform_request";
 import { fetchUserModels } from "@/components/create_key_button";
 import { fetchTeams } from "@/components/common_components/fetch_teams";
+import MCPToolsViewer from "@/components/mcp_tools";
+
 function getCookie(name: string) {
   const cookieValue = document.cookie
     .split("; ")
@@ -344,8 +347,22 @@ export default function CreateKeyPage() {
                   userRole={userRole}
                   token={token}
                   accessToken={accessToken}
+                  allTeams={teams as Team[] ?? []}
                 />
-              ) : (
+              ) : page == "mcp-tools" ? (
+                <MCPToolsViewer
+                  accessToken={accessToken}
+                  userRole={userRole}
+                  userID={userID}
+                />
+              ) : page == "new_usage" ? (
+                <NewUsagePage
+                  userID={userID}
+                  userRole={userRole}
+                  accessToken={accessToken}
+                />
+              ) : 
+              (
                 <Usage
                   userID={userID}
                   userRole={userRole}

@@ -1,4 +1,3 @@
-import io
 import json
 from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Tuple, Union
 
@@ -8,6 +7,9 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm.llms.base_llm.audio_transcription.transformation import (
+    BaseAudioTranscriptionConfig,
+)
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
@@ -39,7 +41,6 @@ else:
 
 
 class BaseLLMHTTPHandler:
-
     async def _make_common_async_call(
         self,
         async_httpx_client: AsyncHTTPHandler,
@@ -107,7 +108,6 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj,
         stream: bool = False,
     ) -> httpx.Response:
-
         max_retry_on_unprocessable_entity_error = (
             provider_config.max_retry_on_unprocessable_entity_error
         )
@@ -597,7 +597,6 @@ class BaseLLMHTTPHandler:
         aembedding: bool = False,
         headers={},
     ) -> EmbeddingResponse:
-
         provider_config = ProviderConfigManager.get_provider_embedding_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
         )
@@ -740,7 +739,6 @@ class BaseLLMHTTPHandler:
         api_base: Optional[str] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ) -> RerankResponse:
-
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
             api_key=api_key,
@@ -826,7 +824,6 @@ class BaseLLMHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ) -> RerankResponse:
-
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider)
@@ -852,54 +849,12 @@ class BaseLLMHTTPHandler:
             request_data=request_data,
         )
 
-    def handle_audio_file(self, audio_file: FileTypes) -> bytes:
-        """
-        Processes the audio file input based on its type and returns the binary data.
-
-        Args:
-            audio_file: Can be a file path (str), a tuple (filename, file_content), or binary data (bytes).
-
-        Returns:
-            The binary data of the audio file.
-        """
-        binary_data: bytes  # Explicitly declare the type
-
-        # Handle the audio file based on type
-        if isinstance(audio_file, str):
-            # If it's a file path
-            with open(audio_file, "rb") as f:
-                binary_data = f.read()  # `f.read()` always returns `bytes`
-        elif isinstance(audio_file, tuple):
-            # Handle tuple case
-            _, file_content = audio_file[:2]
-            if isinstance(file_content, str):
-                with open(file_content, "rb") as f:
-                    binary_data = f.read()  # `f.read()` always returns `bytes`
-            elif isinstance(file_content, bytes):
-                binary_data = file_content
-            else:
-                raise TypeError(
-                    f"Unexpected type in tuple: {type(file_content)}. Expected str or bytes."
-                )
-        elif isinstance(audio_file, bytes):
-            # Assume it's already binary data
-            binary_data = audio_file
-        elif isinstance(audio_file, io.BufferedReader) or isinstance(
-            audio_file, io.BytesIO
-        ):
-            # Handle file-like objects
-            binary_data = audio_file.read()
-
-        else:
-            raise TypeError(f"Unsupported type for audio_file: {type(audio_file)}")
-
-        return binary_data
-
     def audio_transcriptions(
         self,
         model: str,
         audio_file: FileTypes,
         optional_params: dict,
+        litellm_params: dict,
         model_response: TranscriptionResponse,
         timeout: float,
         max_retries: int,
@@ -910,11 +865,8 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         atranscription: bool = False,
         headers: dict = {},
-        litellm_params: dict = {},
+        provider_config: Optional[BaseAudioTranscriptionConfig] = None,
     ) -> TranscriptionResponse:
-        provider_config = ProviderConfigManager.get_provider_audio_transcription_config(
-            model=model, provider=litellm.LlmProviders(custom_llm_provider)
-        )
         if provider_config is None:
             raise ValueError(
                 f"No provider config found for model: {model} and provider: {custom_llm_provider}"
@@ -938,7 +890,18 @@ class BaseLLMHTTPHandler:
         )
 
         # Handle the audio file based on type
-        binary_data = self.handle_audio_file(audio_file)
+        data = provider_config.transform_audio_transcription_request(
+            model=model,
+            audio_file=audio_file,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+        )
+        binary_data: Optional[bytes] = None
+        json_data: Optional[dict] = None
+        if isinstance(data, bytes):
+            binary_data = data
+        else:
+            json_data = data
 
         try:
             # Make the POST request
@@ -946,6 +909,7 @@ class BaseLLMHTTPHandler:
                 url=complete_url,
                 headers=headers,
                 content=binary_data,
+                json=json_data,
                 timeout=timeout,
             )
         except Exception as e:
