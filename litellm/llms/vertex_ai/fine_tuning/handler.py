@@ -36,7 +36,6 @@ class VertexFineTuningAPI(VertexLLM):
 
     def convert_response_created_at(self, response: ResponseTuningJob):
         try:
-
             create_time_str = response.get("createTime", "") or ""
             create_time_datetime = datetime.fromisoformat(
                 create_time_str.replace("Z", "+00:00")
@@ -65,9 +64,9 @@ class VertexFineTuningAPI(VertexLLM):
         )
 
         if create_fine_tuning_job_data.validation_file:
-            supervised_tuning_spec["validation_dataset"] = (
-                create_fine_tuning_job_data.validation_file
-            )
+            supervised_tuning_spec[
+                "validation_dataset"
+            ] = create_fine_tuning_job_data.validation_file
 
         _vertex_hyperparameters = (
             self._transform_openai_hyperparameters_to_vertex_hyperparameters(
@@ -175,7 +174,6 @@ class VertexFineTuningAPI(VertexLLM):
         headers: dict,
         request_data: FineTuneJobCreate,
     ):
-
         try:
             verbose_logger.debug(
                 "about to create fine tuning job: %s, request_data: %s",
@@ -229,7 +227,6 @@ class VertexFineTuningAPI(VertexLLM):
         kwargs: Optional[dict] = None,
         original_hyperparameters: Optional[dict] = {},
     ):
-
         verbose_logger.debug(
             "creating fine tuning job, args= %s", create_fine_tuning_job_data
         )
@@ -346,9 +343,9 @@ class VertexFineTuningAPI(VertexLLM):
         elif "cachedContents" in request_route:
             _model = request_data.get("model")
             if _model is not None and "/publishers/google/models/" not in _model:
-                request_data["model"] = (
-                    f"projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{_model}"
-                )
+                request_data[
+                    "model"
+                ] = f"projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{_model}"
 
             url = f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
         else:

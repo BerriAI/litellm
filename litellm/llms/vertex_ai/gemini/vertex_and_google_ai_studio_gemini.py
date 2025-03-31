@@ -246,9 +246,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         value = _remove_strict_from_schema(value)
 
         for tool in value:
-            openai_function_object: Optional[ChatCompletionToolParamFunctionChunk] = (
-                None
-            )
+            openai_function_object: Optional[
+                ChatCompletionToolParamFunctionChunk
+            ] = None
             if "function" in tool:  # tools list
                 _openai_function_object = ChatCompletionToolParamFunctionChunk(  # type: ignore
                     **tool["function"]
@@ -813,15 +813,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             ## ADD SAFETY RATINGS ##
             setattr(model_response, "vertex_ai_safety_results", safety_ratings)
-            model_response._hidden_params["vertex_ai_safety_results"] = (
-                safety_ratings  # older approach - maintaining to prevent regressions
-            )
+            model_response._hidden_params[
+                "vertex_ai_safety_results"
+            ] = safety_ratings  # older approach - maintaining to prevent regressions
 
             ## ADD CITATION METADATA ##
             setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)
-            model_response._hidden_params["vertex_ai_citation_metadata"] = (
-                citation_metadata  # older approach - maintaining to prevent regressions
-            )
+            model_response._hidden_params[
+                "vertex_ai_citation_metadata"
+            ] = citation_metadata  # older approach - maintaining to prevent regressions
 
         except Exception as e:
             raise VertexAIError(

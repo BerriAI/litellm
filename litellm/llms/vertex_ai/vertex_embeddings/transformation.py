@@ -212,7 +212,6 @@ class VertexAITextEmbeddingConfig(BaseModel):
         embedding_response = []
         input_tokens: int = 0
         for idx, element in enumerate(_predictions):
-
             embedding = element["embeddings"]
             embedding_response.append(
                 {

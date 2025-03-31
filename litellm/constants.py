@@ -4,9 +4,11 @@ ROUTER_MAX_FALLBACKS = 5
 DEFAULT_BATCH_SIZE = 512
 DEFAULT_FLUSH_INTERVAL_SECONDS = 5
 DEFAULT_MAX_RETRIES = 2
+DEFAULT_MAX_RECURSE_DEPTH = 10
 DEFAULT_FAILURE_THRESHOLD_PERCENT = (
     0.5  # default cooldown a deployment if 50% of requests fail in a given minute
 )
+DEFAULT_MAX_TOKENS = 4096
 DEFAULT_REDIS_SYNC_INTERVAL = 1
 DEFAULT_COOLDOWN_TIME_SECONDS = 5
 DEFAULT_REPLICATE_POLLING_RETRIES = 5
@@ -16,6 +18,8 @@ DEFAULT_IMAGE_WIDTH = 300
 DEFAULT_IMAGE_HEIGHT = 300
 MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = 1024  # 1MB = 1024KB
 SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD = 1000  # Minimum number of requests to consider "reasonable traffic". Used for single-deployment cooldown logic.
+REDIS_UPDATE_BUFFER_KEY = "litellm_spend_update_buffer"
+MAX_REDIS_BUFFER_DEQUEUE_COUNT = 100
 #### RELIABILITY ####
 REPEATED_STREAMING_CHUNK_LIMIT = 100  # catch if model starts looping the same chunk while streaming. Uses high default to prevent false positives.
 #### Networking settings ####
@@ -414,6 +418,7 @@ RESPONSE_FORMAT_TOOL_NAME = "json_tool_call"  # default tool name used when conv
 
 ########################### Logging Callback Constants ###########################
 AZURE_STORAGE_MSFT_VERSION = "2019-07-07"
+MCP_TOOL_NAME_PREFIX = "mcp_tool"
 
 ########################### LiteLLM Proxy Specific Constants ###########################
 ########################################################################################
@@ -441,3 +446,7 @@ HEALTH_CHECK_TIMEOUT_SECONDS = 60  # 60 seconds
 
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
+
+########################### DB CRON JOB NAMES ###########################
+DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
+DEFAULT_CRON_JOB_LOCK_TTL_SECONDS = 60  # 1 minute

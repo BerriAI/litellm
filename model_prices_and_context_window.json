@@ -4696,6 +4696,8 @@
         "supports_vision": true,
         "supports_response_schema": true,
         "supports_audio_output": true,
+        "supports_audio_input": true,
+        "supported_modalities": ["text", "image", "audio", "video"],
         "supports_tool_choice": true,
         "source": "https://ai.google.dev/pricing#2_0flash"
     },
@@ -5393,6 +5395,23 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models"
     },
     "multimodalembedding": {
+        "max_tokens": 2048,
+        "max_input_tokens": 2048,
+        "output_vector_size": 768,
+        "input_cost_per_character": 0.0000002,
+        "input_cost_per_image": 0.0001,
+        "input_cost_per_video_per_second": 0.0005,
+        "input_cost_per_video_per_second_above_8s_interval": 0.0010,
+        "input_cost_per_video_per_second_above_15s_interval": 0.0020,
+        "input_cost_per_token": 0.0000008,
+        "output_cost_per_token": 0,
+        "litellm_provider": "vertex_ai-embedding-models",
+        "mode": "embedding",
+        "supported_endpoints": ["/v1/embeddings"],
+        "supported_modalities": ["text", "image", "video"],
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models"
+    },
+    "multimodalembedding@001": {
         "max_tokens": 2048,
         "max_input_tokens": 2048,
         "output_vector_size": 768,
@@ -10170,6 +10189,22 @@
         "litellm_provider": "voyage",
         "mode": "rerank"
     },
+    "databricks/databricks-claude-3-7-sonnet": {
+        "max_tokens": 200000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000, 
+        "input_cost_per_token": 0.0000025,
+        "input_dbu_cost_per_token": 0.00003571,
+        "output_cost_per_token": 0.00017857,
+        "output_db_cost_per_token": 0.000214286,
+        "litellm_provider": "databricks",
+        "mode": "chat",
+        "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
+        "metadata": {"notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Claude 3.7 conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."},
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
     "databricks/databricks-meta-llama-3-1-405b-instruct": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
@@ -10198,7 +10233,7 @@
         "metadata": {"notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."},
         "supports_tool_choice": true
     },
-    "databricks/meta-llama-3.3-70b-instruct": {
+    "databricks/databricks-meta-llama-3-3-70b-instruct": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
         "max_output_tokens": 128000, 
