@@ -2905,6 +2905,11 @@ class BedrockConverseMessagesProcessor:
                                     image_url=image_url, format=format
                                 )
                                 _parts.append(_part)  # type: ignore
+                            elif element["type"] == "file":
+                                _part = await BedrockConverseMessagesProcessor._async_process_file_message(
+                                    message=cast(ChatCompletionFileObject, element)
+                                )
+                                _parts.append(_part)
                             _cache_point_block = (
                                 litellm.AmazonConverseConfig()._get_cache_point_block(
                                     message_block=cast(
@@ -3074,6 +3079,45 @@ class BedrockConverseMessagesProcessor:
             reasoning_content_blocks.append(bedrock_content_block)
         return reasoning_content_blocks
 
+    @staticmethod
+    def _process_file_message(message: ChatCompletionFileObject) -> BedrockContentBlock:
+        file_message = message["file"]
+        file_data = file_message.get("file_data")
+        file_id = file_message.get("file_id")
+
+        if file_data is None and file_id is None:
+            raise litellm.BadRequestError(
+                message="file_data and file_id cannot both be None. Got={}".format(
+                    message
+                ),
+                model="",
+                llm_provider="bedrock",
+            )
+        format = file_message.get("format")
+        return BedrockImageProcessor.process_image_sync(
+            image_url=cast(str, file_id or file_data), format=format
+        )
+
+    @staticmethod
+    async def _async_process_file_message(
+        message: ChatCompletionFileObject,
+    ) -> BedrockContentBlock:
+        file_message = message["file"]
+        file_data = file_message.get("file_data")
+        file_id = file_message.get("file_id")
+        format = file_message.get("format")
+        if file_data is None and file_id is None:
+            raise litellm.BadRequestError(
+                message="file_data and file_id cannot both be None. Got={}".format(
+                    message
+                ),
+                model="",
+                llm_provider="bedrock",
+            )
+        return await BedrockImageProcessor.process_image_async(
+            image_url=cast(str, file_id or file_data), format=format
+        )
+
 
 def _bedrock_converse_messages_pt(  # noqa: PLR0915
     messages: List,
@@ -3146,6 +3190,13 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                 format=format,
                             )
                             _parts.append(_part)  # type: ignore
+                        elif element["type"] == "file":
+                            _part = (
+                                BedrockConverseMessagesProcessor._process_file_message(
+                                    message=cast(ChatCompletionFileObject, element)
+                                )
+                            )
+                            _parts.append(_part)
                         _cache_point_block = (
                             litellm.AmazonConverseConfig()._get_cache_point_block(
                                 message_block=cast(
