@@ -543,6 +543,7 @@ class RedisCache(BaseCache):
         parent_otel_span: Optional[Span] = None,
     ) -> float:
         from redis.asyncio import Redis
+        from redis.exceptions import ResponseError
 
         _redis_client: Redis = self.init_async_client()  # type: ignore
         start_time = time.time()
@@ -572,6 +573,82 @@ class RedisCache(BaseCache):
                 )
             )
             return result
+        except ResponseError as e:
+            # Handle Redis Cluster MOVED errors
+            if "MOVED" in str(e):
+                verbose_logger.debug(
+                    f"Redis Cluster MOVED error detected, retrying operation: {str(e)}"
+                )
+                self.redis_async_client = None
+                # Get a frash client
+                _redis_client = self.init_async_client()
+                
+                try:
+                    # Retry the operation with the new client
+                    result = await _redis_client.incrbyfloat(name=key, amount=value)
+                    if _used_ttl is not None:
+                        # checking if key already has ttl, if not–set ttl
+                        current_ttl = await _redis_client.ttl(key)
+                        if current_ttl == -1:
+                            # Key has no expiration
+                            await _redis_client.expire(key, _used_ttl)
+                    
+                    ## LOGGING ##
+                    end_time = time.time()
+                    _duration = end_time - start_time
+                    
+                    asyncio.create_task(
+                        self.service_logger_obj.async_service_success_hook(
+                            service=ServiceTypes.REDIS,
+                            duration=_duration,
+                            call_type="async_increment",
+                            start_time=start_time,
+                            end_time=end_time,
+                            parent_otel_span=parent_otel_span,
+                        )
+                    )
+                    return result
+                except Exception as retry_e:
+                    ## LOGGING ##
+                    end_time = time.time()
+                    _duration = end_time - start_time
+                    asyncio.create_task(
+                        self.service_logger_obj.async_service_failure_hook(
+                            service=ServiceTypes.REDIS,
+                            duration=_duration,
+                            error=retry_e,
+                            call_type="async_increment",
+                            start_time=start_time,
+                            end_time=end_time,
+                            parent_otel_span=parent_otel_span,
+                        )
+                    )
+                    verbose_logger.error(
+                        "LiteLLM Redis Caching: async async_increment() - Got exception from REDIS %s, Writing value=%s",
+                        str(retry_e),
+                        value,
+                    )
+                    raise retry_e
+            ## LOGGING ##
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    error=e,
+                    call_type="async_increment",
+                    start_time=start_time,
+                    end_time=end_time,
+                    parent_otel_span=parent_otel_span,
+                )
+            )
+            verbose_logger.error(
+                "LiteLLM Redis Caching: async async_increment() - Got exception from REDIS %s, Writing value=%s",
+                str(e),
+                value,
+            )
+            raise e
         except Exception as e:
             ## LOGGING ##
             end_time = time.time()
