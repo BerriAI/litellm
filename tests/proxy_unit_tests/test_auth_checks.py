@@ -255,7 +255,108 @@ async def test_can_key_call_model_wildcard_access(key_models, model, expect_to_w
                 llm_router=router,
             )
 
-            print(e)
+
+# Mock ProxyLogging for budget alert testing
+class MockProxyLogging:
+    def __init__(self):
+        self.alert_triggered = False
+        self.alert_type = None
+        self.user_info = None
+
+    async def budget_alerts(self, type, user_info):
+        self.alert_triggered = True
+        self.alert_type = type
+        self.user_info = user_info
+
+    # Add dummy methods for other required ProxyLogging methods if needed
+    async def pre_call_hook(self, *args, **kwargs):
+        pass
+
+    async def post_call_failure_hook(self, *args, **kwargs):
+        pass
+
+    async def post_call_success_hook(self, *args, **kwargs):
+        pass
+
+    async def async_post_call_streaming_hook(self, *args, **kwargs):
+        pass
+
+    def async_post_call_streaming_iterator_hook(self, response, *args, **kwargs):
+        return response
+
+    def _init_response_taking_too_long_task(self, *args, **kwargs):
+        pass
+
+    async def update_request_status(self, *args, **kwargs):
+        pass
+
+    async def failed_tracking_alert(self, *args, **kwargs):
+        pass
+
+    async def alerting_handler(self, *args, **kwargs):
+        pass
+
+    async def failure_handler(self, *args, **kwargs):
+        pass
+
+
+@pytest.mark.parametrize(
+    "token_spend, max_budget, expect_error",
+    [
+        (5.0, 10.0, False),  # Under budget
+        (9.99, 10.0, False), # Just under budget
+        (0.0, 0.0, True),   # At zero budget
+        (0.0, None, False), # No budget set
+        (10.0, 10.0, True), # At budget limit
+        (15.0, 10.0, True), # Over budget
+        (None, 10.0, False), # Spend not tracked yet
+    ],
+)
+@pytest.mark.asyncio
+async def test_max_budget_limiter_hook(token_spend, max_budget, expect_error):
+    """
+    Test the _PROXY_MaxBudgetLimiter pre-call hook directly.
+    This test verifies the fix applied in the hook itself.
+    """
+    from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
+    from litellm.caching.caching import DualCache
+    from fastapi import HTTPException
+
+    limiter = _PROXY_MaxBudgetLimiter()
+    mock_cache = DualCache() # The hook expects a cache object, even if not used in the updated logic
+
+    # Ensure spend is a float, defaulting to 0.0 if None
+    actual_spend = token_spend if token_spend is not None else 0.0
+
+    user_api_key_dict = UserAPIKeyAuth(
+        token="test-token-hook",
+        spend=actual_spend,
+        max_budget=max_budget,
+        user_id="test-user-hook",
+    )
+
+    mock_data = {"model": "gpt-4", "messages": [{"role": "user", "content": "hello"}]}
+
+    try:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=mock_cache,
+            data=mock_data,
+            call_type="completion",
+        )
+        if expect_error:
+            pytest.fail(
+                f"Expected HTTPException for spend={token_spend}, max_budget={max_budget}"
+            )
+    except HTTPException as e:
+        if not expect_error:
+            pytest.fail(
+                f"Unexpected HTTPException for spend={token_spend}, max_budget={max_budget}: {e.detail}"
+            )
+        assert e.status_code == 429
+        assert "Max budget limit reached" in e.detail
+    except Exception as e:
+         pytest.fail(f"Unexpected exception type {type(e).__name__} raised: {e}")
 
 
 @pytest.mark.asyncio
@@ -319,13 +420,11 @@ async def test_virtual_key_max_budget_check(
 
     user_obj = LiteLLM_UserTable(
         user_id="test-user",
-        user_email="test@email.com",
+        user_email="test@example.com",
         max_budget=None,
     )
 
-    proxy_logging_obj = ProxyLogging(
-        user_api_key_cache=None,
-    )
+    proxy_logging_obj = MockProxyLogging()
 
     # Track if budget alert was called
     alert_called = False
@@ -356,7 +455,6 @@ async def test_virtual_key_max_budget_check(
 
     await asyncio.sleep(1)
 
-    # Verify budget alert was triggered
     assert alert_called, "Budget alert should be triggered"
 
 
@@ -475,6 +573,85 @@ async def test_virtual_key_soft_budget_check(spend, soft_budget, expect_alert):
     assert (
         alert_triggered == expect_alert
     ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+
+
+@pytest.mark.parametrize(
+    "token_spend, max_budget_from_table, expect_budget_error",
+    [
+        (5.0, 10.0, False),  # Under budget
+        (10.0, 10.0, True),  # At budget limit
+        (15.0, 10.0, True),  # Over budget
+        (5.0, None, False),  # No budget set in table
+    ],
+)
+@pytest.mark.asyncio
+async def test_virtual_key_max_budget_check_from_budget_table(
+    token_spend, max_budget_from_table, expect_budget_error
+):
+    """
+    Test if virtual key budget checks work when max_budget is derived
+    from the joined LiteLLM_BudgetTable data.
+    """
+    from litellm.proxy.auth.auth_checks import _virtual_key_max_budget_check
+    from litellm.proxy.utils import ProxyLogging
+
+    # Setup test data - Simulate data structure after get_key_object fix
+    valid_token = UserAPIKeyAuth(
+        token="test-token-from-table",
+        spend=token_spend,
+        max_budget=max_budget_from_table,  # This now reflects the budget from the table
+        user_id="test-user-table",
+        key_alias="test-key-table",
+        # Simulate that litellm_budget_table was present during the join
+        litellm_budget_table={
+            "max_budget": max_budget_from_table,
+            "soft_budget": None, # Assuming soft_budget is not the focus here
+            # Add other necessary fields if the model requires them
+        } if max_budget_from_table is not None else None,
+    )
+
+    user_obj = LiteLLM_UserTable(
+        user_id="test-user-table",
+        user_email="test-table@example.com",
+        max_budget=None, # Ensure user-level budget doesn't interfere
+    )
+
+    proxy_logging_obj = MockProxyLogging() # Use the mock class defined above
+
+    # Track if budget alert was called
+    alert_called = False
+
+    async def mock_budget_alert(*args, **kwargs):
+        nonlocal alert_called
+        alert_called = True
+
+    proxy_logging_obj.budget_alerts = mock_budget_alert
+
+    try:
+        await _virtual_key_max_budget_check(
+            valid_token=valid_token,
+            proxy_logging_obj=proxy_logging_obj,
+            user_obj=user_obj,
+        )
+        if expect_budget_error:
+            pytest.fail(
+                f"Expected BudgetExceededError for spend={token_spend}, max_budget_from_table={max_budget_from_table}"
+            )
+    except litellm.BudgetExceededError as e:
+        if not expect_budget_error:
+            pytest.fail(
+                f"Unexpected BudgetExceededError for spend={token_spend}, max_budget_from_table={max_budget_from_table}"
+            )
+        assert e.current_cost == token_spend
+        assert e.max_budget == max_budget_from_table
+
+    await asyncio.sleep(0.1)  # Allow time for alert task
+
+    # Verify budget alert was triggered only if there was a budget
+    if max_budget_from_table is not None:
+        assert alert_called, "Budget alert should be triggered when max_budget is set"
+    else:
+        assert not alert_called, "Budget alert should not be triggered when max_budget is None"
 
 
 @pytest.mark.asyncio

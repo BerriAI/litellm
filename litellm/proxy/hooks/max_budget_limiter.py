@@ -21,29 +21,37 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
     ):
         try:
             verbose_proxy_logger.debug("Inside Max Budget Limiter Pre-Call Hook")
-            cache_key = f"{user_api_key_dict.user_id}_user_api_key_user_id"
-            user_row = await cache.async_get_cache(
-                cache_key, parent_otel_span=user_api_key_dict.parent_otel_span
-            )
-            if user_row is None:  # value not yet cached
-                return
-            max_budget = user_row["max_budget"]
-            curr_spend = user_row["spend"]
+
+            # Use the budget information directly from the validated user_api_key_dict
+            max_budget = user_api_key_dict.max_budget
+            curr_spend = user_api_key_dict.spend
 
             if max_budget is None:
+                # No budget limit set for this key/user/team
                 return
 
             if curr_spend is None:
-                return
+                # If spend tracking hasn't started, assume 0
+                curr_spend = 0.0
 
             # CHECK IF REQUEST ALLOWED
             if curr_spend >= max_budget:
+                verbose_proxy_logger.info(
+                    f"Budget Limit Reached for {user_api_key_dict.user_id or user_api_key_dict.team_id or user_api_key_dict.api_key}. Current Spend: {curr_spend}, Max Budget: {max_budget}"
+                )
                 raise HTTPException(status_code=429, detail="Max budget limit reached.")
+            else:
+                 verbose_proxy_logger.debug(
+                    f"Budget Check Passed for {user_api_key_dict.user_id or user_api_key_dict.team_id or user_api_key_dict.api_key}. Current Spend: {curr_spend}, Max Budget: {max_budget}"
+                )
+
         except HTTPException as e:
+            # Re-raise HTTPException to ensure FastAPI handles it correctly
             raise e
         except Exception as e:
             verbose_logger.exception(
-                "litellm.proxy.hooks.max_budget_limiter.py::async_pre_call_hook(): Exception occured - {}".format(
+                "litellm.proxy.hooks.max_budget_limiter.py::async_pre_call_hook(): Exception occurred - {}".format(
                     str(e)
                 )
             )
+            pass

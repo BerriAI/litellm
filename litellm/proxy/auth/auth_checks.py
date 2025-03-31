@@ -2,11 +2,11 @@
 ## Common auth checks between jwt + key based auth
 """
 Got Valid Token from Cache, DB
-Run checks for: 
+Run checks for:
 
 1. If user can call model
-2. If user is in budget 
-3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget 
+2. If user is in budget
+3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
 """
 import asyncio
 import re
@@ -999,7 +999,16 @@ async def get_key_object(
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    _response = UserAPIKeyAuth(**_valid_token.model_dump(exclude_none=True))
+    token_data = _valid_token.model_dump(exclude_none=True)
+
+    # Manually map the budget from the joined budget table if it exists
+    # This ensures the max_budget from LiteLLM_BudgetTable takes precedence if set
+    if token_data.get("litellm_budget_table_max_budget") is not None:
+        token_data["max_budget"] = token_data.pop("litellm_budget_table_max_budget")
+    if token_data.get("litellm_budget_table_soft_budget") is not None:
+        token_data["soft_budget"] = token_data.pop("litellm_budget_table_soft_budget")
+
+    _response = UserAPIKeyAuth(**token_data)
 
     # save the key object to cache
     await _cache_key_object(
