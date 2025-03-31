@@ -9,7 +9,7 @@ IGNORE_FUNCTIONS = [
     "_check_for_os_environ_vars",
     "clean_message",
     "unpack_defs",
-    "convert_to_nullable",
+    "convert_anyof_null_to_nullable", # has a set max depth
     "add_object_type",
     "strip_field",
     "_transform_prompt",
@@ -76,15 +76,26 @@ def find_recursive_functions_in_directory(directory):
                     ignored_recursive_functions[file_path] = ignored
     return recursive_functions, ignored_recursive_functions
 
+if __name__ == "__main__":
+    # Example usage
+    # raise exception if any recursive functions are found, except for the ignored ones
+    # this is used in the CI/CD pipeline to prevent recursive functions from being merged
 
-# Example usage
-directory_path = "./litellm"
-recursive_functions, ignored_recursive_functions = (
-    find_recursive_functions_in_directory(directory_path)
-)
-print("ALL RECURSIVE FUNCTIONS: ", recursive_functions)
-print("IGNORED RECURSIVE FUNCTIONS: ", ignored_recursive_functions)
-if len(recursive_functions) > 0:
-    raise Exception(
-        f"🚨 Recursive functions found in {file}: {functions}. THIS IS REALLY BAD, it has caused CPU Usage spikes in the past. Only keep this if it's ABSOLUTELY necessary."
+    directory_path = "./litellm"
+    recursive_functions, ignored_recursive_functions = (
+        find_recursive_functions_in_directory(directory_path)
     )
+    print("UNIGNORED RECURSIVE FUNCTIONS: ", recursive_functions)
+    print("IGNORED RECURSIVE FUNCTIONS: ", ignored_recursive_functions)
+
+    if len(recursive_functions) > 0:
+        # raise exception if any recursive functions are found
+        for file, functions in recursive_functions.items():
+            print(
+                    f"🚨 Unignored recursive functions found in {file}: {functions}. THIS IS REALLY BAD, it has caused CPU Usage spikes in the past. Only keep this if it's ABSOLUTELY necessary."
+                )
+        file, functions = list(recursive_functions.items())[0]
+        raise Exception(
+                f"🚨 Unignored recursive functions found include {file}: {functions}. THIS IS REALLY BAD, it has caused CPU Usage spikes in the past. Only keep this if it's ABSOLUTELY necessary."
+            )
+        

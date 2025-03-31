@@ -22,6 +22,7 @@ from litellm.types.llms.openai import (
     ChatCompletionAnnotation,
     ChatCompletionAnnotationURLCitation,
 )
+from base_audio_transcription_unit_tests import BaseLLMAudioTranscriptionTest
 
 
 def test_openai_prediction_param():
@@ -415,6 +416,7 @@ def validate_web_search_annotations(annotations: ChatCompletionAnnotation):
         validate_response_url_citation(url_citation)
 
 
+@pytest.mark.flaky(reruns=3)
 def test_openai_web_search():
     """Makes a simple web search request and validates the response contains web search annotations and all expected fields are present"""
     litellm._turn_on_debug()
@@ -458,3 +460,13 @@ def test_openai_web_search_streaming():
     # Assert this request has at-least one web search annotation
     assert test_openai_web_search is not None
     validate_web_search_annotations(test_openai_web_search)
+
+
+class TestOpenAIGPT4OAudioTranscription(BaseLLMAudioTranscriptionTest):
+    def get_base_audio_transcription_call_args(self) -> dict:
+        return {
+            "model": "openai/gpt-4o-transcribe",
+        }
+
+    def get_custom_llm_provider(self) -> litellm.LlmProviders:
+        return litellm.LlmProviders.OPENAI

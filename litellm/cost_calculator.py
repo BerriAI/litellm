@@ -2,7 +2,7 @@
 ## File for 'response_cost' calculation in Logging
 import time
 from functools import lru_cache
-from typing import Any, List, Literal, Optional, Tuple, Union
+from typing import Any, List, Literal, Optional, Tuple, Union, cast
 
 from pydantic import BaseModel
 
@@ -275,15 +275,13 @@ def cost_per_token(  # noqa: PLR0915
                 custom_llm_provider=custom_llm_provider,
                 prompt_characters=prompt_characters,
                 completion_characters=completion_characters,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
+                usage=usage_block,
             )
         elif cost_router == "cost_per_token":
             return google_cost_per_token(
                 model=model_without_prefix,
                 custom_llm_provider=custom_llm_provider,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
+                usage=usage_block,
             )
     elif custom_llm_provider == "anthropic":
         return anthropic_cost_per_token(model=model, usage=usage_block)
@@ -464,13 +462,36 @@ def _model_contains_known_llm_provider(model: str) -> bool:
 def _get_usage_object(
     completion_response: Any,
 ) -> Optional[Usage]:
-    usage_obj: Optional[Usage] = None
-    if completion_response is not None and isinstance(
-        completion_response, ModelResponse
-    ):
-        usage_obj = completion_response.get("usage")
+    usage_obj = cast(
+        Union[Usage, ResponseAPIUsage, dict, BaseModel],
+        (
+            completion_response.get("usage")
+            if isinstance(completion_response, dict)
+            else getattr(completion_response, "get", lambda x: None)("usage")
+        ),
+    )
 
-    return usage_obj
+    if usage_obj is None:
+        return None
+    if isinstance(usage_obj, Usage):
+        return usage_obj
+    elif (
+        usage_obj is not None
+        and (isinstance(usage_obj, dict) or isinstance(usage_obj, ResponseAPIUsage))
+        and ResponseAPILoggingUtils._is_response_api_usage(usage_obj)
+    ):
+        return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage_obj
+        )
+    elif isinstance(usage_obj, dict):
+        return Usage(**usage_obj)
+    elif isinstance(usage_obj, BaseModel):
+        return Usage(**usage_obj.model_dump())
+    else:
+        verbose_logger.debug(
+            f"Unknown usage object type: {type(usage_obj)}, usage_obj: {usage_obj}"
+        )
+        return None
 
 
 def _is_known_usage_objects(usage_obj):
@@ -559,7 +580,6 @@ def completion_cost(  # noqa: PLR0915
         - For un-mapped Replicate models, the cost is calculated based on the total time used for the request.
     """
     try:
-
         call_type = _infer_call_type(call_type, completion_response) or "completion"
 
         if (
@@ -664,6 +684,7 @@ def completion_cost(  # noqa: PLR0915
             elif len(prompt) > 0:
                 prompt_tokens = token_counter(model=model, text=prompt)
             completion_tokens = token_counter(model=model, text=completion)
+
         if model is None:
             raise ValueError(
                 f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
@@ -828,11 +849,14 @@ def get_response_cost_from_hidden_params(
         _hidden_params_dict = hidden_params
 
     additional_headers = _hidden_params_dict.get("additional_headers", {})
-    if additional_headers and "x-litellm-response-cost" in additional_headers:
-        response_cost = additional_headers["x-litellm-response-cost"]
+    if (
+        additional_headers
+        and "llm_provider-x-litellm-response-cost" in additional_headers
+    ):
+        response_cost = additional_headers["llm_provider-x-litellm-response-cost"]
         if response_cost is None:
             return None
-        return float(additional_headers["x-litellm-response-cost"])
+        return float(additional_headers["llm_provider-x-litellm-response-cost"])
     return None
 
 

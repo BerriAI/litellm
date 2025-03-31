@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState, useRef, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { uiSpendLogsCall } from "../networking";
+import { uiSpendLogsCall, keyInfoV1Call } from "../networking";
 import { DataTable } from "./table";
 import { columns, LogEntry } from "./columns";
 import { Row } from "@tanstack/react-table";
@@ -12,12 +12,15 @@ import { RequestResponsePanel } from "./columns";
 import { ErrorViewer } from './ErrorViewer';
 import { internalUserRoles } from "../../utils/roles";
 import { ConfigInfoMessage } from './ConfigInfoMessage';
-
+import { Tooltip } from "antd";
+import { KeyResponse, Team } from "../key_team_helpers/key_list";
+import KeyInfoView from "../key_info_view";
 interface SpendLogsTableProps {
   accessToken: string | null;
   token: string | null;
   userRole: string | null;
   userID: string | null;
+  allTeams: Team[];
 }
 
 interface PaginatedResponse {
@@ -38,6 +41,7 @@ export default function SpendLogsTable({
   token,
   userRole,
   userID,
+  allTeams,
 }: SpendLogsTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [showFilters, setShowFilters] = useState(false);
@@ -63,13 +67,33 @@ export default function SpendLogsTable({
   const [tempKeyHash, setTempKeyHash] = useState("");
   const [selectedTeamId, setSelectedTeamId] = useState("");
   const [selectedKeyHash, setSelectedKeyHash] = useState("");
+  const [selectedKeyInfo, setSelectedKeyInfo] = useState<KeyResponse | null>(null);
+  const [selectedKeyIdInfoView, setSelectedKeyIdInfoView] = useState<string | null>(null);
   const [selectedFilter, setSelectedFilter] = useState("Team ID");
   const [filterByCurrentUser, setFilterByCurrentUser] = useState(
     userRole && internalUserRoles.includes(userRole)
   );
+
   const [expandedRequestId, setExpandedRequestId] = useState<string | null>(null);
 
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    const fetchKeyInfo = async () => {
+      if (selectedKeyIdInfoView && accessToken) {
+        const keyData = await keyInfoV1Call(accessToken, selectedKeyIdInfoView);
+        console.log("keyData", keyData);
+
+        const keyResponse: KeyResponse = {
+          ...keyData["info"],
+          "token": selectedKeyIdInfoView,
+          "api_key": selectedKeyIdInfoView,
+        };
+        setSelectedKeyInfo(keyResponse);
+      }
+    };
+    fetchKeyInfo();
+  }, [selectedKeyIdInfoView, accessToken]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -206,7 +230,11 @@ export default function SpendLogsTable({
       
       // No need for additional filtering since we're now handling this in the API call
       return matchesSearch;
-    }) || [];
+      
+    }).map(log => ({
+      ...log,
+      onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash)
+    })) || [];
 
   // Add this function to handle manual refresh
   const handleRefresh = () => {
@@ -242,7 +270,10 @@ export default function SpendLogsTable({
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-semibold">Request Logs</h1>
       </div>
-      
+      {selectedKeyInfo && selectedKeyIdInfoView && selectedKeyInfo.api_key === selectedKeyIdInfoView ? (
+        <KeyInfoView keyId={selectedKeyIdInfoView} keyData={selectedKeyInfo} accessToken={accessToken} userID={userID} userRole={userRole} teams={allTeams} onClose={() => setSelectedKeyIdInfoView(null)} />
+      ) : (
+      <>
       <div className="bg-white rounded-lg shadow">
         <div className="border-b px-6 py-4">
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
@@ -594,6 +625,8 @@ export default function SpendLogsTable({
           expandedRequestId={expandedRequestId}
         />
       </div>
+      </>
+      )} 
     </div>
   );
 }
@@ -672,17 +705,24 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
               <span>{row.original.model}</span>
             </div>
             <div className="flex">
+              <span className="font-medium w-1/3">Model ID:</span>
+              <span>{row.original.model_id}</span>
+            </div>
+            <div className="flex">
               <span className="font-medium w-1/3">Provider:</span>
               <span>{row.original.custom_llm_provider || "-"}</span>
+            </div>
+            <div className="flex">
+              <span className="font-medium w-1/3">API Base:</span>
+              <Tooltip title={row.original.api_base || "-"}>
+                <span className="max-w-[15ch] truncate block">{row.original.api_base || "-"}</span>
+              </Tooltip>
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">Start Time:</span>
               <span>{row.original.startTime}</span>
             </div>
-            <div className="flex">
-              <span className="font-medium w-1/3">End Time:</span>
-              <span>{row.original.endTime}</span>
-            </div>
+
           </div>
           <div className="space-y-2">
             <div className="flex">
@@ -712,6 +752,11 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
               }`}>
                 {(row.original.metadata?.status || "Success").toLowerCase() !== "failure" ? "Success" : "Failure"}
               </span>
+              
+            </div>
+            <div className="flex">
+              <span className="font-medium w-1/3">End Time:</span>
+              <span>{row.original.endTime}</span>
             </div>
           </div>
         </div>

@@ -67,6 +67,13 @@ class AmazonConverseConfig(BaseConfig):
         return "bedrock_converse"
 
     @classmethod
+    def get_config_blocks(cls) -> dict:
+        return {
+            "guardrailConfig": GuardrailConfigBlock,
+            "performanceConfig": PerformanceConfigBlock,
+        }
+
+    @classmethod
     def get_config(cls):
         return {
             k: v
@@ -210,9 +217,12 @@ class AmazonConverseConfig(BaseConfig):
         drop_params: bool,
         messages: Optional[List[AllMessageValues]] = None,
     ) -> dict:
+        is_thinking_enabled = self.is_thinking_enabled(non_default_params)
+        self.update_optional_params_with_thinking_tokens(
+            non_default_params=non_default_params, optional_params=optional_params
+        )
         for param, value in non_default_params.items():
             if param == "response_format" and isinstance(value, dict):
-
                 ignore_response_format_types = ["text"]
                 if value["type"] in ignore_response_format_types:  # value is a no-op
                     continue
@@ -247,8 +257,11 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=[_tool]
                 )
-                if litellm.utils.supports_tool_choice(
-                    model=model, custom_llm_provider=self.custom_llm_provider
+                if (
+                    litellm.utils.supports_tool_choice(
+                        model=model, custom_llm_provider=self.custom_llm_provider
+                    )
+                    and not is_thinking_enabled
                 ):
                     optional_params["tool_choice"] = ToolChoiceValuesBlock(
                         tool=SpecificToolChoiceBlock(
@@ -284,6 +297,7 @@ class AmazonConverseConfig(BaseConfig):
                     optional_params["tool_choice"] = _tool_choice_value
             if param == "thinking":
                 optional_params["thinking"] = value
+
         return optional_params
 
     @overload
@@ -386,7 +400,6 @@ class AmazonConverseConfig(BaseConfig):
         optional_params: dict,
         messages: Optional[List[AllMessageValues]] = None,
     ) -> CommonRequestObject:
-
         ## VALIDATE REQUEST
         """
         Bedrock doesn't support tool calling without `tools=` param specified.
@@ -412,11 +425,11 @@ class AmazonConverseConfig(BaseConfig):
             AmazonConverseConfig.__annotations__.keys()
         ) + ["top_k"]
         supported_tool_call_params = ["tools", "tool_choice"]
-        supported_guardrail_params = ["guardrailConfig"]
+        supported_config_params = list(self.get_config_blocks().keys())
         total_supported_params = (
             supported_converse_params
             + supported_tool_call_params
-            + supported_guardrail_params
+            + supported_config_params
         )
         inference_params.pop("json_mode", None)  # used for handling json_schema
 
@@ -455,12 +468,11 @@ class AmazonConverseConfig(BaseConfig):
             ),
         }
 
-        # Guardrail Config
-        guardrail_config: Optional[GuardrailConfigBlock] = None
-        request_guardrails_config = inference_params.pop("guardrailConfig", None)
-        if request_guardrails_config is not None:
-            guardrail_config = GuardrailConfigBlock(**request_guardrails_config)
-            data["guardrailConfig"] = guardrail_config
+        # Handle all config blocks
+        for config_name, config_class in self.get_config_blocks().items():
+            config_value = inference_params.pop(config_name, None)
+            if config_value is not None:
+                data[config_name] = config_class(**config_value)  # type: ignore
 
         # Tool Config
         if bedrock_tool_config is not None:
@@ -702,9 +714,9 @@ class AmazonConverseConfig(BaseConfig):
         chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
-        reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
-            None
-        )
+        reasoningContentBlocks: Optional[
+            List[BedrockConverseReasoningContentBlock]
+        ] = None
 
         if message is not None:
             for idx, content in enumerate(message["content"]):
@@ -714,7 +726,6 @@ class AmazonConverseConfig(BaseConfig):
                 if "text" in content:
                     content_str += content["text"]
                 if "toolUse" in content:
-
                     ## check tool name was formatted by litellm
                     _response_tool_name = content["toolUse"]["name"]
                     response_tool_name = get_bedrock_tool_name(
@@ -741,12 +752,12 @@ class AmazonConverseConfig(BaseConfig):
             chat_completion_message["provider_specific_fields"] = {
                 "reasoningContentBlocks": reasoningContentBlocks,
             }
-            chat_completion_message["reasoning_content"] = (
-                self._transform_reasoning_content(reasoningContentBlocks)
-            )
-            chat_completion_message["thinking_blocks"] = (
-                self._transform_thinking_blocks(reasoningContentBlocks)
-            )
+            chat_completion_message[
+                "reasoning_content"
+            ] = self._transform_reasoning_content(reasoningContentBlocks)
+            chat_completion_message[
+                "thinking_blocks"
+            ] = self._transform_thinking_blocks(reasoningContentBlocks)
         chat_completion_message["content"] = content_str
         if json_mode is True and tools is not None and len(tools) == 1:
             # to support 'json_schema' logic on bedrock models

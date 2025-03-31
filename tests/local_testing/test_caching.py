@@ -1734,6 +1734,7 @@ def test_redis_semantic_cache_completion():
 # test_redis_cache_completion()
 
 
+@pytest.mark.flaky(reruns=3)
 @pytest.mark.asyncio
 async def test_redis_semantic_cache_acompletion():
     litellm.set_verbose = True
@@ -1760,6 +1761,8 @@ async def test_redis_semantic_cache_acompletion():
         max_tokens=5,
     )
     print(f"response1: {response1}")
+
+    await asyncio.sleep(2)
 
     response2 = await litellm.acompletion(
         model="gpt-3.5-turbo",

@@ -1176,21 +1176,40 @@
         "output_cost_per_pixel": 0.0,
         "litellm_provider": "openai"
     },
+    "gpt-4o-transcribe": {
+        "mode": "audio_transcription",
+        "input_cost_per_token": 0.0000025,
+        "input_cost_per_audio_token": 0.000006,
+        "output_cost_per_token": 0.00001, 
+        "litellm_provider": "openai",
+        "supported_endpoints": ["/v1/audio/transcriptions"]
+    }, 
+    "gpt-4o-mini-transcribe": {
+        "mode": "audio_transcription",
+        "input_cost_per_token": 0.00000125,
+        "input_cost_per_audio_token": 0.000003,
+        "output_cost_per_token": 0.000005, 
+        "litellm_provider": "openai",
+        "supported_endpoints": ["/v1/audio/transcriptions"]
+    }, 
     "whisper-1": {
         "mode": "audio_transcription",
         "input_cost_per_second": 0.0001,
         "output_cost_per_second": 0.0001, 
-        "litellm_provider": "openai"
+        "litellm_provider": "openai",
+        "supported_endpoints": ["/v1/audio/transcriptions"]
     }, 
     "tts-1": {
         "mode": "audio_speech", 
         "input_cost_per_character": 0.000015,
-        "litellm_provider": "openai"
+        "litellm_provider": "openai",
+        "supported_endpoints": ["/v1/audio/speech"]
     },
     "tts-1-hd": {
         "mode": "audio_speech", 
         "input_cost_per_character": 0.000030,
-        "litellm_provider": "openai"
+        "litellm_provider": "openai",
+        "supported_endpoints": ["/v1/audio/speech"]
     },
     "azure/gpt-4o-mini-realtime-preview-2024-12-17": {
         "max_tokens": 4096,
@@ -4595,6 +4614,28 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash",
         "supports_tool_choice": true
     },
+    "gemini-2.0-flash-lite": {
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 8192,
+        "max_images_per_prompt": 3000,
+        "max_videos_per_prompt": 10,
+        "max_video_length": 1,
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_pdf_size_mb": 50,
+        "input_cost_per_audio_token": 0.000000075,
+        "input_cost_per_token": 0.000000075,
+        "output_cost_per_token": 0.0000003,
+        "litellm_provider": "vertex_ai-language-models",
+        "mode": "chat",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_response_schema": true,
+        "supports_audio_output": true,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash",
+        "supports_tool_choice": true
+    },
     "gemini/gemini-2.0-pro-exp-02-05": {
         "max_tokens": 8192,
         "max_input_tokens": 2097152,
@@ -4655,8 +4696,34 @@
         "supports_vision": true,
         "supports_response_schema": true,
         "supports_audio_output": true,
+        "supports_audio_input": true,
+        "supported_modalities": ["text", "image", "audio", "video"],
         "supports_tool_choice": true,
         "source": "https://ai.google.dev/pricing#2_0flash"
+    },
+    "gemini/gemini-2.0-flash-lite": {
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 8192,
+        "max_images_per_prompt": 3000,
+        "max_videos_per_prompt": 10,
+        "max_video_length": 1,
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_pdf_size_mb": 50,
+        "input_cost_per_audio_token": 0.000000075,
+        "input_cost_per_token": 0.000000075,
+        "output_cost_per_token": 0.0000003,
+        "litellm_provider": "gemini",
+        "mode": "chat",
+        "tpm": 4000000,
+        "rpm": 4000,
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_response_schema": true,
+        "supports_audio_output": true,
+        "supports_tool_choice": true,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-2.0-flash-lite"
     },
     "gemini/gemini-2.0-flash-001": {
         "max_tokens": 8192,
@@ -5153,6 +5220,29 @@
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
+    "vertex_ai/mistral-small-2503@001": {
+        "max_tokens": 8191,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000003,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "supports_function_calling": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
+    "vertex_ai/mistral-small-2503": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000003,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_tool_choice": true
+    },
     "vertex_ai/jamba-1.5-mini@001": {
         "max_tokens": 256000,
         "max_input_tokens": 256000,
@@ -5302,6 +5392,40 @@
         "output_cost_per_token": 0,
         "litellm_provider": "vertex_ai-embedding-models",
         "mode": "embedding",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models"
+    },
+    "multimodalembedding": {
+        "max_tokens": 2048,
+        "max_input_tokens": 2048,
+        "output_vector_size": 768,
+        "input_cost_per_character": 0.0000002,
+        "input_cost_per_image": 0.0001,
+        "input_cost_per_video_per_second": 0.0005,
+        "input_cost_per_video_per_second_above_8s_interval": 0.0010,
+        "input_cost_per_video_per_second_above_15s_interval": 0.0020,
+        "input_cost_per_token": 0.0000008,
+        "output_cost_per_token": 0,
+        "litellm_provider": "vertex_ai-embedding-models",
+        "mode": "embedding",
+        "supported_endpoints": ["/v1/embeddings"],
+        "supported_modalities": ["text", "image", "video"],
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models"
+    },
+    "multimodalembedding@001": {
+        "max_tokens": 2048,
+        "max_input_tokens": 2048,
+        "output_vector_size": 768,
+        "input_cost_per_character": 0.0000002,
+        "input_cost_per_image": 0.0001,
+        "input_cost_per_video_per_second": 0.0005,
+        "input_cost_per_video_per_second_above_8s_interval": 0.0010,
+        "input_cost_per_video_per_second_above_15s_interval": 0.0020,
+        "input_cost_per_token": 0.0000008,
+        "output_cost_per_token": 0,
+        "litellm_provider": "vertex_ai-embedding-models",
+        "mode": "embedding",
+        "supported_endpoints": ["/v1/embeddings"],
+        "supported_modalities": ["text", "image", "video"],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models"
     },
     "text-embedding-large-exp-03-07": {
