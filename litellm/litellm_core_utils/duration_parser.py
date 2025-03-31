@@ -7,7 +7,6 @@ duration_in_seconds is used in diff parts of the code base, example
 """
 
 import re
-import time
 from datetime import datetime, timedelta
 from typing import Tuple
 

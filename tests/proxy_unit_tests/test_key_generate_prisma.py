@@ -1311,7 +1311,7 @@ def test_generate_and_update_key(prisma_client):
                 data=UpdateKeyRequest(
                     key=generated_key,
                     models=["ada", "babbage", "curie", "davinci"],
-                    budget_duration="1mo",
+                    budget_duration="30d",
                     max_budget=100,
                 ),
                 user_api_key_dict=UserAPIKeyAuth(
@@ -1351,18 +1351,18 @@ def test_generate_and_update_key(prisma_client):
             }
             assert result["info"]["models"] == ["ada", "babbage", "curie", "davinci"]
             assert result["info"]["team_id"] == _team_2
-            assert result["info"]["budget_duration"] == "1mo"
+            assert result["info"]["budget_duration"] == "30d"
             assert result["info"]["max_budget"] == 100
 
-            # budget_reset_at should be 30 days from now
+            # budget_reset_at should be 30 days from now, give or take 24 hours
             assert result["info"]["budget_reset_at"] is not None
             budget_reset_at = result["info"]["budget_reset_at"].replace(
                 tzinfo=timezone.utc
             )
             current_time = datetime.now(timezone.utc)
 
-            # assert budget_reset_at is 30 days from now
-            assert 31 >= (budget_reset_at - current_time).days >= 27
+            # assert budget_reset_at is 30 days from now, give or take 24 hours
+            assert 30 >= (budget_reset_at - current_time).days >= 29
 
             # cleanup - delete key
             delete_key_request = KeyRequest(keys=[generated_key])
@@ -2724,13 +2724,16 @@ async def test_create_update_team(prisma_client):
         _updated_info["budget_reset_at"], datetime.datetime
     )
 
-    # budget_reset_at should be 2 days from now
+    # budget_reset_at should be 2 days from now, at midnight UTC
     budget_reset_at = _updated_info["budget_reset_at"].replace(tzinfo=timezone.utc)
     current_time = datetime.datetime.now(timezone.utc)
 
-    # assert budget_reset_at is 2 days from now
+    # assert budget_reset_at is 2 days from now, at midnight UTC
+    time_until_midnight = (
+        2 * 24 * 60 * 60 - time.time() % (24 * 60 * 60)
+    )
     assert (
-        abs((budget_reset_at - current_time).total_seconds() - 2 * 24 * 60 * 60) <= 10
+        abs((budget_reset_at - current_time).total_seconds() - time_until_midnight) <= 10
     )
 
     # now hit team_info
@@ -2858,11 +2861,16 @@ async def test_update_user_unit_test(prisma_client):
     assert _user_info["rpm_limit"] == 100
     assert _user_info["metadata"] == {"very-new-metadata": "something"}
 
-    # budget reset at should be 10 days from now
+    # budget reset at should be 10 days from now, at midnight UTC
     budget_reset_at = _user_info["budget_reset_at"].replace(tzinfo=timezone.utc)
     current_time = datetime.now(timezone.utc)
+
+    # assert budget_reset_at is 10 days from now, at midnight UTC
+    time_until_midnight = (
+        10 * 24 * 60 * 60 - time.time() % (24 * 60 * 60)
+    )
     assert (
-        abs((budget_reset_at - current_time).total_seconds() - 10 * 24 * 60 * 60) <= 10
+        abs((budget_reset_at - current_time).total_seconds() - time_until_midnight) <= 10
     )
 
 

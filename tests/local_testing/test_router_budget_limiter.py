@@ -551,7 +551,8 @@ async def test_get_current_provider_budget_reset_at():
     reset_at = await provider_budget._get_current_provider_budget_reset_at("openai")
     assert reset_at is not None
     reset_time = datetime.fromisoformat(reset_at.replace("Z", "+00:00"))
-    expected_time = datetime.now(timezone.utc) + timedelta(seconds=(24 * 60 * 60))
+    now = datetime.now(timezone.utc)
+    expected_time = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
     time_difference = abs((reset_time - expected_time).total_seconds())
     assert time_difference < 5
 
@@ -561,7 +562,7 @@ async def test_get_current_provider_budget_reset_at():
 
     # Verify the timestamp format and approximate time
     reset_time = datetime.fromisoformat(reset_at.replace("Z", "+00:00"))
-    expected_time = datetime.now(timezone.utc) + timedelta(seconds=3600)
+    expected_time = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0) + timedelta(seconds=3600)
 
     # Allow for small time differences (within 5 seconds)
     time_difference = abs((reset_time - expected_time).total_seconds())

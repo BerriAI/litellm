@@ -385,9 +385,12 @@ async def test_team_budget_metrics():
         ), "remaining budget should be less than 10.0 after first request"
         assert first_budget["total"] == 10.0, "Total budget metric is incorrect"
         print("first_budget['remaining_hours']", first_budget["remaining_hours"])
-        # Verify remaining hours matches 7 days (with small delta for processing time)
+        # Verify remaining hours matches expected time (hours until midnight UTC in 7 days)
+        time_until_midnight = (
+            7 * 24 * 60 * 60 - time.time() % (24 * 60 * 60)
+        ) / (60 * 60)
         assert (
-            abs(first_budget["remaining_hours"] - (7 * 24)) <= 0.1
+            abs(first_budget["remaining_hours"] - time_until_midnight) <= 0.1
         ), "Budget remaining hours should be approximately 7 days (168 hours)"
 
         # Get team info and verify spend matches prometheus metrics
@@ -561,7 +564,7 @@ async def test_user_email_metrics():
             "user_email": user_email,
         }
         user_info = await create_test_user(session, user_data)
-        key = user_info["key"]
+        key = user_info["key"] # type: ignore
 
         # Initialize OpenAI client with the user's email
         client = AsyncOpenAI(base_url="http://0.0.0.0:4000", api_key=key)
