@@ -191,6 +191,10 @@ class ContentBlockDeltaEvent(TypedDict, total=False):
     reasoningContent: BedrockConverseReasoningContentBlockDelta
 
 
+class PerformanceConfigBlock(TypedDict):
+    latency: Literal["optimized", "throughput"]
+
+
 class CommonRequestObject(
     TypedDict, total=False
 ):  # common request object across sync + async flows
@@ -200,6 +204,7 @@ class CommonRequestObject(
     system: List[SystemContentBlock]
     toolConfig: ToolConfigBlock
     guardrailConfig: Optional[GuardrailConfigBlock]
+    performanceConfig: Optional[PerformanceConfigBlock]
 
 
 class RequestObject(CommonRequestObject, total=False):
@@ -429,7 +434,9 @@ class AmazonNovaCanvasColorGuidedGenerationParams(TypedDict, total=False):
     negativeText: str
 
 
-class AmazonNovaCanvasColorGuidedRequest(AmazonNovaCanvasRequestBase, TypedDict, total=False):
+class AmazonNovaCanvasColorGuidedRequest(
+    AmazonNovaCanvasRequestBase, TypedDict, total=False
+):
     """
     Request for Amazon Nova Canvas Color Guided Generation API
 

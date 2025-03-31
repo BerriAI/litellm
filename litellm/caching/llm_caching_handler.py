@@ -8,7 +8,6 @@ from .in_memory_cache import InMemoryCache
 
 
 class LLMClientCache(InMemoryCache):
-
     def update_cache_key_with_event_loop(self, key):
         """
         Add the event loop to the cache key, to prevent event loop closed errors.

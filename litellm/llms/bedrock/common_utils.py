@@ -314,7 +314,6 @@ def get_bedrock_tool_name(response_tool_name: str) -> str:
 
 
 class BedrockModelInfo(BaseLLMModelInfo):
-
     global_config = AmazonBedrockGlobalConfig()
     all_global_regions = global_config.get_all_regions()
 

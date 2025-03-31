@@ -482,7 +482,6 @@ from openai.types.chat.chat_completion_audio import ChatCompletionAudio
 
 
 class ChatCompletionAudioResponse(ChatCompletionAudio):
-
     def __init__(
         self,
         data: str,
@@ -779,6 +778,24 @@ class PromptTokensDetailsWrapper(
     image_tokens: Optional[int] = None
     """Image tokens sent to the model."""
 
+    character_count: Optional[int] = None
+    """Character count sent to the model. Used for Vertex AI multimodal embeddings."""
+
+    image_count: Optional[int] = None
+    """Number of images sent to the model. Used for Vertex AI multimodal embeddings."""
+
+    video_length_seconds: Optional[float] = None
+    """Length of videos sent to the model. Used for Vertex AI multimodal embeddings."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.character_count is None:
+            del self.character_count
+        if self.image_count is None:
+            del self.image_count
+        if self.video_length_seconds is None:
+            del self.video_length_seconds
+
 
 class Usage(CompletionUsage):
     _cache_creation_input_tokens: int = PrivateAttr(
@@ -909,7 +926,6 @@ class StreamingChoices(OpenAIObject):
             self.finish_reason = None
         self.index = index
         if delta is not None:
-
             if isinstance(delta, Delta):
                 self.delta = delta
             elif isinstance(delta, dict):
@@ -943,7 +959,6 @@ class StreamingChoices(OpenAIObject):
 
 class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
     def __init__(self, **kwargs):
-
         new_choices = []
         for choice in kwargs["choices"]:
             new_choice = StreamingChoices(**choice).model_dump()
@@ -1629,6 +1644,33 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_end_user_id: Optional[str]
 
 
+class StandardLoggingMCPToolCall(TypedDict, total=False):
+    name: str
+    """
+    Name of the tool to call
+    """
+    arguments: dict
+    """
+    Arguments to pass to the tool
+    """
+    result: dict
+    """
+    Result of the tool call
+    """
+
+    mcp_server_name: Optional[str]
+    """
+    Name of the MCP server that the tool call was made to
+    """
+
+    mcp_server_logo_url: Optional[str]
+    """
+    Optional logo URL of the MCP server that the tool call was made to
+
+    (this is to render the logo on the logs page on litellm ui)
+    """
+
+
 class StandardBuiltInToolsParams(TypedDict, total=False):
     """
     Standard built-in OpenAItools parameters
@@ -1659,6 +1701,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     requester_ip_address: Optional[str]
     requester_metadata: Optional[dict]
     prompt_management_metadata: Optional[StandardLoggingPromptManagementMetadata]
+    mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
     applied_guardrails: Optional[List[str]]
 
 

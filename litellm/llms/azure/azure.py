@@ -654,7 +654,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     ) -> EmbeddingResponse:
         response = None
         try:
-
             openai_aclient = self.get_azure_openai_client(
                 api_version=api_version,
                 api_base=api_base,
@@ -835,7 +834,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 "2023-10-01-preview",
             ]
         ):  # CREATE + POLL for azure dall-e-2 calls
-
             api_base = modify_url(
                 original_url=api_base, new_path="/openai/images/generations:submit"
             )
@@ -867,7 +865,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 )
             while response.json()["status"] not in ["succeeded", "failed"]:
                 if time.time() - start_time > timeout_secs:
-
                     raise AzureOpenAIError(
                         status_code=408, message="Operation polling timed out."
                     )
@@ -935,7 +932,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 "2023-10-01-preview",
             ]
         ):  # CREATE + POLL for azure dall-e-2 calls
-
             api_base = modify_url(
                 original_url=api_base, new_path="/openai/images/generations:submit"
             )
@@ -1199,7 +1195,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         client=None,
         litellm_params: Optional[dict] = None,
     ) -> HttpxBinaryResponseContent:
-
         max_retries = optional_params.pop("max_retries", 2)
 
         if aspeech is not None and aspeech is True:
@@ -1253,7 +1248,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         client=None,
         litellm_params: Optional[dict] = None,
     ) -> HttpxBinaryResponseContent:
-
         azure_client: AsyncAzureOpenAI = self.get_azure_openai_client(
             api_base=api_base,
             api_version=api_version,

@@ -178,7 +178,6 @@ def _get_wildcard_models(
     all_wildcard_models = []
     for model in unique_models:
         if _check_wildcard_routing(model=model):
-
             if (
                 return_wildcard_routes
             ):  # will add the wildcard route to the list eg: anthropic/*.
