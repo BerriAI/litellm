@@ -26,7 +26,6 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
     _get_user_role,
-    _handle_failed_db_connection_for_get_key_object,
     _is_user_proxy_admin,
     _virtual_key_max_budget_check,
     _virtual_key_soft_budget_check,
@@ -38,8 +37,8 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
     is_valid_fallback_model,
 )
+from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_utils import (
-    _get_request_ip_address,
     get_end_user_id_from_request_body,
     get_request_route,
     is_pass_through_provider_route,
@@ -207,7 +206,6 @@ def get_rbac_role(jwt_handler: JWTHandler, scopes: List[str]) -> str:
 
 
 def get_model_from_request(request_data: dict, route: str) -> Optional[str]:
-
     # First try to get model from request_data
     model = request_data.get("model")
 
@@ -230,7 +228,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
     azure_apim_header: Optional[str],
     request_data: dict,
 ) -> UserAPIKeyAuth:
-
     from litellm.proxy.proxy_server import (
         general_settings,
         jwt_handler,
@@ -252,7 +249,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
     valid_token: Optional[UserAPIKeyAuth] = None
 
     try:
-
         # get the request body
 
         await pre_db_read_auth_checks(
@@ -515,23 +511,23 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     proxy_logging_obj=proxy_logging_obj,
                 )
                 if _end_user_object is not None:
-                    end_user_params["allowed_model_region"] = (
-                        _end_user_object.allowed_model_region
-                    )
+                    end_user_params[
+                        "allowed_model_region"
+                    ] = _end_user_object.allowed_model_region
                     if _end_user_object.litellm_budget_table is not None:
                         budget_info = _end_user_object.litellm_budget_table
                         if budget_info.tpm_limit is not None:
-                            end_user_params["end_user_tpm_limit"] = (
-                                budget_info.tpm_limit
-                            )
+                            end_user_params[
+                                "end_user_tpm_limit"
+                            ] = budget_info.tpm_limit
                         if budget_info.rpm_limit is not None:
-                            end_user_params["end_user_rpm_limit"] = (
-                                budget_info.rpm_limit
-                            )
+                            end_user_params[
+                                "end_user_rpm_limit"
+                            ] = budget_info.rpm_limit
                         if budget_info.max_budget is not None:
-                            end_user_params["end_user_max_budget"] = (
-                                budget_info.max_budget
-                            )
+                            end_user_params[
+                                "end_user_max_budget"
+                            ] = budget_info.max_budget
             except Exception as e:
                 if isinstance(e, litellm.BudgetExceededError):
                     raise e
@@ -675,8 +671,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         if (
             prisma_client is None
         ):  # if both master key + user key submitted, and user key != master key, and no db connected, raise an error
-            return await _handle_failed_db_connection_for_get_key_object(
-                e=Exception("No connected db.")
+            raise ProxyException(
+                message="No connected db.",
+                type=ProxyErrorTypes.no_db_connection,
+                code=400,
+                param=None,
             )
 
         ## check for cache hit (In-Memory Cache)
@@ -685,37 +684,25 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             api_key = hash_token(token=api_key)
 
         if valid_token is None:
-            try:
-                valid_token = await get_key_object(
-                    hashed_token=api_key,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                )
-                # update end-user params on valid token
-                # These can change per request - it's important to update them here
-                valid_token.end_user_id = end_user_params.get("end_user_id")
-                valid_token.end_user_tpm_limit = end_user_params.get(
-                    "end_user_tpm_limit"
-                )
-                valid_token.end_user_rpm_limit = end_user_params.get(
-                    "end_user_rpm_limit"
-                )
-                valid_token.allowed_model_region = end_user_params.get(
-                    "allowed_model_region"
-                )
-                # update key budget with temp budget increase
-                valid_token = _update_key_budget_with_temp_budget_increase(
-                    valid_token
-                )  # updating it here, allows all downstream reporting / checks to use the updated budget
-            except Exception:
-                verbose_logger.info(
-                    "litellm.proxy.auth.user_api_key_auth.py::user_api_key_auth() - Unable to find token={} in cache or `LiteLLM_VerificationTokenTable`. Defaulting 'valid_token' to None'".format(
-                        api_key
-                    )
-                )
-                valid_token = None
+            valid_token = await get_key_object(
+                hashed_token=api_key,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            # update end-user params on valid token
+            # These can change per request - it's important to update them here
+            valid_token.end_user_id = end_user_params.get("end_user_id")
+            valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
+            valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
+            valid_token.allowed_model_region = end_user_params.get(
+                "allowed_model_region"
+            )
+            # update key budget with temp budget increase
+            valid_token = _update_key_budget_with_temp_budget_increase(
+                valid_token
+            )  # updating it here, allows all downstream reporting / checks to use the updated budget
 
         if valid_token is None:
             raise Exception(
@@ -811,7 +798,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             # Check 3. Check if user is in their team budget
             if valid_token.team_member_spend is not None:
                 if prisma_client is not None:
-
                     _cache_key = f"{valid_token.team_id}_{valid_token.user_id}"
 
                     team_member_info = await user_api_key_cache.async_get_cache(
@@ -1015,57 +1001,14 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 route=route,
                 start_time=start_time,
             )
-        else:
-            raise Exception()
     except Exception as e:
-        requester_ip = _get_request_ip_address(
+        return await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
+            e=e,
             request=request,
-            use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
-        )
-        verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {}\nRequester IP Address:{}".format(
-                str(e),
-                requester_ip,
-            ),
-            extra={"requester_ip": requester_ip},
-        )
-
-        # Log this exception to OTEL, Datadog etc
-        user_api_key_dict = UserAPIKeyAuth(
+            request_data=request_data,
+            route=route,
             parent_otel_span=parent_otel_span,
             api_key=api_key,
-        )
-        asyncio.create_task(
-            proxy_logging_obj.post_call_failure_hook(
-                request_data=request_data,
-                original_exception=e,
-                user_api_key_dict=user_api_key_dict,
-                error_type=ProxyErrorTypes.auth_error,
-                route=route,
-            )
-        )
-
-        if isinstance(e, litellm.BudgetExceededError):
-            raise ProxyException(
-                message=e.message,
-                type=ProxyErrorTypes.budget_exceeded,
-                param=None,
-                code=400,
-            )
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_401_UNAUTHORIZED),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_401_UNAUTHORIZED,
         )
 
 

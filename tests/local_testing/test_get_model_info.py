@@ -441,6 +441,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_token_batches": {"type": "number"},
                 "input_cost_per_token_cache_hit": {"type": "number"},
                 "input_cost_per_video_per_second": {"type": "number"},
+                "input_cost_per_video_per_second_above_8s_interval": {"type": "number"},
+                "input_cost_per_video_per_second_above_15s_interval": {
+                    "type": "number"
+                },
                 "input_cost_per_video_per_second_above_128k_tokens": {"type": "number"},
                 "input_dbu_cost_per_token": {"type": "number"},
                 "litellm_provider": {"type": "string"},
@@ -516,6 +520,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/images/variations",
                             "/v1/images/edits",
                             "/v1/batch",
+                            "/v1/audio/transcriptions",
+                            "/v1/audio/speech",
                         ],
                     },
                 },

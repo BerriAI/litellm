@@ -121,7 +121,6 @@ class TopazImageVariationConfig(BaseImageVariationConfig):
         optional_params: dict,
         headers: dict,
     ) -> HttpHandlerRequestFields:
-
         request_params = HttpHandlerRequestFields(
             files={"image": self.prepare_file_tuple(image)},
             data=optional_params,
@@ -134,7 +133,6 @@ class TopazImageVariationConfig(BaseImageVariationConfig):
         image_content: bytes,
         response_ms: float,
     ) -> ImageResponse:
-
         # Convert to base64
         base64_image = base64.b64encode(image_content).decode("utf-8")
 

@@ -9,7 +9,6 @@ from litellm.types.utils import ModelResponse, TextCompletionResponse
 
 
 class BaseLLM:
-
     _client_session: Optional[httpx.Client] = None
 
     def process_response(

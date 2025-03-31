@@ -589,8 +589,10 @@ response = litellm.completion(
             "content": [
                 {"type": "text", "text": "Please summarize the audio."},
                 {
-                    "type": "image_url",
-                    "image_url": "data:audio/mp3;base64,{}".format(encoded_data), # 👈 SET MIME_TYPE + DATA
+                    "type": "file",
+                    "file": {
+                        "file_data": "data:audio/mp3;base64,{}".format(encoded_data), # 👈 SET MIME_TYPE + DATA
+                    }
                 },
             ],
         }
@@ -640,8 +642,11 @@ response = litellm.completion(
             "content": [
                 {"type": "text", "text": "Please summarize the file."},
                 {
-                    "type": "image_url",
-                    "image_url": "https://storage..." # 👈 SET THE IMG URL
+                    "type": "file",
+                    "file": {
+                        "file_id": "https://storage...", # 👈 SET THE IMG URL
+                        "format": "application/pdf" # OPTIONAL
+                    }
                 },
             ],
         }
@@ -668,8 +673,11 @@ response = litellm.completion(
             "content": [
                 {"type": "text", "text": "Please summarize the file."},
                 {
-                    "type": "image_url",
-                    "image_url": "gs://..." # 👈 SET THE cloud storage bucket url
+                    "type": "file",
+                    "file": {
+                        "file_id": "gs://storage...", # 👈 SET THE IMG URL
+                        "format": "application/pdf" # OPTIONAL
+                    }
                 },
             ],
         }
