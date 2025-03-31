@@ -41,7 +41,7 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
                 )
                 raise HTTPException(status_code=429, detail="Max budget limit reached.")
             else:
-                 verbose_proxy_logger.debug(
+                verbose_proxy_logger.debug(
                     f"Budget Check Passed for {user_api_key_dict.user_id or user_api_key_dict.team_id or user_api_key_dict.api_key}. Current Spend: {curr_spend}, Max Budget: {max_budget}"
                 )
 
