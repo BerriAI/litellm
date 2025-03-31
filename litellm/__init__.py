@@ -1026,7 +1026,6 @@ from .proxy.proxy_cli import run_server
 from .router import Router
 from .assistants.main import *
 from .batches.main import *
-from .anthropic import *
 from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *
@@ -1039,6 +1038,7 @@ from .cost_calculator import response_cost_calculator, cost_per_token
 
 ### ADAPTERS ###
 from .types.adapter import AdapterItem
+import litellm.anthropic_interface as anthropic
 
 adapters: List[AdapterItem] = []
 
