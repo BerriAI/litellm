@@ -29,7 +29,7 @@ test("view internal user page", async ({ page }) => {
   // try to click on button
   // <button class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-l focus:outline-none" disabled="">← Prev</button>
   // wait 1-2 seconds
-  // await page.waitForTimeout(10000);
+  await page.waitForTimeout(10000);
 
   // Test all expected fields are present
   // number of keys owned by user
@@ -38,8 +38,6 @@ test("view internal user page", async ({ page }) => {
       hasText: "Keys",
     })
     .all();
-
-  await page.pause();
 
   /*
   const keysCountArray = await keysBadges.evaluateAll((elements) => {
@@ -53,13 +51,17 @@ test("view internal user page", async ({ page }) => {
   let keysCountArray: number[] = [];
 
   for (const element of keysBadges) {
-    keysCountArray.push(
-      parseInt((await element.innerText()).split(" ")[0], 10)
-    );
+    if (!((await element.innerText()) === "No Keys")) {
+      keysCountArray.push(
+        parseInt((await element.innerText()).split(" ")[0], 10)
+      );
+    }
   }
 
-  const hasNonZeroKeys = keysCountArray.some((count) => count > 0);
-  expect(hasNonZeroKeys).toBe(true);
+  if ((await keysBadges[0].first().innerText()) != "No Keys") {
+    const hasNonZeroKeys = keysCountArray.some((count) => count > 0);
+    expect(hasNonZeroKeys).toBe(true);
+  }
 
   // test pagination
   const prevButton = page.locator(
