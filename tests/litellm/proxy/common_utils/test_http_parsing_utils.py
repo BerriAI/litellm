@@ -105,3 +105,46 @@ async def test_empty_request_body():
 
     # Verify the body was read
     mock_request.body.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_circular_reference_handling():
+    """
+    Test that cached request body isn't modified when the returned result is modified.
+    Demonstrates the mutable dictionary reference issue.
+    """
+    # Create a mock request with initial data
+    mock_request = MagicMock()
+    initial_body = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+
+    mock_request.body = AsyncMock(return_value=orjson.dumps(initial_body))
+    mock_request.headers = {"content-type": "application/json"}
+    mock_request.scope = {}
+
+    # First parse
+    result = await _read_request_body(mock_request)
+
+    # Verify initial parse
+    assert result["model"] == "gpt-4"
+    assert result["messages"] == [{"role": "user", "content": "Hello"}]
+
+    # Modify the result by adding proxy_server_request
+    result["proxy_server_request"] = {
+        "url": "http://0.0.0.0:4000/v1/chat/completions",
+        "method": "POST",
+        "headers": {"content-type": "application/json"},
+        "body": result,  # Creates circular reference
+    }
+
+    # Get the cached value - it will have been modified too!
+    cached_value = _safe_get_request_parsed_body(mock_request)
+    assert "proxy_server_request" in cached_value  # This will pass, showing the issue
+
+    # Second parse using the same request - will use the modified cached value
+    result2 = await _read_request_body(mock_request)
+    assert (
+        "proxy_server_request" not in result2
+    )  # This will pass, showing the cache pollution
