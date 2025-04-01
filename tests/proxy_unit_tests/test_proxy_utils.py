@@ -770,42 +770,6 @@ async def test_add_litellm_data_to_request_duplicate_tags(
 
 
 @pytest.mark.parametrize(
-    "general_settings, user_api_key_dict, expected_enforced_params",
-    [
-        (
-            {"enforced_params": ["param1", "param2"]},
-            UserAPIKeyAuth(
-                api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
-            ),
-            ["param1", "param2"],
-        ),
-        (
-            {"service_account_settings": {"enforced_params": ["param1", "param2"]}},
-            UserAPIKeyAuth(
-                api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
-            ),
-            ["param1", "param2"],
-        ),
-        (
-            {"service_account_settings": {"enforced_params": ["param1", "param2"]}},
-            UserAPIKeyAuth(
-                api_key="test_api_key",
-                metadata={"enforced_params": ["param3", "param4"]},
-            ),
-            ["param1", "param2", "param3", "param4"],
-        ),
-    ],
-)
-def test_get_enforced_params(
-    general_settings, user_api_key_dict, expected_enforced_params
-):
-    from litellm.proxy.litellm_pre_call_utils import _get_enforced_params
-
-    enforced_params = _get_enforced_params(general_settings, user_api_key_dict)
-    assert enforced_params == expected_enforced_params
-
-
-@pytest.mark.parametrize(
     "general_settings, user_api_key_dict, request_body, expected_error",
     [
         (
@@ -820,6 +784,17 @@ def test_get_enforced_params(
             {"service_account_settings": {"enforced_params": ["user"]}},
             UserAPIKeyAuth(
                 api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
+            ),
+            {},
+            False,
+        ),
+        (
+            {"service_account_settings": {"enforced_params": ["user"]}},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+                user_id="test_user_id", 
+                org_id="test_org_id",
+                metadata={"service_account_id": "test_service_account_id"}
             ),
             {},
             True,
@@ -854,6 +829,7 @@ def test_get_enforced_params(
             {"service_account_settings": {"enforced_params": ["user"]}},
             UserAPIKeyAuth(
                 api_key="test_api_key",
+                metadata={"service_account_id": "test_service_account_id"}
             ),
             {"user": "test_user"},
             False,
