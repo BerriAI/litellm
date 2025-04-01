@@ -12,6 +12,7 @@ import httpx
 
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.llms.openrouter import OpenRouterErrorMessage
 from litellm.types.utils import ModelResponse, ModelResponseStream
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -71,6 +72,24 @@ class OpenrouterConfig(OpenAIGPTConfig):
 class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
+            ## HANDLE ERROR IN CHUNK ##
+            if "error" in chunk:
+                error_chunk = chunk["error"]
+                error_message = OpenRouterErrorMessage(
+                    message="Message: {}, Metadata: {}, User ID: {}".format(
+                        error_chunk["message"],
+                        error_chunk.get("metadata", {}),
+                        error_chunk.get("user_id", ""),
+                    ),
+                    code=error_chunk["code"],
+                    metadata=error_chunk.get("metadata", {}),
+                )
+                raise OpenRouterException(
+                    message=error_message["message"],
+                    status_code=error_message["code"],
+                    headers=error_message["metadata"].get("headers", {}),
+                )
+
             new_choices = []
             for choice in chunk["choices"]:
                 choice["delta"]["reasoning_content"] = choice["delta"].get("reasoning")
