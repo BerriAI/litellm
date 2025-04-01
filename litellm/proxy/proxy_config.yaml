@@ -1,15 +1,15 @@
 model_list:
-  - model_name: gpt-4o
+  - model_name: fake-openai-endpoint
     litellm_params:
-      model: openai/gpt-4o
-      api_key: sk-xxxxxxx
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
-mcp_servers:
-  {
-    "zapier_mcp": {
-      "url": "https://actions.zapier.com/mcp/sk-akxxxxx/sse"
-    },
-    "fetch": {
-      "url": "http://localhost:8000/sse"
-    }
-  }
+general_settings:
+  use_redis_transaction_buffer: true
+
+litellm_settings:
+  cache: True
+  cache_params:
+    type: redis
+    supported_call_types: []
