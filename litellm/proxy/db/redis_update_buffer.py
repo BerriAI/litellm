@@ -33,7 +33,6 @@ class RedisUpdateBuffer:
         redis_cache: Optional[RedisCache] = None,
     ):
         self.redis_cache = redis_cache
-        self.spend_update_queue = SpendUpdateQueue()
 
     @staticmethod
     def _should_commit_spend_updates_to_redis() -> bool:
@@ -56,6 +55,7 @@ class RedisUpdateBuffer:
 
     async def store_in_memory_spend_updates_in_redis(
         self,
+        spend_update_queue: SpendUpdateQueue,
     ):
         """
         Stores the in-memory spend updates to Redis
@@ -81,9 +81,9 @@ class RedisUpdateBuffer:
             return
 
         aggregated_updates = (
-            await self.spend_update_queue.flush_and_get_all_aggregated_updates_by_entity_type()
+            await spend_update_queue.flush_and_get_all_aggregated_updates_by_entity_type()
         )
-        verbose_proxy_logger.debug("ALL AGGREGATED UPDATES: ", aggregated_updates)
+        verbose_proxy_logger.debug("ALL AGGREGATED UPDATES: %s", aggregated_updates)
 
         db_spend_update_transactions: DBSpendUpdateTransactions = (
             DBSpendUpdateTransactions(
@@ -92,7 +92,7 @@ class RedisUpdateBuffer:
                 key_list_transactions=aggregated_updates.get("key", {}),
                 team_list_transactions=aggregated_updates.get("team", {}),
                 team_member_list_transactions=aggregated_updates.get("team_member", {}),
-                org_list_transactions=aggregated_updates.get("org", {}),
+                org_list_transactions=aggregated_updates.get("organization", {}),
             )
         )
 
