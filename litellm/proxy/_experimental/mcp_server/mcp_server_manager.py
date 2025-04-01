@@ -3,7 +3,7 @@ MCP Client Manager
 
 This class is responsible for managing MCP SSE clients.
 
-This is a Proxy 
+This is a Proxy
 """
 
 import asyncio
