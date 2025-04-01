@@ -10,7 +10,17 @@ import traceback
 from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Union,
+    cast,
+    overload,
+)
 
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
@@ -18,6 +28,7 @@ from litellm.proxy._types import (
     DailyUserSpendTransaction,
     ProxyErrorTypes,
     ProxyException,
+    SpendLogsMetadata,
     SpendLogsPayload,
 )
 from litellm.types.guardrails import GuardrailEventHooks
@@ -1100,12 +1111,6 @@ def jsonify_object(data: dict) -> dict:
 
 
 class PrismaClient:
-    user_list_transactions: dict = {}
-    end_user_list_transactions: dict = {}
-    key_list_transactions: dict = {}
-    team_list_transactions: dict = {}
-    team_member_list_transactions: dict = {}  # key is ["team_id" + "user_id"]
-    org_list_transactions: dict = {}
     spend_log_transactions: List = []
     daily_user_spend_transactions: Dict[str, DailyUserSpendTransaction] = {}
 
@@ -1145,6 +1150,41 @@ class PrismaClient:
             )  # Client to connect to Prisma db
         verbose_proxy_logger.debug("Success - Created Prisma Client")
 
+    def get_request_status(
+        self, payload: Union[dict, SpendLogsPayload]
+    ) -> Literal["success", "failure"]:
+        """
+        Determine if a request was successful or failed based on payload metadata.
+
+        Args:
+            payload (Union[dict, SpendLogsPayload]): Request payload containing metadata
+
+        Returns:
+            Literal["success", "failure"]: Request status
+        """
+        try:
+            # Get metadata and convert to dict if it's a JSON string
+            payload_metadata: Union[Dict, SpendLogsMetadata, str] = payload.get(
+                "metadata", {}
+            )
+            if isinstance(payload_metadata, str):
+                payload_metadata_json: Union[Dict, SpendLogsMetadata] = cast(
+                    Dict, json.loads(payload_metadata)
+                )
+            else:
+                payload_metadata_json = payload_metadata
+
+            # Check status in metadata dict
+            return (
+                "failure"
+                if payload_metadata_json.get("status") == "failure"
+                else "success"
+            )
+
+        except (json.JSONDecodeError, AttributeError):
+            # Default to success if metadata parsing fails
+            return "success"
+
     def add_spend_log_transaction_to_daily_user_transaction(
         self, payload: Union[dict, SpendLogsPayload]
     ):
@@ -1156,12 +1196,15 @@ class PrismaClient:
         If key exists, update the transaction with the new spend and usage
         """
         expected_keys = ["user", "startTime", "api_key", "model", "custom_llm_provider"]
+
         if not all(key in payload for key in expected_keys):
             verbose_proxy_logger.debug(
                 f"Missing expected keys: {expected_keys}, in payload, skipping from daily_user_spend_transactions"
             )
             return
 
+        request_status = self.get_request_status(payload)
+        verbose_proxy_logger.info(f"Logged request status: {request_status}")
         if isinstance(payload["startTime"], datetime):
             start_time = payload["startTime"].isoformat()
             date = start_time.split("T")[0]
@@ -1174,6 +1217,7 @@ class PrismaClient:
             return
         try:
             daily_transaction_key = f"{payload['user']}_{date}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}"
+
             if daily_transaction_key in self.daily_user_spend_transactions:
                 daily_transaction = self.daily_user_spend_transactions[
                     daily_transaction_key
@@ -1182,6 +1226,11 @@ class PrismaClient:
                 daily_transaction["prompt_tokens"] += payload["prompt_tokens"]
                 daily_transaction["completion_tokens"] += payload["completion_tokens"]
                 daily_transaction["api_requests"] += 1
+
+                if request_status == "success":
+                    daily_transaction["successful_requests"] += 1
+                else:
+                    daily_transaction["failed_requests"] += 1
             else:
                 daily_transaction = DailyUserSpendTransaction(
                     user_id=payload["user"],
@@ -1194,6 +1243,8 @@ class PrismaClient:
                     completion_tokens=payload["completion_tokens"],
                     spend=payload["spend"],
                     api_requests=1,
+                    successful_requests=1 if request_status == "success" else 0,
+                    failed_requests=1 if request_status != "success" else 0,
                 )
 
             self.daily_user_spend_transactions[
@@ -2422,7 +2473,10 @@ def _hash_token_if_needed(token: str) -> str:
 class ProxyUpdateSpend:
     @staticmethod
     async def update_end_user_spend(
-        n_retry_times: int, prisma_client: PrismaClient, proxy_logging_obj: ProxyLogging
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        end_user_list_transactions: Dict[str, float],
     ):
         for i in range(n_retry_times + 1):
             start_time = time.time()
@@ -2434,7 +2488,7 @@ class ProxyUpdateSpend:
                         for (
                             end_user_id,
                             response_cost,
-                        ) in prisma_client.end_user_list_transactions.items():
+                        ) in end_user_list_transactions.items():
                             if litellm.max_end_user_budget is not None:
                                 pass
                             batcher.litellm_endusertable.upsert(
@@ -2461,10 +2515,6 @@ class ProxyUpdateSpend:
                 _raise_failed_update_spend_exception(
                     e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                 )
-            finally:
-                prisma_client.end_user_list_transactions = (
-                    {}
-                )  # reset the end user list transactions - prevent bad data from causing issues
 
     @staticmethod
     async def update_spend_logs(
@@ -2603,6 +2653,12 @@ class ProxyUpdateSpend:
                                         ],
                                         "spend": transaction["spend"],
                                         "api_requests": transaction["api_requests"],
+                                        "successful_requests": transaction[
+                                            "successful_requests"
+                                        ],
+                                        "failed_requests": transaction[
+                                            "failed_requests"
+                                        ],
                                     },
                                     "update": {
                                         "prompt_tokens": {
@@ -2616,6 +2672,14 @@ class ProxyUpdateSpend:
                                         "spend": {"increment": transaction["spend"]},
                                         "api_requests": {
                                             "increment": transaction["api_requests"]
+                                        },
+                                        "successful_requests": {
+                                            "increment": transaction[
+                                                "successful_requests"
+                                            ]
+                                        },
+                                        "failed_requests": {
+                                            "increment": transaction["failed_requests"]
                                         },
                                     },
                                 },

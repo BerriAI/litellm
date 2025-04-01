@@ -892,6 +892,7 @@ class Logging(LiteLLMLoggingBaseClass):
             ResponseCompletedEvent,
         ],
         cache_hit: Optional[bool] = None,
+        litellm_model_name: Optional[str] = None,
     ) -> Optional[float]:
         """
         Calculate response cost using result + logging object variables.
@@ -917,7 +918,7 @@ class Logging(LiteLLMLoggingBaseClass):
         try:
             response_cost_calculator_kwargs = {
                 "response_object": result,
-                "model": self.model,
+                "model": litellm_model_name or self.model,
                 "cache_hit": cache_hit,
                 "custom_llm_provider": self.model_call_details.get(
                     "custom_llm_provider", None

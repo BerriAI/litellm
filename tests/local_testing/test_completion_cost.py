@@ -1280,7 +1280,8 @@ def test_completion_cost_databricks(model):
     resp = litellm.completion(model=model, messages=messages)  # works fine
 
     print(resp)
-    cost = completion_cost(completion_response=resp)
+    print(f"hidden_params: {resp._hidden_params}")
+    assert resp._hidden_params["response_cost"] > 0
 
 
 @pytest.mark.parametrize(
