@@ -482,7 +482,6 @@ def get_dynamic_callbacks(
 def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
-
     ### NOTICES ###
     from litellm import Logging as LiteLLMLogging
     from litellm.litellm_core_utils.litellm_logging import set_callbacks
@@ -504,9 +503,9 @@ def function_setup(  # noqa: PLR0915
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = (
-            kwargs.pop("callbacks", None)
-        )
+        dynamic_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = kwargs.pop("callbacks", None)
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
@@ -1190,9 +1189,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs["retry_policy"] = (
-                        reset_retry_policy()
-                    )  # prevent infinite loops
+                    kwargs[
+                        "retry_policy"
+                    ] = reset_retry_policy()  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -1404,7 +1403,6 @@ def client(original_function):  # noqa: PLR0915
                 if (
                     num_retries and not _is_litellm_router_call
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
-
                     try:
                         litellm.num_retries = (
                             None  # set retries to None to prevent infinite loops
@@ -1425,7 +1423,6 @@ def client(original_function):  # noqa: PLR0915
                     and context_window_fallback_dict
                     and model in context_window_fallback_dict
                 ):
-
                     if len(args) > 0:
                         args[0] = context_window_fallback_dict[model]  # type: ignore
                     else:
@@ -1521,7 +1518,6 @@ def _select_tokenizer(
 
 @lru_cache(maxsize=128)
 def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
-
     if litellm.disable_hf_tokenizer_download is True:
         return _return_openai_tokenizer(model)
 
@@ -2990,16 +2986,16 @@ def get_optional_params(  # noqa: PLR0915
                     True  # so that main.py adds the function call to the prompt
                 )
                 if "tools" in non_default_params:
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.pop("tools")
-                    )
+                    optional_params[
+                        "functions_unsupported_model"
+                    ] = non_default_params.pop("tools")
                     non_default_params.pop(
                         "tool_choice", None
                     )  # causes ollama requests to hang
                 elif "functions" in non_default_params:
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.pop("functions")
-                    )
+                    optional_params[
+                        "functions_unsupported_model"
+                    ] = non_default_params.pop("functions")
             elif (
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
@@ -3022,10 +3018,10 @@ def get_optional_params(  # noqa: PLR0915
 
     if "response_format" in non_default_params:
         if provider_config is not None:
-            non_default_params["response_format"] = (
-                provider_config.get_json_schema_from_pydantic_object(
-                    response_format=non_default_params["response_format"]
-                )
+            non_default_params[
+                "response_format"
+            ] = provider_config.get_json_schema_from_pydantic_object(
+                response_format=non_default_params["response_format"]
             )
         else:
             non_default_params["response_format"] = type_to_response_format_param(
@@ -3177,7 +3173,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "replicate":
-
         optional_params = litellm.ReplicateConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3211,7 +3206,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "together_ai":
-
         optional_params = litellm.TogetherAIConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3279,7 +3273,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "vertex_ai":
-
         if model in litellm.vertex_mistral_models:
             if "codestral" in model:
                 optional_params = (
@@ -3358,7 +3351,6 @@ def get_optional_params(  # noqa: PLR0915
 
         elif "anthropic" in bedrock_base_model and bedrock_route == "invoke":
             if bedrock_base_model.startswith("anthropic.claude-3"):
-
                 optional_params = (
                     litellm.AmazonAnthropicClaude3Config().map_openai_params(
                         non_default_params=non_default_params,
@@ -3395,7 +3387,6 @@ def get_optional_params(  # noqa: PLR0915
                 ),
             )
     elif custom_llm_provider == "cloudflare":
-
         optional_params = litellm.CloudflareChatConfig().map_openai_params(
             model=model,
             non_default_params=non_default_params,
@@ -3407,7 +3398,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "ollama":
-
         optional_params = litellm.OllamaConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3419,7 +3409,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "ollama_chat":
-
         optional_params = litellm.OllamaChatConfig().map_openai_params(
             model=model,
             non_default_params=non_default_params,
@@ -4005,9 +3994,9 @@ def _count_characters(text: str) -> int:
 
 
 def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream]) -> str:
-    _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
-        response_obj.choices
-    )
+    _choices: Union[
+        List[Union[Choices, StreamingChoices]], List[StreamingChoices]
+    ] = response_obj.choices
 
     response_str = ""
     for choice in _choices:
@@ -4405,7 +4394,6 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ):
                     _model_info = None
             if _model_info is None and model in litellm.model_cost:
-
                 key = model
                 _model_info = _get_model_info_from_model_cost(key=key)
                 if not _check_provider_match(
@@ -4416,7 +4404,6 @@ def _get_model_info_helper(  # noqa: PLR0915
                 _model_info is None
                 and combined_stripped_model_name in litellm.model_cost
             ):
-
                 key = combined_stripped_model_name
                 _model_info = _get_model_info_from_model_cost(key=key)
                 if not _check_provider_match(
@@ -4424,7 +4411,6 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ):
                     _model_info = None
             if _model_info is None and stripped_model_name in litellm.model_cost:
-
                 key = stripped_model_name
                 _model_info = _get_model_info_from_model_cost(key=key)
                 if not _check_provider_match(
@@ -4432,7 +4418,6 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ):
                     _model_info = None
             if _model_info is None and split_model in litellm.model_cost:
-
                 key = split_model
                 _model_info = _get_model_info_from_model_cost(key=key)
                 if not _check_provider_match(
@@ -5744,13 +5729,15 @@ def trim_messages(
         return messages
 
 
-def get_valid_models(check_provider_endpoint: bool = False) -> List[str]:
+def get_valid_models(
+    check_provider_endpoint: bool = False, custom_llm_provider: Optional[str] = None
+) -> List[str]:
     """
     Returns a list of valid LLMs based on the set environment variables
 
     Args:
         check_provider_endpoint: If True, will check the provider's endpoint for valid models.
-
+        custom_llm_provider: If provided, will only check the provider's endpoint for valid models.
     Returns:
         A list of valid LLMs
     """
@@ -5762,6 +5749,9 @@ def get_valid_models(check_provider_endpoint: bool = False) -> List[str]:
         valid_models = []
 
         for provider in litellm.provider_list:
+            if custom_llm_provider and provider != custom_llm_provider:
+                continue
+
             # edge case litellm has together_ai as a provider, it should be togetherai
             env_provider_1 = provider.replace("_", "")
             env_provider_2 = provider
@@ -5783,10 +5773,17 @@ def get_valid_models(check_provider_endpoint: bool = False) -> List[str]:
                 provider=LlmProviders(provider),
             )
 
+            if custom_llm_provider and provider != custom_llm_provider:
+                continue
+
             if provider == "azure":
                 valid_models.append("Azure-LLM")
             elif provider_config is not None and check_provider_endpoint:
-                valid_models.extend(provider_config.get_models())
+                try:
+                    models = provider_config.get_models()
+                    valid_models.extend(models)
+                except Exception as e:
+                    verbose_logger.debug(f"Error getting valid models: {e}")
             else:
                 models_for_provider = litellm.models_by_provider.get(provider, [])
                 valid_models.extend(models_for_provider)
@@ -6364,6 +6361,11 @@ class ProviderConfigManager:
             return litellm.FireworksAIAudioTranscriptionConfig()
         elif litellm.LlmProviders.DEEPGRAM == provider:
             return litellm.DeepgramAudioTranscriptionConfig()
+        elif litellm.LlmProviders.OPENAI == provider:
+            if "gpt-4o" in model:
+                return litellm.OpenAIGPTAudioTranscriptionConfig()
+            else:
+                return litellm.OpenAIWhisperAudioTranscriptionConfig()
         return None
 
     @staticmethod
@@ -6395,10 +6397,16 @@ class ProviderConfigManager:
             return litellm.FireworksAIConfig()
         elif LlmProviders.OPENAI == provider:
             return litellm.OpenAIGPTConfig()
+        elif LlmProviders.GEMINI == provider:
+            return litellm.GeminiModelInfo()
         elif LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyChatConfig()
         elif LlmProviders.TOPAZ == provider:
             return litellm.TopazModelInfo()
+        elif LlmProviders.ANTHROPIC == provider:
+            return litellm.AnthropicModelInfo()
+        elif LlmProviders.XAI == provider:
+            return litellm.XAIModelInfo()
 
         return None
 

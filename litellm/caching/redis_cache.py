@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     cluster_pipeline = ClusterPipeline
     async_redis_client = Redis
     async_redis_cluster_client = RedisCluster
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     pipeline = Any
     cluster_pipeline = Any
@@ -57,7 +57,6 @@ class RedisCache(BaseCache):
         socket_timeout: Optional[float] = 5.0,  # default 5 second timeout
         **kwargs,
     ):
-
         from litellm._service_logger import ServiceLogging
 
         from .._redis import get_redis_client, get_redis_connection_pool
@@ -1045,3 +1044,109 @@ class RedisCache(BaseCache):
         except Exception as e:
             verbose_logger.debug(f"Redis TTL Error: {e}")
             return None
+
+    async def async_rpush(
+        self,
+        key: str,
+        values: List[Any],
+        parent_otel_span: Optional[Span] = None,
+        **kwargs,
+    ) -> int:
+        """
+        Append one or multiple values to a list stored at key
+
+        Args:
+            key: The Redis key of the list
+            values: One or more values to append to the list
+            parent_otel_span: Optional parent OpenTelemetry span
+
+        Returns:
+            int: The length of the list after the push operation
+        """
+        _redis_client: Any = self.init_async_client()
+        start_time = time.time()
+        try:
+            response = await _redis_client.rpush(key, *values)
+            ## LOGGING ##
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.async_service_success_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    call_type="async_rpush",
+                )
+            )
+            return response
+        except Exception as e:
+            # NON blocking - notify users Redis is throwing an exception
+            ## LOGGING ##
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    error=e,
+                    call_type="async_rpush",
+                )
+            )
+            verbose_logger.error(
+                f"LiteLLM Redis Cache RPUSH: - Got exception from REDIS : {str(e)}"
+            )
+            raise e
+
+    async def async_lpop(
+        self,
+        key: str,
+        count: Optional[int] = None,
+        parent_otel_span: Optional[Span] = None,
+        **kwargs,
+    ) -> Union[Any, List[Any]]:
+        _redis_client: Any = self.init_async_client()
+        start_time = time.time()
+        print_verbose(f"LPOP from Redis list: key: {key}, count: {count}")
+        try:
+            result = await _redis_client.lpop(key, count)
+            ## LOGGING ##
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.async_service_success_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    call_type="async_lpop",
+                )
+            )
+
+            # Handle result parsing if needed
+            if isinstance(result, bytes):
+                try:
+                    return result.decode("utf-8")
+                except Exception:
+                    return result
+            elif isinstance(result, list) and all(
+                isinstance(item, bytes) for item in result
+            ):
+                try:
+                    return [item.decode("utf-8") for item in result]
+                except Exception:
+                    return result
+            return result
+        except Exception as e:
+            # NON blocking - notify users Redis is throwing an exception
+            ## LOGGING ##
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    error=e,
+                    call_type="async_lpop",
+                )
+            )
+            verbose_logger.error(
+                f"LiteLLM Redis Cache LPOP: - Got exception from REDIS : {str(e)}"
+            )
+            raise e

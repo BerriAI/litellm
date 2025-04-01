@@ -1509,7 +1509,7 @@ from litellm.proxy.utils import ProxyUpdateSpend
 async def test_end_user_transactions_reset():
     # Setup
     mock_client = MagicMock()
-    mock_client.end_user_list_transactons = {"1": 10.0}  # Bad log
+    mock_client.end_user_list_transactions = {"1": 10.0}  # Bad log
     mock_client.db.tx = AsyncMock(side_effect=Exception("DB Error"))
 
     # Call function - should raise error
@@ -1520,7 +1520,7 @@ async def test_end_user_transactions_reset():
 
     # Verify cleanup happened
     assert (
-        mock_client.end_user_list_transactons == {}
+        mock_client.end_user_list_transactions == {}
     ), "Transactions list should be empty after error"
 
 

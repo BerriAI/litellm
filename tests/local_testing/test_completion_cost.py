@@ -1280,7 +1280,8 @@ def test_completion_cost_databricks(model):
     resp = litellm.completion(model=model, messages=messages)  # works fine
 
     print(resp)
-    cost = completion_cost(completion_response=resp)
+    print(f"hidden_params: {resp._hidden_params}")
+    assert resp._hidden_params["response_cost"] > 0
 
 
 @pytest.mark.parametrize(
@@ -2454,6 +2455,14 @@ def test_completion_cost_params_gemini_3():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
+    usage = Usage(
+        completion_tokens=2,
+        prompt_tokens=3771,
+        total_tokens=3773,
+        completion_tokens_details=None,
+        prompt_tokens_details=None,
+    )
+
     response = ModelResponse(
         id="chatcmpl-61043504-4439-48be-9996-e29bdee24dc3",
         choices=[
@@ -2472,13 +2481,7 @@ def test_completion_cost_params_gemini_3():
         model="gemini-1.5-flash",
         object="chat.completion",
         system_fingerprint=None,
-        usage=Usage(
-            completion_tokens=2,
-            prompt_tokens=3771,
-            total_tokens=3773,
-            completion_tokens_details=None,
-            prompt_tokens_details=None,
-        ),
+        usage=usage,
         vertex_ai_grounding_metadata=[],
         vertex_ai_safety_results=[
             [
@@ -2501,10 +2504,9 @@ def test_completion_cost_params_gemini_3():
         **{
             "model": "gemini-1.5-flash",
             "custom_llm_provider": "vertex_ai",
-            "prompt_tokens": 3771,
-            "completion_tokens": 2,
             "prompt_characters": None,
             "completion_characters": 3,
+            "usage": usage,
         }
     )
 

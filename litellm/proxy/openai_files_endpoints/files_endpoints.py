@@ -316,7 +316,6 @@ async def get_file_content(
 
     data: Dict = {}
     try:
-
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
             data=data,

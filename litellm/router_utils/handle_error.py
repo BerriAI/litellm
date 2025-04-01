@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from litellm._logging import verbose_router_logger
 from litellm.router_utils.cooldown_handlers import (
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from litellm.router import Router as _Router
 
     LitellmRouter = _Router
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     LitellmRouter = Any
     Span = Any

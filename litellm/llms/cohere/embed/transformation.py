@@ -72,7 +72,6 @@ class CohereEmbeddingConfig:
         return transformed_request
 
     def _calculate_usage(self, input: List[str], encoding: Any, meta: dict) -> Usage:
-
         input_tokens = 0
 
         text_tokens: Optional[int] = meta.get("billed_units", {}).get("input_tokens")
@@ -111,7 +110,6 @@ class CohereEmbeddingConfig:
         encoding: Any,
         input: list,
     ) -> EmbeddingResponse:
-
         response_json = response.json()
         ## LOGGING
         logging_obj.post_call(

@@ -244,7 +244,6 @@ class TritonInferConfig(TritonConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-
         text_input = messages[0].get("content", "")
         data_for_triton = {
             "inputs": [

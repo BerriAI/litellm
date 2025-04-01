@@ -257,7 +257,6 @@ def _insert_assistant_continue_message(
             and message.get("role") == "user"  # Current is user
             and messages[i + 1].get("role") == "user"
         ):  # Next is user
-
             # Insert assistant message
             continue_message = (
                 assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE

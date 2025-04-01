@@ -138,7 +138,6 @@ def create_fine_tuning_job(
 
         # OpenAI
         if custom_llm_provider == "openai":
-
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
                 optional_params.api_base
@@ -360,7 +359,6 @@ def cancel_fine_tuning_job(
 
         # OpenAI
         if custom_llm_provider == "openai":
-
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
                 optional_params.api_base
@@ -522,7 +520,6 @@ def list_fine_tuning_jobs(
 
         # OpenAI
         if custom_llm_provider == "openai":
-
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
                 optional_params.api_base
