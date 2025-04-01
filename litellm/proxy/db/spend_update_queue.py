@@ -11,9 +11,7 @@ else:
 
 class SpendUpdateQueue:
     """
-    Handles buffering database `UPDATE` transactions in Redis before committing them to the database
-
-    This is to prevent deadlocks and improve reliability
+    In memory buffer for spend updates that should be committed to the database
     """
 
     def __init__(
