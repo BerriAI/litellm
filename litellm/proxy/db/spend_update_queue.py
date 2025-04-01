@@ -1,6 +1,8 @@
 import asyncio
 from typing import TYPE_CHECKING, Any, Dict, List
 
+from litellm._logging import verbose_proxy_logger
+
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 else:
@@ -21,6 +23,7 @@ class SpendUpdateQueue:
 
     async def add_update(self, update: Dict[str, Any]) -> None:
         """Enqueue an update. Each update might be a dict like {'entity_type': 'user', 'entity_id': '123', 'amount': 1.2}."""
+        verbose_proxy_logger.debug("Adding update to queue: %s", update)
         await self.update_queue.put(update)
 
     async def flush_all_updates_from_in_memory_queue(self) -> List[Dict[str, Any]]:
@@ -35,6 +38,7 @@ class SpendUpdateQueue:
     ) -> Dict[str, Any]:
         """Flush all updates from the queue and return all updates aggregated by entity type."""
         updates = await self.flush_all_updates_from_in_memory_queue()
+        verbose_proxy_logger.debug("Aggregating updates by entity type: %s", updates)
         return self.aggregate_updates_by_entity_type(updates)
 
     def aggregate_updates_by_entity_type(
