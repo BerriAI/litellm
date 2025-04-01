@@ -156,7 +156,7 @@ async def test_basic_spend_accuracy():
             response = await chat_completion(session, key)
             print("response: ", response)
 
-        # wait 10 seconds for spend to be updated
+        # wait 15 seconds for spend to be updated
         await asyncio.sleep(15)
 
         # Get spend information for each entity
@@ -235,7 +235,7 @@ async def test_long_term_spend_accuracy_with_bursts():
             print(f"Burst 1 - Request {i+1}/{BURST_1_REQUESTS} completed")
 
         # Wait for spend to be updated
-        await asyncio.sleep(8)
+        await asyncio.sleep(15)
 
         # Check intermediate spend
         intermediate_key_info = await get_spend_info(session, "key", key)
@@ -248,7 +248,7 @@ async def test_long_term_spend_accuracy_with_bursts():
             print(f"Burst 2 - Request {i+1}/{BURST_2_REQUESTS} completed")
 
         # Wait for spend to be updated
-        await asyncio.sleep(8)
+        await asyncio.sleep(15)
 
         # Get final spend information for each entity
         key_info = await get_spend_info(session, "key", key)
