@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
 
@@ -11,9 +11,13 @@ from litellm.types.router import GenericLiteLLMParams
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
+    from ..chat.transformation import BaseLLMException as _BaseLLMException
+
     LiteLLMLoggingObj = _LiteLLMLoggingObj
+    BaseLLMException = _BaseLLMException
 else:
     LiteLLMLoggingObj = Any
+    BaseLLMException = Any
 
 
 class BaseAnthropicMessagesConfig(ABC):
@@ -60,3 +64,24 @@ class BaseAnthropicMessagesConfig(ABC):
         logging_obj: LiteLLMLoggingObj,
     ) -> AnthropicMessagesResponse:
         pass
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
+        from ..chat.transformation import BaseLLMException
+
+        raise BaseLLMException(
+            status_code=status_code,
+            message=error_message,
+            headers=headers,
+        )
+
+    def should_fake_stream(
+        self, model: str, stream: Optional[bool], custom_llm_provider: str
+    ) -> bool:
+        """
+        OPTIONAL
+
+        Whether to fake a stream response
+        """
+        return False

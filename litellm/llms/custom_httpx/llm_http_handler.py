@@ -1,5 +1,5 @@
 import json
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Coroutine, Dict, List, Optional, Tuple, Union
 
 import httpx  # type: ignore
 
@@ -7,6 +7,9 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm.llms.base_llm.anthropic_messages.transformation import (
+    BaseAnthropicMessagesConfig,
+)
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
@@ -25,6 +28,9 @@ from litellm.responses.streaming_iterator import (
     MockResponsesAPIStreamingIterator,
     ResponsesAPIStreamingIterator,
     SyncResponsesAPIStreamingIterator,
+)
+from litellm.types.llms.anthropic_messages.anthropic_response import (
+    AnthropicMessagesResponse,
 )
 from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIResponse
 from litellm.types.rerank import OptionalRerankParams, RerankResponse
@@ -1203,7 +1209,12 @@ class BaseLLMHTTPHandler:
     def _handle_error(
         self,
         e: Exception,
-        provider_config: Union[BaseConfig, BaseRerankConfig, BaseResponsesAPIConfig],
+        provider_config: Union[
+            BaseConfig,
+            BaseRerankConfig,
+            BaseResponsesAPIConfig,
+            BaseAnthropicMessagesConfig,
+        ],
     ):
         status_code = getattr(e, "status_code", 500)
         error_headers = getattr(e, "headers", None)
@@ -1221,4 +1232,228 @@ class BaseLLMHTTPHandler:
             error_message=error_text,
             status_code=status_code,
             headers=error_headers,
+        )
+
+    def anthropic_messages_handler(
+        self,
+        model: str,
+        messages: List[Dict],
+        anthropic_messages_provider_config: BaseAnthropicMessagesConfig,
+        anthropic_messages_optional_params: Dict,
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+        fake_stream: bool = False,
+    ) -> Union[
+        AnthropicMessagesResponse, Coroutine[Any, Any, AnthropicMessagesResponse]
+    ]:
+        """
+        Handles Anthropic messages API requests.
+        When _is_async=True, returns a coroutine instead of making the call directly.
+        """
+        if _is_async:
+            # Return the async coroutine if called with _is_async=True
+            return self.async_anthropic_messages_handler(
+                model=model,
+                messages=messages,
+                anthropic_messages_provider_config=anthropic_messages_provider_config,
+                anthropic_messages_optional_params=anthropic_messages_optional_params,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+                timeout=timeout,
+                client=client if isinstance(client, AsyncHTTPHandler) else None,
+                fake_stream=fake_stream,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = anthropic_messages_provider_config.validate_environment(
+            api_key=litellm_params.api_key,
+            headers=anthropic_messages_optional_params.get("extra_headers", {}) or {},
+            model=model,
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = anthropic_messages_provider_config.get_complete_url(
+            api_base=litellm_params.api_base,
+            model=model,
+        )
+
+        data = anthropic_messages_provider_config.transform_anthropic_messages_request(
+            model=model,
+            messages=messages,
+            anthropic_messages_optional_request_params=anthropic_messages_optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=messages,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        # Check if streaming is requested
+        stream = anthropic_messages_optional_params.get("stream", False)
+
+        try:
+            if stream:
+                # For streaming, use stream=True in the request
+                if fake_stream is True:
+                    stream, data = self._prepare_fake_stream_request(
+                        stream=stream,
+                        data=data,
+                        fake_stream=fake_stream,
+                    )
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=json.dumps(data),
+                    timeout=timeout
+                    or anthropic_messages_optional_params.get("timeout"),
+                    stream=stream,
+                )
+
+            else:
+                # For non-streaming requests
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=json.dumps(data),
+                    timeout=timeout
+                    or anthropic_messages_optional_params.get("timeout"),
+                )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=anthropic_messages_provider_config,
+            )
+
+        return anthropic_messages_provider_config.transform_response_to_anthropic_messages_response(
+            model=model,
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_anthropic_messages_handler(
+        self,
+        model: str,
+        messages: List[Dict],
+        anthropic_messages_provider_config: BaseAnthropicMessagesConfig,
+        anthropic_messages_optional_params: Dict,
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        fake_stream: bool = False,
+    ) -> AnthropicMessagesResponse:
+        """
+        Async version of the Anthropic messages API handler.
+        Uses async HTTP client to make requests.
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = anthropic_messages_provider_config.validate_environment(
+            api_key=litellm_params.api_key,
+            headers=anthropic_messages_optional_params.get("extra_headers", {}) or {},
+            model=model,
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = anthropic_messages_provider_config.get_complete_url(
+            api_base=litellm_params.api_base,
+            model=model,
+        )
+
+        data = anthropic_messages_provider_config.transform_anthropic_messages_request(
+            model=model,
+            messages=messages,
+            anthropic_messages_optional_request_params=anthropic_messages_optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=messages,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        # Check if streaming is requested
+        stream = anthropic_messages_optional_params.get("stream", False)
+
+        try:
+            if stream:
+                # For streaming, we need to use stream=True in the request
+                if fake_stream is True:
+                    stream, data = self._prepare_fake_stream_request(
+                        stream=stream,
+                        data=data,
+                        fake_stream=fake_stream,
+                    )
+
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=json.dumps(data),
+                    timeout=timeout
+                    or anthropic_messages_optional_params.get("timeout"),
+                    stream=stream,
+                )
+            else:
+                # For non-streaming, proceed as before
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=json.dumps(data),
+                    timeout=timeout
+                    or anthropic_messages_optional_params.get("timeout"),
+                )
+
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=anthropic_messages_provider_config,
+            )
+
+        return anthropic_messages_provider_config.transform_response_to_anthropic_messages_response(
+            model=model,
+            raw_response=response,
+            logging_obj=logging_obj,
         )
