@@ -1379,3 +1379,12 @@ def test_azure_modalities_param():
     )
     assert optional_params["modalities"] == ["text", "audio"]
     assert optional_params["audio"] == {"type": "audio_input", "input": "test.wav"}
+
+
+def test_anthropic_unified_reasoning_content():
+    optional_params = get_optional_params(
+        model="claude-3-5-sonnet-20240620-v1:0",
+        custom_llm_provider="anthropic",
+        reasoning_effort="high",
+    )
+    assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
