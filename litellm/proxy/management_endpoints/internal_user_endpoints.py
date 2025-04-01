@@ -1259,6 +1259,8 @@ class SpendMetrics(BaseModel):
     prompt_tokens: int = Field(default=0)
     completion_tokens: int = Field(default=0)
     total_tokens: int = Field(default=0)
+    successful_requests: int = Field(default=0)
+    failed_requests: int = Field(default=0)
     api_requests: int = Field(default=0)
 
 
@@ -1286,6 +1288,8 @@ class DailySpendMetadata(BaseModel):
     total_completion_tokens: int = Field(default=0)
     total_tokens: int = Field(default=0)
     total_api_requests: int = Field(default=0)
+    total_successful_requests: int = Field(default=0)
+    total_failed_requests: int = Field(default=0)
     page: int = Field(default=1)
     total_pages: int = Field(default=1)
     has_more: bool = Field(default=False)
@@ -1308,6 +1312,8 @@ class LiteLLM_DailyUserSpend(BaseModel):
     completion_tokens: int = 0
     spend: float = 0.0
     api_requests: int = 0
+    successful_requests: int = 0
+    failed_requests: int = 0
 
 
 class GroupedData(TypedDict):
@@ -1444,6 +1450,10 @@ async def get_user_daily_activity(
             take=page_size,
         )
 
+        daily_spend_data_pydantic_list = [
+            LiteLLM_DailyUserSpend(**record.model_dump()) for record in daily_spend_data
+        ]
+
         # Process results
         results = []
         total_metrics = SpendMetrics()
@@ -1451,7 +1461,7 @@ async def get_user_daily_activity(
         # Group data by date and other dimensions
 
         grouped_data: Dict[str, Dict[str, Any]] = {}
-        for record in daily_spend_data:
+        for record in daily_spend_data_pydantic_list:
             date_str = record.date
             if date_str not in grouped_data:
                 grouped_data[date_str] = {
@@ -1475,7 +1485,9 @@ async def get_user_daily_activity(
             total_metrics.total_tokens += (
                 record.prompt_tokens + record.completion_tokens
             )
-            total_metrics.api_requests += 1
+            total_metrics.api_requests += record.api_requests
+            total_metrics.successful_requests += record.successful_requests
+            total_metrics.failed_requests += record.failed_requests
 
         # Convert grouped data to response format
         for date_str, data in grouped_data.items():
@@ -1498,6 +1510,8 @@ async def get_user_daily_activity(
                 total_completion_tokens=total_metrics.completion_tokens,
                 total_tokens=total_metrics.total_tokens,
                 total_api_requests=total_metrics.api_requests,
+                total_successful_requests=total_metrics.successful_requests,
+                total_failed_requests=total_metrics.failed_requests,
                 page=page,
                 total_pages=-(-total_count // page_size),  # Ceiling division
                 has_more=(page * page_size) < total_count,
