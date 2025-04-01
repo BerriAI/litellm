@@ -37,10 +37,24 @@ interface SpendMetrics {
   failed_requests: number;
 }
 
+interface KeyMetadata {
+  key_alias: string | null;
+}
+
+interface KeyMetricWithMetadata {
+  metrics: SpendMetrics;
+  metadata: KeyMetadata;
+}
+
+interface MetricWithMetadata {
+  metrics: SpendMetrics;
+  metadata: object;
+}
+
 interface BreakdownMetrics {
-  models: { [key: string]: SpendMetrics };
-  providers: { [key: string]: SpendMetrics };
-  api_keys: { [key: string]: SpendMetrics };
+  models: { [key: string]: MetricWithMetadata };
+  providers: { [key: string]: MetricWithMetadata };
+  api_keys: { [key: string]: KeyMetricWithMetadata };
 }
 
 interface DailyData {
@@ -64,38 +78,41 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
   // Calculate top models from the breakdown data
   const getTopModels = () => {
-    const modelSpend: { [key: string]: SpendMetrics } = {};
+    const modelSpend: { [key: string]: MetricWithMetadata } = {};
     userSpendData.results.forEach(day => {
       Object.entries(day.breakdown.models || {}).forEach(([model, metrics]) => {
         if (!modelSpend[model]) {
           modelSpend[model] = {
-            spend: 0,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            api_requests: 0,
-            successful_requests: 0,
-            failed_requests: 0
+            metrics: {
+              spend: 0,
+              prompt_tokens: 0,
+              completion_tokens: 0,
+              total_tokens: 0,
+              api_requests: 0,
+              successful_requests: 0,
+              failed_requests: 0
+            },
+            metadata: {}
           };
         }
-        modelSpend[model].spend += metrics.spend;
-        modelSpend[model].prompt_tokens += metrics.prompt_tokens;
-        modelSpend[model].completion_tokens += metrics.completion_tokens;
-        modelSpend[model].total_tokens += metrics.total_tokens;
-        modelSpend[model].api_requests += metrics.api_requests;
-        modelSpend[model].successful_requests += metrics.successful_requests || 0;
-        modelSpend[model].failed_requests += metrics.failed_requests || 0;
+        modelSpend[model].metrics.spend += metrics.metrics.spend;
+        modelSpend[model].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
+        modelSpend[model].metrics.completion_tokens += metrics.metrics.completion_tokens;
+        modelSpend[model].metrics.total_tokens += metrics.metrics.total_tokens;
+        modelSpend[model].metrics.api_requests += metrics.metrics.api_requests;
+        modelSpend[model].metrics.successful_requests += metrics.metrics.successful_requests || 0;
+        modelSpend[model].metrics.failed_requests += metrics.metrics.failed_requests || 0;
       });
     });
     
     return Object.entries(modelSpend)
       .map(([model, metrics]) => ({
         key: model,
-        spend: metrics.spend,
-        requests: metrics.api_requests,
-        successful_requests: metrics.successful_requests,
-        failed_requests: metrics.failed_requests,
-        tokens: metrics.total_tokens
+        spend: metrics.metrics.spend,
+        requests: metrics.metrics.api_requests,
+        successful_requests: metrics.metrics.successful_requests,
+        failed_requests: metrics.metrics.failed_requests,
+        tokens: metrics.metrics.total_tokens
       }))
       .sort((a, b) => b.spend - a.spend)
       .slice(0, 5);
@@ -103,72 +120,80 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
   // Calculate provider spend from the breakdown data
   const getProviderSpend = () => {
-    const providerSpend: { [key: string]: SpendMetrics } = {};
+    const providerSpend: { [key: string]: MetricWithMetadata } = {};
     userSpendData.results.forEach(day => {
       Object.entries(day.breakdown.providers || {}).forEach(([provider, metrics]) => {
         if (!providerSpend[provider]) {
           providerSpend[provider] = {
-            spend: 0,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            api_requests: 0,
-            successful_requests: 0,
-            failed_requests: 0
+            metrics: {
+              spend: 0,
+              prompt_tokens: 0,
+              completion_tokens: 0,
+              total_tokens: 0,
+              api_requests: 0,
+              successful_requests: 0,
+              failed_requests: 0
+            },
+            metadata: {}
           };
         }
-        providerSpend[provider].spend += metrics.spend;
-        providerSpend[provider].prompt_tokens += metrics.prompt_tokens;
-        providerSpend[provider].completion_tokens += metrics.completion_tokens;
-        providerSpend[provider].total_tokens += metrics.total_tokens;
-        providerSpend[provider].api_requests += metrics.api_requests;
-        providerSpend[provider].successful_requests += metrics.successful_requests || 0;
-        providerSpend[provider].failed_requests += metrics.failed_requests || 0;
+        providerSpend[provider].metrics.spend += metrics.metrics.spend;
+        providerSpend[provider].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
+        providerSpend[provider].metrics.completion_tokens += metrics.metrics.completion_tokens;
+        providerSpend[provider].metrics.total_tokens += metrics.metrics.total_tokens;
+        providerSpend[provider].metrics.api_requests += metrics.metrics.api_requests;
+        providerSpend[provider].metrics.successful_requests += metrics.metrics.successful_requests || 0;
+        providerSpend[provider].metrics.failed_requests += metrics.metrics.failed_requests || 0;
       });
     });
     
     return Object.entries(providerSpend)
       .map(([provider, metrics]) => ({
         provider,
-        spend: metrics.spend,
-        requests: metrics.api_requests,
-        successful_requests: metrics.successful_requests,
-        failed_requests: metrics.failed_requests,
-        tokens: metrics.total_tokens
+        spend: metrics.metrics.spend,
+        requests: metrics.metrics.api_requests,
+        successful_requests: metrics.metrics.successful_requests,
+        failed_requests: metrics.metrics.failed_requests,
+        tokens: metrics.metrics.total_tokens
       }));
   };
 
   // Calculate top API keys from the breakdown data
   const getTopKeys = () => {
-    const keySpend: { [key: string]: SpendMetrics } = {};
+    const keySpend: { [key: string]: KeyMetricWithMetadata } = {};
     userSpendData.results.forEach(day => {
       Object.entries(day.breakdown.api_keys || {}).forEach(([key, metrics]) => {
         if (!keySpend[key]) {
           keySpend[key] = {
-            spend: 0,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            api_requests: 0,
-            successful_requests: 0,
-            failed_requests: 0
+            metrics: {
+              spend: 0,
+              prompt_tokens: 0,
+              completion_tokens: 0,
+              total_tokens: 0,
+              api_requests: 0,
+              successful_requests: 0,
+              failed_requests: 0,
+            },
+            metadata: {
+              key_alias: metrics.metadata.key_alias
+            }
           };
         }
-        keySpend[key].spend += metrics.spend;
-        keySpend[key].prompt_tokens += metrics.prompt_tokens;
-        keySpend[key].completion_tokens += metrics.completion_tokens;
-        keySpend[key].total_tokens += metrics.total_tokens;
-        keySpend[key].api_requests += metrics.api_requests;
-        keySpend[key].successful_requests += metrics.successful_requests;
-        keySpend[key].failed_requests += metrics.failed_requests;
+        keySpend[key].metrics.spend += metrics.metrics.spend;
+        keySpend[key].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
+        keySpend[key].metrics.completion_tokens += metrics.metrics.completion_tokens;
+        keySpend[key].metrics.total_tokens += metrics.metrics.total_tokens;
+        keySpend[key].metrics.api_requests += metrics.metrics.api_requests;
+        keySpend[key].metrics.successful_requests += metrics.metrics.successful_requests;
+        keySpend[key].metrics.failed_requests += metrics.metrics.failed_requests;
       });
     });
     
     return Object.entries(keySpend)
       .map(([api_key, metrics]) => ({
         api_key,
-        key_alias: api_key.substring(0, 10), // Using truncated key as alias
-        spend: metrics.spend,
+        key_alias: metrics.metadata.key_alias || "-", // Using truncated key as alias
+        spend: metrics.metrics.spend,
       }))
       .sort((a, b) => b.spend - a.spend)
       .slice(0, 5);
