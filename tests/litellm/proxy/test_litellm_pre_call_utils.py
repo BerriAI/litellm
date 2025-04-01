@@ -44,18 +44,20 @@ def test_get_enforced_params_for_service_account_settings():
     service_account_token = UserAPIKeyAuth(
         api_key="test-key", metadata={"service_account_id": "test-service-account"}
     )
-    general_settings_with_service = {
-        "enforced_params": ["user"],
+    general_settings_with_service_account_settings = {
         "service_account_settings": {"enforced_params": ["metadata.service"]},
     }
     result = _get_enforced_params(
-        general_settings=general_settings_with_service,
+        general_settings=general_settings_with_service_account_settings,
         user_api_key_dict=service_account_token,
     )
-    assert result == ["user", "metadata.service"]
+    assert result == ["metadata.service"]
 
-    regular_token = UserAPIKeyAuth(api_key="test-key", metadata={})
+    regular_token = UserAPIKeyAuth(
+        api_key="test-key", metadata={"enforced_params": ["user"]}
+    )
     result = _get_enforced_params(
-        general_settings=general_settings_with_service, user_api_key_dict=regular_token
+        general_settings=general_settings_with_service_account_settings,
+        user_api_key_dict=regular_token,
     )
     assert result == ["user"]
