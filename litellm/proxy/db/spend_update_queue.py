@@ -1,5 +1,5 @@
 import asyncio
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import TYPE_CHECKING, Any, List
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
