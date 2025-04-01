@@ -1035,8 +1035,10 @@ response = completion(
             "content": [
                 {"type": "text", "text": "You are a very professional document summarization specialist. Please summarize the given document."},
                 {
-                    "type": "image_url",
-                    "image_url": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+                    "type": "file",
+                    "file": {
+                       "file_data": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+                    }
                 },
             ],
         }
@@ -1081,8 +1083,10 @@ curl http://0.0.0.0:4000/v1/chat/completions \
             "text": "You are a very professional document summarization specialist. Please summarize the given document"
           },
           {
-                "type": "image_url",
-                "image_url": "data:application/pdf;base64,{encoded_file}" # 👈 PDF
+                "type": "file",
+                "file": {
+                    "file_data": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+                }
             }
           }
         ]
