@@ -120,7 +120,9 @@ class SpendUpdateQueue:
 
             if transactions_dict is None:
                 transactions_dict = {}
-                db_spend_update_transactions[dict_key] = transactions_dict
+
+                # type ignore: dict_key is guaranteed to be one of "one of ("user_list_transactions", "end_user_list_transactions", "key_list_transactions", "team_list_transactions", "team_member_list_transactions", "org_list_transactions")"
+                db_spend_update_transactions[dict_key] = transactions_dict  # type: ignore
 
             if entity_id not in transactions_dict:
                 transactions_dict[entity_id] = 0
