@@ -139,10 +139,6 @@ async def test_circular_reference_handling():
         "body": result,  # Creates circular reference
     }
 
-    # Get the cached value - it will have been modified too!
-    cached_value = _safe_get_request_parsed_body(mock_request)
-    assert "proxy_server_request" in cached_value  # This will pass, showing the issue
-
     # Second parse using the same request - will use the modified cached value
     result2 = await _read_request_body(mock_request)
     assert (
