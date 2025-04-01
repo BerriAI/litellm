@@ -822,6 +822,17 @@ def test_get_enforced_params(
                 api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
             ),
             {},
+            False,
+        ),
+        (
+            {"service_account_settings": {"enforced_params": ["user"]}},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+                user_id="test_user_id", 
+                org_id="test_org_id",
+                metadata={"service_account_id": "test_service_account_id"}
+            ),
+            {},
             True,
         ),
         (
@@ -854,6 +865,7 @@ def test_get_enforced_params(
             {"service_account_settings": {"enforced_params": ["user"]}},
             UserAPIKeyAuth(
                 api_key="test_api_key",
+                metadata={"service_account_id": "test_service_account_id"}
             ),
             {"user": "test_user"},
             False,
