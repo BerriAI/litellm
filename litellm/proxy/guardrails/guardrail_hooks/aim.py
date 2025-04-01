@@ -108,7 +108,6 @@ class AimGuardrail(CustomGuardrail):
         headers = self._build_aim_headers(
             hook=hook, key_alias=key_alias, user_email=user_email
         )
-        print(headers)
         response = await self.async_handler.post(
             f"{self.api_base}/detect/openai",
             headers=headers,
