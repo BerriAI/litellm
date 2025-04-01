@@ -18,17 +18,16 @@ LiteLLM provides `success_callbacks` and `failure_callbacks`, allowing you to ea
 Use just a few lines of code to instantly trace your responses **across all providers** with AgentOps:
 
 ```python
-from agentops.integration.callbacks.litellm import LiteLLMCallbackHandler
 import litellm
 
-# Initialize the callback handler
-callback_handler = LiteLLMCallbackHandler(
-    api_key="your_agentops_api_key",  # Optional
-    tags=["production", "chatbot"],    # Optional
-)
+# Configure LiteLLM to use AgentOps
+litellm.success_callback = ["agentops"]
 
-# Configure LiteLLM to use the callback
-litellm.callbacks = [callback_handler]
+# Make your LLM calls as usual
+response = litellm.completion(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Hello, how are you?"}],
+)
 ```
 
 Complete Code:
@@ -36,19 +35,13 @@ Complete Code:
 ```python
 import os
 from litellm import completion
-from agentops.integration.callbacks.litellm import LiteLLMCallbackHandler
 
 # Set env variables
 os.environ["OPENAI_API_KEY"] = "your-openai-key"
+os.environ["AGENTOPS_API_KEY"] = "your-agentops-api-key"  # Optional
 
-# Initialize AgentOps callback
-callback_handler = LiteLLMCallbackHandler(
-    api_key="your_agentops_api_key",
-    tags=["production"]
-)
-
-# Configure LiteLLM
-litellm.callbacks = [callback_handler]
+# Configure LiteLLM to use AgentOps
+litellm.success_callback = ["agentops"]
 
 # OpenAI call
 response = completion(
@@ -59,45 +52,28 @@ response = completion(
 print(response)
 ```
 
-### Features
-
-The AgentOps integration provides comprehensive tracing and monitoring capabilities:
-
-- **Automatic Session Management**
-  - Automatic session span creation and management
-  - Hierarchical tracing of multi-step operations
-
-- **Detailed Tracing**
-  - Pre-request tracing
-  - Success event tracking
-  - Failure event monitoring
-  - Support for both synchronous and asynchronous operations
-
-- **Rich Span Attributes**
-  - Provider information
-  - Model details
-  - Request parameters (temperature, max_tokens, streaming)
-  - Message history
-  - Response data
-  - Timing information
-  - Error details (when applicable)
-
 ### Configuration Options
 
-The `LiteLLMCallbackHandler` accepts the following parameters:
+The AgentOps integration can be configured through environment variables:
 
-- `api_key` (str, optional): Your AgentOps API key
-- `tags` (List[str], optional): Tags to add to the session for better organization
+- `AGENTOPS_API_KEY` (str, optional): Your AgentOps API key
+- `AGENTOPS_ENVIRONMENT` (str, optional): Deployment environment (defaults to "production")
+- `AGENTOPS_SERVICE_NAME` (str, optional): Service name for tracing (defaults to "agentops")
 
 ### Advanced Usage
 
-You can add custom tags and metadata to your traces:
+You can configure additional settings through environment variables:
 
 ```python
-callback_handler = LiteLLMCallbackHandler(
-    api_key="your_agentops_api_key",
-    tags=["production", "chatbot", "customer-service"],
-)
+import os
+
+# Configure AgentOps settings
+os.environ["AGENTOPS_API_KEY"] = "your-agentops-api-key"
+os.environ["AGENTOPS_ENVIRONMENT"] = "staging"
+os.environ["AGENTOPS_SERVICE_NAME"] = "my-service"
+
+# Enable AgentOps tracing
+litellm.success_callback = ["agentops"]
 ```
 
 ### Support
