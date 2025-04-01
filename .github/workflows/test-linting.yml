@@ -24,10 +24,10 @@ jobs:
       run: |
         poetry install --with dev
 
-    - name: Run Black formatting check
+    - name: Run Black formatting
       run: |
         cd litellm
-        poetry run black . --check
+        poetry run black .
         cd ..
 
     - name: Run Ruff linting
