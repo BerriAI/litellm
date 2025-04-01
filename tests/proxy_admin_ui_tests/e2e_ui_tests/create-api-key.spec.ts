@@ -8,7 +8,7 @@ test("4644_Test_Creating_An_API_Key_for_Self_for_All_Team_Models", async ({
 }) => {
   let username = "admin";
   let password = "sk-1234";
-  let apiKey = "";
+  // let apiKey = "";
   let apiKeyID = "";
   const keyName = "test-key-name-3";
 
@@ -45,10 +45,12 @@ test("4644_Test_Creating_An_API_Key_for_Self_for_All_Team_Models", async ({
   // await page.screenshot({path: `./test-results/4644_Test_Creating_An_API_Key_for_Self_for_All_Team_Models/06_create-api-key.png`,});
 
   // console.log("7. Copying the API key to clipboard");
+  /*
   await virtualKeysPage.getCopyAPIKeyButton().click();
   apiKey = await page.evaluate(async () => {
     return await navigator.clipboard.readText();
   });
+  */
 
   // console.log("8. Exiting Modal Window");
   await page
@@ -68,4 +70,7 @@ test("4644_Test_Creating_An_API_Key_for_Self_for_All_Team_Models", async ({
   await page.getByRole("button", { name: apiKeyID }).click();
   await page.getByRole("button", { name: "Delete Key" }).click();
   await page.getByRole("button", { name: "Delete", exact: true }).click();
+
+  // console.log("9. Logging out");
+  await page.getByRole("link", { name: "LiteLLM Brand" }).click();
 });

@@ -108,7 +108,7 @@ Object.entries(providersAndModels).forEach(([provider, model]) => {
       "OpenAI-Compatible Text Completion Models (Together AI, etc.)",
       "Anthropic",
     ];
-    let litellmModelNameDropdownValues = [];
+    let litellmModelNameDropdownValues: string[] = [];
     if (loginDetailsSet()) {
       console.log("Login details exist in .env file.");
       username = process.env.UI_USERNAME as string;
@@ -149,11 +149,14 @@ Object.entries(providersAndModels).forEach(([provider, model]) => {
       if (
         !excludeLitellmModelNameDropdownValues.includes(modelNameDropdownValue)
       ) {
-        litellmModelNameDropdownValues.push(await element.innerText());
+        litellmModelNameDropdownValues.push(modelNameDropdownValue);
       }
     }
     litellmModelNameDropdownValues.forEach((element) => {
       expect(providersAndModels[provider].includes(element)).toBeTruthy();
     });
+
+    // console.log("5. Logging out");
+    await page.getByRole("link", { name: "LiteLLM Brand" }).click();
   });
 });
