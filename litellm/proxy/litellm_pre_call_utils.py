@@ -496,7 +496,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         "url": str(request.url),
         "method": request.method,
         "headers": _headers,
-        "body": copy.copy(data),  # use copy instead of deepcopy
+        # "body": copy.copy(data),  # use copy instead of deepcopy
     }
 
     ## Dynamic api version (Azure OpenAI endpoints) ##
