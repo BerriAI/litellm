@@ -1,5 +1,5 @@
 import asyncio
-from typing import TYPE_CHECKING, Any, List
+from typing import TYPE_CHECKING, Any, Dict, List
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
@@ -82,7 +82,34 @@ class SpendUpdateQueue:
             if dict_key is None:
                 continue  # Skip unknown entity types
 
-            transactions_dict = db_spend_update_transactions[dict_key]
+            # Type-safe access using if/elif statements
+            if dict_key == "user_list_transactions":
+                transactions_dict = db_spend_update_transactions[
+                    "user_list_transactions"
+                ]
+            elif dict_key == "end_user_list_transactions":
+                transactions_dict = db_spend_update_transactions[
+                    "end_user_list_transactions"
+                ]
+            elif dict_key == "key_list_transactions":
+                transactions_dict = db_spend_update_transactions[
+                    "key_list_transactions"
+                ]
+            elif dict_key == "team_list_transactions":
+                transactions_dict = db_spend_update_transactions[
+                    "team_list_transactions"
+                ]
+            elif dict_key == "team_member_list_transactions":
+                transactions_dict = db_spend_update_transactions[
+                    "team_member_list_transactions"
+                ]
+            elif dict_key == "org_list_transactions":
+                transactions_dict = db_spend_update_transactions[
+                    "org_list_transactions"
+                ]
+            else:
+                continue
+
             if transactions_dict is None:
                 transactions_dict = {}
                 db_spend_update_transactions[dict_key] = transactions_dict
