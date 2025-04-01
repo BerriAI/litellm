@@ -1,5 +1,5 @@
 import asyncio
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import TYPE_CHECKING, Any, List
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
@@ -72,14 +72,22 @@ class SpendUpdateQueue:
 
         for update in updates:
             entity_type = update.get("entity_type")
-            entity_id = update.get("entity_id")
-            response_cost = update.get("response_cost")
+            entity_id = update.get("entity_id") or ""
+            response_cost = update.get("response_cost") or 0
 
-            if entity_type is None or entity_id is None or response_cost is None:
-                raise ValueError("Invalid update: %s", update)
+            if entity_type is None:
+                verbose_proxy_logger.debug(
+                    "Skipping update spend for update: %s, because entity_type is None",
+                    update,
+                )
+                continue
 
             dict_key = entity_type_to_dict_key.get(entity_type)
             if dict_key is None:
+                verbose_proxy_logger.debug(
+                    "Skipping update spend for update: %s, because entity_type is not in entity_type_to_dict_key",
+                    update,
+                )
                 continue  # Skip unknown entity types
 
             # Type-safe access using if/elif statements
@@ -117,6 +125,6 @@ class SpendUpdateQueue:
             if entity_id not in transactions_dict:
                 transactions_dict[entity_id] = 0
 
-            transactions_dict[entity_id] += response_cost
+            transactions_dict[entity_id] += response_cost or 0
 
         return db_spend_update_transactions
