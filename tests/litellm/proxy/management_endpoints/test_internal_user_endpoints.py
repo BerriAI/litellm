@@ -55,3 +55,30 @@ async def test_ui_view_users_with_null_email(mocker, caplog):
     assert response == [
         LiteLLM_UserTableFiltered(user_id="test-user-null-email", user_email=None)
     ]
+
+
+def test_user_daily_activity_types():
+    """
+    Assert all fiels in SpendMetrics are reported in DailySpendMetadata as "total_"
+    """
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        DailySpendMetadata,
+        SpendMetrics,
+    )
+
+    # Create a SpendMetrics instance
+    spend_metrics = SpendMetrics()
+
+    # Create a DailySpendMetadata instance
+    daily_spend_metadata = DailySpendMetadata()
+
+    # Assert all fields in SpendMetrics are reported in DailySpendMetadata as "total_"
+    for field in spend_metrics.__dict__:
+        if field.startswith("total_"):
+            assert hasattr(
+                daily_spend_metadata, field
+            ), f"Field {field} is not reported in DailySpendMetadata"
+        else:
+            assert not hasattr(
+                daily_spend_metadata, field
+            ), f"Field {field} is reported in DailySpendMetadata"
