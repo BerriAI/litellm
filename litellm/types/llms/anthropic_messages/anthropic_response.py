@@ -1,6 +1,7 @@
-from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
-from typing_extensions import Annotated, TypeAlias
+from pydantic import PrivateAttr
+from typing_extensions import Annotated, TypeAlias, TypedDict
 
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
 
@@ -53,7 +54,7 @@ AnthropicResponseContentBlock: TypeAlias = Union[
 ]
 
 
-class AnthropicUsage(TypedDict, total=False):
+class AnthropicUsage(BaseLiteLLMOpenAIResponseObject):
     """
     Input and output tokens used in the request
     """
@@ -68,7 +69,7 @@ class AnthropicUsage(TypedDict, total=False):
     cache_read_input_tokens: int
 
 
-class AnthropicMessagesResponse(TypedDict, total=False):
+class AnthropicMessagesResponse(BaseLiteLLMOpenAIResponseObject):
     """
     Anthropic Messages API Response: https://docs.anthropic.com/en/api/messages
     """
@@ -83,6 +84,9 @@ class AnthropicMessagesResponse(TypedDict, total=False):
     stop_sequence: Optional[str]
     type: Optional[Literal["message"]]
     usage: Optional[AnthropicUsage]
+
+    # Define private attributes using PrivateAttr
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
 
 
 class AnthropicMessagesStreamingResponse(TypedDict, total=False):

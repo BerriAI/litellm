@@ -19,7 +19,6 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     tools: Optional[List[Dict[str, Any]]]
     top_k: Optional[int]
     top_p: Optional[float]
-    timeout: Optional[Union[float, httpx.Timeout]]
     pass
 
 
