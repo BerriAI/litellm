@@ -12,6 +12,7 @@ import httpx
 
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.llms.openrouter import OpenRouterErrorMessage
 from litellm.types.utils import ModelResponse, ModelResponseStream
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -19,7 +20,6 @@ from ..common_utils import OpenRouterException
 
 
 class OpenrouterConfig(OpenAIGPTConfig):
-
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -42,9 +42,9 @@ class OpenrouterConfig(OpenAIGPTConfig):
             extra_body["models"] = models
         if route is not None:
             extra_body["route"] = route
-        mapped_openai_params["extra_body"] = (
-            extra_body  # openai client supports `extra_body` param
-        )
+        mapped_openai_params[
+            "extra_body"
+        ] = extra_body  # openai client supports `extra_body` param
         return mapped_openai_params
 
     def get_error_class(
@@ -70,9 +70,26 @@ class OpenrouterConfig(OpenAIGPTConfig):
 
 
 class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
-
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
+            ## HANDLE ERROR IN CHUNK ##
+            if "error" in chunk:
+                error_chunk = chunk["error"]
+                error_message = OpenRouterErrorMessage(
+                    message="Message: {}, Metadata: {}, User ID: {}".format(
+                        error_chunk["message"],
+                        error_chunk.get("metadata", {}),
+                        error_chunk.get("user_id", ""),
+                    ),
+                    code=error_chunk["code"],
+                    metadata=error_chunk.get("metadata", {}),
+                )
+                raise OpenRouterException(
+                    message=error_message["message"],
+                    status_code=error_message["code"],
+                    headers=error_message["metadata"].get("headers", {}),
+                )
+
             new_choices = []
             for choice in chunk["choices"]:
                 choice["delta"]["reasoning_content"] = choice["delta"].get("reasoning")
@@ -83,6 +100,12 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
                 created=chunk["created"],
                 model=chunk["model"],
                 choices=new_choices,
+            )
+        except KeyError as e:
+            raise OpenRouterException(
+                message=f"KeyError: {e}, Got unexpected response from OpenRouter: {chunk}",
+                status_code=400,
+                headers={"Content-Type": "application/json"},
             )
         except Exception as e:
             raise e

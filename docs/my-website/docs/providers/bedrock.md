@@ -664,6 +664,58 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+## Usage - Latency Optimized Inference
+
+Valid from v1.65.1+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    performanceConfig={"latency": "optimized"},
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: bedrock-claude-3-7
+    litellm_params:
+      model: bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0
+      performanceConfig: {"latency": "optimized"} # 👈 EITHER HERE OR ON REQUEST
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "bedrock-claude-3-7",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "performanceConfig": {"latency": "optimized"} # 👈 EITHER HERE OR ON CONFIG.YAML
+  }'
+```
+
+</TabItem>
+</Tabs>
+
 ## Usage - Bedrock Guardrails
 
 Example of using [Bedrock Guardrails with LiteLLM](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html)
@@ -1116,14 +1168,22 @@ os.environ["AWS_REGION_NAME"] = ""
 # pdf url
 image_url = "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
 
+# Download the file
+response = requests.get(url)
+file_data = response.content
+
+encoded_file = base64.b64encode(file_data).decode("utf-8")
+
 # model
 model = "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
 
 image_content = [
     {"type": "text", "text": "What's this file about?"},
     {
-        "type": "image_url",
-        "image_url": image_url, # OR {"url": image_url}
+        "type": "file",
+        "file": {
+            "file_data": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+        }
     },
 ]
 
@@ -1169,8 +1229,10 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
     "messages": [
         {"role": "user", "content": {"type": "text", "text": "What's this file about?"}},
         {
-            "type": "image_url",
-            "image_url": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+            "type": "file",
+            "file": {
+                "file_data": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+            }
         }
     ]
 }'

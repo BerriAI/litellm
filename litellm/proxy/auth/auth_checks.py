@@ -11,7 +11,7 @@ Run checks for:
 import asyncio
 import re
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
 from fastapi import Request, status
 from pydantic import BaseModel
@@ -49,7 +49,7 @@ from .auth_checks_organization import organization_role_based_access_check
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     Span = Any
 
@@ -551,7 +551,6 @@ def _get_role_based_permissions(
         return None
 
     for role_based_permission in role_based_permissions:
-
         if role_based_permission.role == rbac_role:
             return getattr(role_based_permission, key)
 
@@ -867,7 +866,6 @@ async def _get_team_object_from_cache(
         proxy_logging_obj is not None
         and proxy_logging_obj.internal_usage_cache.dual_cache
     ):
-
         cached_team_obj = (
             await proxy_logging_obj.internal_usage_cache.dual_cache.async_get_cache(
                 key=key, parent_otel_span=parent_otel_span
@@ -1202,7 +1200,6 @@ async def can_user_call_model(
     llm_router: Optional[Router],
     user_object: Optional[LiteLLM_UserTable],
 ) -> Literal[True]:
-
     if user_object is None:
         return True
 

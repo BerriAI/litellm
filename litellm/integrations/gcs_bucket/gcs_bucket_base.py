@@ -125,9 +125,9 @@ class GCSBucketBase(CustomBatchLogger):
         if kwargs is None:
             kwargs = {}
 
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-            kwargs.get("standard_callback_dynamic_params", None)
-        )
+        standard_callback_dynamic_params: Optional[
+            StandardCallbackDynamicParams
+        ] = kwargs.get("standard_callback_dynamic_params", None)
 
         bucket_name: str
         path_service_account: Optional[str]

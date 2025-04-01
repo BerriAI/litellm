@@ -15,7 +15,7 @@ from .types.services import ServiceLoggerPayload, ServiceTypes
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span
+    Span = Union[_Span, Any]
     OTELClass = OpenTelemetry
 else:
     Span = Any

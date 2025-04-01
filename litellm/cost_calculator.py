@@ -2,7 +2,7 @@
 ## File for 'response_cost' calculation in Logging
 import time
 from functools import lru_cache
-from typing import Any, List, Literal, Optional, Tuple, Union
+from typing import Any, List, Literal, Optional, Tuple, Union, cast
 
 from pydantic import BaseModel
 
@@ -462,13 +462,36 @@ def _model_contains_known_llm_provider(model: str) -> bool:
 def _get_usage_object(
     completion_response: Any,
 ) -> Optional[Usage]:
-    usage_obj: Optional[Usage] = None
-    if completion_response is not None and isinstance(
-        completion_response, ModelResponse
-    ):
-        usage_obj = completion_response.get("usage")
+    usage_obj = cast(
+        Union[Usage, ResponseAPIUsage, dict, BaseModel],
+        (
+            completion_response.get("usage")
+            if isinstance(completion_response, dict)
+            else getattr(completion_response, "get", lambda x: None)("usage")
+        ),
+    )
 
-    return usage_obj
+    if usage_obj is None:
+        return None
+    if isinstance(usage_obj, Usage):
+        return usage_obj
+    elif (
+        usage_obj is not None
+        and (isinstance(usage_obj, dict) or isinstance(usage_obj, ResponseAPIUsage))
+        and ResponseAPILoggingUtils._is_response_api_usage(usage_obj)
+    ):
+        return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage_obj
+        )
+    elif isinstance(usage_obj, dict):
+        return Usage(**usage_obj)
+    elif isinstance(usage_obj, BaseModel):
+        return Usage(**usage_obj.model_dump())
+    else:
+        verbose_logger.debug(
+            f"Unknown usage object type: {type(usage_obj)}, usage_obj: {usage_obj}"
+        )
+        return None
 
 
 def _is_known_usage_objects(usage_obj):
@@ -527,6 +550,7 @@ def completion_cost(  # noqa: PLR0915
     custom_pricing: Optional[bool] = None,
     base_model: Optional[str] = None,
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams] = None,
+    litellm_model_name: Optional[str] = None,
 ) -> float:
     """
     Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
@@ -557,7 +581,6 @@ def completion_cost(  # noqa: PLR0915
         - For un-mapped Replicate models, the cost is calculated based on the total time used for the request.
     """
     try:
-
         call_type = _infer_call_type(call_type, completion_response) or "completion"
 
         if (
@@ -580,7 +603,7 @@ def completion_cost(  # noqa: PLR0915
             completion_response=completion_response
         )
         rerank_billed_units: Optional[RerankBilledUnits] = None
-        model = _select_model_name_for_cost_calc(
+        selected_model = _select_model_name_for_cost_calc(
             model=model,
             completion_response=completion_response,
             custom_llm_provider=custom_llm_provider,
@@ -588,231 +611,268 @@ def completion_cost(  # noqa: PLR0915
             base_model=base_model,
         )
 
-        verbose_logger.info(f"selected model name for cost calculation: {model}")
+        potential_model_names = [selected_model]
+        if model is not None:
+            potential_model_names.append(model)
 
-        if completion_response is not None and (
-            isinstance(completion_response, BaseModel)
-            or isinstance(completion_response, dict)
-        ):  # tts returns a custom class
-            if isinstance(completion_response, dict):
-                usage_obj: Optional[Union[dict, Usage]] = completion_response.get(
-                    "usage", {}
-                )
-            else:
-                usage_obj = getattr(completion_response, "usage", {})
-            if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
-                usage_obj=usage_obj
-            ):
-                setattr(
-                    completion_response,
-                    "usage",
-                    litellm.Usage(**usage_obj.model_dump()),
-                )
-            if usage_obj is None:
-                _usage = {}
-            elif isinstance(usage_obj, BaseModel):
-                _usage = usage_obj.model_dump()
-            else:
-                _usage = usage_obj
-
-            if ResponseAPILoggingUtils._is_response_api_usage(_usage):
-                _usage = (
-                    ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-                        _usage
-                    ).model_dump()
-                )
-
-            # get input/output tokens from completion_response
-            prompt_tokens = _usage.get("prompt_tokens", 0)
-            completion_tokens = _usage.get("completion_tokens", 0)
-            cache_creation_input_tokens = _usage.get("cache_creation_input_tokens", 0)
-            cache_read_input_tokens = _usage.get("cache_read_input_tokens", 0)
-            if (
-                "prompt_tokens_details" in _usage
-                and _usage["prompt_tokens_details"] != {}
-                and _usage["prompt_tokens_details"]
-            ):
-                prompt_tokens_details = _usage.get("prompt_tokens_details", {})
-                cache_read_input_tokens = prompt_tokens_details.get("cached_tokens", 0)
-
-            total_time = getattr(completion_response, "_response_ms", 0)
-
-            hidden_params = getattr(completion_response, "_hidden_params", None)
-            if hidden_params is not None:
-                custom_llm_provider = hidden_params.get(
-                    "custom_llm_provider", custom_llm_provider or None
-                )
-                region_name = hidden_params.get("region_name", region_name)
-                size = hidden_params.get("optional_params", {}).get(
-                    "size", "1024-x-1024"
-                )  # openai default
-                quality = hidden_params.get("optional_params", {}).get(
-                    "quality", "standard"
-                )  # openai default
-                n = hidden_params.get("optional_params", {}).get(
-                    "n", 1
-                )  # openai default
-        else:
-            if model is None:
-                raise ValueError(
-                    f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
-                )
-            if len(messages) > 0:
-                prompt_tokens = token_counter(model=model, messages=messages)
-            elif len(prompt) > 0:
-                prompt_tokens = token_counter(model=model, text=prompt)
-            completion_tokens = token_counter(model=model, text=completion)
-        if model is None:
-            raise ValueError(
-                f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
-            )
-        if custom_llm_provider is None:
+        for idx, model in enumerate(potential_model_names):
             try:
-                model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                    model=model
-                )  # strip the llm provider from the model name -> for image gen cost calculation
+                verbose_logger.info(
+                    f"selected model name for cost calculation: {model}"
+                )
+
+                if completion_response is not None and (
+                    isinstance(completion_response, BaseModel)
+                    or isinstance(completion_response, dict)
+                ):  # tts returns a custom class
+                    if isinstance(completion_response, dict):
+                        usage_obj: Optional[
+                            Union[dict, Usage]
+                        ] = completion_response.get("usage", {})
+                    else:
+                        usage_obj = getattr(completion_response, "usage", {})
+                    if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
+                        usage_obj=usage_obj
+                    ):
+                        setattr(
+                            completion_response,
+                            "usage",
+                            litellm.Usage(**usage_obj.model_dump()),
+                        )
+                    if usage_obj is None:
+                        _usage = {}
+                    elif isinstance(usage_obj, BaseModel):
+                        _usage = usage_obj.model_dump()
+                    else:
+                        _usage = usage_obj
+
+                    if ResponseAPILoggingUtils._is_response_api_usage(_usage):
+                        _usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                            _usage
+                        ).model_dump()
+
+                    # get input/output tokens from completion_response
+                    prompt_tokens = _usage.get("prompt_tokens", 0)
+                    completion_tokens = _usage.get("completion_tokens", 0)
+                    cache_creation_input_tokens = _usage.get(
+                        "cache_creation_input_tokens", 0
+                    )
+                    cache_read_input_tokens = _usage.get("cache_read_input_tokens", 0)
+                    if (
+                        "prompt_tokens_details" in _usage
+                        and _usage["prompt_tokens_details"] != {}
+                        and _usage["prompt_tokens_details"]
+                    ):
+                        prompt_tokens_details = _usage.get("prompt_tokens_details", {})
+                        cache_read_input_tokens = prompt_tokens_details.get(
+                            "cached_tokens", 0
+                        )
+
+                    total_time = getattr(completion_response, "_response_ms", 0)
+
+                    hidden_params = getattr(completion_response, "_hidden_params", None)
+                    if hidden_params is not None:
+                        custom_llm_provider = hidden_params.get(
+                            "custom_llm_provider", custom_llm_provider or None
+                        )
+                        region_name = hidden_params.get("region_name", region_name)
+                        size = hidden_params.get("optional_params", {}).get(
+                            "size", "1024-x-1024"
+                        )  # openai default
+                        quality = hidden_params.get("optional_params", {}).get(
+                            "quality", "standard"
+                        )  # openai default
+                        n = hidden_params.get("optional_params", {}).get(
+                            "n", 1
+                        )  # openai default
+                else:
+                    if model is None:
+                        raise ValueError(
+                            f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
+                        )
+                    if len(messages) > 0:
+                        prompt_tokens = token_counter(model=model, messages=messages)
+                    elif len(prompt) > 0:
+                        prompt_tokens = token_counter(model=model, text=prompt)
+                    completion_tokens = token_counter(model=model, text=completion)
+
+                if model is None:
+                    raise ValueError(
+                        f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
+                    )
+                if custom_llm_provider is None:
+                    try:
+                        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                            model=model
+                        )  # strip the llm provider from the model name -> for image gen cost calculation
+                    except Exception as e:
+                        verbose_logger.debug(
+                            "litellm.cost_calculator.py::completion_cost() - Error inferring custom_llm_provider - {}".format(
+                                str(e)
+                            )
+                        )
+                if (
+                    call_type == CallTypes.image_generation.value
+                    or call_type == CallTypes.aimage_generation.value
+                    or call_type
+                    == PassthroughCallTypes.passthrough_image_generation.value
+                ):
+                    ### IMAGE GENERATION COST CALCULATION ###
+                    if custom_llm_provider == "vertex_ai":
+                        if isinstance(completion_response, ImageResponse):
+                            return vertex_ai_image_cost_calculator(
+                                model=model,
+                                image_response=completion_response,
+                            )
+                    elif custom_llm_provider == "bedrock":
+                        if isinstance(completion_response, ImageResponse):
+                            return bedrock_image_cost_calculator(
+                                model=model,
+                                size=size,
+                                image_response=completion_response,
+                                optional_params=optional_params,
+                            )
+                        raise TypeError(
+                            "completion_response must be of type ImageResponse for bedrock image cost calculation"
+                        )
+                    else:
+                        return default_image_cost_calculator(
+                            model=model,
+                            quality=quality,
+                            custom_llm_provider=custom_llm_provider,
+                            n=n,
+                            size=size,
+                            optional_params=optional_params,
+                        )
+                elif (
+                    call_type == CallTypes.speech.value
+                    or call_type == CallTypes.aspeech.value
+                ):
+                    prompt_characters = litellm.utils._count_characters(text=prompt)
+                elif (
+                    call_type == CallTypes.atranscription.value
+                    or call_type == CallTypes.transcription.value
+                ):
+                    audio_transcription_file_duration = getattr(
+                        completion_response, "duration", 0.0
+                    )
+                elif (
+                    call_type == CallTypes.rerank.value
+                    or call_type == CallTypes.arerank.value
+                ):
+                    if completion_response is not None and isinstance(
+                        completion_response, RerankResponse
+                    ):
+                        meta_obj = completion_response.meta
+                        if meta_obj is not None:
+                            billed_units = meta_obj.get("billed_units", {}) or {}
+                        else:
+                            billed_units = {}
+
+                        rerank_billed_units = RerankBilledUnits(
+                            search_units=billed_units.get("search_units"),
+                            total_tokens=billed_units.get("total_tokens"),
+                        )
+
+                        search_units = (
+                            billed_units.get("search_units") or 1
+                        )  # cohere charges per request by default.
+                        completion_tokens = search_units
+                # Calculate cost based on prompt_tokens, completion_tokens
+                if (
+                    "togethercomputer" in model
+                    or "together_ai" in model
+                    or custom_llm_provider == "together_ai"
+                ):
+                    # together ai prices based on size of llm
+                    # get_model_params_and_category takes a model name and returns the category of LLM size it is in model_prices_and_context_window.json
+
+                    model = get_model_params_and_category(
+                        model, call_type=CallTypes(call_type)
+                    )
+
+                # replicate llms are calculate based on time for request running
+                # see https://replicate.com/pricing
+                elif (
+                    model in litellm.replicate_models or "replicate" in model
+                ) and model not in litellm.model_cost:
+                    # for unmapped replicate model, default to replicate's time tracking logic
+                    return get_replicate_completion_pricing(completion_response, total_time)  # type: ignore
+
+                if model is None:
+                    raise ValueError(
+                        f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
+                    )
+
+                if (
+                    custom_llm_provider is not None
+                    and custom_llm_provider == "vertex_ai"
+                ):
+                    # Calculate the prompt characters + response characters
+                    if len(messages) > 0:
+                        prompt_string = litellm.utils.get_formatted_prompt(
+                            data={"messages": messages}, call_type="completion"
+                        )
+
+                        prompt_characters = litellm.utils._count_characters(
+                            text=prompt_string
+                        )
+                    if completion_response is not None and isinstance(
+                        completion_response, ModelResponse
+                    ):
+                        completion_string = litellm.utils.get_response_string(
+                            response_obj=completion_response
+                        )
+                        completion_characters = litellm.utils._count_characters(
+                            text=completion_string
+                        )
+
+                (
+                    prompt_tokens_cost_usd_dollar,
+                    completion_tokens_cost_usd_dollar,
+                ) = cost_per_token(
+                    model=model,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    custom_llm_provider=custom_llm_provider,
+                    response_time_ms=total_time,
+                    region_name=region_name,
+                    custom_cost_per_second=custom_cost_per_second,
+                    custom_cost_per_token=custom_cost_per_token,
+                    prompt_characters=prompt_characters,
+                    completion_characters=completion_characters,
+                    cache_creation_input_tokens=cache_creation_input_tokens,
+                    cache_read_input_tokens=cache_read_input_tokens,
+                    usage_object=cost_per_token_usage_object,
+                    call_type=cast(CallTypesLiteral, call_type),
+                    audio_transcription_file_duration=audio_transcription_file_duration,
+                    rerank_billed_units=rerank_billed_units,
+                )
+                _final_cost = (
+                    prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
+                )
+                _final_cost += (
+                    StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+                        model=model,
+                        response_object=completion_response,
+                        standard_built_in_tools_params=standard_built_in_tools_params,
+                        custom_llm_provider=custom_llm_provider,
+                    )
+                )
+                return _final_cost
             except Exception as e:
                 verbose_logger.debug(
-                    "litellm.cost_calculator.py::completion_cost() - Error inferring custom_llm_provider - {}".format(
-                        str(e)
+                    "litellm.cost_calculator.py::completion_cost() - Error calculating cost for model={} - {}".format(
+                        model, str(e)
                     )
                 )
-        if (
-            call_type == CallTypes.image_generation.value
-            or call_type == CallTypes.aimage_generation.value
-            or call_type == PassthroughCallTypes.passthrough_image_generation.value
-        ):
-            ### IMAGE GENERATION COST CALCULATION ###
-            if custom_llm_provider == "vertex_ai":
-                if isinstance(completion_response, ImageResponse):
-                    return vertex_ai_image_cost_calculator(
-                        model=model,
-                        image_response=completion_response,
-                    )
-            elif custom_llm_provider == "bedrock":
-                if isinstance(completion_response, ImageResponse):
-                    return bedrock_image_cost_calculator(
-                        model=model,
-                        size=size,
-                        image_response=completion_response,
-                        optional_params=optional_params,
-                    )
-                raise TypeError(
-                    "completion_response must be of type ImageResponse for bedrock image cost calculation"
-                )
-            else:
-                return default_image_cost_calculator(
-                    model=model,
-                    quality=quality,
-                    custom_llm_provider=custom_llm_provider,
-                    n=n,
-                    size=size,
-                    optional_params=optional_params,
-                )
-        elif (
-            call_type == CallTypes.speech.value or call_type == CallTypes.aspeech.value
-        ):
-            prompt_characters = litellm.utils._count_characters(text=prompt)
-        elif (
-            call_type == CallTypes.atranscription.value
-            or call_type == CallTypes.transcription.value
-        ):
-            audio_transcription_file_duration = getattr(
-                completion_response, "duration", 0.0
+                if idx == len(potential_model_names) - 1:
+                    raise e
+        raise Exception(
+            "Unable to calculat cost for received potential model names - {}".format(
+                potential_model_names
             )
-        elif (
-            call_type == CallTypes.rerank.value or call_type == CallTypes.arerank.value
-        ):
-            if completion_response is not None and isinstance(
-                completion_response, RerankResponse
-            ):
-                meta_obj = completion_response.meta
-                if meta_obj is not None:
-                    billed_units = meta_obj.get("billed_units", {}) or {}
-                else:
-                    billed_units = {}
-
-                rerank_billed_units = RerankBilledUnits(
-                    search_units=billed_units.get("search_units"),
-                    total_tokens=billed_units.get("total_tokens"),
-                )
-
-                search_units = (
-                    billed_units.get("search_units") or 1
-                )  # cohere charges per request by default.
-                completion_tokens = search_units
-        # Calculate cost based on prompt_tokens, completion_tokens
-        if (
-            "togethercomputer" in model
-            or "together_ai" in model
-            or custom_llm_provider == "together_ai"
-        ):
-            # together ai prices based on size of llm
-            # get_model_params_and_category takes a model name and returns the category of LLM size it is in model_prices_and_context_window.json
-
-            model = get_model_params_and_category(model, call_type=CallTypes(call_type))
-
-        # replicate llms are calculate based on time for request running
-        # see https://replicate.com/pricing
-        elif (
-            model in litellm.replicate_models or "replicate" in model
-        ) and model not in litellm.model_cost:
-            # for unmapped replicate model, default to replicate's time tracking logic
-            return get_replicate_completion_pricing(completion_response, total_time)  # type: ignore
-
-        if model is None:
-            raise ValueError(
-                f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
-            )
-
-        if custom_llm_provider is not None and custom_llm_provider == "vertex_ai":
-            # Calculate the prompt characters + response characters
-            if len(messages) > 0:
-                prompt_string = litellm.utils.get_formatted_prompt(
-                    data={"messages": messages}, call_type="completion"
-                )
-
-                prompt_characters = litellm.utils._count_characters(text=prompt_string)
-            if completion_response is not None and isinstance(
-                completion_response, ModelResponse
-            ):
-                completion_string = litellm.utils.get_response_string(
-                    response_obj=completion_response
-                )
-                completion_characters = litellm.utils._count_characters(
-                    text=completion_string
-                )
-
-        (
-            prompt_tokens_cost_usd_dollar,
-            completion_tokens_cost_usd_dollar,
-        ) = cost_per_token(
-            model=model,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            custom_llm_provider=custom_llm_provider,
-            response_time_ms=total_time,
-            region_name=region_name,
-            custom_cost_per_second=custom_cost_per_second,
-            custom_cost_per_token=custom_cost_per_token,
-            prompt_characters=prompt_characters,
-            completion_characters=completion_characters,
-            cache_creation_input_tokens=cache_creation_input_tokens,
-            cache_read_input_tokens=cache_read_input_tokens,
-            usage_object=cost_per_token_usage_object,
-            call_type=call_type,
-            audio_transcription_file_duration=audio_transcription_file_duration,
-            rerank_billed_units=rerank_billed_units,
         )
-        _final_cost = prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
-        _final_cost += StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
-            model=model,
-            response_object=completion_response,
-            standard_built_in_tools_params=standard_built_in_tools_params,
-            custom_llm_provider=custom_llm_provider,
-        )
-
-        return _final_cost
     except Exception as e:
         raise e
 
@@ -874,6 +934,7 @@ def response_cost_calculator(
     custom_pricing: Optional[bool] = None,
     prompt: str = "",
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams] = None,
+    litellm_model_name: Optional[str] = None,
 ) -> float:
     """
     Returns

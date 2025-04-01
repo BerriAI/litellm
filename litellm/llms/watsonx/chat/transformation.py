@@ -15,7 +15,6 @@ from ..common_utils import IBMWatsonXMixin
 
 
 class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
-
     def get_supported_openai_params(self, model: str) -> List:
         return [
             "temperature",  # equivalent to temperature
