@@ -16,7 +16,7 @@ LiteLLM provides `success_callbacks` and `failure_callbacks`, allowing you to ea
 ### Integration
 
 Use just a few lines of code to instantly trace your responses **across all providers** with AgentOps:
-
+Get your AgentOps API Keys from https://app.agentops.ai/
 ```python
 import litellm
 
@@ -38,7 +38,7 @@ from litellm import completion
 
 # Set env variables
 os.environ["OPENAI_API_KEY"] = "your-openai-key"
-os.environ["AGENTOPS_API_KEY"] = "your-agentops-api-key"  # Optional
+os.environ["AGENTOPS_API_KEY"] = "your-agentops-api-key"
 
 # Configure LiteLLM to use AgentOps
 litellm.success_callback = ["agentops"]
