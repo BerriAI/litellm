@@ -1284,6 +1284,7 @@ class DailySpendMetadata(BaseModel):
     total_spend: float = Field(default=0.0)
     total_prompt_tokens: int = Field(default=0)
     total_completion_tokens: int = Field(default=0)
+    total_tokens: int = Field(default=0)
     total_api_requests: int = Field(default=0)
     page: int = Field(default=1)
     total_pages: int = Field(default=1)
@@ -1495,6 +1496,7 @@ async def get_user_daily_activity(
                 total_spend=total_metrics.spend,
                 total_prompt_tokens=total_metrics.prompt_tokens,
                 total_completion_tokens=total_metrics.completion_tokens,
+                total_tokens=total_metrics.total_tokens,
                 total_api_requests=total_metrics.api_requests,
                 page=page,
                 total_pages=-(-total_count // page_size),  # Ceiling division
