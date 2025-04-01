@@ -197,7 +197,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
         <TabPanels>
           {/* Cost Panel */}
           <TabPanel>
-            <Grid numItems={2} className="gap-2 h-[100vh] w-full">
+            <Grid numItems={2} className="gap-2 w-full">
               {/* Total Spend Card */}
               <Col numColSpan={2}>
                 <Text className="text-tremor-default text-tremor-content dark:text-dark-tremor-content mb-2 mt-2 text-lg">
@@ -392,7 +392,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
           {/* Activity Panel */}
           <TabPanel>
-            <Grid numItems={1} className="gap-2 h-[75vh] w-full">
+            <Grid numItems={1} className="gap-2 w-full">
               <Card>
                 <Title>All Up</Title>
                 <Grid numItems={2}>
