@@ -514,6 +514,7 @@ class DBSpendUpdateWriter:
                 n_retry_times=n_retry_times,
                 prisma_client=prisma_client,
                 proxy_logging_obj=proxy_logging_obj,
+                end_user_list_transactions=end_user_list_transactions,
             )
         ### UPDATE KEY TABLE ###
         key_list_transactions = db_spend_update_transactions["key_list_transactions"]
