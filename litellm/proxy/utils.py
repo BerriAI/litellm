@@ -1111,12 +1111,6 @@ def jsonify_object(data: dict) -> dict:
 
 
 class PrismaClient:
-    user_list_transactions: dict = {}
-    end_user_list_transactions: dict = {}
-    key_list_transactions: dict = {}
-    team_list_transactions: dict = {}
-    team_member_list_transactions: dict = {}  # key is ["team_id" + "user_id"]
-    org_list_transactions: dict = {}
     spend_log_transactions: List = []
     daily_user_spend_transactions: Dict[str, DailyUserSpendTransaction] = {}
 
@@ -2479,7 +2473,10 @@ def _hash_token_if_needed(token: str) -> str:
 class ProxyUpdateSpend:
     @staticmethod
     async def update_end_user_spend(
-        n_retry_times: int, prisma_client: PrismaClient, proxy_logging_obj: ProxyLogging
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        end_user_list_transactions: Dict[str, float],
     ):
         for i in range(n_retry_times + 1):
             start_time = time.time()
@@ -2491,7 +2488,7 @@ class ProxyUpdateSpend:
                         for (
                             end_user_id,
                             response_cost,
-                        ) in prisma_client.end_user_list_transactions.items():
+                        ) in end_user_list_transactions.items():
                             if litellm.max_end_user_budget is not None:
                                 pass
                             batcher.litellm_endusertable.upsert(
@@ -2518,10 +2515,6 @@ class ProxyUpdateSpend:
                 _raise_failed_update_spend_exception(
                     e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                 )
-            finally:
-                prisma_client.end_user_list_transactions = (
-                    {}
-                )  # reset the end user list transactions - prevent bad data from causing issues
 
     @staticmethod
     async def update_spend_logs(
