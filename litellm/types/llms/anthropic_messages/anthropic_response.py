@@ -1,6 +1,8 @@
 from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 
-from typing_extensions import TypeAlias
+from typing_extensions import Annotated, TypeAlias
+
+from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
 
 
 class AnthropicResponseTextBlock(TypedDict, total=False):
@@ -81,3 +83,12 @@ class AnthropicMessagesResponse(TypedDict, total=False):
     stop_sequence: Optional[str]
     type: Optional[Literal["message"]]
     usage: Optional[AnthropicUsage]
+
+
+class AnthropicMessagesStreamingResponse(TypedDict, total=False):
+    """
+    Anthropic Messages Streaming API Response: https://docs.anthropic.com/en/api/messages
+    """
+
+    type: str
+    message: Dict[str, Any]

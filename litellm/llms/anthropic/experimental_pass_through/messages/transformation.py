@@ -15,6 +15,7 @@ from litellm.types.llms.anthropic_messages.anthropic_request import (
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
+    AnthropicMessagesStreamingResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
 
@@ -95,3 +96,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 message=raw_response.text, status_code=raw_response.status_code
             )
         return AnthropicMessagesResponse(**raw_response_json)
+
+    def transform_response_to_anthropic_messages_streaming_response(
+        self,
+        model: str,
+        parsed_chunk: Dict,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> AnthropicMessagesStreamingResponse:
+        """No transform applied since outputs from Anthropic are in Anthropic spec already"""
+        return AnthropicMessagesStreamingResponse(**parsed_chunk)

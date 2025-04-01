@@ -8,6 +8,7 @@ from litellm.types.llms.anthropic_messages.anthropic_request import (
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
+    AnthropicMessagesStreamingResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
 
@@ -75,6 +76,15 @@ class BaseAnthropicMessagesConfig(ABC):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> AnthropicMessagesResponse:
+        pass
+
+    @abstractmethod
+    def transform_response_to_anthropic_messages_streaming_response(
+        self,
+        model: str,
+        parsed_chunk: Dict,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> AnthropicMessagesStreamingResponse:
         pass
 
     def get_error_class(
