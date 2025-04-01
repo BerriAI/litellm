@@ -87,8 +87,9 @@ class SpendUpdateQueue:
                 transactions_dict = {}
                 db_spend_update_transactions[dict_key] = transactions_dict
 
-            transactions_dict[entity_id] = (
-                transactions_dict.get(entity_id, 0) + response_cost
-            )
+            if entity_id not in transactions_dict:
+                transactions_dict[entity_id] = 0
+
+            transactions_dict[entity_id] += response_cost
 
         return db_spend_update_transactions
