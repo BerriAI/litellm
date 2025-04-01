@@ -266,14 +266,14 @@ async def test_long_term_spend_accuracy_with_bursts():
             abs(key_info["info"]["spend"] - expected_spend) < TOLERANCE
         ), f"Key spend {key_info['info']['spend']} does not match expected {expected_spend}"
 
-        # assert (
-        #     abs(user_info["user_info"]["spend"] - expected_spend) < TOLERANCE
-        # ), f"User spend {user_info['user_info']['spend']} does not match expected {expected_spend}"
+        assert (
+            abs(user_info["user_info"]["spend"] - expected_spend) < TOLERANCE
+        ), f"User spend {user_info['user_info']['spend']} does not match expected {expected_spend}"
 
-        # assert (
-        #     abs(team_info["team_info"]["spend"] - expected_spend) < TOLERANCE
-        # ), f"Team spend {team_info['team_info']['spend']} does not match expected {expected_spend}"
+        assert (
+            abs(team_info["team_info"]["spend"] - expected_spend) < TOLERANCE
+        ), f"Team spend {team_info['team_info']['spend']} does not match expected {expected_spend}"
 
-        # assert (
-        #     abs(org_info["spend"] - expected_spend) < TOLERANCE
-        # ), f"Organization spend {org_info['spend']} does not match expected {expected_spend}"
+        assert (
+            abs(org_info["spend"] - expected_spend) < TOLERANCE
+        ), f"Organization spend {org_info['spend']} does not match expected {expected_spend}"
