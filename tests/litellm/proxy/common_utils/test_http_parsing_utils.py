@@ -39,7 +39,7 @@ async def test_request_body_caching():
     result1 = await _read_request_body(mock_request)
     assert result1 == test_data
     assert "parsed_body" in mock_request.scope
-    assert mock_request.scope["parsed_body"] == test_data
+    assert mock_request.scope["parsed_body"] == (("key",), {"key": "value"})
 
     # Verify the body was read once
     mock_request.body.assert_called_once()
@@ -49,7 +49,7 @@ async def test_request_body_caching():
 
     # Second call should use the cached body
     result2 = await _read_request_body(mock_request)
-    assert result2 == test_data
+    assert result2 == {"key": "value"}
 
     # Verify the body was not read again
     mock_request.body.assert_not_called()
@@ -75,7 +75,10 @@ async def test_form_data_parsing():
     # Verify the form data was correctly parsed
     assert result == test_data
     assert "parsed_body" in mock_request.scope
-    assert mock_request.scope["parsed_body"] == test_data
+    assert mock_request.scope["parsed_body"] == (
+        ("name", "message"),
+        {"name": "test_user", "message": "hello world"},
+    )
 
     # Verify form() was called
     mock_request.form.assert_called_once()
@@ -101,7 +104,7 @@ async def test_empty_request_body():
     # Verify an empty dict is returned
     assert result == {}
     assert "parsed_body" in mock_request.scope
-    assert mock_request.scope["parsed_body"] == {}
+    assert mock_request.scope["parsed_body"] == ((), {})
 
     # Verify the body was read
     mock_request.body.assert_called_once()
