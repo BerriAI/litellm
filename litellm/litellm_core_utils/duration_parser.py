@@ -7,7 +7,7 @@ duration_in_seconds is used in diff parts of the code base, example
 """
 
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Tuple
 
 
@@ -44,7 +44,7 @@ def duration_in_seconds(duration: str) -> int:
         - if the duration is "1mo", the budget will reset at the top of the next month (00:00:00 UTC). 
     """
     value, unit = _extract_from_regex(duration=duration)
-    current_time = datetime.now()
+    current_time = datetime.now(timezone.utc)
 
     if unit == "s":
         return value
@@ -59,6 +59,7 @@ def duration_in_seconds(duration: str) -> int:
     elif unit == "d": # Calculate the time until the nth day at 00:00:00 UTC from now in seconds
         target = current_time.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=value)
         duration_until_target = target - current_time
+        print(duration_until_target)
         return int(duration_until_target.total_seconds())
     elif unit == "w": # Calculate the time until the nth Monday at 00:00:00 UTC from now in seconds        
         time_until_midnight = timedelta(hours=23 - current_time.hour, minutes=59 - current_time.minute, seconds=60 - current_time.second)

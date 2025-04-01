@@ -2244,10 +2244,10 @@ async def test_upperbound_key_param_none_duration(prisma_client):
         assert key.max_budget == 100
         assert key.expires is not None
 
-        _date_key_expires = key.expires.date()
-        _fourteen_days_from_now = (datetime.now() + timedelta(days=14)).date()
+        expected_time = (datetime.now(timezone.utc) + timedelta(days=14)).replace(hour=0, minute=0, second=0, microsecond=0)
 
-        assert _date_key_expires == _fourteen_days_from_now
+        time_difference = abs((key.expires - expected_time).total_seconds())
+        assert time_difference < 5  # Allow a small margin of error for time comparison
     except Exception as e:
         pytest.fail(f"Got exception {e}")
 

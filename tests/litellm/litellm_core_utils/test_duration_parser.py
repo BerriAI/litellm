@@ -1,7 +1,7 @@
 import os
 import sys
 from unittest.mock import MagicMock, patch
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -37,6 +37,37 @@ def test_duration_in_seconds(mock_now, duration, expected_seconds):
         mock_datetime.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)  # Allow other datetime functionality
         result = duration_in_seconds(duration)
         assert result == expected_seconds
+
+def test_duration_in_seconds_invalid():
+    with pytest.raises(ValueError):
+        duration_in_seconds("invalid_duration")
+
+    with pytest.raises(ValueError):
+        duration_in_seconds("1x")
+
+    with pytest.raises(ValueError):
+        duration_in_seconds("1y")
+
+    with pytest.raises(ValueError):
+        duration_in_seconds("1z")
+
+    with pytest.raises(ValueError):
+        duration_in_seconds("1")
+
+    with pytest.raises(ValueError):
+        duration_in_seconds("")
+
+def test_duration_in_seconds_utc():
+    # Verify that the function correctly calculates the duration in seconds to the next UTC reset
+    # For example, if the current time is 2025-03-24 12:30:00 UTC and the duration is "1d",
+    # the function should return the seconds until the next midnight UTC.
+    # Mock the current time to a specific UTC time
+    mock_now = datetime(2025, 3, 24, 12, 30, 0, tzinfo=timezone.utc)
+    with patch("litellm.litellm_core_utils.duration_parser.datetime") as mock_datetime:
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)  # Allow other datetime functionality
+        result = duration_in_seconds("1d")
+        assert result == 86400 - (12 * 3600 + 30 * 60)  # seconds until the next midnight UTC
 
 
 def test_extract_from_regex():
