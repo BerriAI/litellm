@@ -123,6 +123,7 @@ class ProxyBaseLLMRequestProcessing:
         """
         Common request processing logic for both chat completions and responses API endpoints
         """
+
         verbose_proxy_logger.debug(
             "Request received by LiteLLM:\n{}".format(json.dumps(self.data, indent=4)),
         )
