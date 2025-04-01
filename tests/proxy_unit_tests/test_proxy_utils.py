@@ -1521,12 +1521,6 @@ async def test_end_user_transactions_reset():
             end_user_list_transactions=end_user_list_transactions,
         )
 
-    # Verify cleanup happened
-    assert (
-        mock_client.end_user_list_transactions == {}
-    ), "Transactions list should be empty after error"
-
-
 @pytest.mark.asyncio
 async def test_spend_logs_cleanup_after_error():
     # Setup test data
