@@ -1329,6 +1329,8 @@ def update_metrics(
     group_metrics.completion_tokens += record.completion_tokens
     group_metrics.total_tokens += record.prompt_tokens + record.completion_tokens
     group_metrics.api_requests += record.api_requests
+    group_metrics.successful_requests += record.successful_requests
+    group_metrics.failed_requests += record.failed_requests
     return group_metrics
 
 
