@@ -33,6 +33,8 @@ interface SpendMetrics {
   completion_tokens: number;
   total_tokens: number;
   api_requests: number;
+  successful_requests: number;
+  failed_requests: number;
 }
 
 interface BreakdownMetrics {
@@ -59,7 +61,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
   // Derived states from userSpendData
   const totalSpend = userSpendData.metadata?.total_spend || 0;
-  
+
   // Calculate top models from the breakdown data
   const getTopModels = () => {
     const modelSpend: { [key: string]: SpendMetrics } = {};
@@ -71,7 +73,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
             prompt_tokens: 0,
             completion_tokens: 0,
             total_tokens: 0,
-            api_requests: 0
+            api_requests: 0,
+            successful_requests: 0,
+            failed_requests: 0
           };
         }
         modelSpend[model].spend += metrics.spend;
@@ -79,6 +83,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
         modelSpend[model].completion_tokens += metrics.completion_tokens;
         modelSpend[model].total_tokens += metrics.total_tokens;
         modelSpend[model].api_requests += metrics.api_requests;
+        modelSpend[model].successful_requests += metrics.successful_requests || 0;
+        modelSpend[model].failed_requests += metrics.failed_requests || 0;
       });
     });
     
@@ -87,6 +93,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
         key: model,
         spend: metrics.spend,
         requests: metrics.api_requests,
+        successful_requests: metrics.successful_requests,
+        failed_requests: metrics.failed_requests,
         tokens: metrics.total_tokens
       }))
       .sort((a, b) => b.spend - a.spend)
@@ -104,7 +112,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
             prompt_tokens: 0,
             completion_tokens: 0,
             total_tokens: 0,
-            api_requests: 0
+            api_requests: 0,
+            successful_requests: 0,
+            failed_requests: 0
           };
         }
         providerSpend[provider].spend += metrics.spend;
@@ -112,6 +122,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
         providerSpend[provider].completion_tokens += metrics.completion_tokens;
         providerSpend[provider].total_tokens += metrics.total_tokens;
         providerSpend[provider].api_requests += metrics.api_requests;
+        providerSpend[provider].successful_requests += metrics.successful_requests || 0;
+        providerSpend[provider].failed_requests += metrics.failed_requests || 0;
       });
     });
     
@@ -120,6 +132,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
         provider,
         spend: metrics.spend,
         requests: metrics.api_requests,
+        successful_requests: metrics.successful_requests,
+        failed_requests: metrics.failed_requests,
         tokens: metrics.total_tokens
       }));
   };
@@ -135,7 +149,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
             prompt_tokens: 0,
             completion_tokens: 0,
             total_tokens: 0,
-            api_requests: 0
+            api_requests: 0,
+            successful_requests: 0,
+            failed_requests: 0
           };
         }
         keySpend[key].spend += metrics.spend;
@@ -143,6 +159,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
         keySpend[key].completion_tokens += metrics.completion_tokens;
         keySpend[key].total_tokens += metrics.total_tokens;
         keySpend[key].api_requests += metrics.api_requests;
+        keySpend[key].successful_requests += metrics.successful_requests;
+        keySpend[key].failed_requests += metrics.failed_requests;
       });
     });
     
@@ -185,6 +203,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                 <Text className="text-tremor-default text-tremor-content dark:text-dark-tremor-content mb-2 mt-2 text-lg">
                   Project Spend {new Date().toLocaleString('default', { month: 'long' })} 1 - {new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()}
                 </Text>
+                
                 <ViewUserSpend
                   userID={userID}
                   userRole={userRole}
@@ -193,6 +212,44 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                   selectedTeam={null}
                   userMaxBudget={null}
                 />
+              </Col>
+
+              <Col numColSpan={2}>
+                <Card>
+                  <Title>Usage Metrics</Title>
+                  <Grid numItems={5} className="gap-4 mt-4">
+                    <Card>
+                      <Title>Total Requests</Title>
+                      <Text className="text-2xl font-bold mt-2">
+                        {userSpendData.metadata?.total_api_requests?.toLocaleString() || 0}
+                      </Text>
+                    </Card>
+                    <Card>
+                      <Title>Successful Requests</Title>
+                      <Text className="text-2xl font-bold mt-2 text-green-600">
+                        {userSpendData.metadata?.total_successful_requests?.toLocaleString() || 0}
+                      </Text>
+                    </Card>
+                    <Card>
+                      <Title>Failed Requests</Title>
+                      <Text className="text-2xl font-bold mt-2 text-red-600">
+                        {userSpendData.metadata?.total_failed_requests?.toLocaleString() || 0}
+                      </Text>
+                    </Card>
+                    <Card>
+                      <Title>Total Tokens</Title>
+                      <Text className="text-2xl font-bold mt-2">
+                        {userSpendData.metadata?.total_tokens?.toLocaleString() || 0}
+                      </Text>
+                    </Card>
+                    <Card>
+                      <Title>Average Cost per Request</Title>
+                      <Text className="text-2xl font-bold mt-2">
+                        ${((totalSpend || 0) / (userSpendData.metadata?.total_api_requests || 1)).toFixed(4)}
+                      </Text>
+                    </Card>
+                  </Grid>
+                </Card>
               </Col>
 
               {/* Daily Spend Chart */}
@@ -215,6 +272,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                           <p className="font-bold">{data.date}</p>
                           <p className="text-cyan-500">Spend: ${data.metrics.spend.toFixed(2)}</p>
                           <p className="text-gray-600">Requests: {data.metrics.api_requests}</p>
+                          <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
+                          <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
                           <p className="text-gray-600">Tokens: {data.metrics.total_tokens}</p>
                         </div>
                       );
@@ -240,7 +299,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               {/* Top Models */}
               <Col numColSpan={1}>
                 <Card className="h-full">
-                  <Title>Top Models</Title>
+                  <div className="flex justify-between items-center mb-4">
+                    <Title>Top Models</Title>
+                  </div>
                   <BarChart
                     className="mt-4 h-40"
                     data={getTopModels()}
@@ -258,7 +319,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                         <div className="bg-white p-4 shadow-lg rounded-lg border">
                           <p className="font-bold">{data.key}</p>
                           <p className="text-cyan-500">Spend: ${data.spend.toFixed(2)}</p>
-                          <p className="text-gray-600">Requests: {data.requests.toLocaleString()}</p>
+                          <p className="text-gray-600">Total Requests: {data.requests.toLocaleString()}</p>
+                          <p className="text-green-600">Successful: {data.successful_requests.toLocaleString()}</p>
+                          <p className="text-red-600">Failed: {data.failed_requests.toLocaleString()}</p>
                           <p className="text-gray-600">Tokens: {data.tokens.toLocaleString()}</p>
                         </div>
                       );
@@ -270,7 +333,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               {/* Spend by Provider */}
               <Col numColSpan={2}>
                 <Card className="h-full">
-                  <Title>Spend by Provider</Title>
+                  <div className="flex justify-between items-center mb-4">
+                    <Title>Spend by Provider</Title>
+                  </div>
                   <Grid numItems={2}>
                     <Col numColSpan={1}>
                       <DonutChart
@@ -288,20 +353,28 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                           <TableRow>
                             <TableHeaderCell>Provider</TableHeaderCell>
                             <TableHeaderCell>Spend</TableHeaderCell>
-                            <TableHeaderCell>Requests</TableHeaderCell>
+                            <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
+                            <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
                             <TableHeaderCell>Tokens</TableHeaderCell>
                           </TableRow>
                         </TableHead>
                         <TableBody>
-                          {getProviderSpend().map((provider) => (
-                            <TableRow key={provider.provider}>
-                              <TableCell>{provider.provider}</TableCell>
-                              <TableCell>
-                                ${provider.spend < 0.00001 
-                                  ? "less than 0.00" 
-                                  : provider.spend.toFixed(2)}
+                          {getProviderSpend()
+                            .filter(provider => provider.spend > 0)
+                            .map((provider) => (
+                              <TableRow key={provider.provider}>
+                                <TableCell>{provider.provider}</TableCell>
+                                <TableCell>
+                                  ${provider.spend < 0.00001
+                                      ? "less than 0.00001" 
+                                      : provider.spend.toFixed(2)}
                               </TableCell>
-                              <TableCell>{provider.requests.toLocaleString()}</TableCell>
+                              <TableCell className="text-green-600">
+                                {provider.successful_requests.toLocaleString()}
+                              </TableCell>
+                              <TableCell className="text-red-600">
+                                {provider.failed_requests.toLocaleString()}
+                              </TableCell>
                               <TableCell>{provider.tokens.toLocaleString()}</TableCell>
                             </TableRow>
                           ))}
@@ -313,31 +386,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               </Col>
 
               {/* Usage Metrics */}
-              <Col numColSpan={2}>
-                <Card>
-                  <Title>Usage Metrics</Title>
-                  <Grid numItems={3} className="gap-4 mt-4">
-                    <Card>
-                      <Title>Total Requests</Title>
-                      <Text className="text-2xl font-bold mt-2">
-                        {userSpendData.metadata?.total_api_requests?.toLocaleString() || 0}
-                      </Text>
-                    </Card>
-                    <Card>
-                      <Title>Total Tokens</Title>
-                      <Text className="text-2xl font-bold mt-2">
-                        {userSpendData.metadata?.total_tokens?.toLocaleString() || 0}
-                      </Text>
-                    </Card>
-                    <Card>
-                      <Title>Average Cost per Request</Title>
-                      <Text className="text-2xl font-bold mt-2">
-                        ${((totalSpend || 0) / (userSpendData.metadata?.total_api_requests || 1)).toFixed(4)}
-                      </Text>
-                    </Card>
-                  </Grid>
-                </Card>
-              </Col>
+              
             </Grid>
           </TabPanel>
 
