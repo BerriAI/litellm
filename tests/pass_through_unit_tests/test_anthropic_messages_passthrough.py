@@ -69,7 +69,7 @@ def _validate_anthropic_response(response: Dict[str, Any]):
     assert response["role"] == "assistant"
 
 
-@pytest.mark.parametrize("sync_mode", [True])
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_anthropic_messages_non_streaming(sync_mode: bool):
     """
@@ -106,12 +106,13 @@ async def test_anthropic_messages_non_streaming(sync_mode: bool):
     assert "model" in response
     assert response["role"] == "assistant"
 
-    print(f"Non-streaming response: {json.dumps(response, indent=2)}")
+    print(f"Non-streaming response: {response.model_dump_json(indent=2)}")
     return response
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_streaming():
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_anthropic_messages_streaming(sync_mode: bool):
     """
     Test the anthropic_messages with streaming request
     """
@@ -123,18 +124,26 @@ async def test_anthropic_messages_streaming():
     # Set up test parameters
     messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
 
-    # Call the handler
-    async_httpx_client = AsyncHTTPHandler()
-    response = await litellm.anthropic.messages.acreate(
-        messages=messages,
-        api_key=api_key,
-        model="claude-3-haiku-20240307",
-        max_tokens=100,
-        stream=True,
-        client=async_httpx_client,
-    )
+    if sync_mode is True:
+        response = litellm.anthropic.messages.create(
+            messages=messages,
+            api_key=api_key,
+            model="claude-3-haiku-20240307",
+            max_tokens=100,
+            stream=True,
+        )
 
-    if isinstance(response, AsyncIterator):
+        for chunk in response:
+            print("chunk=", chunk)
+    else:
+        response = await litellm.anthropic.messages.acreate(
+            messages=messages,
+            api_key=api_key,
+            model="claude-3-haiku-20240307",
+            max_tokens=100,
+            stream=True,
+        )
+
         async for chunk in response:
             print("chunk=", chunk)
 
@@ -228,7 +237,7 @@ async def test_anthropic_messages_litellm_router_non_streaming():
     assert "model" in response
     assert response["role"] == "assistant"
 
-    print(f"Non-streaming response: {json.dumps(response, indent=2)}")
+    print(f"Non-streaming response: {response.model_dump_json(indent=2)}")
     return response
 
 
@@ -279,9 +288,12 @@ async def test_anthropic_messages_litellm_router_non_streaming_with_logging():
     # Verify response
     _validate_anthropic_response(response)
 
-    print(f"Non-streaming response: {json.dumps(response, indent=2)}")
+    print(f"Non-streaming response: {response.model_dump_json(indent=2)}")
 
     await asyncio.sleep(1)
+
+    # logged slp object
+    print("logged_standard_logging_payload", json.dumps(test_custom_logger.logged_standard_logging_payload, indent=4, default=str))
     assert test_custom_logger.logged_standard_logging_payload["messages"] == messages
     assert test_custom_logger.logged_standard_logging_payload["response"] is not None
     assert (
