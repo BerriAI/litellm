@@ -34,7 +34,6 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "tools",
             "top_k",
             "top_p",
-            "timeout",
         ]
 
     def map_anthropic_messages_optional_params(
