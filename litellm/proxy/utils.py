@@ -1158,18 +1158,28 @@ class PrismaClient:
 
     def get_request_status(
         self, payload: Union[dict, SpendLogsPayload]
-    ) -> Optional[str]:
+    ) -> Literal["success", "failure"]:
         """
-        Get the request status from the payload
+        Determine if a request was successful or failed based on payload metadata.
+
+        Args:
+            payload (Union[dict, SpendLogsPayload]): Request payload containing metadata
+
+        Returns:
+            Literal["success", "failure"]: Request status
         """
-        metadata = payload.get("metadata", {})
-        if isinstance(metadata, dict):
-            return metadata.get("status")
-        elif isinstance(metadata, str):
-            json_metadata = cast(SpendLogsMetadata, json.loads(metadata))
-            return json_metadata.get("status")
-        else:
-            return None
+        try:
+            # Get metadata and convert to dict if it's a JSON string
+            metadata = payload.get("metadata", {})
+            if isinstance(metadata, str):
+                metadata = json.loads(metadata)
+
+            # Check status in metadata dict
+            return "failure" if metadata.get("status") == "failure" else "success"
+
+        except (json.JSONDecodeError, AttributeError):
+            # Default to success if metadata parsing fails
+            return "success"
 
     def add_spend_log_transaction_to_daily_user_transaction(
         self, payload: Union[dict, SpendLogsPayload]
@@ -1190,6 +1200,7 @@ class PrismaClient:
             return
 
         request_status = self.get_request_status(payload)
+        verbose_proxy_logger.info(f"Logged request status: {request_status}")
         if isinstance(payload["startTime"], datetime):
             start_time = payload["startTime"].isoformat()
             date = start_time.split("T")[0]
