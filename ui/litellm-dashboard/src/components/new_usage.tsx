@@ -359,13 +359,15 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                           </TableRow>
                         </TableHead>
                         <TableBody>
-                          {getProviderSpend().map((provider) => (
-                            <TableRow key={provider.provider}>
-                              <TableCell>{provider.provider}</TableCell>
-                              <TableCell>
-                                ${provider.spend < 0.00001 
-                                  ? "less than 0.00" 
-                                  : provider.spend.toFixed(2)}
+                          {getProviderSpend()
+                            .filter(provider => provider.spend > 0)
+                            .map((provider) => (
+                              <TableRow key={provider.provider}>
+                                <TableCell>{provider.provider}</TableCell>
+                                <TableCell>
+                                  ${provider.spend < 0.00001
+                                      ? "less than 0.00001" 
+                                      : provider.spend.toFixed(2)}
                               </TableCell>
                               <TableCell className="text-green-600">
                                 {provider.successful_requests.toLocaleString()}
