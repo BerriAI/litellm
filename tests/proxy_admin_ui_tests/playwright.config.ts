@@ -14,12 +14,7 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   globalSetup: "utils/globalSetup.ts",
   testDir: "./e2e_ui_tests",
-  testIgnore: [
-    "**/tests/pass_through_tests/**",
-    "../pass_through_tests/**/*",
-    "./e2e_ui_tests/login_to_ui.spec.ts",
-    "./e2e_ui_tests/view_internal_user.spec.ts",
-  ],
+  testIgnore: ["**/tests/pass_through_tests/**", "../pass_through_tests/**/*"],
   testMatch: "**/*.spec.ts", // Only run files ending in .spec.ts
   /* Run tests in files in parallel */
   fullyParallel: true,
