@@ -257,7 +257,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                 <Card>
                   <Title>Daily Spend</Title>
                   <BarChart
-                    data={userSpendData.results}
+                    data={[...userSpendData.results].sort((a, b) => 
+                      new Date(a.date).getTime() - new Date(b.date).getTime()
+                    )}
                     index="date"
                     categories={["metrics.spend"]}
                     colors={["cyan"]}
@@ -402,7 +404,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                     </Subtitle>
                     <AreaChart
                       className="h-40"
-                      data={[...userSpendData.results].reverse()}
+                      data={[...userSpendData.results].sort((a, b) => 
+                        new Date(a.date).getTime() - new Date(b.date).getTime()
+                      )}
                       valueFormatter={valueFormatterNumbers}
                       index="date"
                       colors={['cyan']}
@@ -415,7 +419,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                     </Subtitle>
                     <BarChart
                       className="h-40"
-                      data={[...userSpendData.results].reverse()}
+                      data={[...userSpendData.results].sort((a, b) => 
+                        new Date(a.date).getTime() - new Date(b.date).getTime()
+                      )}
                       valueFormatter={valueFormatterNumbers}
                       index="date"
                       colors={['cyan']}
@@ -436,7 +442,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                       </Subtitle>
                       <AreaChart
                         className="h-40"
-                        data={[...data.daily_data].reverse()}
+                        data={[...data.daily_data].sort((a, b) => 
+                          new Date(a.date).getTime() - new Date(b.date).getTime()
+                        )}
                         index="date"
                         colors={['cyan']}
                         categories={['api_requests']}
@@ -449,7 +457,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                       </Subtitle>
                       <BarChart
                         className="h-40"
-                        data={data.daily_data}  
+                        data={[...data.daily_data].sort((a, b) => 
+                          new Date(a.date).getTime() - new Date(b.date).getTime()
+                        )}
                         index="date"
                         colors={['cyan']}
                         categories={['total_tokens']}
