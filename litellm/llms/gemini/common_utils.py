@@ -25,7 +25,6 @@ class GeminiModelInfo(BaseLLMModelInfo):
     def get_models(
         self, api_key: Optional[str] = None, api_base: Optional[str] = None
     ) -> List[str]:
-
         api_base = GeminiModelInfo.get_api_base(api_base)
         api_key = GeminiModelInfo.get_api_key(api_key)
         if api_base is None or api_key is None:

@@ -47,7 +47,8 @@ async def test_async_post_call_failure_hook():
 
     # Mock update_database function
     with patch(
-        "litellm.proxy.proxy_server.update_database", new_callable=AsyncMock
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
     ) as mock_update_database:
         # Call the method
         await logger.async_post_call_failure_hook(

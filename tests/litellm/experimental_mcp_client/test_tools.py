@@ -19,11 +19,11 @@ from mcp.types import Tool as MCPTool
 
 from litellm.experimental_mcp_client.tools import (
     _get_function_arguments,
-    _transform_openai_tool_call_to_mcp_tool_call_request,
     call_mcp_tool,
     call_openai_tool,
     load_mcp_tools,
     transform_mcp_tool_to_openai_tool,
+    transform_openai_tool_call_request_to_mcp_tool_call_request,
 )
 
 
@@ -76,11 +76,11 @@ def test_transform_mcp_tool_to_openai_tool(mock_mcp_tool):
     }
 
 
-def test_transform_openai_tool_call_to_mcp_tool_call_request(mock_mcp_tool):
+def testtransform_openai_tool_call_request_to_mcp_tool_call_request(mock_mcp_tool):
     openai_tool = {
         "function": {"name": "test_tool", "arguments": json.dumps({"test": "value"})}
     }
-    mcp_tool_call_request = _transform_openai_tool_call_to_mcp_tool_call_request(
+    mcp_tool_call_request = transform_openai_tool_call_request_to_mcp_tool_call_request(
         openai_tool
     )
     assert mcp_tool_call_request.name == "test_tool"

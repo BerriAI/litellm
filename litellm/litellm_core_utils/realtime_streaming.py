@@ -122,7 +122,6 @@ class RealTimeStreaming:
             pass
 
     async def bidirectional_forward(self):
-
         forward_task = asyncio.create_task(self.backend_to_client_send_messages())
         try:
             await self.client_ack_messages()

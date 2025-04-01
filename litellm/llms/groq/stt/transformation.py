@@ -9,7 +9,6 @@ import litellm
 
 
 class GroqSTTConfig:
-
     frequency_penalty: Optional[int] = None
     function_call: Optional[Union[str, dict]] = None
     functions: Optional[list] = None
