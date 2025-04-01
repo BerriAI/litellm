@@ -3,6 +3,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
 
+from litellm.types.llms.anthropic_messages.anthropic_request import (
+    AnthropicMessagesRequestOptionalParams,
+)
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -42,7 +45,16 @@ class BaseAnthropicMessagesConfig(ABC):
         return api_base or ""
 
     @abstractmethod
-    def get_supported_anthropic_messages_params(self, model: str) -> list:
+    def get_supported_anthropic_messages_optional_params(self, model: str) -> list:
+        pass
+
+    @abstractmethod
+    def map_anthropic_messages_optional_params(
+        self,
+        anthropic_messages_optional_params: AnthropicMessagesRequestOptionalParams,
+        model: str,
+        drop_params: bool,
+    ) -> Dict:
         pass
 
     @abstractmethod

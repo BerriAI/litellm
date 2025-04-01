@@ -69,8 +69,9 @@ def _validate_anthropic_response(response: Dict[str, Any]):
     assert response["role"] == "assistant"
 
 
+@pytest.mark.parametrize("sync_mode", [True])
 @pytest.mark.asyncio
-async def test_anthropic_messages_non_streaming():
+async def test_anthropic_messages_non_streaming(sync_mode: bool):
     """
     Test the anthropic_messages with non-streaming request
     """
@@ -84,12 +85,20 @@ async def test_anthropic_messages_non_streaming():
     messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
 
     # Call the handler
-    response = await litellm.anthropic.messages.acreate(
-        messages=messages,
-        api_key=api_key,
-        model="claude-3-haiku-20240307",
-        max_tokens=100,
-    )
+    if sync_mode is True:
+        response = litellm.anthropic.messages.create(
+            messages=messages,
+            api_key=api_key,
+            model="claude-3-haiku-20240307",
+            max_tokens=100,
+        )
+    else:
+        response = await litellm.anthropic.messages.acreate(
+            messages=messages,
+            api_key=api_key,
+            model="claude-3-haiku-20240307",
+            max_tokens=100,
+        )
 
     # Verify response
     assert "id" in response

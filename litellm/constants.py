@@ -26,6 +26,12 @@ REPEATED_STREAMING_CHUNK_LIMIT = 100  # catch if model starts looping the same c
 request_timeout: float = 6000  # time in seconds
 STREAM_SSE_DONE_STRING: str = "[DONE]"
 
+############ LLM API ENDPOINTS / VERSIONS ############
+DEFAULT_ANTHROPIC_API_BASE = "https://api.anthropic.com"
+DEFAULT_ANTHROPIC_API_VERSION = "2023-06-01"
+
+############ LLM API PROVIDERS ############
+
 LITELLM_CHAT_PROVIDERS = [
     "openai",
     "openai_like",

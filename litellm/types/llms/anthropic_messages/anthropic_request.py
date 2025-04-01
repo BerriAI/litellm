@@ -1,18 +1,14 @@
 from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 
-import anthropic
 import httpx
-from typing_extensions import TypeAlias
 
 
-class AnthropicMessagesRequestParams(TypedDict, total=False):
+class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     """
-    Anthropic Messages API Request Params: https://docs.anthropic.com/en/api/messages
+    Anthropic Messages API Request Optional Params: https://docs.anthropic.com/en/api/messages
     """
 
     max_tokens: int
-    messages: List[Dict]
-    model: str
     metadata: Optional[Dict[str, Any]]
     stop_sequences: Optional[List[str]]
     stream: Literal[False]
@@ -24,3 +20,15 @@ class AnthropicMessagesRequestParams(TypedDict, total=False):
     top_k: Optional[int]
     top_p: Optional[float]
     timeout: Optional[Union[float, httpx.Timeout]]
+    pass
+
+
+class AnthropicMessagesRequestParams(
+    AnthropicMessagesRequestOptionalParams, total=False
+):
+    """
+    Anthropic Messages API Request Params: https://docs.anthropic.com/en/api/messages
+    """
+
+    messages: List[Dict]
+    model: str

@@ -16,11 +16,16 @@ import httpx
 import litellm
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+    AnthropicMessagesRequestUtils,
+)
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.types.llms.anthropic_messages.anthropic_request import (
+    AnthropicMessagesRequestOptionalParams,
+)
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -244,40 +249,32 @@ def anthropic_messages(
         )
         # Prepare request body
         request_body = locals().copy()
-        request_body = {
-            k: v
-            for k, v in request_body.items()
-            if k
-            in anthropic_messages_provider_config.get_supported_anthropic_messages_params(
-                model=model
+        local_vars.update(kwargs)
+
+        # Get all optional anthropic messages params passed in by user
+        anthropic_messages_optional_params: AnthropicMessagesRequestOptionalParams = (
+            AnthropicMessagesRequestUtils.get_passed_in_optional_params(local_vars)
+        )
+
+        # Get AnthropicMessagesRequestParams with only valid parameters
+        mapped_anthropic_messages_optional_params: Dict = (
+            AnthropicMessagesRequestUtils.get_optional_params_anthropic_messages(
+                model=model,
+                anthropic_messages_provider_config=anthropic_messages_provider_config,
+                anthropic_messages_optional_params=anthropic_messages_optional_params,
             )
-            and v is not None
-        }
+        )
+
         request_body["stream"] = stream
         request_body["model"] = model
         litellm_logging_obj.stream = stream
         litellm_logging_obj.model_call_details.update(request_body)
 
-        # Make the request
-        request_url = anthropic_messages_provider_config.get_complete_url(
-            api_base=api_base, model=model
-        )
-
-        litellm_logging_obj.pre_call(
-            input=[{"role": "user", "content": json.dumps(request_body)}],
-            api_key="",
-            additional_args={
-                "complete_input_dict": request_body,
-                "api_base": str(request_url),
-                "headers": headers,
-            },
-        )
-
         response = base_llm_http_handler.anthropic_messages_handler(
             model=model,
             messages=messages,
             anthropic_messages_provider_config=anthropic_messages_provider_config,
-            anthropic_messages_optional_params=request_body,
+            anthropic_messages_optional_params=mapped_anthropic_messages_optional_params,
             custom_llm_provider=custom_llm_provider,
             litellm_params=optional_params,
             logging_obj=litellm_logging_obj,
