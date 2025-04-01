@@ -8,6 +8,19 @@ import { Tooltip } from "antd";
 import { TimeCell } from "./time_cell";
 import { Button } from "@tremor/react";
 
+// Helper to get the appropriate logo URL
+const getLogoUrl = (
+  row: LogEntry,
+  provider: string
+) => {
+  // Check if mcp_tool_call_metadata exists and contains mcp_server_logo_url
+  if (row.metadata?.mcp_tool_call_metadata?.mcp_server_logo_url) {
+    return row.metadata.mcp_tool_call_metadata.mcp_server_logo_url;
+  }
+  // Fall back to default provider logo
+  return provider ? getProviderLogoAndName(provider).logo : '';
+};
+
 export type LogEntry = {
   request_id: string;
   api_key: string;
@@ -177,7 +190,7 @@ export const columns: ColumnDef<LogEntry>[] = [
         <div className="flex items-center space-x-2">
           {provider && (
             <img
-              src={getProviderLogoAndName(provider).logo}
+              src={getLogoUrl(row, provider)}
               alt=""
               className="w-4 h-4"
               onError={(e) => {

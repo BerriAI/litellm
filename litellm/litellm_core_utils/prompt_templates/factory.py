@@ -1042,10 +1042,10 @@ def convert_to_gemini_tool_call_invoke(
         if tool_calls is not None:
             for tool in tool_calls:
                 if "function" in tool:
-                    gemini_function_call: Optional[VertexFunctionCall] = (
-                        _gemini_tool_call_invoke_helper(
-                            function_call_params=tool["function"]
-                        )
+                    gemini_function_call: Optional[
+                        VertexFunctionCall
+                    ] = _gemini_tool_call_invoke_helper(
+                        function_call_params=tool["function"]
                     )
                     if gemini_function_call is not None:
                         _parts_list.append(
@@ -1432,9 +1432,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
 
                             if "cache_control" in _content_element:
-                                _anthropic_content_element["cache_control"] = (
-                                    _content_element["cache_control"]
-                                )
+                                _anthropic_content_element[
+                                    "cache_control"
+                                ] = _content_element["cache_control"]
                             user_content.append(_anthropic_content_element)
                         elif m.get("type", "") == "text":
                             m = cast(ChatCompletionTextObject, m)
@@ -1466,9 +1466,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     )
 
                     if "cache_control" in _content_element:
-                        _anthropic_content_text_element["cache_control"] = (
-                            _content_element["cache_control"]
-                        )
+                        _anthropic_content_text_element[
+                            "cache_control"
+                        ] = _content_element["cache_control"]
 
                     user_content.append(_anthropic_content_text_element)
 
@@ -1533,7 +1533,6 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     "content"
                 ]  # don't pass empty text blocks. anthropic api raises errors.
             ):
-
                 _anthropic_text_content_element = AnthropicMessagesTextParam(
                     type="text",
                     text=assistant_content_block["content"],
@@ -1569,7 +1568,6 @@ def anthropic_messages_pt(  # noqa: PLR0915
             msg_i += 1
 
         if assistant_content:
-
             new_messages.append({"role": "assistant", "content": assistant_content})
 
         if msg_i == init_msg_i:  # prevent infinite loops
@@ -2245,7 +2243,6 @@ class BedrockImageProcessor:
     @staticmethod
     async def get_image_details_async(image_url) -> Tuple[str, str]:
         try:
-
             client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.PromptFactory,
                 params={"concurrent_limit": 1},
@@ -2612,7 +2609,6 @@ def get_user_message_block_or_continue_message(
         for item in modified_content_block:
             # Check if the list is empty
             if item["type"] == "text":
-
                 if not item["text"].strip():
                     # Replace empty text with continue message
                     _user_continue_message = ChatCompletionUserMessage(
@@ -3207,7 +3203,6 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
         assistant_content: List[BedrockContentBlock] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
-
             assistant_message_block = get_assistant_message_block_or_continue_message(
                 message=messages[msg_i],
                 assistant_continue_message=assistant_continue_message,
@@ -3410,7 +3405,6 @@ def response_schema_prompt(model: str, response_schema: dict) -> str:
         {"role": "user", "content": "{}".format(response_schema)}
     ]
     if f"{model}/response_schema_prompt" in litellm.custom_prompt_dict:
-
         custom_prompt_details = litellm.custom_prompt_dict[
             f"{model}/response_schema_prompt"
         ]  # allow user to define custom response schema prompt by model

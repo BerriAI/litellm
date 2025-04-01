@@ -373,7 +373,6 @@ async def pass_through_request(  # noqa: PLR0915
     litellm_call_id = str(uuid.uuid4())
     url: Optional[httpx.URL] = None
     try:
-
         from litellm.litellm_core_utils.litellm_logging import Logging
         from litellm.proxy.proxy_server import proxy_logging_obj
 
@@ -384,7 +383,6 @@ async def pass_through_request(  # noqa: PLR0915
         )
 
         if merge_query_params:
-
             # Create a new URL with the merged query params
             url = url.copy_with(
                 query=urlencode(
@@ -771,7 +769,6 @@ def _is_streaming_response(response: httpx.Response) -> bool:
 
 
 async def initialize_pass_through_endpoints(pass_through_endpoints: list):
-
     verbose_proxy_logger.debug("initializing pass through endpoints")
     from litellm.proxy._types import CommonProxyErrors, LiteLLMRoutes
     from litellm.proxy.proxy_server import app, premium_user

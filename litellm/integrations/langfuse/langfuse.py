@@ -471,9 +471,9 @@ class LangFuseLogger:
             # we clean out all extra litellm metadata params before logging
             clean_metadata: Dict[str, Any] = {}
             if prompt_management_metadata is not None:
-                clean_metadata["prompt_management_metadata"] = (
-                    prompt_management_metadata
-                )
+                clean_metadata[
+                    "prompt_management_metadata"
+                ] = prompt_management_metadata
             if isinstance(metadata, dict):
                 for key, value in metadata.items():
                     # generate langfuse tags - Default Tags sent to Langfuse from LiteLLM Proxy

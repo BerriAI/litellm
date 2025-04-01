@@ -84,9 +84,9 @@ class CustomStreamWrapper:
 
         self.system_fingerprint: Optional[str] = None
         self.received_finish_reason: Optional[str] = None
-        self.intermittent_finish_reason: Optional[str] = (
-            None  # finish reasons that show up mid-stream
-        )
+        self.intermittent_finish_reason: Optional[
+            str
+        ] = None  # finish reasons that show up mid-stream
         self.special_tokens = [
             "<|assistant|>",
             "<|system|>",
@@ -814,7 +814,6 @@ class CustomStreamWrapper:
         model_response: ModelResponseStream,
         response_obj: Dict[str, Any],
     ):
-
         print_verbose(
             f"completion_obj: {completion_obj}, model_response.choices[0]: {model_response.choices[0]}, response_obj: {response_obj}"
         )
@@ -1008,7 +1007,6 @@ class CustomStreamWrapper:
                 self.custom_llm_provider
                 and self.custom_llm_provider in litellm._custom_providers
             ):
-
                 if self.received_finish_reason is not None:
                     if "provider_specific_fields" not in chunk:
                         raise StopIteration
@@ -1379,9 +1377,9 @@ class CustomStreamWrapper:
                             _json_delta = delta.model_dump()
                             print_verbose(f"_json_delta: {_json_delta}")
                             if "role" not in _json_delta or _json_delta["role"] is None:
-                                _json_delta["role"] = (
-                                    "assistant"  # mistral's api returns role as None
-                                )
+                                _json_delta[
+                                    "role"
+                                ] = "assistant"  # mistral's api returns role as None
                             if "tool_calls" in _json_delta and isinstance(
                                 _json_delta["tool_calls"], list
                             ):
@@ -1758,9 +1756,9 @@ class CustomStreamWrapper:
                         chunk = next(self.completion_stream)
                     if chunk is not None and chunk != b"":
                         print_verbose(f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}")
-                        processed_chunk: Optional[ModelResponseStream] = (
-                            self.chunk_creator(chunk=chunk)
-                        )
+                        processed_chunk: Optional[
+                            ModelResponseStream
+                        ] = self.chunk_creator(chunk=chunk)
                         print_verbose(
                             f"PROCESSED CHUNK POST CHUNK CREATOR: {processed_chunk}"
                         )
