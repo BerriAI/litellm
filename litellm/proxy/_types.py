@@ -2736,6 +2736,8 @@ class DailyUserSpendTransaction(TypedDict):
     completion_tokens: int
     spend: float
     api_requests: int
+    successful_requests: int
+    failed_requests: int
 
 
 class DBSpendUpdateTransactions(TypedDict):
