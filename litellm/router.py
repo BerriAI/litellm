@@ -718,7 +718,7 @@ class Router:
             litellm.amoderation, call_type="moderation"
         )
         self.aanthropic_messages = self.factory_function(
-            litellm.anthropic_messages, call_type="anthropic_messages"
+            litellm.anthropic.messages.acreate, call_type="anthropic_messages"
         )
         self.aresponses = self.factory_function(
             litellm.aresponses, call_type="aresponses"
