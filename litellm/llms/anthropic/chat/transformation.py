@@ -294,8 +294,9 @@ class AnthropicConfig(BaseConfig):
                 new_stop = new_v
         return new_stop
 
+    @staticmethod
     def _map_reasoning_effort(
-        self, reasoning_effort: Optional[Union[REASONING_EFFORT, str]]
+        reasoning_effort: Optional[Union[REASONING_EFFORT, str]]
     ) -> Optional[AnthropicThinkingParam]:
         if reasoning_effort is None:
             return None
@@ -384,7 +385,9 @@ class AnthropicConfig(BaseConfig):
             if param == "thinking":
                 optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
-                optional_params["thinking"] = self._map_reasoning_effort(value)
+                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+                    value
+                )
 
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(

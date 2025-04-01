@@ -1380,11 +1380,19 @@ def test_azure_modalities_param():
     assert optional_params["modalities"] == ["text", "audio"]
     assert optional_params["audio"] == {"type": "audio_input", "input": "test.wav"}
 
-
-def test_anthropic_unified_reasoning_content():
+@pytest.mark.parametrize(
+    "model, provider",
+    [
+        ("claude-3-7-sonnet-20240620-v1:0", "anthropic"),
+        ("anthropic.claude-3-7-sonnet-20250219-v1:0", "bedrock"),
+        ("invoke/anthropic.claude-3-7-sonnet-20240620-v1:0", "bedrock"),
+        ("claude-3-7-sonnet@20250219", "vertex_ai"),
+    ],
+)
+def test_anthropic_unified_reasoning_content(model, provider):
     optional_params = get_optional_params(
-        model="claude-3-5-sonnet-20240620-v1:0",
-        custom_llm_provider="anthropic",
+        model=model,
+        custom_llm_provider=provider,
         reasoning_effort="high",
     )
     assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
