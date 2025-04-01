@@ -5,14 +5,17 @@ from typing import Optional, Union
 
 import httpx
 
+import litellm
+from litellm._logging import verbose_logger
 from litellm.constants import STREAM_SSE_DONE_STRING
+from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.llms.anthropic.chat.handler import (
+    ModelResponseIterator as AnthropicModelResponseIterator,
+)
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
-)
-from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
-    AnthropicPassthroughLoggingHandler,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesStreamingResponse,
@@ -43,7 +46,7 @@ class BaseAnthropicMessagesStreamingIterator:
         self.collected_chunks = []
         self.start_time = datetime.now()
 
-    def _process_chunk(self, chunk):
+    def _process_chunk(self, chunk: Optional[str]):
         """Process a single chunk of data from the stream"""
         if not chunk:
             return None
@@ -81,6 +84,41 @@ class BaseAnthropicMessagesStreamingIterator:
         """Base implementation - should be overridden by subclasses"""
         pass
 
+    def _build_complete_streaming_response(
+        self,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        model: str,
+    ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
+        """
+        Builds complete response from raw Anthropic chunks
+
+        - Converts anthropic chunks to litellm chunks (OpenAI format)
+        - Builds complete response from litellm chunks
+        """
+        anthropic_model_response_iterator = AnthropicModelResponseIterator(
+            streaming_response=None,
+            sync_stream=False,
+        )
+        all_openai_chunks = []
+        for _chunk_str in self.collected_chunks:
+            try:
+                transformed_openai_chunk = (
+                    anthropic_model_response_iterator.chunk_parser(chunk=_chunk_str)
+                )
+                if transformed_openai_chunk is not None:
+                    all_openai_chunks.append(transformed_openai_chunk)
+
+                verbose_logger.debug(
+                    "all openai chunks= %s",
+                    json.dumps(all_openai_chunks, indent=4, default=str),
+                )
+            except (StopIteration, StopAsyncIteration):
+                break
+        complete_streaming_response = litellm.stream_chunk_builder(
+            chunks=all_openai_chunks
+        )
+        return complete_streaming_response
+
 
 class AnthropicMessagesStreamingIterator(BaseAnthropicMessagesStreamingIterator):
     """
@@ -110,11 +148,13 @@ class AnthropicMessagesStreamingIterator(BaseAnthropicMessagesStreamingIterator)
                     chunk = await self.stream_iterator.__anext__()
                 except StopAsyncIteration:
                     self.finished = True
+                    self._handle_logging_completed_response()
                     raise StopAsyncIteration
 
                 result = self._process_chunk(chunk)
 
                 if self.finished:
+                    self._handle_logging_completed_response()
                     raise StopAsyncIteration
                 elif result is not None:
                     return result
@@ -123,16 +163,14 @@ class AnthropicMessagesStreamingIterator(BaseAnthropicMessagesStreamingIterator)
         except httpx.HTTPError as e:
             # Handle HTTP errors
             self.finished = True
-            raise e
-        finally:
             self._handle_logging_completed_response()
+            raise e
 
     def _handle_logging_completed_response(self):
         """Handle logging for completed responses in async context"""
         completed_response: Optional[
             Union[ModelResponse, TextCompletionResponse]
-        ] = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
-            all_chunks=self.collected_chunks,
+        ] = self._build_complete_streaming_response(
             litellm_logging_obj=self.logging_obj,
             model=self.model,
         )
@@ -154,61 +192,73 @@ class AnthropicMessagesStreamingIterator(BaseAnthropicMessagesStreamingIterator)
         )
 
 
-# class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
-#     """
-#     Synchronous iterator for processing streaming responses from the Responses API.
-#     """
+class SyncAnthropicMessagesStreamingIterator(BaseAnthropicMessagesStreamingIterator):
+    """
+    Synchronous iterator for processing streaming responses from the Anthropic Messages API.
+    """
 
-#     def __init__(
-#         self,
-#         response: httpx.Response,
-#         model: str,
-#         responses_api_provider_config: BaseResponsesAPIConfig,
-#         logging_obj: LiteLLMLoggingObj,
-#     ):
-#         super().__init__(response, model, responses_api_provider_config, logging_obj)
-#         self.stream_iterator = response.iter_lines()
+    def __init__(
+        self,
+        response: httpx.Response,
+        model: str,
+        anthropic_messages_provider_config: BaseAnthropicMessagesConfig,
+        logging_obj: LiteLLMLoggingObj,
+    ):
+        super().__init__(
+            response, model, anthropic_messages_provider_config, logging_obj
+        )
+        self.stream_iterator = response.iter_lines()
 
-#     def __iter__(self):
-#         return self
+    def __iter__(self):
+        return self
 
-#     def __next__(self):
-#         try:
-#             while True:
-#                 # Get the next chunk from the stream
-#                 try:
-#                     chunk = next(self.stream_iterator)
-#                 except StopIteration:
-#                     self.finished = True
-#                     raise StopIteration
+    def __next__(self):
+        try:
+            while True:
+                # Get the next chunk from the stream
+                try:
+                    chunk = next(self.stream_iterator)
+                except StopIteration:
+                    self.finished = True
+                    self._handle_logging_completed_response()
+                    raise StopIteration
 
-#                 result = self._process_chunk(chunk)
+                result = self._process_chunk(chunk)
 
-#                 if self.finished:
-#                     raise StopIteration
-#                 elif result is not None:
-#                     return result
-#                 # If result is None, continue the loop to get the next chunk
+                if self.finished:
+                    self._handle_logging_completed_response()
+                    raise StopIteration
+                elif result is not None:
+                    return result
+                # If result is None, continue the loop to get the next chunk
 
-#         except httpx.HTTPError as e:
-#             # Handle HTTP errors
-#             self.finished = True
-#             raise e
+        except httpx.HTTPError as e:
+            # Handle HTTP errors
+            self.finished = True
+            self._handle_logging_completed_response()
+            raise e
 
-#     def _handle_logging_completed_response(self):
-#         """Handle logging for completed responses in sync context"""
-#         run_async_function(
-#             async_function=self.logging_obj.async_success_handler,
-#             result=self.completed_response,
-#             start_time=self.start_time,
-#             end_time=datetime.now(),
-#             cache_hit=None,
-#         )
+    def _handle_logging_completed_response(self):
+        """Handle logging for completed responses in sync context"""
+        completed_response: Optional[
+            Union[ModelResponse, TextCompletionResponse]
+        ] = self._build_complete_streaming_response(
+            litellm_logging_obj=self.logging_obj,
+            model=self.model,
+        )
 
-#         executor.submit(
-#             self.logging_obj.success_handler,
-#             result=self.completed_response,
-#             cache_hit=None,
-#             start_time=self.start_time,
-#             end_time=datetime.now(),
-#         )
+        run_async_function(
+            async_function=self.logging_obj.async_success_handler,
+            result=completed_response,
+            start_time=self.start_time,
+            end_time=datetime.now(),
+            cache_hit=None,
+        )
+
+        executor.submit(
+            self.logging_obj.success_handler,
+            result=completed_response,
+            cache_hit=None,
+            start_time=self.start_time,
+            end_time=datetime.now(),
+        )
