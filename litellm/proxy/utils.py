@@ -1170,12 +1170,20 @@ class PrismaClient:
         """
         try:
             # Get metadata and convert to dict if it's a JSON string
-            metadata = payload.get("metadata", {})
-            if isinstance(metadata, str):
-                metadata = json.loads(metadata)
+            payload_metadata: Union[Dict, SpendLogsMetadata, str] = payload.get(
+                "metadata", {}
+            )
+            if isinstance(payload_metadata, str):
+                payload_metadata_json = cast(Dict, json.loads(payload_metadata))
+            else:
+                payload_metadata_json = payload_metadata
 
             # Check status in metadata dict
-            return "failure" if metadata.get("status") == "failure" else "success"
+            return (
+                "failure"
+                if payload_metadata_json.get("status") == "failure"
+                else "success"
+            )
 
         except (json.JSONDecodeError, AttributeError):
             # Default to success if metadata parsing fails
