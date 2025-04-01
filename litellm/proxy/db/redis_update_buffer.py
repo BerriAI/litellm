@@ -80,20 +80,11 @@ class RedisUpdateBuffer:
             )
             return
 
-        aggregated_updates = (
-            await spend_update_queue.flush_and_get_all_aggregated_updates_by_entity_type()
+        db_spend_update_transactions = (
+            await spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
         )
-        verbose_proxy_logger.debug("ALL AGGREGATED UPDATES: %s", aggregated_updates)
-
-        db_spend_update_transactions: DBSpendUpdateTransactions = (
-            DBSpendUpdateTransactions(
-                user_list_transactions=aggregated_updates.get("user", {}),
-                end_user_list_transactions=aggregated_updates.get("end_user", {}),
-                key_list_transactions=aggregated_updates.get("key", {}),
-                team_list_transactions=aggregated_updates.get("team", {}),
-                team_member_list_transactions=aggregated_updates.get("team_member", {}),
-                org_list_transactions=aggregated_updates.get("organization", {}),
-            )
+        verbose_proxy_logger.debug(
+            "ALL DB SPEND UPDATE TRANSACTIONS: %s", db_spend_update_transactions
         )
 
         # only store in redis if there are any updates to commit

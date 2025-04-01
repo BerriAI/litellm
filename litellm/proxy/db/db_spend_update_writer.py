@@ -22,6 +22,7 @@ from litellm.proxy._types import (
     Litellm_EntityType,
     LiteLLM_UserTable,
     SpendLogsPayload,
+    SpendUpdateQueueItem,
 )
 from litellm.proxy.db.pod_lock_manager import PodLockManager
 from litellm.proxy.db.redis_update_buffer import RedisUpdateBuffer
@@ -148,11 +149,11 @@ class DBSpendUpdateWriter:
                 return
 
             await self.spend_update_queue.add_update(
-                update={
-                    "entity_type": Litellm_EntityType.KEY.value,
-                    "entity_id": hashed_token,
-                    "amount": response_cost,
-                }
+                update=SpendUpdateQueueItem(
+                    entity_type=Litellm_EntityType.KEY,
+                    entity_id=hashed_token,
+                    response_cost=response_cost,
+                )
             )
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -188,20 +189,20 @@ class DBSpendUpdateWriter:
                 for _id in user_ids:
                     if _id is not None:
                         await self.spend_update_queue.add_update(
-                            update={
-                                "entity_type": Litellm_EntityType.USER.value,
-                                "entity_id": _id,
-                                "amount": response_cost,
-                            }
+                            update=SpendUpdateQueueItem(
+                                entity_type=Litellm_EntityType.USER,
+                                entity_id=_id,
+                                response_cost=response_cost,
+                            )
                         )
 
                 if end_user_id is not None:
                     await self.spend_update_queue.add_update(
-                        update={
-                            "entity_type": Litellm_EntityType.END_USER.value,
-                            "entity_id": end_user_id,
-                            "amount": response_cost,
-                        }
+                        update=SpendUpdateQueueItem(
+                            entity_type=Litellm_EntityType.END_USER,
+                            entity_id=end_user_id,
+                            response_cost=response_cost,
+                        )
                     )
         except Exception as e:
             verbose_proxy_logger.info(
@@ -224,11 +225,11 @@ class DBSpendUpdateWriter:
                 return
 
             await self.spend_update_queue.add_update(
-                update={
-                    "entity_type": Litellm_EntityType.TEAM.value,
-                    "entity_id": team_id,
-                    "amount": response_cost,
-                }
+                update=SpendUpdateQueueItem(
+                    entity_type=Litellm_EntityType.TEAM,
+                    entity_id=team_id,
+                    response_cost=response_cost,
+                )
             )
 
             try:
@@ -237,11 +238,11 @@ class DBSpendUpdateWriter:
                     # key is "team_id::<value>::user_id::<value>"
                     team_member_key = f"team_id::{team_id}::user_id::{user_id}"
                     await self.spend_update_queue.add_update(
-                        update={
-                            "entity_type": Litellm_EntityType.TEAM_MEMBER.value,
-                            "entity_id": team_member_key,
-                            "amount": response_cost,
-                        }
+                        update=SpendUpdateQueueItem(
+                            entity_type=Litellm_EntityType.TEAM_MEMBER,
+                            entity_id=team_member_key,
+                            response_cost=response_cost,
+                        )
                     )
             except Exception:
                 pass
@@ -265,11 +266,11 @@ class DBSpendUpdateWriter:
                 return
 
             await self.spend_update_queue.add_update(
-                update={
-                    "entity_type": Litellm_EntityType.ORGANIZATION.value,
-                    "entity_id": org_id,
-                    "amount": response_cost,
-                }
+                update=SpendUpdateQueueItem(
+                    entity_type=Litellm_EntityType.ORGANIZATION,
+                    entity_id=org_id,
+                    response_cost=response_cost,
+                )
             )
         except Exception as e:
             verbose_proxy_logger.info(
@@ -424,16 +425,8 @@ class DBSpendUpdateWriter:
 
         Note: This flow causes Deadlocks in production (1K RPS+). Use self._commit_spend_updates_to_db_with_redis() instead if you expect 1K+ RPS.
         """
-        aggregated_updates = (
-            await self.spend_update_queue.flush_and_get_all_aggregated_updates_by_entity_type()
-        )
-        db_spend_update_transactions = DBSpendUpdateTransactions(
-            user_list_transactions=aggregated_updates.get("user", {}),
-            end_user_list_transactions=aggregated_updates.get("end_user", {}),
-            key_list_transactions=aggregated_updates.get("key", {}),
-            team_list_transactions=aggregated_updates.get("team", {}),
-            team_member_list_transactions=aggregated_updates.get("team_member", {}),
-            org_list_transactions=aggregated_updates.get("organization", {}),
+        db_spend_update_transactions = (
+            await self.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
         )
         await self._commit_spend_updates_to_db(
             prisma_client=prisma_client,
