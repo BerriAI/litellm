@@ -1174,7 +1174,9 @@ class PrismaClient:
                 "metadata", {}
             )
             if isinstance(payload_metadata, str):
-                payload_metadata_json = cast(Dict, json.loads(payload_metadata))
+                payload_metadata_json: Union[Dict, SpendLogsMetadata] = cast(
+                    Dict, json.loads(payload_metadata)
+                )
             else:
                 payload_metadata_json = payload_metadata
 
