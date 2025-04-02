@@ -1,5 +1,5 @@
 import asyncio
-from typing import TYPE_CHECKING, Any, List
+from typing import List
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
@@ -7,36 +7,17 @@ from litellm.proxy._types import (
     Litellm_EntityType,
     SpendUpdateQueueItem,
 )
-
-if TYPE_CHECKING:
-    from litellm.proxy.utils import PrismaClient
-else:
-    PrismaClient = Any
+from litellm.proxy.db.db_transaction_queue.base_update_queue import BaseUpdateQueue
 
 
-class SpendUpdateQueue:
+class SpendUpdateQueue(BaseUpdateQueue):
     """
     In memory buffer for spend updates that should be committed to the database
     """
 
-    def __init__(
-        self,
-    ):
+    def __init__(self):
+        super().__init__()
         self.update_queue: asyncio.Queue[SpendUpdateQueueItem] = asyncio.Queue()
-
-    async def add_update(self, update: SpendUpdateQueueItem) -> None:
-        """Enqueue an update. Each update might be a dict like {'entity_type': 'user', 'entity_id': '123', 'amount': 1.2}."""
-        verbose_proxy_logger.debug("Adding update to queue: %s", update)
-        await self.update_queue.put(update)
-
-    async def flush_all_updates_from_in_memory_queue(
-        self,
-    ) -> List[SpendUpdateQueueItem]:
-        """Get all updates from the queue."""
-        updates: List[SpendUpdateQueueItem] = []
-        while not self.update_queue.empty():
-            updates.append(await self.update_queue.get())
-        return updates
 
     async def flush_and_get_aggregated_db_spend_update_transactions(
         self,
