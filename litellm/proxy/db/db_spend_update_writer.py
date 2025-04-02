@@ -25,9 +25,12 @@ from litellm.proxy._types import (
     SpendLogsPayload,
     SpendUpdateQueueItem,
 )
-from litellm.proxy.db.pod_lock_manager import PodLockManager
-from litellm.proxy.db.redis_update_buffer import RedisUpdateBuffer
-from litellm.proxy.db.spend_update_queue import DailySpendUpdateQueue, SpendUpdateQueue
+from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
+    DailySpendUpdateQueue,
+)
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
+from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
