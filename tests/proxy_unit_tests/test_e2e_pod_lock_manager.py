@@ -23,7 +23,7 @@ import asyncio
 import logging
 
 import pytest
-from litellm.proxy.db.pod_lock_manager import PodLockManager
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.management_endpoints.internal_user_endpoints import (

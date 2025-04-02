@@ -12,7 +12,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.constants import DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
-from litellm.proxy.db.pod_lock_manager import PodLockManager
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 
 
 # Mock Prisma client class
