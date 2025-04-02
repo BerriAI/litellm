@@ -1,137 +1,129 @@
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
 
 if TYPE_CHECKING:
-    from litellm.proxy.utils import PrismaClient, ProxyLogging
+    ProxyLogging = Any
 else:
-    PrismaClient = Any
     ProxyLogging = Any
 
 
 class PodLockManager:
     """
-    Manager for acquiring and releasing locks for cron jobs.
+    Manager for acquiring and releasing locks for cron jobs using Redis.
 
     Ensures that only one pod can run a cron job at a time.
     """
 
-    def __init__(self, cronjob_id: str):
+    def __init__(self, cronjob_id: str, redis_cache: Optional[RedisCache] = None):
         self.pod_id = str(uuid.uuid4())
         self.cronjob_id = cronjob_id
+        self.redis_cache = redis_cache
+        # Define a unique key for this cronjob lock in Redis.
+        self.lock_key = PodLockManager.get_redis_lock_key(cronjob_id)
 
-    async def acquire_lock(self) -> bool:
+    @staticmethod
+    def get_redis_lock_key(cronjob_id: str) -> str:
+        return f"cronjob_lock:{cronjob_id}"
+
+    async def acquire_lock(self) -> Optional[bool]:
         """
-        Attempt to acquire the lock for a specific cron job using database locking.
+        Attempt to acquire the lock for a specific cron job using Redis.
+        Uses the SET command with NX and EX options to ensure atomicity.
         """
-        from litellm.proxy.proxy_server import prisma_client
-
-        verbose_proxy_logger.debug(
-            "Pod %s acquiring lock for cronjob_id=%s", self.pod_id, self.cronjob_id
-        )
-        if not prisma_client:
-            verbose_proxy_logger.debug("prisma is None, returning False")
-            return False
-
-        try:
-            current_time = datetime.now(timezone.utc)
-            ttl_expiry = current_time + timedelta(
-                seconds=DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
-            )
-
-            # Use Prisma's findUnique with FOR UPDATE lock to prevent race conditions
-            lock_record = await prisma_client.db.litellm_cronjob.find_unique(
-                where={"cronjob_id": self.cronjob_id},
-            )
-
-            if lock_record:
-                # If record exists, only update if it's inactive or expired
-                if lock_record.status == "ACTIVE" and lock_record.ttl > current_time:
-                    return lock_record.pod_id == self.pod_id
-
-                # Update existing record
-                updated_lock = await prisma_client.db.litellm_cronjob.update(
-                    where={"cronjob_id": self.cronjob_id},
-                    data={
-                        "pod_id": self.pod_id,
-                        "status": "ACTIVE",
-                        "last_updated": current_time,
-                        "ttl": ttl_expiry,
-                    },
-                )
-            else:
-                # Create new record if none exists
-                updated_lock = await prisma_client.db.litellm_cronjob.create(
-                    data={
-                        "cronjob_id": self.cronjob_id,
-                        "pod_id": self.pod_id,
-                        "status": "ACTIVE",
-                        "last_updated": current_time,
-                        "ttl": ttl_expiry,
-                    }
-                )
-
-            return updated_lock.pod_id == self.pod_id
-
-        except Exception as e:
-            verbose_proxy_logger.error(
-                f"Error acquiring the lock for {self.cronjob_id}: {e}"
-            )
-            return False
-
-    async def renew_lock(self):
-        """
-        Renew the lock (update the TTL) for the pod holding the lock.
-        """
-        from litellm.proxy.proxy_server import prisma_client
-
-        if not prisma_client:
-            return False
+        if self.redis_cache is None:
+            verbose_proxy_logger.debug("redis_cache is None, skipping acquire_lock")
+            return None
         try:
             verbose_proxy_logger.debug(
-                "renewing lock for cronjob_id=%s", self.cronjob_id
+                "Pod %s attempting to acquire Redis lock for cronjob_id=%s",
+                self.pod_id,
+                self.cronjob_id,
             )
-            current_time = datetime.now(timezone.utc)
-            # Extend the TTL for another DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
-            ttl_expiry = current_time + timedelta(
-                seconds=DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
+            # Try to set the lock key with the pod_id as its value, only if it doesn't exist (NX)
+            # and with an expiration (EX) to avoid deadlocks.
+            acquired = await self.redis_cache.async_set_cache(
+                self.lock_key,
+                self.pod_id,
+                nx=True,
+                ttl=DEFAULT_CRON_JOB_LOCK_TTL_SECONDS,
             )
-
-            await prisma_client.db.litellm_cronjob.update(
-                where={"cronjob_id": self.cronjob_id, "pod_id": self.pod_id},
-                data={"ttl": ttl_expiry, "last_updated": current_time},
-            )
-            verbose_proxy_logger.info(
-                f"Renewed the lock for Pod {self.pod_id} for {self.cronjob_id}"
-            )
+            if acquired:
+                verbose_proxy_logger.info(
+                    "Pod %s successfully acquired Redis lock for cronjob_id=%s",
+                    self.pod_id,
+                    self.cronjob_id,
+                )
+                return True
+            else:
+                # Check if the current pod already holds the lock
+                current_value = await self.redis_cache.async_get_cache(self.lock_key)
+                if current_value is not None:
+                    if isinstance(current_value, bytes):
+                        current_value = current_value.decode("utf-8")
+                    if current_value == self.pod_id:
+                        verbose_proxy_logger.info(
+                            "Pod %s already holds the Redis lock for cronjob_id=%s",
+                            self.pod_id,
+                            self.cronjob_id,
+                        )
+                        return True
+            return False
         except Exception as e:
             verbose_proxy_logger.error(
-                f"Error renewing the lock for {self.cronjob_id}: {e}"
+                f"Error acquiring Redis lock for {self.cronjob_id}: {e}"
             )
+            return False
 
     async def release_lock(self):
         """
-        Release the lock and mark the pod as inactive.
+        Release the lock if the current pod holds it.
+        Uses get and delete commands to ensure that only the owner can release the lock.
         """
-        from litellm.proxy.proxy_server import prisma_client
-
-        if not prisma_client:
-            return False
+        if self.redis_cache is None:
+            verbose_proxy_logger.debug("redis_cache is None, skipping release_lock")
+            return
         try:
             verbose_proxy_logger.debug(
-                "Pod %s releasing lock for cronjob_id=%s", self.pod_id, self.cronjob_id
+                "Pod %s attempting to release Redis lock for cronjob_id=%s",
+                self.pod_id,
+                self.cronjob_id,
             )
-            await prisma_client.db.litellm_cronjob.update(
-                where={"cronjob_id": self.cronjob_id, "pod_id": self.pod_id},
-                data={"status": "INACTIVE"},
-            )
-            verbose_proxy_logger.info(
-                f"Pod {self.pod_id} has released the lock for {self.cronjob_id}."
-            )
+            current_value = await self.redis_cache.async_get_cache(self.lock_key)
+            if current_value is not None:
+                if isinstance(current_value, bytes):
+                    current_value = current_value.decode("utf-8")
+                if current_value == self.pod_id:
+                    result = await self.redis_cache.async_delete_cache(self.lock_key)
+                    if result == 1:
+                        verbose_proxy_logger.info(
+                            "Pod %s successfully released Redis lock for cronjob_id=%s",
+                            self.pod_id,
+                            self.cronjob_id,
+                        )
+                    else:
+                        verbose_proxy_logger.debug(
+                            "Pod %s failed to release Redis lock for cronjob_id=%s",
+                            self.pod_id,
+                            self.cronjob_id,
+                        )
+                else:
+                    verbose_proxy_logger.debug(
+                        "Pod %s cannot release Redis lock for cronjob_id=%s because it is held by pod %s",
+                        self.pod_id,
+                        self.cronjob_id,
+                        current_value,
+                    )
+            else:
+                verbose_proxy_logger.debug(
+                    "Pod %s attempted to release Redis lock for cronjob_id=%s, but no lock was found",
+                    self.pod_id,
+                    self.cronjob_id,
+                )
         except Exception as e:
             verbose_proxy_logger.error(
-                f"Error releasing the lock for {self.cronjob_id}: {e}"
+                f"Error releasing Redis lock for {self.cronjob_id}: {e}"
             )
