@@ -1674,7 +1674,7 @@ def openai_token_counter(  # noqa: PLR0915
 
     if tools:
         num_tokens += len(encoding.encode(_format_function_definitions(tools)))
-        num_tokens += FUNCTION_DEFINITION_TOKEN_COUNT  # Additional tokens for function definition of tools
+        num_tokens += 9  # Additional tokens for function definition of tools
     # If there's a system message and tools are present, subtract four tokens
     if tools and includes_system_message:
         num_tokens -= 4
@@ -1684,7 +1684,7 @@ def openai_token_counter(  # noqa: PLR0915
     if tool_choice == "none":
         num_tokens += 1
     elif isinstance(tool_choice, dict):
-        num_tokens += TOOL_CHOICE_OBJECT_TOKEN_COUNT
+        num_tokens += 7
         num_tokens += len(encoding.encode(tool_choice["function"]["name"]))
 
     return num_tokens

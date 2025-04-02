@@ -135,6 +135,7 @@ def main():
         "token_counter.py",
         "mock_functions.py",
         "duration_parser.py",
+        "utils.py",
     ]
     ignore_folder = "types"
     for root, dirs, files in os.walk(folder):
