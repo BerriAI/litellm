@@ -142,7 +142,18 @@ class DailySpendUpdateQueue:
         ] = asyncio.Queue()
 
     async def add_update(self, update: Dict[str, DailyUserSpendTransaction]) -> None:
-        """Enqueue an update. Each update might be a dict like {'entity_type': 'user', 'entity_id': '123', 'amount': 1.2}."""
+        """Enqueue an update. Each update might be a dict like
+        {
+            "user_date_api_key_model_custom_llm_provider": {
+                "spend": 1.2,
+                "prompt_tokens": 1000,
+                "completion_tokens": 1000,
+                "api_requests": 1000,
+                "successful_requests": 1000,
+                "failed_requests": 1000,
+            }
+        }
+        ."""
         verbose_proxy_logger.debug("Adding update to queue: %s", update)
         await self.update_queue.put(update)
 
