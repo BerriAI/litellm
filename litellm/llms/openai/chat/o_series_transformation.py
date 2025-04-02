@@ -71,6 +71,7 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
             verbose_logger.debug(
                 f"Unable to infer model provider for model={model}, defaulting to openai for o1 supported param check"
             )
+
         return [
             param for param in all_openai_params if param not in non_supported_params
         ]
