@@ -16,7 +16,10 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import DailyUserSpendTransaction, DBSpendUpdateTransactions
-from litellm.proxy.db.spend_update_queue import DailySpendUpdateQueue, SpendUpdateQueue
+from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
+    DailySpendUpdateQueue,
+)
+from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
 from litellm.secret_managers.main import str_to_bool
 
 if TYPE_CHECKING:
