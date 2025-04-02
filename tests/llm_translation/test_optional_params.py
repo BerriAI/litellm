@@ -1379,3 +1379,12 @@ def test_azure_modalities_param():
     )
     assert optional_params["modalities"] == ["text", "audio"]
     assert optional_params["audio"] == {"type": "audio_input", "input": "test.wav"}
+
+
+def test_azure_response_format_param():
+    optional_params = litellm.get_optional_params(
+        model="azure/o_series/test-o3-mini",
+        custom_llm_provider="azure/o_series",
+        tools= [{'type': 'function', 'function': {'name': 'get_current_time', 'description': 'Get the current time in a given location.', 'parameters': {'type': 'object', 'properties': {'location': {'type': 'string', 'description': 'The city name, e.g. San Francisco'}}, 'required': ['location']}}}]
+    )
+    assert optional_params["tools"] == [{'type': 'function', 'function': {'name': 'get_current_time', 'description': 'Get the current time in a given location.', 'parameters': {'type': 'object', 'properties': {'location': {'type': 'string', 'description': 'The city name, e.g. San Francisco'}}, 'required': ['location']}}}]
