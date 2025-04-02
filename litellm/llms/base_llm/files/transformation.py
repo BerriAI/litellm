@@ -1,11 +1,17 @@
-from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from abc import abstractmethod
+from typing import TYPE_CHECKING, Any, List, Optional
 
 import httpx
 
-from litellm.llms.base_llm.chat.transformation import BaseConfig
-from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUserMessage
-from litellm.types.utils import ModelResponse
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    CreateFileRequest,
+    OpenAICreateFileRequestOptionalParams,
+    OpenAIFileObject,
+)
+from litellm.types.utils import LlmProviders, ModelResponse
+
+from ..chat.transformation import BaseConfig
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -15,16 +21,17 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class BaseTextCompletionConfig(BaseConfig, ABC):
+class BaseFilesConfig(BaseConfig):
+    @property
     @abstractmethod
-    def transform_text_completion_request(
-        self,
-        model: str,
-        messages: Union[List[AllMessageValues], List[OpenAITextCompletionUserMessage]],
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
-        return {}
+    def custom_llm_provider(self) -> LlmProviders:
+        pass
+
+    @abstractmethod
+    def get_supported_openai_params(
+        self, model: str
+    ) -> List[OpenAICreateFileRequestOptionalParams]:
+        pass
 
     def get_complete_url(
         self,
@@ -43,6 +50,26 @@ class BaseTextCompletionConfig(BaseConfig, ABC):
         Some providers need `model` in `api_base`
         """
         return api_base or ""
+
+    @abstractmethod
+    def transform_create_file_request(
+        self,
+        model: str,
+        create_file_data: CreateFileRequest,
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> dict:
+        pass
+
+    @abstractmethod
+    def transform_create_file_response(
+        self,
+        model: Optional[str],
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> OpenAIFileObject:
+        pass
 
     def transform_request(
         self,

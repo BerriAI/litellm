@@ -45,7 +45,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         max_retries: Optional[int],
         client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None,
         litellm_params: Optional[dict] = None,
-    ) -> Union[FileObject, Coroutine[Any, Any, FileObject]]:
+    ) -> Union[OpenAIFileObject, Coroutine[Any, Any, OpenAIFileObject]]:
         openai_client: Optional[
             Union[AzureOpenAI, AsyncAzureOpenAI]
         ] = self.get_azure_openai_client(
@@ -69,8 +69,8 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
             return self.acreate_file(  # type: ignore
                 create_file_data=create_file_data, openai_client=openai_client
             )
-        response = openai_client.files.create(**create_file_data)
-        return response
+        response = cast(AzureOpenAI, openai_client).files.create(**create_file_data)
+        return OpenAIFileObject(**response.model_dump())
 
     async def afile_content(
         self,
