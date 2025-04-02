@@ -67,6 +67,7 @@ from litellm.types.utils import (
     StandardCallbackDynamicParams,
     StandardLoggingAdditionalHeaders,
     StandardLoggingHiddenParams,
+    StandardLoggingMCPToolCall,
     StandardLoggingMetadata,
     StandardLoggingModelCostFailureDebugInformation,
     StandardLoggingModelInformation,
@@ -289,6 +290,7 @@ class Logging(LiteLLMLoggingBaseClass):
             "input": _input,
             "litellm_params": litellm_params,
             "applied_guardrails": applied_guardrails,
+            "model": model,
         }
 
     def process_dynamic_callbacks(self):
@@ -891,6 +893,7 @@ class Logging(LiteLLMLoggingBaseClass):
             ResponseCompletedEvent,
         ],
         cache_hit: Optional[bool] = None,
+        litellm_model_name: Optional[str] = None,
     ) -> Optional[float]:
         """
         Calculate response cost using result + logging object variables.
@@ -916,7 +919,7 @@ class Logging(LiteLLMLoggingBaseClass):
         try:
             response_cost_calculator_kwargs = {
                 "response_object": result,
-                "model": self.model,
+                "model": litellm_model_name or self.model,
                 "cache_hit": cache_hit,
                 "custom_llm_provider": self.model_call_details.get(
                     "custom_llm_provider", None
@@ -1008,6 +1011,10 @@ class Logging(LiteLLMLoggingBaseClass):
                 return False
         return True
 
+    def _update_completion_start_time(self, completion_start_time: datetime.datetime):
+        self.completion_start_time = completion_start_time
+        self.model_call_details["completion_start_time"] = self.completion_start_time
+
     def _success_handler_helper_fn(
         self,
         result=None,
@@ -1095,7 +1102,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         status="success",
                         standard_built_in_tools_params=self.standard_built_in_tools_params,
                     )
-                elif isinstance(result, dict):  # pass-through endpoints
+                elif isinstance(result, dict) or isinstance(result, list):
                     ## STANDARDIZED LOGGING PAYLOAD
                     self.model_call_details[
                         "standard_logging_object"
@@ -3106,6 +3113,7 @@ class StandardLoggingPayloadSetup:
         litellm_params: Optional[dict] = None,
         prompt_integration: Optional[str] = None,
         applied_guardrails: Optional[List[str]] = None,
+        mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall] = None,
     ) -> StandardLoggingMetadata:
         """
         Clean and filter the metadata dictionary to include only the specified keys in StandardLoggingMetadata.
@@ -3152,6 +3160,7 @@ class StandardLoggingPayloadSetup:
             user_api_key_end_user_id=None,
             prompt_management_metadata=prompt_management_metadata,
             applied_guardrails=applied_guardrails,
+            mcp_tool_call_metadata=mcp_tool_call_metadata,
         )
         if isinstance(metadata, dict):
             # Filter the metadata dictionary to include only the specified keys
@@ -3478,6 +3487,7 @@ def get_standard_logging_object_payload(
             litellm_params=litellm_params,
             prompt_integration=kwargs.get("prompt_integration", None),
             applied_guardrails=kwargs.get("applied_guardrails", None),
+            mcp_tool_call_metadata=kwargs.get("mcp_tool_call_metadata", None),
         )
 
         _request_body = proxy_server_request.get("body", {})
@@ -3617,6 +3627,7 @@ def get_standard_logging_metadata(
         user_api_key_end_user_id=None,
         prompt_management_metadata=None,
         applied_guardrails=None,
+        mcp_tool_call_metadata=None,
     )
     if isinstance(metadata, dict):
         # Filter the metadata dictionary to include only the specified keys

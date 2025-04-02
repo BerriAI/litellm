@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
+from litellm.utils import token_counter
 
 from ..common_utils import SagemakerError
 
@@ -238,9 +239,12 @@ class SagemakerConfig(BaseConfig):
             )
 
         ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
-        prompt_tokens = len(encoding.encode(prompt))
-        completion_tokens = len(
-            encoding.encode(model_response["choices"][0]["message"].get("content", ""))
+        prompt_tokens = token_counter(
+            text=prompt, count_response_tokens=True
+        )  # doesn't apply any default token count from openai's chat template
+        completion_tokens = token_counter(
+            text=model_response["choices"][0]["message"].get("content", ""),
+            count_response_tokens=True,
         )
 
         model_response.created = int(time.time())
