@@ -2,7 +2,7 @@
 Contains utils used by OpenAI compatible endpoints 
 """
 
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import Request
 

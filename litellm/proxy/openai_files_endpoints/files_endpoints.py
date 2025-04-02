@@ -126,7 +126,7 @@ async def create_file(
     request: Request,
     fastapi_response: Response,
     purpose: str = Form(...),
-    target_model_names: List[str] = Form(default=[]),
+    target_model_names: str = Form(default=""),
     provider: Optional[str] = None,
     custom_llm_provider: str = Form(default="openai"),
     file: UploadFile = File(...),
@@ -167,6 +167,9 @@ async def create_file(
             or "openai"
         )
 
+        target_model_names_list = (
+            target_model_names.split(",") if target_model_names else []
+        )
         # Prepare the data for forwarding
 
         if purpose not in OpenAIFilesPurpose.__args__:
@@ -222,7 +225,7 @@ async def create_file(
             response = await llm_router.acreate_file(
                 model=router_model, **_create_file_request
             )
-        elif target_model_names is not None:
+        elif target_model_names_list:
             if llm_router is None:
                 raise HTTPException(
                     status_code=500,
@@ -231,7 +234,7 @@ async def create_file(
                     },
                 )
             responses = []
-            for model in target_model_names:
+            for model in target_model_names_list:
                 individual_response = await llm_router.acreate_file(
                     model=model, **_create_file_request
                 )
