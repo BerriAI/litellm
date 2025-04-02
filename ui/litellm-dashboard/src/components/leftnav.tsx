@@ -64,12 +64,11 @@ const menuItems: MenuItem[] = [
     page: "experimental",
     label: "Experimental", 
     icon: <ExperimentOutlined />,
-    roles: all_admin_roles,
     children: [
       { key: "9", page: "caching", label: "Caching", icon: <DatabaseOutlined />, roles: all_admin_roles },
       { key: "10", page: "budgets", label: "Budgets", icon: <BankOutlined />, roles: all_admin_roles },
       { key: "11", page: "guardrails", label: "Guardrails", icon: <SafetyOutlined />, roles: all_admin_roles },
-      { key: "12", page: "new_usage", label: "New Usage", icon: <BarChartOutlined />, roles: all_admin_roles },
+      { key: "12", page: "new_usage", label: "New Usage", icon: <BarChartOutlined /> },
       { key: "18", page: "mcp-tools", label: "MCP Tools", icon: <ToolOutlined />, roles: all_admin_roles },
     ]
   },
@@ -111,9 +110,21 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   const selectedMenuKey = findMenuItemKey(defaultSelectedKey);
 
-  const filteredMenuItems = menuItems.filter(item => 
-    !item.roles || item.roles.includes(userRole)
-  );
+  const filteredMenuItems = menuItems.filter(item => {
+    // Check if parent item has roles and user has access
+    const hasParentAccess = !item.roles || item.roles.includes(userRole);
+    
+    if (!hasParentAccess) return false;
+
+    // Filter children if they exist
+    if (item.children) {
+      item.children = item.children.filter(child => 
+        !child.roles || child.roles.includes(userRole)
+      );
+    }
+
+    return true;
+  });
 
   return (
     <Layout style={{ minHeight: "100vh" }}>
