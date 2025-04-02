@@ -14,15 +14,8 @@ Translations handled by LiteLLM:
 from typing import List, Optional
 
 import litellm
-from litellm import verbose_logger
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
-from litellm.utils import (
-    supports_function_calling,
-    supports_parallel_function_calling,
-    supports_response_schema,
-    supports_system_messages,
-)
+from litellm.utils import supports_system_messages
 
 from .gpt_transformation import OpenAIGPTConfig
 
@@ -58,20 +51,8 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
             "frequency_penalty",
             "top_logprobs",
         ]
-
         o_series_only_param = ["reasoning_effort"]
-
         all_openai_params.extend(o_series_only_param)
-
-        try:
-            model, custom_llm_provider, api_base, api_key = get_llm_provider(
-                model=model
-            )
-        except Exception:
-            verbose_logger.debug(
-                f"Unable to infer model provider for model={model}, defaulting to openai for o1 supported param check"
-            )
-
         return [
             param for param in all_openai_params if param not in non_supported_params
         ]
