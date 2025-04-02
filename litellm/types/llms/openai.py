@@ -236,6 +236,17 @@ class Thread(BaseModel):
 
 OpenAICreateFileRequestOptionalParams = Literal["purpose",]
 
+OpenAIFilesPurpose = Literal[
+    "assistants",
+    "assistants_output",
+    "batch",
+    "batch_output",
+    "fine-tune",
+    "fine-tune-results",
+    "vision",
+    "user_data",
+]
+
 
 class OpenAIFileObject(BaseModel):
     id: str
@@ -253,16 +264,7 @@ class OpenAIFileObject(BaseModel):
     object: Literal["file"]
     """The object type, which is always `file`."""
 
-    purpose: Literal[
-        "assistants",
-        "assistants_output",
-        "batch",
-        "batch_output",
-        "fine-tune",
-        "fine-tune-results",
-        "vision",
-        "user_data",
-    ]
+    purpose: OpenAIFilesPurpose
     """The intended purpose of the file.
 
     Supported values are `assistants`, `assistants_output`, `batch`, `batch_output`,

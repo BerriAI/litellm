@@ -7,7 +7,8 @@
 
 import asyncio
 import traceback
-from typing import Optional
+from datetime import datetime
+from typing import Optional, cast
 
 import httpx
 from fastapi import (
@@ -32,7 +33,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
 )
 from litellm.router import Router
-from litellm.types.llms.openai import FileObject
+from litellm.types.llms.openai import OpenAIFileObject, OpenAIFilesPurpose
 
 router = APIRouter()
 
@@ -167,6 +168,12 @@ async def create_file(
 
         # Prepare the data for forwarding
 
+        if purpose not in OpenAIFilesPurpose.__args__:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid purpose: {purpose}. Must be one of: {OpenAIFilesPurpose.__args__}",
+            )
+
         data = {"purpose": purpose}
 
         # Include original request and headers in the data
@@ -195,7 +202,7 @@ async def create_file(
 
         _create_file_request = CreateFileRequest(file=file_data, **data)
 
-        response: Optional[FileObject] = None
+        response: Optional[OpenAIFileObject] = None
         if (
             litellm.enable_loadbalancing_on_batch_endpoints is True
             and is_router_model
@@ -220,10 +227,25 @@ async def create_file(
                         "error": "LLM Router not initialized. Ensure models added to proxy."
                     },
                 )
+            responses = []
             for model in target_model_names:
-                response = await llm_router.acreate_file(
+                individual_response = await llm_router.acreate_file(
                     model=model, **_create_file_request
                 )
+                responses.append(individual_response)
+
+            unified_file_id = str(uuid.uuid4())
+            ## STORE RESPONSES IN DATABASE
+            ## CREATE RESPONSE OBJECT
+            response = OpenAIFileObject(
+                id=unified_file_id,
+                object="file",
+                purpose=cast(OpenAIFilesPurpose, purpose),
+                created_at=responses[0].created_at,
+                bytes=1234,
+                filename=file.filename or str(datetime.now().timestamp()),
+                status="uploaded",
+            )
         else:
             # get configs for custom_llm_provider
             llm_provider_config = get_files_provider_config(

@@ -104,7 +104,13 @@ from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_successes_for_current_minute,
 )
 from litellm.scheduler import FlowItem, Scheduler
-from litellm.types.llms.openai import AllMessageValues, Batch, FileObject, FileTypes
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    Batch,
+    FileObject,
+    FileTypes,
+    OpenAIFileObject,
+)
 from litellm.types.router import (
     CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
     VALID_LITELLM_ENVIRONMENTS,
@@ -2702,7 +2708,7 @@ class Router:
         self,
         model: str,
         **kwargs,
-    ) -> FileObject:
+    ) -> OpenAIFileObject:
         try:
             kwargs["model"] = model
             kwargs["original_function"] = self._acreate_file
@@ -2726,7 +2732,7 @@ class Router:
         self,
         model: str,
         **kwargs,
-    ) -> FileObject:
+    ) -> OpenAIFileObject:
         try:
             verbose_router_logger.debug(
                 f"Inside _atext_completion()- model: {model}; kwargs: {kwargs}"
