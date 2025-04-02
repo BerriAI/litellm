@@ -136,7 +136,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger):
         ## STORE RESPONSE IN DB + CACHE
         stored_values: Dict[str, str] = {}
         for file_object in file_objects:
-            model_id = file_object._hidden_params["model_id"]
+            model_id = file_object._hidden_params.get("model_id")
+            if model_id is None:
+                verbose_logger.warning(
+                    f"Skipping file_object: {file_object} because model_id in hidden_params={file_object._hidden_params} is None"
+                )
+                continue
             file_id = file_object.id
             stored_values[model_id] = file_id
         await internal_usage_cache.async_set_cache(
