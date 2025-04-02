@@ -3051,7 +3051,7 @@ def get_optional_params(  # noqa: PLR0915
                     new_parameters.pop("additionalProperties", None)
                 tool_function["parameters"] = new_parameters
 
-    def _check_valid_arg(supported_params: List[str], allowed_openai_params: List[str]):
+    def _check_valid_arg(supported_params: List[str]):
         """
         Check if the params passed to completion() are supported by the provider
 
@@ -3068,7 +3068,6 @@ def get_optional_params(  # noqa: PLR0915
         verbose_logger.debug(
             f"\nLiteLLM: Non-Default params passed to completion() {non_default_params}"
         )
-        supported_params = supported_params + allowed_openai_params
         unsupported_params = {}
         for k in non_default_params.keys():
             if k not in supported_params:
@@ -3103,9 +3102,13 @@ def get_optional_params(  # noqa: PLR0915
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider="openai"
         )
+
+    supported_params = supported_params or []
+    allowed_openai_params = allowed_openai_params or []
+    supported_params.extend(allowed_openai_params)
+
     _check_valid_arg(
         supported_params=supported_params or [],
-        allowed_openai_params=allowed_openai_params or [],
     )
     ## raise exception if provider doesn't support passed in param
     if custom_llm_provider == "anthropic":
@@ -3745,6 +3748,26 @@ def get_optional_params(  # noqa: PLR0915
             if k not in default_params.keys():
                 optional_params[k] = passed_params[k]
     print_verbose(f"Final returned optional params: {optional_params}")
+    optional_params = _apply_openai_param_overrides(
+        optional_params=optional_params,
+        non_default_params=non_default_params,
+        allowed_openai_params=allowed_openai_params,
+    )
+    return optional_params
+
+
+def _apply_openai_param_overrides(
+    optional_params: dict, non_default_params: dict, allowed_openai_params: list
+):
+    """
+    If user passes in allowed_openai_params, apply them to optional_params
+
+    These params will get passed as is to the LLM API since the user opted in to passing them in the request
+    """
+    if allowed_openai_params:
+        for param in allowed_openai_params:
+            if param not in optional_params:
+                optional_params[param] = non_default_params.pop(param, None)
     return optional_params
 
 
