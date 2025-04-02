@@ -32,6 +32,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
 )
 from litellm.router import Router
+from litellm.types.llms.openai import FileObject
 
 router = APIRouter()
 
@@ -123,6 +124,7 @@ async def create_file(
     request: Request,
     fastapi_response: Response,
     purpose: str = Form(...),
+    target_model_names: List[str] = Form(default=[]),
     provider: Optional[str] = None,
     custom_llm_provider: str = Form(default="openai"),
     file: UploadFile = File(...),
@@ -162,6 +164,7 @@ async def create_file(
             or await get_custom_llm_provider_from_request_body(request=request)
             or "openai"
         )
+
         # Prepare the data for forwarding
 
         data = {"purpose": purpose}
@@ -192,6 +195,7 @@ async def create_file(
 
         _create_file_request = CreateFileRequest(file=file_data, **data)
 
+        response: Optional[FileObject] = None
         if (
             litellm.enable_loadbalancing_on_batch_endpoints is True
             and is_router_model
@@ -208,6 +212,18 @@ async def create_file(
             response = await llm_router.acreate_file(
                 model=router_model, **_create_file_request
             )
+        elif target_model_names is not None:
+            if llm_router is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "LLM Router not initialized. Ensure models added to proxy."
+                    },
+                )
+            for model in target_model_names:
+                response = await llm_router.acreate_file(
+                    model=model, **_create_file_request
+                )
         else:
             # get configs for custom_llm_provider
             llm_provider_config = get_files_provider_config(
@@ -220,6 +236,11 @@ async def create_file(
             # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
             response = await litellm.acreate_file(**_create_file_request, custom_llm_provider=custom_llm_provider)  # type: ignore
 
+        if response is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "Failed to create file. Please try again."},
+            )
         ### ALERTING ###
         asyncio.create_task(
             proxy_logging_obj.update_request_status(
