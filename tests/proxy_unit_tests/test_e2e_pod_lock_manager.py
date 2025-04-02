@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from fastapi import Request
 from fastapi.routing import APIRoute
 import httpx
+import json
 
 load_dotenv()
 import io
@@ -72,7 +73,7 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from starlette.datastructures import URL
 
-from litellm.caching.caching import DualCache
+from litellm.caching.caching import DualCache, RedisCache
 from litellm.proxy._types import (
     DynamoDBArgs,
     GenerateKeyRequest,
@@ -98,6 +99,12 @@ request_data = {
         {"role": "user", "content": "this is my new test. respond in 50 lines"}
     ],
 }
+
+global_redis_cache = RedisCache(
+    host=os.getenv("REDIS_HOST"),
+    port=os.getenv("REDIS_PORT"),
+    password=os.getenv("REDIS_PASSWORD"),
+)
 
 
 @pytest.fixture
@@ -131,12 +138,10 @@ async def setup_db_connection(prisma_client):
 
 
 @pytest.mark.asyncio
-async def test_pod_lock_acquisition_when_no_active_lock(prisma_client):
+async def test_pod_lock_acquisition_when_no_active_lock():
     """Test if a pod can acquire a lock when no lock is active"""
-    await setup_db_connection(prisma_client)
-
     cronjob_id = str(uuid.uuid4())
-    lock_manager = PodLockManager(cronjob_id=cronjob_id)
+    lock_manager = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
 
     # Attempt to acquire lock
     result = await lock_manager.acquire_lock()
@@ -144,96 +149,84 @@ async def test_pod_lock_acquisition_when_no_active_lock(prisma_client):
     assert result == True, "Pod should be able to acquire lock when no lock exists"
 
     # Verify in database
-    lock_record = await prisma_client.db.litellm_cronjob.find_first(
-        where={"cronjob_id": cronjob_id}
-    )
-    assert lock_record.status == "ACTIVE"
-    assert lock_record.pod_id == lock_manager.pod_id
+    lock_key = PodLockManager.get_redis_lock_key(cronjob_id)
+    lock_record = await global_redis_cache.async_get_cache(lock_key)
+    print("lock_record=", lock_record)
+    assert lock_record == lock_manager.pod_id
+
 
 
 @pytest.mark.asyncio
-async def test_pod_lock_acquisition_after_completion(prisma_client):
+async def test_pod_lock_acquisition_after_completion():
     """Test if a new pod can acquire lock after previous pod completes"""
-    await setup_db_connection(prisma_client)
-
     cronjob_id = str(uuid.uuid4())
     # First pod acquires and releases lock
-    first_lock_manager = PodLockManager(cronjob_id=cronjob_id)
+    first_lock_manager = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
     await first_lock_manager.acquire_lock()
     await first_lock_manager.release_lock()
 
     # Second pod attempts to acquire lock
-    second_lock_manager = PodLockManager(cronjob_id=cronjob_id)
+    second_lock_manager = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
     result = await second_lock_manager.acquire_lock()
 
     assert result == True, "Second pod should acquire lock after first pod releases it"
 
-    # Verify in database
-    lock_record = await prisma_client.db.litellm_cronjob.find_first(
-        where={"cronjob_id": cronjob_id}
-    )
-    assert lock_record.status == "ACTIVE"
-    assert lock_record.pod_id == second_lock_manager.pod_id
+    # Verify in redis
+    lock_key = PodLockManager.get_redis_lock_key(cronjob_id)
+    lock_record = await global_redis_cache.async_get_cache(lock_key)
+    assert lock_record == second_lock_manager.pod_id
 
 
 @pytest.mark.asyncio
-async def test_pod_lock_acquisition_after_expiry(prisma_client):
+async def test_pod_lock_acquisition_after_expiry():
     """Test if a new pod can acquire lock after previous pod's lock expires"""
-    await setup_db_connection(prisma_client)
-
     cronjob_id = str(uuid.uuid4())
     # First pod acquires lock
-    first_lock_manager = PodLockManager(cronjob_id=cronjob_id)
+    first_lock_manager = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
     await first_lock_manager.acquire_lock()
 
     # release the lock from the first pod
     await first_lock_manager.release_lock()
 
     # Second pod attempts to acquire lock
-    second_lock_manager = PodLockManager(cronjob_id=cronjob_id)
+    second_lock_manager = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
     result = await second_lock_manager.acquire_lock()
 
     assert (
         result == True
     ), "Second pod should acquire lock after first pod's lock expires"
 
-    # Verify in database
-    lock_record = await prisma_client.db.litellm_cronjob.find_first(
-        where={"cronjob_id": cronjob_id}
-    )
-    assert lock_record.status == "ACTIVE"
-    assert lock_record.pod_id == second_lock_manager.pod_id
+    # Verify in redis
+    lock_key = PodLockManager.get_redis_lock_key(cronjob_id)
+    lock_record = await global_redis_cache.async_get_cache(lock_key)
+    assert lock_record == second_lock_manager.pod_id
 
 
 @pytest.mark.asyncio
-async def test_pod_lock_release(prisma_client):
+async def test_pod_lock_release():
     """Test if a pod can successfully release its lock"""
-    await setup_db_connection(prisma_client)
-
     cronjob_id = str(uuid.uuid4())
-    lock_manager = PodLockManager(cronjob_id=cronjob_id)
+    lock_manager = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
 
     # Acquire and then release lock
     await lock_manager.acquire_lock()
     await lock_manager.release_lock()
 
-    # Verify in database
-    lock_record = await prisma_client.db.litellm_cronjob.find_first(
-        where={"cronjob_id": cronjob_id}
-    )
-    assert lock_record.status == "INACTIVE"
+    # Verify in redis
+    lock_key = PodLockManager.get_redis_lock_key(cronjob_id)
+    lock_record = await global_redis_cache.async_get_cache(lock_key)
+    assert lock_record is None
 
 
 @pytest.mark.asyncio
-async def test_concurrent_lock_acquisition(prisma_client):
+async def test_concurrent_lock_acquisition():
     """Test that only one pod can acquire the lock when multiple pods try simultaneously"""
-    await setup_db_connection(prisma_client)
 
     cronjob_id = str(uuid.uuid4())
     # Create multiple lock managers simulating different pods
-    lock_manager1 = PodLockManager(cronjob_id=cronjob_id)
-    lock_manager2 = PodLockManager(cronjob_id=cronjob_id)
-    lock_manager3 = PodLockManager(cronjob_id=cronjob_id)
+    lock_manager1 = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
+    lock_manager2 = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
+    lock_manager3 = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
 
     # Try to acquire locks concurrently
     results = await asyncio.gather(
@@ -246,109 +239,72 @@ async def test_concurrent_lock_acquisition(prisma_client):
     print("all results=", results)
     assert sum(results) == 1, "Only one pod should acquire the lock"
 
-    # Verify in database
-    lock_record = await prisma_client.db.litellm_cronjob.find_first(
-        where={"cronjob_id": cronjob_id}
-    )
-    assert lock_record.status == "ACTIVE"
-    assert lock_record.pod_id in [
+    # Verify in redis
+    lock_key = PodLockManager.get_redis_lock_key(cronjob_id)
+    lock_record = await global_redis_cache.async_get_cache(lock_key)
+    assert lock_record in [
         lock_manager1.pod_id,
         lock_manager2.pod_id,
         lock_manager3.pod_id,
     ]
 
 
-@pytest.mark.asyncio
-async def test_lock_renewal(prisma_client):
-    """Test that a pod can successfully renew its lock"""
-    await setup_db_connection(prisma_client)
-
-    cronjob_id = str(uuid.uuid4())
-    lock_manager = PodLockManager(cronjob_id=cronjob_id)
-
-    # Acquire initial lock
-    await lock_manager.acquire_lock()
-
-    # Get initial TTL
-    initial_record = await prisma_client.db.litellm_cronjob.find_first(
-        where={"cronjob_id": cronjob_id}
-    )
-    initial_ttl = initial_record.ttl
-
-    # Wait a short time
-    await asyncio.sleep(1)
-
-    # Renew the lock
-    await lock_manager.renew_lock()
-
-    # Get updated record
-    renewed_record = await prisma_client.db.litellm_cronjob.find_first(
-        where={"cronjob_id": cronjob_id}
-    )
-
-    assert renewed_record.ttl > initial_ttl, "Lock TTL should be extended after renewal"
-    assert renewed_record.status == "ACTIVE"
-    assert renewed_record.pod_id == lock_manager.pod_id
-
 
 @pytest.mark.asyncio
-async def test_lock_acquisition_with_expired_ttl(prisma_client):
+async def test_lock_acquisition_with_expired_ttl():
     """Test that a pod can acquire a lock when existing lock has expired TTL"""
-    await setup_db_connection(prisma_client)
-
     cronjob_id = str(uuid.uuid4())
-    first_lock_manager = PodLockManager(cronjob_id=cronjob_id)
+    first_lock_manager = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
 
-    # First pod acquires lock
-    await first_lock_manager.acquire_lock()
-
-    # Manually expire the TTL
-    expired_time = datetime.now(timezone.utc) - timedelta(seconds=10)
-    await prisma_client.db.litellm_cronjob.update(
-        where={"cronjob_id": cronjob_id}, data={"ttl": expired_time}
+    # First pod acquires lock with a very short TTL to simulate expiration
+    short_ttl = 1  # 1 second
+    lock_key = PodLockManager.get_redis_lock_key(cronjob_id)
+    await global_redis_cache.async_set_cache(
+        lock_key,
+        first_lock_manager.pod_id,
+        ttl=short_ttl,
     )
+
+    # Wait for the lock to expire
+    await asyncio.sleep(short_ttl + 0.5)  # Wait slightly longer than the TTL
 
     # Second pod tries to acquire without explicit release
-    second_lock_manager = PodLockManager(cronjob_id=cronjob_id)
+    second_lock_manager = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
     result = await second_lock_manager.acquire_lock()
 
     assert result == True, "Should acquire lock when existing lock has expired TTL"
 
-    # Verify in database
-    lock_record = await prisma_client.db.litellm_cronjob.find_first(
-        where={"cronjob_id": cronjob_id}
-    )
-    assert lock_record.status == "ACTIVE"
-    assert lock_record.pod_id == second_lock_manager.pod_id
+    # Verify in Redis
+    lock_record = await global_redis_cache.async_get_cache(lock_key)
+    print("lock_record=", lock_record)
+    assert lock_record == second_lock_manager.pod_id
 
 
 @pytest.mark.asyncio
-async def test_release_expired_lock(prisma_client):
+async def test_release_expired_lock():
     """Test that a pod cannot release a lock that has been taken over by another pod"""
-    await setup_db_connection(prisma_client)
-
     cronjob_id = str(uuid.uuid4())
-    first_lock_manager = PodLockManager(cronjob_id=cronjob_id)
-
-    # First pod acquires lock
-    await first_lock_manager.acquire_lock()
-
-    # Manually expire the TTL
-    expired_time = datetime.now(timezone.utc) - timedelta(seconds=10)
-    await prisma_client.db.litellm_cronjob.update(
-        where={"cronjob_id": cronjob_id}, data={"ttl": expired_time}
+    
+    # First pod acquires lock with a very short TTL
+    first_lock_manager = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
+    short_ttl = 1  # 1 second
+    lock_key = PodLockManager.get_redis_lock_key(cronjob_id)
+    await global_redis_cache.async_set_cache(
+        lock_key,
+        first_lock_manager.pod_id,
+        ttl=short_ttl,
     )
 
+    # Wait for the lock to expire
+    await asyncio.sleep(short_ttl + 0.5)  # Wait slightly longer than the TTL
+
     # Second pod acquires the lock
-    second_lock_manager = PodLockManager(cronjob_id=cronjob_id)
+    second_lock_manager = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
     await second_lock_manager.acquire_lock()
 
     # First pod attempts to release its lock
     await first_lock_manager.release_lock()
 
     # Verify that second pod's lock is still active
-    lock_record = await prisma_client.db.litellm_cronjob.find_first(
-        where={"cronjob_id": cronjob_id}
-    )
-    assert lock_record.status == "ACTIVE"
-    assert lock_record.pod_id == second_lock_manager.pod_id
+    lock_record = await global_redis_cache.async_get_cache(lock_key)
+    assert lock_record == second_lock_manager.pod_id
