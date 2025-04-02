@@ -106,7 +106,10 @@ from .litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
     completion_with_fallbacks,
 )
-from .litellm_core_utils.prompt_templates.common_utils import get_completion_messages
+from .litellm_core_utils.prompt_templates.common_utils import (
+    get_completion_messages,
+    update_messages_with_model_file_ids,
+)
 from .litellm_core_utils.prompt_templates.factory import (
     custom_prompt,
     function_call_prompt,
@@ -944,7 +947,6 @@ def completion(  # type: ignore # noqa: PLR0915
     non_default_params = get_non_default_completion_params(kwargs=kwargs)
     litellm_params = {}  # used to prevent unbound var errors
     ## PROMPT MANAGEMENT HOOKS ##
-
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and prompt_id is not None:
         (
             model,
@@ -1058,6 +1060,12 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_prompt_dict[model]["bos_token"] = bos_token
             if eos_token:
                 custom_prompt_dict[model]["eos_token"] = eos_token
+
+        if kwargs.get("model_file_id_mapping"):
+            messages = update_messages_with_model_file_ids(
+                messages=messages,
+                model_file_id_mapping=kwargs.get("model_file_id_mapping"),
+            )
 
         provider_config: Optional[BaseConfig] = None
         if custom_llm_provider is not None and custom_llm_provider in [

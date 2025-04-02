@@ -57,59 +57,59 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger):
     ) -> Union[Exception, str, Dict, None]:
         """
         - Detect litellm_proxy/ file_id
-        - Update data with a specified prompt_id
+        - add dictionary of mappings of litellm_proxy/ file_id -> provider_file_id => {litellm_proxy/file_id: {"model_id": id, "file_id": provider_file_id}}
         """
-        pass
+        if call_type == CallTypes.completion.value:
+            messages = data.get("messages")
+            if messages:
+                file_ids = get_file_ids_from_messages(messages)
+                if file_ids:
+                    model_file_id_mapping = await self.get_model_file_id_mapping(
+                        file_ids, user_api_key_dict.parent_otel_span
+                    )
+                    data["model_file_id_mapping"] = model_file_id_mapping
 
-    def translate_managed_files(self, file_ids: List[str], model_id: str) -> List[str]:
-        for file_id in file_ids:
-            if file_id.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
-                return self.internal_usage_cache.get_cache(
-                    "{}:{}".format(model_id, file_id)
-                )
-        return file_ids
+        return data
 
-    async def get_provider_file_id_mapping(
-        self, file_ids: List[str], model: str, litellm_parent_otel_span: Span
+    async def get_model_file_id_mapping(
+        self, file_ids: List[str], litellm_parent_otel_span: Span
     ) -> dict:
         """
-        Get provider-specific file IDs for a list of proxy file IDs.
-        Returns a dictionary mapping proxy_file_id -> provider_file_id
-        """
-        file_id_mapping = {}
-        for file_id in file_ids:
-            provider_file_id = await self.internal_usage_cache.async_get_cache(
-                file_id, litellm_parent_otel_span=litellm_parent_otel_span
-            )
-            if provider_file_id:
-                file_id_mapping[file_id] = provider_file_id
-            else:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"File ID {file_id} not found or not mapped for model {model}",
-                )
-        return file_id_mapping
+        Get model-specific file IDs for a list of proxy file IDs.
+        Returns a dictionary mapping litellm_proxy/ file_id -> model_id -> model_file_id
 
-    def get_chat_completion_prompt(
-        self,
-        model: str,
-        messages: List[AllMessageValues],
-        non_default_params: dict,
-        prompt_id: str,
-        prompt_variables: Optional[dict],
-        dynamic_callback_params: StandardCallbackDynamicParams,
-    ) -> Tuple[str, List[AllMessageValues], dict]:
+        1. Get all the litellm_proxy/ file_ids from the messages
+        2. For each file_id, search for cache keys matching the pattern file_id:*
+        3. Return a dictionary of mappings of litellm_proxy/ file_id -> model_id -> model_file_id
+
+        Example:
+        {
+            "litellm_proxy/file_id": {
+                "model_id": "model_file_id"
+            }
+        }
         """
-        Modify the message to replace the file id with the provider-specific file id
-        """
-        return super().get_chat_completion_prompt(
-            model,
-            messages,
-            non_default_params,
-            prompt_id,
-            prompt_variables,
-            dynamic_callback_params,
-        )
+        file_id_mapping: Dict[str, Dict[str, str]] = {}
+        litellm_managed_file_ids = []
+
+        for file_id in file_ids:
+            ## CHECK IF FILE ID IS MANAGED BY LITELM
+            if file_id.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
+                litellm_managed_file_ids.append(file_id)
+
+        if litellm_managed_file_ids:
+            # Get all cache keys matching the pattern file_id:*
+            for file_id in litellm_managed_file_ids:
+                # Search for any cache key starting with this file_id
+                cached_values = cast(
+                    Dict[str, str],
+                    await self.internal_usage_cache.async_get_cache(
+                        key=file_id, litellm_parent_otel_span=litellm_parent_otel_span
+                    ),
+                )
+                if cached_values:
+                    file_id_mapping[file_id] = cached_values
+        return file_id_mapping
 
     @staticmethod
     async def return_unified_file_id(
@@ -134,13 +134,15 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger):
         )
 
         ## STORE RESPONSE IN DB + CACHE
+        stored_values: Dict[str, str] = {}
         for file_object in file_objects:
-            cache_key = "{}:{}".format(
-                file_object._hidden_params["model_id"], file_object.id
-            )
-            await internal_usage_cache.async_set_cache(
-                key=cache_key,
-                value=file_object.id,
-                litellm_parent_otel_span=litellm_parent_otel_span,
-            )
+            model_id = file_object._hidden_params["model_id"]
+            file_id = file_object.id
+            stored_values[model_id] = file_id
+        await internal_usage_cache.async_set_cache(
+            key=unified_file_id,
+            value=stored_values,
+            litellm_parent_otel_span=litellm_parent_otel_span,
+        )
+
         return response

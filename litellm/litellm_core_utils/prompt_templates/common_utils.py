@@ -317,20 +317,29 @@ def get_file_ids_from_messages(messages: List[AllMessageValues]) -> List[str]:
     return file_ids
 
 
-# def update_messages_with_provider_file_ids(messages: List[AllMessageValues], provider_file_ids: List[str]) -> List[AllMessageValues]:
-#     """
-#     Updates messages with provider file ids
-#     """
-#     for message in messages:
-#         if message.get("role") == "user":
-#             content = message.get("content")
-#             if content:
-#                 if isinstance(content, str):
-#                     continue
-#                 for c in content:
-#                     if c["type"] == "file":
-#                         file_object = cast(ChatCompletionFileObjectFile, c["file"])
-#                         file_id = file_object.get("file_id")
-#                         if file_id:
-#                             file_ids.append(file_id)
-#     return file_ids
+def update_messages_with_model_file_ids(
+    messages: List[AllMessageValues], model_file_id_mapping: Dict[str, str]
+) -> List[AllMessageValues]:
+    """
+    Updates messages with model file ids.
+
+    model_file_id_mapping: Dict[str, str] = {
+        "litellm_proxy/file_id": "provider_file_id"
+    }
+    """
+    for message in messages:
+        if message.get("role") == "user":
+            content = message.get("content")
+            if content:
+                if isinstance(content, str):
+                    continue
+                for c in content:
+                    if c["type"] == "file":
+                        file_object = cast(ChatCompletionFileObject, c)
+                        file_object_file_field = file_object["file"]
+                        file_id = file_object_file_field.get("file_id")
+                        if file_id:
+                            file_object_file_field[
+                                "file_id"
+                            ] = model_file_id_mapping.get(file_id, file_id)
+    return messages
