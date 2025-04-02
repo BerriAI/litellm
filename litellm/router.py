@@ -76,6 +76,9 @@ from litellm.router_utils.clientside_credential_handler import (
     get_dynamic_litellm_params,
     is_clientside_credential,
 )
+from litellm.router_utils.common_utils import (
+    get_litellm_params_sensitive_credential_hash,
+)
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_handlers import (
     DEFAULT_COOLDOWN_TIME_SECONDS,
@@ -2801,6 +2804,7 @@ class Router:
             verbose_router_logger.info(
                 f"litellm.acreate_file(model={model_name})\033[32m 200 OK\033[0m"
             )
+
             return response  # type: ignore
         except Exception as e:
             verbose_router_logger.exception(

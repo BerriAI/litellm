@@ -288,6 +288,8 @@ class OpenAIFileObject(BaseModel):
     `error` field on `fine_tuning.job`.
     """
 
+    _hidden_params: dict = {}
+
 
 # OpenAI Files Types
 class CreateFileRequest(TypedDict, total=False):

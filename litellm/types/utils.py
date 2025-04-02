@@ -1861,6 +1861,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
 
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
+    model_id: Optional[str]
 
 
 all_litellm_params = [

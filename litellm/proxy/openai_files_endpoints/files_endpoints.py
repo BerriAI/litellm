@@ -32,6 +32,7 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
 )
+from litellm.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 from litellm.router import Router
 from litellm.types.llms.openai import OpenAIFileObject, OpenAIFilesPurpose
 
@@ -235,18 +236,11 @@ async def create_file(
                     model=model, **_create_file_request
                 )
                 responses.append(individual_response)
-
-            unified_file_id = str(uuid.uuid4())
-            ## STORE RESPONSES IN DATABASE
-            ## CREATE RESPONSE OBJECT
-            response = OpenAIFileObject(
-                id=unified_file_id,
-                object="file",
-                purpose=cast(OpenAIFilesPurpose, purpose),
-                created_at=responses[0].created_at,
-                bytes=1234,
-                filename=file.filename or str(datetime.now().timestamp()),
-                status="uploaded",
+            response = await _PROXY_LiteLLMManagedFiles.return_unified_file_id(
+                file_objects=responses,
+                purpose=purpose,
+                internal_usage_cache=proxy_logging_obj.internal_usage_cache,
+                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
             )
         else:
             # get configs for custom_llm_provider
@@ -293,12 +287,11 @@ async def create_file(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.create_file(): Exception occured - {}".format(
                 str(e)
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
