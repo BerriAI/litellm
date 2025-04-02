@@ -18,6 +18,29 @@ from litellm.proxy.proxy_server import app
 client = TestClient(app)
 
 
+def test_invalid_purpose(mocker: MockerFixture, monkeypatch):
+    """
+    Asserts 'create_file' is called with the correct arguments
+    """
+    # Create a simple test file content
+    test_file_content = b"test audio content"
+    test_file = ("test.wav", test_file_content, "audio/wav")
+
+    response = client.post(
+        "/v1/files",
+        files={"file": test_file},
+        data={
+            "purpose": "my-bad-purpose",
+            "target_model_names": ["azure-gpt-3-5-turbo", "gpt-3.5-turbo"],
+        },
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 400
+    print(f"response: {response.json()}")
+    assert "Invalid purpose: my-bad-purpose" in response.json()["error"]["message"]
+
+
 def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch):
     """
     Asserts 'create_file' is called with the correct arguments

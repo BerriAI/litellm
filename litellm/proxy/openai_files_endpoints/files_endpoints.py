@@ -171,7 +171,9 @@ async def create_file(
         if purpose not in OpenAIFilesPurpose.__args__:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid purpose: {purpose}. Must be one of: {OpenAIFilesPurpose.__args__}",
+                detail={
+                    "error": f"Invalid purpose: {purpose}. Must be one of: {OpenAIFilesPurpose.__args__}",
+                },
             )
 
         data = {"purpose": purpose}
