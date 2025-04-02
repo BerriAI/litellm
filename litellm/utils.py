@@ -3057,7 +3057,6 @@ def get_optional_params(  # noqa: PLR0915
 
         Args:
             supported_params: List[str] - supported params from the litellm config
-            allowed_openai_params: List[str] - use can override the allowed_openai_params for a model by passing `allowed_openai_params`
         """
         verbose_logger.info(
             f"\nLiteLLM completion() model= {model}; provider = {custom_llm_provider}"
