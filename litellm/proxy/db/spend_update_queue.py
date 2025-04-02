@@ -1,8 +1,9 @@
 import asyncio
-from typing import TYPE_CHECKING, Any, List
+from typing import TYPE_CHECKING, Any, Dict, List
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
+    DailyUserSpendTransaction,
     DBSpendUpdateTransactions,
     Litellm_EntityType,
     SpendUpdateQueueItem,
@@ -130,3 +131,61 @@ class SpendUpdateQueue:
             transactions_dict[entity_id] += response_cost or 0
 
         return db_spend_update_transactions
+
+
+class DailySpendUpdateQueue:
+    def __init__(
+        self,
+    ):
+        self.update_queue: asyncio.Queue[
+            Dict[str, DailyUserSpendTransaction]
+        ] = asyncio.Queue()
+
+    async def add_update(self, update: Dict[str, DailyUserSpendTransaction]) -> None:
+        """Enqueue an update. Each update might be a dict like {'entity_type': 'user', 'entity_id': '123', 'amount': 1.2}."""
+        verbose_proxy_logger.debug("Adding update to queue: %s", update)
+        await self.update_queue.put(update)
+
+    async def flush_all_updates_from_in_memory_queue(
+        self,
+    ) -> List[Dict[str, DailyUserSpendTransaction]]:
+        """Get all updates from the queue."""
+        updates: List[Dict[str, DailyUserSpendTransaction]] = []
+        while not self.update_queue.empty():
+            updates.append(await self.update_queue.get())
+        return updates
+
+    async def flush_and_get_aggregated_daily_spend_update_transactions(
+        self,
+    ) -> Dict[str, DailyUserSpendTransaction]:
+        """Get all updates from the queue and return all updates aggregated by daily_transaction_key."""
+        updates = await self.flush_all_updates_from_in_memory_queue()
+        return DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
+            updates
+        )
+
+    @staticmethod
+    def get_aggregated_daily_spend_update_transactions(
+        updates: List[Dict[str, DailyUserSpendTransaction]]
+    ) -> Dict[str, DailyUserSpendTransaction]:
+        """Aggregate updates by daily_transaction_key."""
+        aggregated_daily_spend_update_transactions: Dict[
+            str, DailyUserSpendTransaction
+        ] = {}
+        for _update in updates:
+            for _key, payload in _update.items():
+                if _key in aggregated_daily_spend_update_transactions:
+                    daily_transaction = aggregated_daily_spend_update_transactions[_key]
+                    daily_transaction["spend"] += payload["spend"]
+                    daily_transaction["prompt_tokens"] += payload["prompt_tokens"]
+                    daily_transaction["completion_tokens"] += payload[
+                        "completion_tokens"
+                    ]
+                    daily_transaction["api_requests"] += payload["api_requests"]
+                    daily_transaction["successful_requests"] += payload[
+                        "successful_requests"
+                    ]
+                    daily_transaction["failed_requests"] += payload["failed_requests"]
+                else:
+                    aggregated_daily_spend_update_transactions[_key] = payload
+        return aggregated_daily_spend_update_transactions

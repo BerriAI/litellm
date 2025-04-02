@@ -25,7 +25,6 @@ from typing import (
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
     CommonProxyErrors,
-    DailyUserSpendTransaction,
     ProxyErrorTypes,
     ProxyException,
     SpendLogsMetadata,
@@ -1112,7 +1111,6 @@ def jsonify_object(data: dict) -> dict:
 
 class PrismaClient:
     spend_log_transactions: List = []
-    daily_user_spend_transactions: Dict[str, DailyUserSpendTransaction] = {}
 
     def __init__(
         self,
@@ -1184,74 +1182,6 @@ class PrismaClient:
         except (json.JSONDecodeError, AttributeError):
             # Default to success if metadata parsing fails
             return "success"
-
-    def add_spend_log_transaction_to_daily_user_transaction(
-        self, payload: Union[dict, SpendLogsPayload]
-    ):
-        """
-        Add a spend log transaction to the daily user transaction list
-
-        Key = @@unique([user_id, date, api_key, model, custom_llm_provider])    )
-
-        If key exists, update the transaction with the new spend and usage
-        """
-        expected_keys = ["user", "startTime", "api_key", "model", "custom_llm_provider"]
-
-        if not all(key in payload for key in expected_keys):
-            verbose_proxy_logger.debug(
-                f"Missing expected keys: {expected_keys}, in payload, skipping from daily_user_spend_transactions"
-            )
-            return
-
-        request_status = self.get_request_status(payload)
-        verbose_proxy_logger.info(f"Logged request status: {request_status}")
-        if isinstance(payload["startTime"], datetime):
-            start_time = payload["startTime"].isoformat()
-            date = start_time.split("T")[0]
-        elif isinstance(payload["startTime"], str):
-            date = payload["startTime"].split("T")[0]
-        else:
-            verbose_proxy_logger.debug(
-                f"Invalid start time: {payload['startTime']}, skipping from daily_user_spend_transactions"
-            )
-            return
-        try:
-            daily_transaction_key = f"{payload['user']}_{date}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}"
-
-            if daily_transaction_key in self.daily_user_spend_transactions:
-                daily_transaction = self.daily_user_spend_transactions[
-                    daily_transaction_key
-                ]
-                daily_transaction["spend"] += payload["spend"]
-                daily_transaction["prompt_tokens"] += payload["prompt_tokens"]
-                daily_transaction["completion_tokens"] += payload["completion_tokens"]
-                daily_transaction["api_requests"] += 1
-
-                if request_status == "success":
-                    daily_transaction["successful_requests"] += 1
-                else:
-                    daily_transaction["failed_requests"] += 1
-            else:
-                daily_transaction = DailyUserSpendTransaction(
-                    user_id=payload["user"],
-                    date=date,
-                    api_key=payload["api_key"],
-                    model=payload["model"],
-                    model_group=payload["model_group"],
-                    custom_llm_provider=payload["custom_llm_provider"],
-                    prompt_tokens=payload["prompt_tokens"],
-                    completion_tokens=payload["completion_tokens"],
-                    spend=payload["spend"],
-                    api_requests=1,
-                    successful_requests=1 if request_status == "success" else 0,
-                    failed_requests=1 if request_status != "success" else 0,
-                )
-
-            self.daily_user_spend_transactions[
-                daily_transaction_key
-            ] = daily_transaction
-        except Exception as e:
-            raise e
 
     def hash_token(self, token: str):
         # Hash the string using SHA-256
@@ -2589,134 +2519,6 @@ class ProxyUpdateSpend:
             )
 
     @staticmethod
-    async def update_daily_user_spend(
-        n_retry_times: int,
-        prisma_client: PrismaClient,
-        proxy_logging_obj: ProxyLogging,
-    ):
-        """
-        Batch job to update LiteLLM_DailyUserSpend table using in-memory daily_spend_transactions
-        """
-        BATCH_SIZE = (
-            100  # Number of aggregated records to update in each database operation
-        )
-        start_time = time.time()
-
-        try:
-            for i in range(n_retry_times + 1):
-                try:
-                    # Get transactions to process
-                    transactions_to_process = dict(
-                        list(prisma_client.daily_user_spend_transactions.items())[
-                            :BATCH_SIZE
-                        ]
-                    )
-
-                    if len(transactions_to_process) == 0:
-                        verbose_proxy_logger.debug(
-                            "No new transactions to process for daily spend update"
-                        )
-                        break
-
-                    # Update DailyUserSpend table in batches
-                    async with prisma_client.db.batch_() as batcher:
-                        for _, transaction in transactions_to_process.items():
-                            user_id = transaction.get("user_id")
-                            if not user_id:  # Skip if no user_id
-                                continue
-
-                            batcher.litellm_dailyuserspend.upsert(
-                                where={
-                                    "user_id_date_api_key_model_custom_llm_provider": {
-                                        "user_id": user_id,
-                                        "date": transaction["date"],
-                                        "api_key": transaction["api_key"],
-                                        "model": transaction["model"],
-                                        "custom_llm_provider": transaction.get(
-                                            "custom_llm_provider"
-                                        ),
-                                    }
-                                },
-                                data={
-                                    "create": {
-                                        "user_id": user_id,
-                                        "date": transaction["date"],
-                                        "api_key": transaction["api_key"],
-                                        "model": transaction["model"],
-                                        "model_group": transaction.get("model_group"),
-                                        "custom_llm_provider": transaction.get(
-                                            "custom_llm_provider"
-                                        ),
-                                        "prompt_tokens": transaction["prompt_tokens"],
-                                        "completion_tokens": transaction[
-                                            "completion_tokens"
-                                        ],
-                                        "spend": transaction["spend"],
-                                        "api_requests": transaction["api_requests"],
-                                        "successful_requests": transaction[
-                                            "successful_requests"
-                                        ],
-                                        "failed_requests": transaction[
-                                            "failed_requests"
-                                        ],
-                                    },
-                                    "update": {
-                                        "prompt_tokens": {
-                                            "increment": transaction["prompt_tokens"]
-                                        },
-                                        "completion_tokens": {
-                                            "increment": transaction[
-                                                "completion_tokens"
-                                            ]
-                                        },
-                                        "spend": {"increment": transaction["spend"]},
-                                        "api_requests": {
-                                            "increment": transaction["api_requests"]
-                                        },
-                                        "successful_requests": {
-                                            "increment": transaction[
-                                                "successful_requests"
-                                            ]
-                                        },
-                                        "failed_requests": {
-                                            "increment": transaction["failed_requests"]
-                                        },
-                                    },
-                                },
-                            )
-
-                    verbose_proxy_logger.info(
-                        f"Processed {len(transactions_to_process)} daily spend transactions in {time.time() - start_time:.2f}s"
-                    )
-
-                    # Remove processed transactions
-                    for key in transactions_to_process.keys():
-                        prisma_client.daily_user_spend_transactions.pop(key, None)
-
-                    verbose_proxy_logger.debug(
-                        f"Processed {len(transactions_to_process)} daily spend transactions in {time.time() - start_time:.2f}s"
-                    )
-                    break
-
-                except DB_CONNECTION_ERROR_TYPES as e:
-                    if i >= n_retry_times:
-                        _raise_failed_update_spend_exception(
-                            e=e,
-                            start_time=start_time,
-                            proxy_logging_obj=proxy_logging_obj,
-                        )
-                    await asyncio.sleep(2**i)  # Exponential backoff
-
-        except Exception as e:
-            # Remove processed transactions even if there was an error
-            if "transactions_to_process" in locals():
-                for key in transactions_to_process.keys():  # type: ignore
-                    prisma_client.daily_user_spend_transactions.pop(key, None)
-            _raise_failed_update_spend_exception(
-                e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
-            )
-
-    @staticmethod
     def disable_spend_updates() -> bool:
         """
         returns True if should not update spend in db
@@ -2763,20 +2565,6 @@ async def update_spend(  # noqa: PLR0915
             prisma_client=prisma_client,
             proxy_logging_obj=proxy_logging_obj,
             db_writer_client=db_writer_client,
-        )
-
-    ### UPDATE DAILY USER SPEND ###
-    verbose_proxy_logger.debug(
-        "Daily User Spend transactions: {}".format(
-            len(prisma_client.daily_user_spend_transactions)
-        )
-    )
-
-    if len(prisma_client.daily_user_spend_transactions) > 0:
-        await ProxyUpdateSpend.update_daily_user_spend(
-            n_retry_times=n_retry_times,
-            prisma_client=prisma_client,
-            proxy_logging_obj=proxy_logging_obj,
         )
 
 
