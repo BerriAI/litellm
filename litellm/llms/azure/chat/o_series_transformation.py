@@ -14,6 +14,7 @@ Translations handled by LiteLLM:
 
 from typing import List, Optional
 
+import litellm
 from litellm import verbose_logger
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import get_model_info
@@ -26,7 +27,9 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         """
         Get the supported OpenAI params for the Azure O-Series models
         """
-        all_openai_params = super().get_supported_openai_params(model=model)
+        all_openai_params = litellm.OpenAIGPTConfig().get_supported_openai_params(
+            model=model
+        )
         non_supported_params = [
             "logprobs",
             "top_p",
