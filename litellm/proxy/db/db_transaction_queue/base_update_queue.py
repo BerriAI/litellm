@@ -1,10 +1,13 @@
+"""
+Base class for in memory buffer for database transactions
+"""
 import asyncio
 
 from litellm._logging import verbose_proxy_logger
 
 
 class BaseUpdateQueue:
-    """Base class for spend update queues with common functionality"""
+    """Base class for in memory buffer for database transactions"""
 
     def __init__(self):
         self.update_queue = asyncio.Queue()
