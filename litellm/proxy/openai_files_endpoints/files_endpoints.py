@@ -170,6 +170,7 @@ async def create_file(
         target_model_names_list = (
             target_model_names.split(",") if target_model_names else []
         )
+        target_model_names_list = [model.strip() for model in target_model_names_list]
         # Prepare the data for forwarding
 
         if purpose not in OpenAIFilesPurpose.__args__:
