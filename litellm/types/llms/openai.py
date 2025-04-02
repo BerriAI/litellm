@@ -1113,3 +1113,6 @@ ResponsesAPIStreamingResponse = Annotated[
     ],
     Discriminator("type"),
 ]
+
+
+REASONING_EFFORT = Literal["low", "medium", "high"]
