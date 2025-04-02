@@ -783,6 +783,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         chat_completion_logprobs = self._transform_logprobs(
                             logprobs_result=candidate["logprobsResult"]
                         )
+                    # Handle avgLogprobs for Gemini Flash 2.0
+                    elif "avgLogprobs" in candidate:
+                        chat_completion_logprobs = candidate["avgLogprobs"]
 
                     if tools:
                         chat_completion_message["tool_calls"] = tools
