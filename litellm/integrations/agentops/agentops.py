@@ -56,7 +56,7 @@ class AgentOps(OpenTelemetry):
                 response = self._fetch_auth_token(config.api_key, config.auth_endpoint)
                 jwt_token = response.get("token")
                 project_id = response.get("project_id")
-            except Exception as e:
+            except Exception:
                 pass
 
         headers = f"Authorization=Bearer {jwt_token}" if jwt_token else None
