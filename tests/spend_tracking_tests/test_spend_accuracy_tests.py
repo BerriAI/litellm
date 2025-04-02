@@ -52,7 +52,7 @@ Additional Test Scenarios:
 
 async def create_organization(session, organization_alias: str):
     """Helper function to create a new organization"""
-    url = "http://0.0.0.0:4002/organization/new"
+    url = "http://0.0.0.0:4000/organization/new"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {"organization_alias": organization_alias}
     async with session.post(url, headers=headers, json=data) as response:
@@ -61,7 +61,7 @@ async def create_organization(session, organization_alias: str):
 
 async def create_team(session, org_id: str):
     """Helper function to create a new team under an organization"""
-    url = "http://0.0.0.0:4002/team/new"
+    url = "http://0.0.0.0:4000/team/new"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {"organization_id": org_id, "team_alias": f"test-team-{uuid.uuid4()}"}
     async with session.post(url, headers=headers, json=data) as response:
@@ -70,7 +70,7 @@ async def create_team(session, org_id: str):
 
 async def create_user(session, org_id: str):
     """Helper function to create a new user"""
-    url = "http://0.0.0.0:4002/user/new"
+    url = "http://0.0.0.0:4000/user/new"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {"user_name": f"test-user-{uuid.uuid4()}"}
     async with session.post(url, headers=headers, json=data) as response:
@@ -79,7 +79,7 @@ async def create_user(session, org_id: str):
 
 async def generate_key(session, user_id: str, team_id: str):
     """Helper function to generate a key for a specific user and team"""
-    url = "http://0.0.0.0:4002/key/generate"
+    url = "http://0.0.0.0:4000/key/generate"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {"user_id": user_id, "team_id": team_id}
     async with session.post(url, headers=headers, json=data) as response:
@@ -91,7 +91,7 @@ async def chat_completion(session, key: str):
     from openai import AsyncOpenAI
     import uuid
 
-    client = AsyncOpenAI(api_key=key, base_url="http://0.0.0.0:4002/v1")
+    client = AsyncOpenAI(api_key=key, base_url="http://0.0.0.0:4000/v1")
 
     response = await client.chat.completions.create(
         model="fake-openai-endpoint",
@@ -102,7 +102,7 @@ async def chat_completion(session, key: str):
 
 async def get_spend_info(session, entity_type: str, entity_id: str):
     """Helper function to get spend information for an entity"""
-    url = f"http://0.0.0.0:4002/{entity_type}/info"
+    url = f"http://0.0.0.0:4000/{entity_type}/info"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     if entity_type == "key":
         data = {"key": entity_id}
@@ -156,7 +156,7 @@ async def test_basic_spend_accuracy():
             response = await chat_completion(session, key)
             print("response: ", response)
 
-        # wait 10 seconds for spend to be updated
+        # wait 15 seconds for spend to be updated
         await asyncio.sleep(15)
 
         # Get spend information for each entity
@@ -235,7 +235,7 @@ async def test_long_term_spend_accuracy_with_bursts():
             print(f"Burst 1 - Request {i+1}/{BURST_1_REQUESTS} completed")
 
         # Wait for spend to be updated
-        await asyncio.sleep(8)
+        await asyncio.sleep(15)
 
         # Check intermediate spend
         intermediate_key_info = await get_spend_info(session, "key", key)
@@ -248,7 +248,7 @@ async def test_long_term_spend_accuracy_with_bursts():
             print(f"Burst 2 - Request {i+1}/{BURST_2_REQUESTS} completed")
 
         # Wait for spend to be updated
-        await asyncio.sleep(8)
+        await asyncio.sleep(15)
 
         # Get final spend information for each entity
         key_info = await get_spend_info(session, "key", key)

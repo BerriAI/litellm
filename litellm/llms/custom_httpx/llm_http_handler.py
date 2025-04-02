@@ -7,11 +7,13 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
+from litellm.llms.base_llm.files.transformation import BaseFilesConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.http_handler import (
@@ -26,7 +28,12 @@ from litellm.responses.streaming_iterator import (
     ResponsesAPIStreamingIterator,
     SyncResponsesAPIStreamingIterator,
 )
-from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIResponse
+from litellm.types.llms.openai import (
+    CreateFileRequest,
+    OpenAIFileObject,
+    ResponseInputParam,
+    ResponsesAPIResponse,
+)
 from litellm.types.rerank import OptionalRerankParams, RerankResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import EmbeddingResponse, FileTypes, TranscriptionResponse
@@ -240,6 +247,7 @@ class BaseLLMHTTPHandler:
 
         api_base = provider_config.get_complete_url(
             api_base=api_base,
+            api_key=api_key,
             model=model,
             optional_params=optional_params,
             stream=stream,
@@ -611,6 +619,7 @@ class BaseLLMHTTPHandler:
 
         api_base = provider_config.get_complete_url(
             api_base=api_base,
+            api_key=api_key,
             model=model,
             optional_params=optional_params,
             litellm_params=litellm_params,
@@ -884,6 +893,7 @@ class BaseLLMHTTPHandler:
 
         complete_url = provider_config.get_complete_url(
             api_base=api_base,
+            api_key=api_key,
             model=model,
             optional_params=optional_params,
             litellm_params=litellm_params,
@@ -1184,6 +1194,188 @@ class BaseLLMHTTPHandler:
             raw_response=response,
             logging_obj=logging_obj,
         )
+
+    def create_file(
+        self,
+        create_file_data: CreateFileRequest,
+        litellm_params: dict,
+        provider_config: BaseFilesConfig,
+        headers: dict,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        logging_obj: LiteLLMLoggingObj,
+        _is_async: bool = False,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> Union[OpenAIFileObject, Coroutine[Any, Any, OpenAIFileObject]]:
+        """
+        Creates a file using Gemini's two-step upload process
+        """
+        # get config from model, custom llm provider
+        headers = provider_config.validate_environment(
+            api_key=api_key,
+            headers=headers,
+            model="",
+            messages=[],
+            optional_params={},
+        )
+
+        api_base = provider_config.get_complete_url(
+            api_base=api_base,
+            api_key=api_key,
+            model="",
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        # Get the transformed request data for both steps
+        transformed_request = provider_config.transform_create_file_request(
+            model="",
+            create_file_data=create_file_data,
+            litellm_params=litellm_params,
+            optional_params={},
+        )
+
+        if _is_async:
+            return self.async_create_file(
+                transformed_request=transformed_request,
+                litellm_params=litellm_params,
+                provider_config=provider_config,
+                headers=headers,
+                api_base=api_base,
+                logging_obj=logging_obj,
+                client=client,
+                timeout=timeout,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client()
+        else:
+            sync_httpx_client = client
+
+        try:
+            # Step 1: Initial request to get upload URL
+            initial_response = sync_httpx_client.post(
+                url=api_base,
+                headers={
+                    **headers,
+                    **transformed_request["initial_request"]["headers"],
+                },
+                data=json.dumps(transformed_request["initial_request"]["data"]),
+                timeout=timeout,
+            )
+
+            # Extract upload URL from response headers
+            upload_url = initial_response.headers.get("X-Goog-Upload-URL")
+
+            if not upload_url:
+                raise ValueError("Failed to get upload URL from initial request")
+
+            # Step 2: Upload the actual file
+            upload_response = sync_httpx_client.post(
+                url=upload_url,
+                headers=transformed_request["upload_request"]["headers"],
+                data=transformed_request["upload_request"]["data"],
+                timeout=timeout,
+            )
+
+            return provider_config.transform_create_file_response(
+                model=None,
+                raw_response=upload_response,
+                logging_obj=logging_obj,
+                litellm_params=litellm_params,
+            )
+
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=provider_config,
+            )
+
+    async def async_create_file(
+        self,
+        transformed_request: dict,
+        litellm_params: dict,
+        provider_config: BaseFilesConfig,
+        headers: dict,
+        api_base: str,
+        logging_obj: LiteLLMLoggingObj,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ):
+        """
+        Creates a file using Gemini's two-step upload process
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=provider_config.custom_llm_provider
+            )
+        else:
+            async_httpx_client = client
+
+        try:
+            # Step 1: Initial request to get upload URL
+            initial_response = await async_httpx_client.post(
+                url=api_base,
+                headers={
+                    **headers,
+                    **transformed_request["initial_request"]["headers"],
+                },
+                data=json.dumps(transformed_request["initial_request"]["data"]),
+                timeout=timeout,
+            )
+
+            # Extract upload URL from response headers
+            upload_url = initial_response.headers.get("X-Goog-Upload-URL")
+
+            if not upload_url:
+                raise ValueError("Failed to get upload URL from initial request")
+
+            # Step 2: Upload the actual file
+            upload_response = await async_httpx_client.post(
+                url=upload_url,
+                headers=transformed_request["upload_request"]["headers"],
+                data=transformed_request["upload_request"]["data"],
+                timeout=timeout,
+            )
+
+            return provider_config.transform_create_file_response(
+                model=None,
+                raw_response=upload_response,
+                logging_obj=logging_obj,
+                litellm_params=litellm_params,
+            )
+
+        except Exception as e:
+            verbose_logger.exception(f"Error creating file: {e}")
+            raise self._handle_error(
+                e=e,
+                provider_config=provider_config,
+            )
+
+    def list_files(self):
+        """
+        Lists all files
+        """
+        pass
+
+    def delete_file(self):
+        """
+        Deletes a file
+        """
+        pass
+
+    def retrieve_file(self):
+        """
+        Returns the metadata of the file
+        """
+        pass
+
+    def retrieve_file_content(self):
+        """
+        Returns the content of the file
+        """
+        pass
 
     def _prepare_fake_stream_request(
         self,
