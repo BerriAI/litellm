@@ -349,6 +349,7 @@ class ProxyLogging:
         if redis_cache is not None:
             self.internal_usage_cache.dual_cache.redis_cache = redis_cache
             self.db_spend_update_writer.redis_update_buffer.redis_cache = redis_cache
+            self.db_spend_update_writer.pod_lock_manager.redis_cache = redis_cache
 
     def _init_litellm_callbacks(self, llm_router: Optional[Router] = None):
         litellm.logging_callback_manager.add_litellm_callback(self.max_parallel_request_limiter)  # type: ignore
