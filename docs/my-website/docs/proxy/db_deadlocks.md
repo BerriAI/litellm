@@ -40,7 +40,7 @@ A single instance flushes the redis queue to the DB
 
 ## Usage
 
-## Required components
+### Required components
 
 - Redis
 - Postgres
@@ -49,7 +49,7 @@ A single instance flushes the redis queue to the DB
 
 You can enable using the redis buffer by setting `use_redis_transaction_buffer: true` in the `general_settings` section of your `proxy_config.yaml` file. 
 
-Note: This setup requires a redis instance to be running. 
+Note: This setup requires litellm to be connected to a redis instance. 
 
 ```yaml showLineNumbers title="litellm proxy_config.yaml"
 general_settings:
@@ -61,3 +61,5 @@ litellm_settings:
     type: redis
     supported_call_types: [] # Optional: Set cache for proxy, but not on the actual llm api call
 ```
+
+
