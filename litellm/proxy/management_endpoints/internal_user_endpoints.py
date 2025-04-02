@@ -1480,6 +1480,14 @@ async def get_user_daily_activity(
         if api_key:
             where_conditions["api_key"] = api_key
 
+        if (
+            user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+            and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+        ):
+            where_conditions[
+                "user_id"
+            ] = user_api_key_dict.user_id  # only allow access to own data
+
         # Get total count for pagination
         total_count = await prisma_client.db.litellm_dailyuserspend.count(
             where=where_conditions
