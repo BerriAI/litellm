@@ -91,13 +91,6 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
         </AccordionHeader>
         <AccordionBody>
           <div className="bg-white rounded-lg">
-            <Form.Item
-              label="Team"
-              name="team_id"
-              className="mb-4"
-            >
-              <TeamDropdown teams={teams} />
-            </Form.Item>
 
             <Form.Item
               label="Custom Pricing"

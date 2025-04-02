@@ -3,7 +3,9 @@ from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
 
+import litellm
 from litellm import supports_response_schema, supports_system_messages, verbose_logger
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.vertex_ai import PartType
 
@@ -28,6 +30,10 @@ def get_supports_system_message(
         supports_system_message = supports_system_messages(
             model=model, custom_llm_provider=_custom_llm_provider
         )
+
+        # Vertex Models called in the `/gemini` request/response format also support system messages
+        if litellm.VertexGeminiConfig._is_model_gemini_spec_model(model):
+            supports_system_message = True
     except Exception as e:
         verbose_logger.warning(
             "Unable to identify if system message supported. Defaulting to 'False'. Received error message - {}\nAdd it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json".format(
@@ -55,7 +61,9 @@ def get_supports_response_schema(
 
 from typing import Literal, Optional
 
-all_gemini_url_modes = Literal["chat", "embedding", "batch_embedding"]
+all_gemini_url_modes = Literal[
+    "chat", "embedding", "batch_embedding", "image_generation"
+]
 
 
 def _get_vertex_url(
@@ -68,6 +76,8 @@ def _get_vertex_url(
 ) -> Tuple[str, str]:
     url: Optional[str] = None
     endpoint: Optional[str] = None
+
+    model = litellm.VertexGeminiConfig.get_model_for_vertex_ai_url(model=model)
     if mode == "chat":
         ### SET RUNTIME ENDPOINT ###
         endpoint = "generateContent"
@@ -91,7 +101,11 @@ def _get_vertex_url(
         if model.isdigit():
             # https://us-central1-aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/us-central1/endpoints/$ENDPOINT_ID:predict
             url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
-
+    elif mode == "image_generation":
+        endpoint = "predict"
+        url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+        if model.isdigit():
+            url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
     if not url or not endpoint:
         raise ValueError(f"Unable to get vertex url/endpoint for mode: {mode}")
     return url, endpoint
@@ -127,6 +141,10 @@ def _get_gemini_url(
         url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
             _gemini_model_name, endpoint, gemini_api_key
         )
+    elif mode == "image_generation":
+        raise ValueError(
+            "LiteLLM's `gemini/` route does not support image generation yet. Let us know if you need this feature by opening an issue at https://github.com/BerriAI/litellm/issues"
+        )
 
     return url, endpoint
 
@@ -160,7 +178,7 @@ def _build_vertex_schema(parameters: dict):
     #     * https://github.com/pydantic/pydantic/issues/1270
     #     * https://stackoverflow.com/a/58841311
     #     * https://github.com/pydantic/pydantic/discussions/4872
-    convert_to_nullable(parameters)
+    convert_anyof_null_to_nullable(parameters)
     add_object_type(parameters)
     # Postprocessing
     # 4. Suppress unnecessary title generation:
@@ -211,34 +229,41 @@ def unpack_defs(schema, defs):
                 continue
 
 
-def convert_to_nullable(schema):
-    anyof = schema.pop("anyOf", None)
+def convert_anyof_null_to_nullable(schema, depth=0):
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(
+            f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
+        )
+    """ Converts null objects within anyOf by removing them and adding nullable to all remaining objects """
+    anyof = schema.get("anyOf", None)
     if anyof is not None:
-        if len(anyof) != 2:
+        contains_null = False
+        for atype in anyof:
+            if atype == {"type": "null"}:
+                # remove null type
+                anyof.remove(atype)
+                contains_null = True
+
+        if len(anyof) == 0:
+            # Edge case: response schema with only null type present is invalid in Vertex AI
             raise ValueError(
-                "Invalid input: Type Unions are not supported, except for `Optional` types. "
-                "Please provide an `Optional` type or a non-Union type."
+                "Invalid input: AnyOf schema with only null type is not supported. "
+                "Please provide a non-null type."
             )
-        a, b = anyof
-        if a == {"type": "null"}:
-            schema.update(b)
-        elif b == {"type": "null"}:
-            schema.update(a)
-        else:
-            raise ValueError(
-                "Invalid input: Type Unions are not supported, except for `Optional` types. "
-                "Please provide an `Optional` type or a non-Union type."
-            )
-        schema["nullable"] = True
+
+        if contains_null:
+            # set all types to nullable following guidance found here: https://cloud.google.com/vertex-ai/generative-ai/docs/samples/generativeaionvertexai-gemini-controlled-generation-response-schema-3#generativeaionvertexai_gemini_controlled_generation_response_schema_3-python
+            for atype in anyof:
+                atype["nullable"] = True
 
     properties = schema.get("properties", None)
     if properties is not None:
         for name, value in properties.items():
-            convert_to_nullable(value)
+            convert_anyof_null_to_nullable(value, depth=depth + 1)
 
     items = schema.get("items", None)
     if items is not None:
-        convert_to_nullable(items)
+        convert_anyof_null_to_nullable(items, depth=depth + 1)
 
 
 def add_object_type(schema):

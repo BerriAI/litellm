@@ -313,3 +313,44 @@ model LiteLLM_AuditLog {
   before_value       Json?       // value of the row 
   updated_values     Json?       // value of the row after change
 }
+
+// Track daily user spend metrics per model and key
+model LiteLLM_DailyUserSpend {
+  id                  String   @id @default(uuid())
+  user_id             String
+  date                String
+  api_key             String   
+  model               String   
+  model_group         String?  
+  custom_llm_provider String?  
+  prompt_tokens       Int      @default(0)
+  completion_tokens   Int      @default(0)
+  spend               Float    @default(0.0)
+  api_requests        Int      @default(0)
+  successful_requests Int      @default(0)
+  failed_requests     Int      @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@unique([user_id, date, api_key, model, custom_llm_provider])
+  @@index([date])
+  @@index([user_id])
+  @@index([api_key])
+  @@index([model])
+}
+
+
+// Track the status of cron jobs running. Only allow one pod to run the job at a time
+model LiteLLM_CronJob {
+  cronjob_id            String   @id @default(cuid()) // Unique ID for the record
+  pod_id         String   // Unique identifier for the pod acting as the leader
+  status        JobStatus @default(INACTIVE) // Status of the cron job (active or inactive)
+  last_updated   DateTime @default(now()) // Timestamp for the last update of the cron job record
+  ttl           DateTime // Time when the leader's lease expires
+}
+
+enum JobStatus {
+  ACTIVE
+  INACTIVE
+}
+

@@ -22,6 +22,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
     ChatCompletionAssistantToolCall,
+    ChatCompletionFileObject,
     ChatCompletionFunctionMessage,
     ChatCompletionImageObject,
     ChatCompletionTextObject,
@@ -1042,10 +1043,10 @@ def convert_to_gemini_tool_call_invoke(
         if tool_calls is not None:
             for tool in tool_calls:
                 if "function" in tool:
-                    gemini_function_call: Optional[VertexFunctionCall] = (
-                        _gemini_tool_call_invoke_helper(
-                            function_call_params=tool["function"]
-                        )
+                    gemini_function_call: Optional[
+                        VertexFunctionCall
+                    ] = _gemini_tool_call_invoke_helper(
+                        function_call_params=tool["function"]
                     )
                     if gemini_function_call is not None:
                         _parts_list.append(
@@ -1447,9 +1448,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
 
                             if "cache_control" in _content_element:
-                                _anthropic_content_element["cache_control"] = (
-                                    _content_element["cache_control"]
-                                )
+                                _anthropic_content_element[
+                                    "cache_control"
+                                ] = _content_element["cache_control"]
                             user_content.append(_anthropic_content_element)
                         elif m.get("type", "") == "text":
                             m = cast(ChatCompletionTextObject, m)
@@ -1470,6 +1471,25 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             user_content.append(_content_element)
                         elif m.get("type", "") == "document":
                             user_content.append(cast(AnthropicMessagesDocumentParam, m))
+                        elif m.get("type", "") == "file":
+                            file_message = cast(ChatCompletionFileObject, m)
+                            file_data = file_message["file"].get("file_data")
+                            if file_data:
+                                image_chunk = convert_to_anthropic_image_obj(
+                                    openai_image_url=file_data,
+                                    format=file_message["file"].get("format"),
+                                )
+                                anthropic_document_param = (
+                                    AnthropicMessagesDocumentParam(
+                                        type="document",
+                                        source=AnthropicContentParamSource(
+                                            type="base64",
+                                            media_type=image_chunk["media_type"],
+                                            data=image_chunk["data"],
+                                        ),
+                                    )
+                                )
+                                user_content.append(anthropic_document_param)
                 elif isinstance(user_message_types_block["content"], str):
                     _anthropic_content_text_element: AnthropicMessagesTextParam = {
                         "type": "text",
@@ -1481,9 +1501,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     )
 
                     if "cache_control" in _content_element:
-                        _anthropic_content_text_element["cache_control"] = (
-                            _content_element["cache_control"]
-                        )
+                        _anthropic_content_text_element[
+                            "cache_control"
+                        ] = _content_element["cache_control"]
 
                     user_content.append(_anthropic_content_text_element)
 
@@ -1548,7 +1568,6 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     "content"
                 ]  # don't pass empty text blocks. anthropic api raises errors.
             ):
-
                 _anthropic_text_content_element = AnthropicMessagesTextParam(
                     type="text",
                     text=assistant_content_block["content"],
@@ -1584,7 +1603,6 @@ def anthropic_messages_pt(  # noqa: PLR0915
             msg_i += 1
 
         if assistant_content:
-
             new_messages.append({"role": "assistant", "content": assistant_content})
 
         if msg_i == init_msg_i:  # prevent infinite loops
@@ -2260,7 +2278,6 @@ class BedrockImageProcessor:
     @staticmethod
     async def get_image_details_async(image_url) -> Tuple[str, str]:
         try:
-
             client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.PromptFactory,
                 params={"concurrent_limit": 1},
@@ -2627,7 +2644,6 @@ def get_user_message_block_or_continue_message(
         for item in modified_content_block:
             # Check if the list is empty
             if item["type"] == "text":
-
                 if not item["text"].strip():
                     # Replace empty text with continue message
                     _user_continue_message = ChatCompletionUserMessage(
@@ -2904,6 +2920,11 @@ class BedrockConverseMessagesProcessor:
                                     image_url=image_url, format=format
                                 )
                                 _parts.append(_part)  # type: ignore
+                            elif element["type"] == "file":
+                                _part = await BedrockConverseMessagesProcessor._async_process_file_message(
+                                    message=cast(ChatCompletionFileObject, element)
+                                )
+                                _parts.append(_part)
                             _cache_point_block = (
                                 litellm.AmazonConverseConfig()._get_cache_point_block(
                                     message_block=cast(
@@ -3073,6 +3094,45 @@ class BedrockConverseMessagesProcessor:
             reasoning_content_blocks.append(bedrock_content_block)
         return reasoning_content_blocks
 
+    @staticmethod
+    def _process_file_message(message: ChatCompletionFileObject) -> BedrockContentBlock:
+        file_message = message["file"]
+        file_data = file_message.get("file_data")
+        file_id = file_message.get("file_id")
+
+        if file_data is None and file_id is None:
+            raise litellm.BadRequestError(
+                message="file_data and file_id cannot both be None. Got={}".format(
+                    message
+                ),
+                model="",
+                llm_provider="bedrock",
+            )
+        format = file_message.get("format")
+        return BedrockImageProcessor.process_image_sync(
+            image_url=cast(str, file_id or file_data), format=format
+        )
+
+    @staticmethod
+    async def _async_process_file_message(
+        message: ChatCompletionFileObject,
+    ) -> BedrockContentBlock:
+        file_message = message["file"]
+        file_data = file_message.get("file_data")
+        file_id = file_message.get("file_id")
+        format = file_message.get("format")
+        if file_data is None and file_id is None:
+            raise litellm.BadRequestError(
+                message="file_data and file_id cannot both be None. Got={}".format(
+                    message
+                ),
+                model="",
+                llm_provider="bedrock",
+            )
+        return await BedrockImageProcessor.process_image_async(
+            image_url=cast(str, file_id or file_data), format=format
+        )
+
 
 def _bedrock_converse_messages_pt(  # noqa: PLR0915
     messages: List,
@@ -3145,6 +3205,13 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                 format=format,
                             )
                             _parts.append(_part)  # type: ignore
+                        elif element["type"] == "file":
+                            _part = (
+                                BedrockConverseMessagesProcessor._process_file_message(
+                                    message=cast(ChatCompletionFileObject, element)
+                                )
+                            )
+                            _parts.append(_part)
                         _cache_point_block = (
                             litellm.AmazonConverseConfig()._get_cache_point_block(
                                 message_block=cast(
@@ -3222,7 +3289,6 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
         assistant_content: List[BedrockContentBlock] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
-
             assistant_message_block = get_assistant_message_block_or_continue_message(
                 message=messages[msg_i],
                 assistant_continue_message=assistant_continue_message,
@@ -3425,7 +3491,6 @@ def response_schema_prompt(model: str, response_schema: dict) -> str:
         {"role": "user", "content": "{}".format(response_schema)}
     ]
     if f"{model}/response_schema_prompt" in litellm.custom_prompt_dict:
-
         custom_prompt_details = litellm.custom_prompt_dict[
             f"{model}/response_schema_prompt"
         ]  # allow user to define custom response schema prompt by model

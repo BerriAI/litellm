@@ -244,7 +244,6 @@ async def async_completion(
     print_verbose,
     headers: dict,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
-
     prediction_url = replicate_config.get_complete_url(
         api_base=api_base,
         model=model,
