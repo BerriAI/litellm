@@ -21,9 +21,9 @@ from base_llm_unit_tests import BaseLLMChatTest, BaseOSeriesModelsTest
 class TestAzureOpenAIO1(BaseOSeriesModelsTest, BaseLLMChatTest):
     def get_base_completion_call_args(self):
         return {
-            "model": "azure/o1-preview",
+            "model": "azure/o1",
             "api_key": os.getenv("AZURE_OPENAI_O1_KEY"),
-            "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com",
+            "api_base": "https://openai-prod-test.openai.azure.com",
         }
 
     def get_client(self):
@@ -31,7 +31,7 @@ class TestAzureOpenAIO1(BaseOSeriesModelsTest, BaseLLMChatTest):
 
         return AzureOpenAI(
             api_key="my-fake-o1-key",
-            base_url="https://openai-gpt-4-test-v-1.openai.azure.com",
+            base_url="https://openai-prod-test.openai.azure.com",
             api_version="2024-02-15-preview",
         )
 
