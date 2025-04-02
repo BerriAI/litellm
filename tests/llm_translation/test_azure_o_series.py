@@ -24,6 +24,7 @@ class TestAzureOpenAIO1(BaseOSeriesModelsTest, BaseLLMChatTest):
             "model": "azure/o1",
             "api_key": os.getenv("AZURE_OPENAI_O1_KEY"),
             "api_base": "https://openai-prod-test.openai.azure.com",
+            "api_version": "2024-12-01-preview"
         }
 
     def get_client(self):
