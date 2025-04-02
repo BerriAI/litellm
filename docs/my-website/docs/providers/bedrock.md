@@ -476,7 +476,7 @@ os.environ["AWS_REGION_NAME"] = ""
 resp = completion(
     model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
     messages=[{"role": "user", "content": "What is the capital of France?"}],
-    thinking={"type": "enabled", "budget_tokens": 1024},
+    reasoning_effort="low",
 )
 
 print(resp)
@@ -491,7 +491,7 @@ model_list:
   - model_name: bedrock-claude-3-7
     litellm_params:
       model: bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0
-      thinking: {"type": "enabled", "budget_tokens": 1024} # 👈 EITHER HERE OR ON REQUEST
+      reasoning_effort: "low" # 👈 EITHER HERE OR ON REQUEST
 ```
 
 2. Start proxy 
@@ -509,7 +509,7 @@ curl http://0.0.0.0:4000/v1/chat/completions \
   -d '{
     "model": "bedrock-claude-3-7",
     "messages": [{"role": "user", "content": "What is the capital of France?"}],
-    "thinking": {"type": "enabled", "budget_tokens": 1024} # 👈 EITHER HERE OR ON CONFIG.YAML
+    "reasoning_effort": "low" # 👈 EITHER HERE OR ON CONFIG.YAML
   }'
 ```
 
@@ -557,6 +557,10 @@ Same as [Anthropic API response](../providers/anthropic#usage---thinking--reason
     }
 }
 ```
+
+### Pass `thinking` to Anthropic models
+
+Same as [Anthropic API response](../providers/anthropic#usage---thinking--reasoning_content).
 
 
 ## Usage - Structured Output / JSON mode 
