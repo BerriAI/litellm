@@ -1,4 +1,5 @@
 import copy
+import json
 import sys
 import time
 from datetime import datetime
@@ -1910,6 +1911,43 @@ async def test_wrapper_kwargs_passthrough():
         == "gpt-4o-mini"
     )
 
+@pytest.mark.asyncio
+async def test_cache_key_stability_with_mutation(monkeypatch):
+    from litellm.utils import client
+    import asyncio
+    from litellm.caching import Cache
+
+    # Set up in-memory cache
+    cache = Cache()
+    monkeypatch.setattr(litellm, "cache", cache)
+
+    # Create mock original function
+    mock_original = AsyncMock()
+
+    def side_effect(**kwargs):
+        print(f"kwargs: {kwargs}")
+        return litellm.ModelResponse(
+            model="vertex_ai/gemini-2.0-flash"
+        )
+    mock_original.side_effect = side_effect
+
+    # Apply decorator
+    @client
+    async def acompletion(**kwargs):
+        kwargs["messages"][0]["content"] = "mutated"
+        return await mock_original(**kwargs)
+
+    # Test kwargs
+    test_kwargs = {"model": "vertex_ai/gemini-2.0-flash", "messages": [{"role": "user", "content": "Hello, world!"}]}
+    original_kwargs = copy.deepcopy(test_kwargs)
+
+    # Call decorated function
+    await acompletion(**test_kwargs)
+    await asyncio.sleep(0.01)
+    await acompletion(**original_kwargs)
+
+    mock_original.assert_called_once()
+
 
 def test_dict_to_response_format_helper():
     from litellm.llms.base_llm.base_utils import _dict_to_response_format_helper
@@ -2122,3 +2160,70 @@ def test_get_provider_audio_transcription_config():
         config = ProviderConfigManager.get_provider_audio_transcription_config(
             model="whisper-1", provider=provider
         )
+
+def test_remove_strict_from_schema():
+    from litellm.utils import _remove_strict_from_schema
+
+    schema = { # This isn't maybe actually very realistic json schema, just slop full of stricts
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "strict": True,
+        "definitions": {
+            "address": {
+                "type": "object",
+                "properties": {
+                    "street": {"type": "string"},
+                    "city": {"type": "string"}
+                },
+                "required": ["street", "city"],
+                "strict": True
+            }
+        },
+        "properties": {
+            "name": {
+                "type": "string",
+                "strict": True
+            },
+            "age": {
+                "type": "integer"
+            },
+            "address": {
+                "$ref": "#/definitions/address"
+            },
+            "tags": {
+                "type": "array",
+                "items": {"type": "string"},
+                "strict": True
+            },
+            "contacts": {
+                "type": "array",
+                "items": {
+                    "oneOf": [
+                        {"type": "string"},
+                        {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "strict": True,
+                                "properties": {
+                                    "value": {"type": "string"}
+                                },
+                                "required": ["value"]
+                            }
+                        }
+                    ],
+                    "strict": True
+                }
+            }
+        }
+    }
+    original_schema = copy.deepcopy(schema)
+    cleaned = _remove_strict_from_schema(schema)
+    assert "strict" not in json.dumps(cleaned)
+    # schema should be unchanged, (should copy instead of mutate)
+    # otherwise it breaks cache keys 
+    # https://github.com/BerriAI/litellm/issues/9692
+    assert cleaned != original_schema
+    assert schema == original_schema
+    
+    

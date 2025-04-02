@@ -251,3 +251,26 @@ def test_generate_streaming_content():
     assert chunk_count > 1
 
     print(f"Number of chunks: {chunk_count}")
+
+def test_caching_stable_with_mutation():
+    """
+    Test that caching is stable with mutation during a request. This is to circumvent the cache miss when a provider
+    implementation mutates an argument of the original request (e.g. to normalize it for the specific provider).
+    Otherwise the response is stored under a different key than the cache is checked with.
+    """
+    litellm.cache = Cache()
+    kwargs = {
+        "model": "o1",
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Hello, world!"},
+        ],
+        "temperature": 0.7,
+        "litellm_params": {}, # litellm_params must be set for this to work, otherwise it's not spread into the kwargs
+    }
+    cache_key = litellm.cache.get_cache_key(**kwargs)
+    
+    # mutate kwargs
+    kwargs["messages"][0]["role"] = "developer"
+    cache_key_2 = litellm.cache.get_cache_key(**kwargs)
+    assert cache_key == cache_key_2
