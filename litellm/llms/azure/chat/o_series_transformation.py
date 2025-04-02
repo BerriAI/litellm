@@ -22,6 +22,25 @@ from ...openai.chat.o_series_transformation import OpenAIOSeriesConfig
 
 
 class AzureOpenAIO1Config(OpenAIOSeriesConfig):
+    def get_supported_openai_params(self, model: str) -> list:
+        """
+        Get the supported OpenAI params for the Azure O-Series models
+        """
+        all_openai_params = super().get_supported_openai_params(model=model)
+        non_supported_params = [
+            "logprobs",
+            "top_p",
+            "presence_penalty",
+            "frequency_penalty",
+            "top_logprobs",
+        ]
+
+        o_series_only_param = ["reasoning_effort"]
+        all_openai_params.extend(o_series_only_param)
+        return [
+            param for param in all_openai_params if param not in non_supported_params
+        ]
+
     def should_fake_stream(
         self,
         model: Optional[str],
