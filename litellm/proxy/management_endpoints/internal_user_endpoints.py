@@ -1264,16 +1264,38 @@ class SpendMetrics(BaseModel):
     api_requests: int = Field(default=0)
 
 
+class MetricBase(BaseModel):
+    metrics: SpendMetrics
+
+
+class MetricWithMetadata(MetricBase):
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class KeyMetadata(BaseModel):
+    """Metadata for a key"""
+
+    key_alias: Optional[str] = None
+
+
+class KeyMetricWithMetadata(MetricBase):
+    """Base class for metrics with additional metadata"""
+
+    metadata: KeyMetadata = Field(default_factory=KeyMetadata)
+
+
 class BreakdownMetrics(BaseModel):
     """Breakdown of spend by different dimensions"""
 
-    models: Dict[str, SpendMetrics] = Field(default_factory=dict)  # model -> metrics
-    providers: Dict[str, SpendMetrics] = Field(
+    models: Dict[str, MetricWithMetadata] = Field(
         default_factory=dict
-    )  # provider -> metrics
-    api_keys: Dict[str, SpendMetrics] = Field(
+    )  # model -> {metrics, metadata}
+    providers: Dict[str, MetricWithMetadata] = Field(
         default_factory=dict
-    )  # api_key -> metrics
+    )  # provider -> {metrics, metadata}
+    api_keys: Dict[str, KeyMetricWithMetadata] = Field(
+        default_factory=dict
+    )  # api_key -> {metrics, metadata}
 
 
 class DailySpendData(BaseModel):
@@ -1335,30 +1357,51 @@ def update_metrics(
 
 
 def update_breakdown_metrics(
-    breakdown: BreakdownMetrics, record: LiteLLM_DailyUserSpend
+    breakdown: BreakdownMetrics,
+    record: LiteLLM_DailyUserSpend,
+    model_metadata: Dict[str, Dict[str, Any]],
+    provider_metadata: Dict[str, Dict[str, Any]],
+    api_key_metadata: Dict[str, Dict[str, Any]],
 ) -> BreakdownMetrics:
     """Updates breakdown metrics for a single record using the existing update_metrics function"""
 
     # Update model breakdown
     if record.model not in breakdown.models:
-        breakdown.models[record.model] = SpendMetrics()
-    breakdown.models[record.model] = update_metrics(
-        breakdown.models[record.model], record
+        breakdown.models[record.model] = MetricWithMetadata(
+            metrics=SpendMetrics(),
+            metadata=model_metadata.get(
+                record.model, {}
+            ),  # Add any model-specific metadata here
+        )
+    breakdown.models[record.model].metrics = update_metrics(
+        breakdown.models[record.model].metrics, record
     )
 
     # Update provider breakdown
     provider = record.custom_llm_provider or "unknown"
     if provider not in breakdown.providers:
-        breakdown.providers[provider] = SpendMetrics()
-    breakdown.providers[provider] = update_metrics(
-        breakdown.providers[provider], record
+        breakdown.providers[provider] = MetricWithMetadata(
+            metrics=SpendMetrics(),
+            metadata=provider_metadata.get(
+                provider, {}
+            ),  # Add any provider-specific metadata here
+        )
+    breakdown.providers[provider].metrics = update_metrics(
+        breakdown.providers[provider].metrics, record
     )
 
     # Update api key breakdown
     if record.api_key not in breakdown.api_keys:
-        breakdown.api_keys[record.api_key] = SpendMetrics()
-    breakdown.api_keys[record.api_key] = update_metrics(
-        breakdown.api_keys[record.api_key], record
+        breakdown.api_keys[record.api_key] = KeyMetricWithMetadata(
+            metrics=SpendMetrics(),
+            metadata=KeyMetadata(
+                key_alias=api_key_metadata.get(record.api_key, {}).get(
+                    "key_alias", None
+                )
+            ),  # Add any api_key-specific metadata here
+        )
+    breakdown.api_keys[record.api_key].metrics = update_metrics(
+        breakdown.api_keys[record.api_key].metrics, record
     )
 
     return breakdown
@@ -1456,6 +1499,24 @@ async def get_user_daily_activity(
             LiteLLM_DailyUserSpend(**record.model_dump()) for record in daily_spend_data
         ]
 
+        # Get all unique API keys from the spend data
+        api_keys = set()
+        for record in daily_spend_data_pydantic_list:
+            if record.api_key:
+                api_keys.add(record.api_key)
+
+        # Fetch key aliases in bulk
+
+        api_key_metadata: Dict[str, Dict[str, Any]] = {}
+        model_metadata: Dict[str, Dict[str, Any]] = {}
+        provider_metadata: Dict[str, Dict[str, Any]] = {}
+        if api_keys:
+            key_records = await prisma_client.db.litellm_verificationtoken.find_many(
+                where={"token": {"in": list(api_keys)}}
+            )
+            api_key_metadata.update(
+                {k.token: {"key_alias": k.key_alias} for k in key_records}
+            )
         # Process results
         results = []
         total_metrics = SpendMetrics()
@@ -1477,7 +1538,11 @@ async def get_user_daily_activity(
             )
             # Update breakdowns
             grouped_data[date_str]["breakdown"] = update_breakdown_metrics(
-                grouped_data[date_str]["breakdown"], record
+                grouped_data[date_str]["breakdown"],
+                record,
+                model_metadata,
+                provider_metadata,
+                api_key_metadata,
             )
 
             # Update total metrics

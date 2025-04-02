@@ -20,34 +20,16 @@ import { AreaChart } from "@tremor/react";
 import { userDailyActivityCall } from "./networking";
 import ViewUserSpend from "./view_user_spend";
 import TopKeyView from "./top_key_view";
-
+import { ActivityMetrics, processActivityData } from './activity_metrics';
+import { SpendMetrics, DailyData, ModelActivityData, MetricWithMetadata, KeyMetricWithMetadata } from './usage/types';
 interface NewUsagePageProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
 }
 
-interface SpendMetrics {
-  spend: number;
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-  api_requests: number;
-  successful_requests: number;
-  failed_requests: number;
-}
 
-interface BreakdownMetrics {
-  models: { [key: string]: SpendMetrics };
-  providers: { [key: string]: SpendMetrics };
-  api_keys: { [key: string]: SpendMetrics };
-}
 
-interface DailyData {
-  date: string;
-  metrics: SpendMetrics;
-  breakdown: BreakdownMetrics;
-}
 
 const NewUsagePage: React.FC<NewUsagePageProps> = ({
   accessToken,
@@ -64,38 +46,41 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
   // Calculate top models from the breakdown data
   const getTopModels = () => {
-    const modelSpend: { [key: string]: SpendMetrics } = {};
+    const modelSpend: { [key: string]: MetricWithMetadata } = {};
     userSpendData.results.forEach(day => {
       Object.entries(day.breakdown.models || {}).forEach(([model, metrics]) => {
         if (!modelSpend[model]) {
           modelSpend[model] = {
-            spend: 0,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            api_requests: 0,
-            successful_requests: 0,
-            failed_requests: 0
+            metrics: {
+              spend: 0,
+              prompt_tokens: 0,
+              completion_tokens: 0,
+              total_tokens: 0,
+              api_requests: 0,
+              successful_requests: 0,
+              failed_requests: 0
+            },
+            metadata: {}
           };
         }
-        modelSpend[model].spend += metrics.spend;
-        modelSpend[model].prompt_tokens += metrics.prompt_tokens;
-        modelSpend[model].completion_tokens += metrics.completion_tokens;
-        modelSpend[model].total_tokens += metrics.total_tokens;
-        modelSpend[model].api_requests += metrics.api_requests;
-        modelSpend[model].successful_requests += metrics.successful_requests || 0;
-        modelSpend[model].failed_requests += metrics.failed_requests || 0;
+        modelSpend[model].metrics.spend += metrics.metrics.spend;
+        modelSpend[model].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
+        modelSpend[model].metrics.completion_tokens += metrics.metrics.completion_tokens;
+        modelSpend[model].metrics.total_tokens += metrics.metrics.total_tokens;
+        modelSpend[model].metrics.api_requests += metrics.metrics.api_requests;
+        modelSpend[model].metrics.successful_requests += metrics.metrics.successful_requests || 0;
+        modelSpend[model].metrics.failed_requests += metrics.metrics.failed_requests || 0;
       });
     });
     
     return Object.entries(modelSpend)
       .map(([model, metrics]) => ({
         key: model,
-        spend: metrics.spend,
-        requests: metrics.api_requests,
-        successful_requests: metrics.successful_requests,
-        failed_requests: metrics.failed_requests,
-        tokens: metrics.total_tokens
+        spend: metrics.metrics.spend,
+        requests: metrics.metrics.api_requests,
+        successful_requests: metrics.metrics.successful_requests,
+        failed_requests: metrics.metrics.failed_requests,
+        tokens: metrics.metrics.total_tokens
       }))
       .sort((a, b) => b.spend - a.spend)
       .slice(0, 5);
@@ -103,72 +88,80 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
   // Calculate provider spend from the breakdown data
   const getProviderSpend = () => {
-    const providerSpend: { [key: string]: SpendMetrics } = {};
+    const providerSpend: { [key: string]: MetricWithMetadata } = {};
     userSpendData.results.forEach(day => {
       Object.entries(day.breakdown.providers || {}).forEach(([provider, metrics]) => {
         if (!providerSpend[provider]) {
           providerSpend[provider] = {
-            spend: 0,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            api_requests: 0,
-            successful_requests: 0,
-            failed_requests: 0
+            metrics: {
+              spend: 0,
+              prompt_tokens: 0,
+              completion_tokens: 0,
+              total_tokens: 0,
+              api_requests: 0,
+              successful_requests: 0,
+              failed_requests: 0
+            },
+            metadata: {}
           };
         }
-        providerSpend[provider].spend += metrics.spend;
-        providerSpend[provider].prompt_tokens += metrics.prompt_tokens;
-        providerSpend[provider].completion_tokens += metrics.completion_tokens;
-        providerSpend[provider].total_tokens += metrics.total_tokens;
-        providerSpend[provider].api_requests += metrics.api_requests;
-        providerSpend[provider].successful_requests += metrics.successful_requests || 0;
-        providerSpend[provider].failed_requests += metrics.failed_requests || 0;
+        providerSpend[provider].metrics.spend += metrics.metrics.spend;
+        providerSpend[provider].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
+        providerSpend[provider].metrics.completion_tokens += metrics.metrics.completion_tokens;
+        providerSpend[provider].metrics.total_tokens += metrics.metrics.total_tokens;
+        providerSpend[provider].metrics.api_requests += metrics.metrics.api_requests;
+        providerSpend[provider].metrics.successful_requests += metrics.metrics.successful_requests || 0;
+        providerSpend[provider].metrics.failed_requests += metrics.metrics.failed_requests || 0;
       });
     });
     
     return Object.entries(providerSpend)
       .map(([provider, metrics]) => ({
         provider,
-        spend: metrics.spend,
-        requests: metrics.api_requests,
-        successful_requests: metrics.successful_requests,
-        failed_requests: metrics.failed_requests,
-        tokens: metrics.total_tokens
+        spend: metrics.metrics.spend,
+        requests: metrics.metrics.api_requests,
+        successful_requests: metrics.metrics.successful_requests,
+        failed_requests: metrics.metrics.failed_requests,
+        tokens: metrics.metrics.total_tokens
       }));
   };
 
   // Calculate top API keys from the breakdown data
   const getTopKeys = () => {
-    const keySpend: { [key: string]: SpendMetrics } = {};
+    const keySpend: { [key: string]: KeyMetricWithMetadata } = {};
     userSpendData.results.forEach(day => {
       Object.entries(day.breakdown.api_keys || {}).forEach(([key, metrics]) => {
         if (!keySpend[key]) {
           keySpend[key] = {
-            spend: 0,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            api_requests: 0,
-            successful_requests: 0,
-            failed_requests: 0
+            metrics: {
+              spend: 0,
+              prompt_tokens: 0,
+              completion_tokens: 0,
+              total_tokens: 0,
+              api_requests: 0,
+              successful_requests: 0,
+              failed_requests: 0,
+            },
+            metadata: {
+              key_alias: metrics.metadata.key_alias
+            }
           };
         }
-        keySpend[key].spend += metrics.spend;
-        keySpend[key].prompt_tokens += metrics.prompt_tokens;
-        keySpend[key].completion_tokens += metrics.completion_tokens;
-        keySpend[key].total_tokens += metrics.total_tokens;
-        keySpend[key].api_requests += metrics.api_requests;
-        keySpend[key].successful_requests += metrics.successful_requests;
-        keySpend[key].failed_requests += metrics.failed_requests;
+        keySpend[key].metrics.spend += metrics.metrics.spend;
+        keySpend[key].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
+        keySpend[key].metrics.completion_tokens += metrics.metrics.completion_tokens;
+        keySpend[key].metrics.total_tokens += metrics.metrics.total_tokens;
+        keySpend[key].metrics.api_requests += metrics.metrics.api_requests;
+        keySpend[key].metrics.successful_requests += metrics.metrics.successful_requests;
+        keySpend[key].metrics.failed_requests += metrics.metrics.failed_requests;
       });
     });
     
     return Object.entries(keySpend)
       .map(([api_key, metrics]) => ({
         api_key,
-        key_alias: api_key.substring(0, 10), // Using truncated key as alias
-        spend: metrics.spend,
+        key_alias: metrics.metadata.key_alias || "-", // Using truncated key as alias
+        spend: metrics.metrics.spend,
       }))
       .sort((a, b) => b.spend - a.spend)
       .slice(0, 5);
@@ -186,6 +179,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
     fetchUserSpendData();
   }, [accessToken]);
 
+  const modelMetrics = processActivityData(userSpendData);
+
   return (
     <div style={{ width: "100%" }} className="p-8">
       <Text>Experimental Usage page, using new `/user/daily/activity` endpoint.</Text>
@@ -197,7 +192,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
         <TabPanels>
           {/* Cost Panel */}
           <TabPanel>
-            <Grid numItems={2} className="gap-2 h-[100vh] w-full">
+            <Grid numItems={2} className="gap-2 w-full">
               {/* Total Spend Card */}
               <Col numColSpan={2}>
                 <Text className="text-tremor-default text-tremor-content dark:text-dark-tremor-content mb-2 mt-2 text-lg">
@@ -257,7 +252,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                 <Card>
                   <Title>Daily Spend</Title>
                   <BarChart
-                    data={userSpendData.results}
+                    data={[...userSpendData.results].sort((a, b) => 
+                      new Date(a.date).getTime() - new Date(b.date).getTime()
+                    )}
                     index="date"
                     categories={["metrics.spend"]}
                     colors={["cyan"]}
@@ -392,77 +389,11 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
           {/* Activity Panel */}
           <TabPanel>
-            <Grid numItems={1} className="gap-2 h-[75vh] w-full">
-              <Card>
-                <Title>All Up</Title>
-                <Grid numItems={2}>
-                  <Col>
-                    <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>
-                      API Requests {valueFormatterNumbers(userSpendData.metadata?.total_api_requests || 0)}
-                    </Subtitle>
-                    <AreaChart
-                      className="h-40"
-                      data={[...userSpendData.results].reverse()}
-                      valueFormatter={valueFormatterNumbers}
-                      index="date"
-                      colors={['cyan']}
-                      categories={['metrics.api_requests']}
-                    />
-                  </Col>
-                  <Col>
-                    <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>
-                      Tokens {valueFormatterNumbers(userSpendData.metadata?.total_tokens || 0)}
-                    </Subtitle>
-                    <BarChart
-                      className="h-40"
-                      data={[...userSpendData.results].reverse()}
-                      valueFormatter={valueFormatterNumbers}
-                      index="date"
-                      colors={['cyan']}
-                      categories={['metrics.total_tokens']}
-                    />
-                  </Col>
-                </Grid>
-              </Card>
-
-              {/* Per Model Activity */}
-              {Object.entries(getModelActivityData(userSpendData)).map(([model, data], index) => (
-                <Card key={index}>
-                  <Title>{model}</Title>
-                  <Grid numItems={2}>
-                    <Col>
-                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>
-                        API Requests {valueFormatterNumbers(data.total_requests)}
-                      </Subtitle>
-                      <AreaChart
-                        className="h-40"
-                        data={[...data.daily_data].reverse()}
-                        index="date"
-                        colors={['cyan']}
-                        categories={['api_requests']}
-                        valueFormatter={valueFormatterNumbers}
-                      />
-                    </Col>
-                    <Col>
-                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>
-                        Tokens {valueFormatterNumbers(data.total_tokens)}
-                      </Subtitle>
-                      <BarChart
-                        className="h-40"
-                        data={data.daily_data}  
-                        index="date"
-                        colors={['cyan']}
-                        categories={['total_tokens']}
-                        valueFormatter={valueFormatterNumbers}
-                      />
-                    </Col>
-                  </Grid>
-                </Card>
-              ))}
-            </Grid>
+            <ActivityMetrics modelMetrics={modelMetrics} />
           </TabPanel>
         </TabPanels>
       </TabGroup>
+      
     </div>
   );
 };
@@ -494,12 +425,12 @@ const getModelActivityData = (userSpendData: {
         };
       }
       
-      modelData[model].total_requests += metrics.api_requests;
-      modelData[model].total_tokens += metrics.total_tokens;
+      modelData[model].total_requests += metrics.metrics.api_requests;
+      modelData[model].total_tokens += metrics.metrics.total_tokens;
       modelData[model].daily_data.push({
         date: day.date,
-        api_requests: metrics.api_requests,
-        total_tokens: metrics.total_tokens
+        api_requests: metrics.metrics.api_requests,
+        total_tokens: metrics.metrics.total_tokens
       });
     });
   });
