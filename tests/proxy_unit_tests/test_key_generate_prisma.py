@@ -2280,15 +2280,16 @@ def test_get_bearer_token():
     result = _get_bearer_token(api_key)
     assert result == "sk-1234", f"Expected 'valid_token', got '{result}'"
 
-
-def test_update_logs_with_spend_logs_url(prisma_client):
+@pytest.mark.asyncio
+async def test_update_logs_with_spend_logs_url(prisma_client):
     """
     Unit test for making sure spend logs list is still updated when url passed in
     """
     from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+    db_spend_update_writer = DBSpendUpdateWriter()
 
     payload = {"startTime": datetime.now(), "endTime": datetime.now()}
-    DBSpendUpdateWriter._set_spend_logs_payload(payload=payload, prisma_client=prisma_client)
+    await db_spend_update_writer._set_spend_logs_payload(payload=payload, prisma_client=prisma_client)
 
     assert len(prisma_client.spend_log_transactions) > 0
 
@@ -2296,7 +2297,7 @@ def test_update_logs_with_spend_logs_url(prisma_client):
 
     spend_logs_url = ""
     payload = {"startTime": datetime.now(), "endTime": datetime.now()}
-    DBSpendUpdateWriter._set_spend_logs_payload(
+    await db_spend_update_writer._set_spend_logs_payload(
         payload=payload, spend_logs_url=spend_logs_url, prisma_client=prisma_client
     )
 

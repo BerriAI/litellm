@@ -137,15 +137,17 @@ const sidebars = {
           label: "[Beta] Guardrails",
           items: [
             "proxy/guardrails/quick_start",
-            "proxy/guardrails/aim_security",
-            "proxy/guardrails/aporia_api",
-            "proxy/guardrails/bedrock",
-            "proxy/guardrails/guardrails_ai",
-            "proxy/guardrails/lakera_ai",
-            "proxy/guardrails/pii_masking_v2",
-            "proxy/guardrails/secret_detection",
-            "proxy/guardrails/custom_guardrail",
-            "prompt_injection"
+            ...[
+              "proxy/guardrails/aim_security",
+              "proxy/guardrails/aporia_api",
+              "proxy/guardrails/bedrock",
+              "proxy/guardrails/guardrails_ai",
+              "proxy/guardrails/lakera_ai",
+              "proxy/guardrails/pii_masking_v2",
+              "proxy/guardrails/secret_detection",
+              "proxy/guardrails/custom_guardrail",
+              "proxy/guardrails/prompt_injection",
+            ].sort(),
           ],
         },
         {

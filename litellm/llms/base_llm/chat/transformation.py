@@ -104,7 +104,10 @@ class BaseConfig(ABC):
         return type_to_response_format_param(response_format=response_format)
 
     def is_thinking_enabled(self, non_default_params: dict) -> bool:
-        return non_default_params.get("thinking", {}).get("type", None) == "enabled"
+        return (
+            non_default_params.get("thinking", {}).get("type") == "enabled"
+            or non_default_params.get("reasoning_effort") is not None
+        )
 
     def update_optional_params_with_thinking_tokens(
         self, non_default_params: dict, optional_params: dict
@@ -116,9 +119,9 @@ class BaseConfig(ABC):
 
         if 'thinking' is enabled and 'max_tokens' is not specified, set 'max_tokens' to the thinking token budget + DEFAULT_MAX_TOKENS
         """
-        is_thinking_enabled = self.is_thinking_enabled(non_default_params)
+        is_thinking_enabled = self.is_thinking_enabled(optional_params)
         if is_thinking_enabled and "max_tokens" not in non_default_params:
-            thinking_token_budget = cast(dict, non_default_params["thinking"]).get(
+            thinking_token_budget = cast(dict, optional_params["thinking"]).get(
                 "budget_tokens", None
             )
             if thinking_token_budget is not None:
