@@ -20,48 +20,16 @@ import { AreaChart } from "@tremor/react";
 import { userDailyActivityCall } from "./networking";
 import ViewUserSpend from "./view_user_spend";
 import TopKeyView from "./top_key_view";
-
+import { ActivityMetrics, processActivityData } from './activity_metrics';
+import { SpendMetrics, DailyData, ModelActivityData, MetricWithMetadata, KeyMetricWithMetadata } from './usage/types';
 interface NewUsagePageProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
 }
 
-interface SpendMetrics {
-  spend: number;
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-  api_requests: number;
-  successful_requests: number;
-  failed_requests: number;
-}
 
-interface KeyMetadata {
-  key_alias: string | null;
-}
 
-interface KeyMetricWithMetadata {
-  metrics: SpendMetrics;
-  metadata: KeyMetadata;
-}
-
-interface MetricWithMetadata {
-  metrics: SpendMetrics;
-  metadata: object;
-}
-
-interface BreakdownMetrics {
-  models: { [key: string]: MetricWithMetadata };
-  providers: { [key: string]: MetricWithMetadata };
-  api_keys: { [key: string]: KeyMetricWithMetadata };
-}
-
-interface DailyData {
-  date: string;
-  metrics: SpendMetrics;
-  breakdown: BreakdownMetrics;
-}
 
 const NewUsagePage: React.FC<NewUsagePageProps> = ({
   accessToken,
@@ -210,6 +178,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
   useEffect(() => {
     fetchUserSpendData();
   }, [accessToken]);
+
+  const modelMetrics = processActivityData(userSpendData);
 
   return (
     <div style={{ width: "100%" }} className="p-8">
@@ -419,85 +389,11 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
           {/* Activity Panel */}
           <TabPanel>
-            <Grid numItems={1} className="gap-2 w-full">
-              <Card>
-                <Title>All Up</Title>
-                <Grid numItems={2}>
-                  <Col>
-                    <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>
-                      API Requests {valueFormatterNumbers(userSpendData.metadata?.total_api_requests || 0)}
-                    </Subtitle>
-                    <AreaChart
-                      className="h-40"
-                      data={[...userSpendData.results].sort((a, b) => 
-                        new Date(a.date).getTime() - new Date(b.date).getTime()
-                      )}
-                      valueFormatter={valueFormatterNumbers}
-                      index="date"
-                      colors={['cyan']}
-                      categories={['metrics.api_requests']}
-                    />
-                  </Col>
-                  <Col>
-                    <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>
-                      Tokens {valueFormatterNumbers(userSpendData.metadata?.total_tokens || 0)}
-                    </Subtitle>
-                    <BarChart
-                      className="h-40"
-                      data={[...userSpendData.results].sort((a, b) => 
-                        new Date(a.date).getTime() - new Date(b.date).getTime()
-                      )}
-                      valueFormatter={valueFormatterNumbers}
-                      index="date"
-                      colors={['cyan']}
-                      categories={['metrics.total_tokens']}
-                    />
-                  </Col>
-                </Grid>
-              </Card>
-
-              {/* Per Model Activity */}
-              {Object.entries(getModelActivityData(userSpendData)).map(([model, data], index) => (
-                <Card key={index}>
-                  <Title>{model}</Title>
-                  <Grid numItems={2}>
-                    <Col>
-                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>
-                        API Requests {valueFormatterNumbers(data.total_requests)}
-                      </Subtitle>
-                      <AreaChart
-                        className="h-40"
-                        data={[...data.daily_data].sort((a, b) => 
-                          new Date(a.date).getTime() - new Date(b.date).getTime()
-                        )}
-                        index="date"
-                        colors={['cyan']}
-                        categories={['api_requests']}
-                        valueFormatter={valueFormatterNumbers}
-                      />
-                    </Col>
-                    <Col>
-                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>
-                        Tokens {valueFormatterNumbers(data.total_tokens)}
-                      </Subtitle>
-                      <BarChart
-                        className="h-40"
-                        data={[...data.daily_data].sort((a, b) => 
-                          new Date(a.date).getTime() - new Date(b.date).getTime()
-                        )}
-                        index="date"
-                        colors={['cyan']}
-                        categories={['total_tokens']}
-                        valueFormatter={valueFormatterNumbers}
-                      />
-                    </Col>
-                  </Grid>
-                </Card>
-              ))}
-            </Grid>
+            <ActivityMetrics modelMetrics={modelMetrics} />
           </TabPanel>
         </TabPanels>
       </TabGroup>
+      
     </div>
   );
 };
@@ -529,12 +425,12 @@ const getModelActivityData = (userSpendData: {
         };
       }
       
-      modelData[model].total_requests += metrics.api_requests;
-      modelData[model].total_tokens += metrics.total_tokens;
+      modelData[model].total_requests += metrics.metrics.api_requests;
+      modelData[model].total_tokens += metrics.metrics.total_tokens;
       modelData[model].daily_data.push({
         date: day.date,
-        api_requests: metrics.api_requests,
-        total_tokens: metrics.total_tokens
+        api_requests: metrics.metrics.api_requests,
+        total_tokens: metrics.metrics.total_tokens
       });
     });
   });
