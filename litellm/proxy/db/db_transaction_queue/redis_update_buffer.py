@@ -9,10 +9,17 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
-from litellm.constants import MAX_REDIS_BUFFER_DEQUEUE_COUNT, REDIS_UPDATE_BUFFER_KEY
+from litellm.constants import (
+    MAX_REDIS_BUFFER_DEQUEUE_COUNT,
+    REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
+    REDIS_UPDATE_BUFFER_KEY,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import DBSpendUpdateTransactions
-from litellm.proxy.db.spend_update_queue import SpendUpdateQueue
+from litellm.proxy._types import DailyUserSpendTransaction, DBSpendUpdateTransactions
+from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
+    DailySpendUpdateQueue,
+)
+from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
 from litellm.secret_managers.main import str_to_bool
 
 if TYPE_CHECKING:
@@ -56,23 +63,51 @@ class RedisUpdateBuffer:
     async def store_in_memory_spend_updates_in_redis(
         self,
         spend_update_queue: SpendUpdateQueue,
+        daily_spend_update_queue: DailySpendUpdateQueue,
     ):
         """
         Stores the in-memory spend updates to Redis
 
-        Each transaction is a dict stored as following:
-        - key is the entity id
-        - value is the spend amount
+        Stores the following in memory data structures in Redis:
+            - SpendUpdateQueue - Key, User, Team, TeamMember, Org, EndUser Spend updates
+            - DailySpendUpdateQueue - Daily Spend updates Aggregate view
 
-            ```
-            Redis List:
-            key_list_transactions:
-            [
-                "0929880201": 1.2,
-                "0929880202": 0.01,
-                "0929880203": 0.001,
-            ]
-            ```
+        For SpendUpdateQueue:
+            Each transaction is a dict stored as following:
+            - key is the entity id
+            - value is the spend amount
+
+                ```
+                Redis List:
+                key_list_transactions:
+                [
+                    "0929880201": 1.2,
+                    "0929880202": 0.01,
+                    "0929880203": 0.001,
+                ]
+                ```
+
+        For DailySpendUpdateQueue:
+            Each transaction is a Dict[str, DailyUserSpendTransaction] stored as following:
+            - key is the daily_transaction_key
+            - value is the DailyUserSpendTransaction
+
+                ```
+                Redis List:
+                daily_spend_update_transactions:
+                [
+                    {
+                        "user_keyhash_1_model_1": {
+                            "spend": 1.2,
+                            "prompt_tokens": 1000,
+                            "completion_tokens": 1000,
+                            "api_requests": 1000,
+                            "successful_requests": 1000,
+                        },
+
+                    }
+                ]
+                ```
         """
         if self.redis_cache is None:
             verbose_proxy_logger.debug(
@@ -86,6 +121,12 @@ class RedisUpdateBuffer:
         verbose_proxy_logger.debug(
             "ALL DB SPEND UPDATE TRANSACTIONS: %s", db_spend_update_transactions
         )
+        daily_spend_update_transactions = (
+            await daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
+        )
+        verbose_proxy_logger.debug(
+            "ALL DAILY SPEND UPDATE TRANSACTIONS: %s", daily_spend_update_transactions
+        )
 
         # only store in redis if there are any updates to commit
         if (
@@ -98,6 +139,14 @@ class RedisUpdateBuffer:
         await self.redis_cache.async_rpush(
             key=REDIS_UPDATE_BUFFER_KEY,
             values=list_of_transactions,
+        )
+
+        list_of_daily_spend_update_transactions = [
+            safe_dumps(daily_spend_update_transactions)
+        ]
+        await self.redis_cache.async_rpush(
+            key=REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
+            values=list_of_daily_spend_update_transactions,
         )
 
     @staticmethod
@@ -179,6 +228,27 @@ class RedisUpdateBuffer:
         combined_transaction = self._combine_list_of_transactions(parsed_transactions)
 
         return combined_transaction
+
+    async def get_all_daily_spend_update_transactions_from_redis_buffer(
+        self,
+    ) -> Optional[Dict[str, DailyUserSpendTransaction]]:
+        """
+        Gets all the daily spend update transactions from Redis
+        """
+        if self.redis_cache is None:
+            return None
+        list_of_transactions = await self.redis_cache.async_lpop(
+            key=REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
+            count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
+        )
+        if list_of_transactions is None:
+            return None
+        list_of_daily_spend_update_transactions = [
+            json.loads(transaction) for transaction in list_of_transactions
+        ]
+        return DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
+            list_of_daily_spend_update_transactions
+        )
 
     @staticmethod
     def _parse_list_of_transactions(
