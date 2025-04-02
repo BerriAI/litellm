@@ -290,6 +290,7 @@ class Logging(LiteLLMLoggingBaseClass):
             "input": _input,
             "litellm_params": litellm_params,
             "applied_guardrails": applied_guardrails,
+            "model": model,
         }
 
     def process_dynamic_callbacks(self):
@@ -1009,6 +1010,10 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 return False
         return True
+
+    def _update_completion_start_time(self, completion_start_time: datetime.datetime):
+        self.completion_start_time = completion_start_time
+        self.model_call_details["completion_start_time"] = self.completion_start_time
 
     def _success_handler_helper_fn(
         self,

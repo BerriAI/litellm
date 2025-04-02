@@ -18,8 +18,10 @@ from litellm.types.llms.anthropic import (
     AnthropicMessagesTool,
     AnthropicMessagesToolChoice,
     AnthropicSystemMessageContent,
+    AnthropicThinkingParam,
 )
 from litellm.types.llms.openai import (
+    REASONING_EFFORT,
     AllMessageValues,
     ChatCompletionCachedContent,
     ChatCompletionSystemMessage,
@@ -94,6 +96,7 @@ class AnthropicConfig(BaseConfig):
             "parallel_tool_calls",
             "response_format",
             "user",
+            "reasoning_effort",
         ]
 
         if "claude-3-7-sonnet" in model:
@@ -291,6 +294,21 @@ class AnthropicConfig(BaseConfig):
                 new_stop = new_v
         return new_stop
 
+    @staticmethod
+    def _map_reasoning_effort(
+        reasoning_effort: Optional[Union[REASONING_EFFORT, str]]
+    ) -> Optional[AnthropicThinkingParam]:
+        if reasoning_effort is None:
+            return None
+        elif reasoning_effort == "low":
+            return AnthropicThinkingParam(type="enabled", budget_tokens=1024)
+        elif reasoning_effort == "medium":
+            return AnthropicThinkingParam(type="enabled", budget_tokens=2048)
+        elif reasoning_effort == "high":
+            return AnthropicThinkingParam(type="enabled", budget_tokens=4096)
+        else:
+            raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -302,10 +320,6 @@ class AnthropicConfig(BaseConfig):
             non_default_params=non_default_params
         )
 
-        ## handle thinking tokens
-        self.update_optional_params_with_thinking_tokens(
-            non_default_params=non_default_params, optional_params=optional_params
-        )
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_tokens"] = value
@@ -370,7 +384,15 @@ class AnthropicConfig(BaseConfig):
                 optional_params["metadata"] = {"user_id": value}
             if param == "thinking":
                 optional_params["thinking"] = value
+            elif param == "reasoning_effort" and isinstance(value, str):
+                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+                    value
+                )
 
+        ## handle thinking tokens
+        self.update_optional_params_with_thinking_tokens(
+            non_default_params=non_default_params, optional_params=optional_params
+        )
         return optional_params
 
     def _create_json_tool_call_for_response_format(
