@@ -2624,7 +2624,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             non_default_params=non_default_params, optional_params={}, kwargs=kwargs
         )
         return optional_params
-    elif custom_llm_provider == "vertex_ai":
+    elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "gemini":
         supported_params = get_supported_openai_params(
             model=model,
             custom_llm_provider="vertex_ai",
