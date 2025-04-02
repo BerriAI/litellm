@@ -37,6 +37,9 @@ def llm_router() -> Router:
                     "api_base": "azure_api_base",
                     "api_version": "azure_api_version",
                 },
+                "model_info": {
+                    "id": "azure-gpt-3-5-turbo-id",
+                },
             },
             {
                 "model_name": "gpt-3.5-turbo",
@@ -44,11 +47,17 @@ def llm_router() -> Router:
                     "model": "openai/gpt-3.5-turbo",
                     "api_key": "openai_api_key",
                 },
+                "model_info": {
+                    "id": "gpt-3.5-turbo-id",
+                },
             },
             {
                 "model_name": "gemini-2.0-flash",
                 "litellm_params": {
                     "model": "gemini/gemini-2.0-flash",
+                },
+                "model_info": {
+                    "id": "gemini-2.0-flash-id",
                 },
             },
         ]
@@ -177,7 +186,7 @@ def test_create_file_and_call_chat_completion_e2e(
         purpose="user_data",
         status="uploaded",
     )
-    mock_file_response._hidden_params = {"model_id": "gemini-2.0-flash"}
+    mock_file_response._hidden_params = {"model_id": "gemini-2.0-flash-id"}
     mocker.patch.object(llm_router, "acreate_file", return_value=mock_file_response)
 
     # Mock the Gemini API call using respx

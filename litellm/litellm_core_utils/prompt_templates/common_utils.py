@@ -318,13 +318,17 @@ def get_file_ids_from_messages(messages: List[AllMessageValues]) -> List[str]:
 
 
 def update_messages_with_model_file_ids(
-    messages: List[AllMessageValues], model_file_id_mapping: Dict[str, str]
+    messages: List[AllMessageValues],
+    model_id: str,
+    model_file_id_mapping: Dict[str, Dict[str, str]],
 ) -> List[AllMessageValues]:
     """
     Updates messages with model file ids.
 
-    model_file_id_mapping: Dict[str, str] = {
-        "litellm_proxy/file_id": "provider_file_id"
+    model_file_id_mapping: Dict[str, Dict[str, str]] = {
+        "litellm_proxy/file_id": {
+            "model_id": "provider_file_id"
+        }
     }
     """
     for message in messages:
@@ -339,7 +343,9 @@ def update_messages_with_model_file_ids(
                         file_object_file_field = file_object["file"]
                         file_id = file_object_file_field.get("file_id")
                         if file_id:
-                            file_object_file_field[
-                                "file_id"
-                            ] = model_file_id_mapping.get(file_id, file_id)
+                            provider_file_id = (
+                                model_file_id_mapping.get(file_id, {}).get(model_id)
+                                or file_id
+                            )
+                            file_object_file_field["file_id"] = provider_file_id
     return messages
