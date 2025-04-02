@@ -171,9 +171,16 @@ class DailySpendUpdateQueue:
     ) -> Dict[str, DailyUserSpendTransaction]:
         """Get all updates from the queue and return all updates aggregated by daily_transaction_key."""
         updates = await self.flush_all_updates_from_in_memory_queue()
-        return DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
-            updates
+        aggregated_daily_spend_update_transactions = (
+            DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
+                updates
+            )
         )
+        verbose_proxy_logger.debug(
+            "Aggregated daily spend update transactions: %s",
+            aggregated_daily_spend_update_transactions,
+        )
+        return aggregated_daily_spend_update_transactions
 
     @staticmethod
     def get_aggregated_daily_spend_update_transactions(
