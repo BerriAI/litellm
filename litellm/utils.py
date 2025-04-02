@@ -5901,9 +5901,10 @@ class ModelResponseIterator:
 
 
 class ModelResponseListIterator:
-    def __init__(self, model_responses):
+    def __init__(self, model_responses, delay: Optional[float] = None):
         self.model_responses = model_responses
         self.index = 0
+        self.delay = delay
 
     # Sync iterator
     def __iter__(self):
@@ -5914,6 +5915,8 @@ class ModelResponseListIterator:
             raise StopIteration
         model_response = self.model_responses[self.index]
         self.index += 1
+        if self.delay:
+            time.sleep(self.delay)
         return model_response
 
     # Async iterator
@@ -5925,6 +5928,8 @@ class ModelResponseListIterator:
             raise StopAsyncIteration
         model_response = self.model_responses[self.index]
         self.index += 1
+        if self.delay:
+            await asyncio.sleep(self.delay)
         return model_response
 
 

@@ -1168,14 +1168,22 @@ os.environ["AWS_REGION_NAME"] = ""
 # pdf url
 image_url = "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
 
+# Download the file
+response = requests.get(url)
+file_data = response.content
+
+encoded_file = base64.b64encode(file_data).decode("utf-8")
+
 # model
 model = "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
 
 image_content = [
     {"type": "text", "text": "What's this file about?"},
     {
-        "type": "image_url",
-        "image_url": image_url, # OR {"url": image_url}
+        "type": "file",
+        "file": {
+            "file_data": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+        }
     },
 ]
 
@@ -1221,8 +1229,10 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
     "messages": [
         {"role": "user", "content": {"type": "text", "text": "What's this file about?"}},
         {
-            "type": "image_url",
-            "image_url": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+            "type": "file",
+            "file": {
+                "file_data": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+            }
         }
     ]
 }'
