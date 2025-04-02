@@ -32,6 +32,7 @@ class AgentOps(OpenTelemetry):
     Example usage:
         ```python
         import litellm
+        
         litellm.success_callback = ["agentops"]
 
         response = litellm.completion(
@@ -56,7 +57,7 @@ class AgentOps(OpenTelemetry):
                 jwt_token = response.get("token")
                 project_id = response.get("project_id")
             except Exception as e:
-                print(f"Failed to fetch JWT token: {e}")
+                pass
 
         headers = f"Authorization=Bearer {jwt_token}" if jwt_token else None
         
@@ -114,11 +115,4 @@ class AgentOps(OpenTelemetry):
             
             return response.json()
         finally:
-            client.close()
-
-    def _get_span_name(self, kwargs: Dict[str, Any]) -> str:
-        """
-        Customize span names for AgentOps
-        """
-        model = kwargs.get("model", "unknown_model")
-        return f"litellm.completion.{model}" 
+            client.close() 
