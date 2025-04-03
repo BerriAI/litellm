@@ -168,6 +168,8 @@ class TestAzureOpenAIDalle3(BaseImageGenTest):
         return {
             "model": "azure/dall-e-3-test",
             "api_version": "2023-12-01-preview",
+            "api_base": os.getenv("AZURE_SWEDEN_API_BASE"),
+            "api_key": os.getenv("AZURE_SWEDEN_API_KEY"),
             "metadata": {
                 "model_info": {
                     "base_model": "azure/dall-e-3",
