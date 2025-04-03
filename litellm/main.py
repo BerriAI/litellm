@@ -2345,42 +2345,34 @@ def completion(  # type: ignore # noqa: PLR0915
 
             headers = datarobot_headers
 
-            ## Load Config
-            config = litellm.DataRobotConfig.get_config()
-            for k, v in config.items():
-                if k == "extra_body":
-                    # we use openai 'extra_body' to pass openrouter specific params - transforms, route, models
-                    if "extra_body" in optional_params:
-                        optional_params[k].update(v)
-                    else:
-                        optional_params[k] = v
-                elif k not in optional_params:
-                    optional_params[k] = v
-
-            data = {"model": model, "messages": messages, **optional_params}
-
             ## COMPLETION CALL
-            response = base_llm_http_handler.completion(
-                model=model,
-                stream=stream,
-                messages=messages,
-                acompletion=acompletion,
-                api_base=api_base,
-                model_response=model_response,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                custom_llm_provider="datarobot",
-                timeout=timeout,
-                headers=headers,
-                encoding=encoding,
-                api_key=api_key,
-                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
-                client=client,
-            )
-            ## LOGGING
-            logging.post_call(
-                input=messages, api_key=openai.api_key, original_response=response
-            )
+            try:
+                response = base_llm_http_handler.completion(
+                    model=model,
+                    stream=stream,
+                    messages=messages,
+                    acompletion=acompletion,
+                    api_base=api_base,
+                    model_response=model_response,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    custom_llm_provider="datarobot",
+                    timeout=timeout,
+                    headers=headers,
+                    encoding=encoding,
+                    api_key=api_key,
+                    logging_obj=logging,
+                    client=client,
+                )
+            except Exception as e:
+                ## LOGGING - log the original exception returned
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=str(e),
+                    additional_args={"headers": headers},
+                )
+                raise e
         elif custom_llm_provider == "openrouter":
             api_base = (
                 api_base
