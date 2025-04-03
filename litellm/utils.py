@@ -4851,6 +4851,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("OPENROUTER_API_KEY")
+        elif custom_llm_provider == "datarobot":
+            if "DATAROBOT_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("DATAROBOT_API_KEY")
         elif custom_llm_provider == "vertex_ai":
             if "VERTEXAI_PROJECT" in os.environ and "VERTEXAI_LOCATION" in os.environ:
                 keys_in_environment = True
@@ -5048,6 +5053,12 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("OPENROUTER_API_KEY")
+        ## datarobot
+        elif model in litellm.datarobot_models:
+            if "DATAROBOT_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("DATAROBOT_API_KEY")
         ## vertex - text + chat models
         elif (
             model in litellm.vertex_chat_models

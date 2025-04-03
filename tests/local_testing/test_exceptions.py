@@ -181,6 +181,9 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
         elif model in litellm.openrouter_models:
             temporary_key = os.environ["OPENROUTER_API_KEY"]
             os.environ["OPENROUTER_API_KEY"] = "bad-key"
+        elif model in litellm.datarobot_models:
+            temporary_key = os.environ["DATAROBOT_API_KEY"]
+            os.environ["DATAROBOT_API_KEY"] = "bad-key"
         elif model in litellm.aleph_alpha_models:
             temporary_key = os.environ["ALEPH_ALPHA_API_KEY"]
             os.environ["ALEPH_ALPHA_API_KEY"] = "bad-key"
