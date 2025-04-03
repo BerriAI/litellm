@@ -5,7 +5,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 import httpx
 
 import litellm
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.constants import (
+    DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,
+    RESPONSE_FORMAT_TOOL_NAME,
+)
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
@@ -53,7 +56,7 @@ class AnthropicConfig(BaseConfig):
 
     max_tokens: Optional[
         int
-    ] = 4096  # anthropic requires a default value (Opus, Sonnet, and Haiku have the same default)
+    ] = DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS  # anthropic requires a default value (Opus, Sonnet, and Haiku have the same default)
     stop_sequences: Optional[list] = None
     temperature: Optional[int] = None
     top_p: Optional[int] = None
@@ -65,7 +68,7 @@ class AnthropicConfig(BaseConfig):
         self,
         max_tokens: Optional[
             int
-        ] = 4096,  # You can pass in a value yourself or use the default value 4096
+        ] = DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,  # You can pass in a value yourself or use the default value 4096
         stop_sequences: Optional[list] = None,
         temperature: Optional[int] = None,
         top_p: Optional[int] = None,
