@@ -1,5 +1,5 @@
 import asyncio
-from typing import List
+from typing import List, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
@@ -7,7 +7,11 @@ from litellm.proxy._types import (
     Litellm_EntityType,
     SpendUpdateQueueItem,
 )
-from litellm.proxy.db.db_transaction_queue.base_update_queue import BaseUpdateQueue
+from litellm.proxy.db.db_transaction_queue.base_update_queue import (
+    BaseUpdateQueue,
+    service_logger_obj,
+)
+from litellm.types.services import ServiceTypes
 
 
 class SpendUpdateQueue(BaseUpdateQueue):
@@ -111,3 +115,19 @@ class SpendUpdateQueue(BaseUpdateQueue):
             transactions_dict[entity_id] += response_cost or 0
 
         return db_spend_update_transactions
+
+    async def _emit_new_item_added_to_queue_event(
+        self,
+        queue_size: Optional[int] = None,
+    ):
+        asyncio.create_task(
+            service_logger_obj.async_service_success_hook(
+                service=ServiceTypes.IN_MEMORY_SPEND_UPDATE_QUEUE,
+                duration=0,
+                call_type="_emit_new_item_added_to_queue_event",
+                event_metadata={
+                    "gauge_labels": ServiceTypes.IN_MEMORY_SPEND_UPDATE_QUEUE,
+                    "gauge_value": queue_size,
+                },
+            )
+        )

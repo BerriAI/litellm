@@ -3,17 +3,15 @@ import uuid
 from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_proxy_logger
-from litellm._service_logger import ServiceLogging
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
+from litellm.proxy.db.db_transaction_queue.base_update_queue import service_logger_obj
 from litellm.types.services import ServiceTypes
 
 if TYPE_CHECKING:
     ProxyLogging = Any
 else:
     ProxyLogging = Any
-
-service_logger_obj = ServiceLogging()  # used for tracking current pod lock status
 
 
 class PodLockManager:
