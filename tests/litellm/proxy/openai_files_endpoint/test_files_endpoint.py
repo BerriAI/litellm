@@ -194,11 +194,12 @@ def test_create_file_and_call_chat_completion_e2e(
         "candidates": [{"content": {"parts": [{"text": "This is a test audio file"}]}}]
     }
 
-    # Mock the Gemini API endpoint
-    # Mock the Gemini API endpoint with a wildcard URL match
+    # Mock the Gemini API endpoint with regex pattern matching
     gemini_route = respx.post(
-        url__startswith="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
-    ).mock(return_value=respx.MockResponse(status_code=200, json=mock_gemini_response))
+        url__regex=r".*generativelanguage\.googleapis\.com.*"
+    ).mock(
+        return_value=respx.MockResponse(status_code=200, json=mock_gemini_response),
+    )
 
     ## CREATE FILE
     file = client.post(
