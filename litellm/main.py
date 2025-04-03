@@ -110,7 +110,10 @@ from .litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
     completion_with_fallbacks,
 )
-from .litellm_core_utils.prompt_templates.common_utils import get_completion_messages
+from .litellm_core_utils.prompt_templates.common_utils import (
+    get_completion_messages,
+    update_messages_with_model_file_ids,
+)
 from .litellm_core_utils.prompt_templates.factory import (
     custom_prompt,
     function_call_prompt,
@@ -953,7 +956,6 @@ def completion(  # type: ignore # noqa: PLR0915
     non_default_params = get_non_default_completion_params(kwargs=kwargs)
     litellm_params = {}  # used to prevent unbound var errors
     ## PROMPT MANAGEMENT HOOKS ##
-
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and prompt_id is not None:
         (
             model,
@@ -1067,6 +1069,15 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_prompt_dict[model]["bos_token"] = bos_token
             if eos_token:
                 custom_prompt_dict[model]["eos_token"] = eos_token
+
+        if kwargs.get("model_file_id_mapping"):
+            messages = update_messages_with_model_file_ids(
+                messages=messages,
+                model_id=kwargs.get("model_info", {}).get("id", None),
+                model_file_id_mapping=cast(
+                    Dict[str, Dict[str, str]], kwargs.get("model_file_id_mapping")
+                ),
+            )
 
         provider_config: Optional[BaseConfig] = None
         if custom_llm_provider is not None and custom_llm_provider in [
@@ -5799,6 +5810,19 @@ def stream_chunk_builder(  # noqa: PLR0915
                 "content"
             ] = processor.get_combined_content(content_chunks)
 
+        reasoning_chunks = [
+            chunk
+            for chunk in chunks
+            if len(chunk["choices"]) > 0
+            and "reasoning_content" in chunk["choices"][0]["delta"]
+            and chunk["choices"][0]["delta"]["reasoning_content"] is not None
+        ]
+
+        if len(reasoning_chunks) > 0:
+            response["choices"][0]["message"][
+                "reasoning_content"
+            ] = processor.get_combined_reasoning_content(reasoning_chunks)
+
         audio_chunks = [
             chunk
             for chunk in chunks
@@ -5813,11 +5837,14 @@ def stream_chunk_builder(  # noqa: PLR0915
 
         completion_output = get_content_from_model_response(response)
 
+        reasoning_tokens = processor.count_reasoning_tokens(response)
+
         usage = processor.calculate_usage(
             chunks=chunks,
             model=model,
             completion_output=completion_output,
             messages=messages,
+            reasoning_tokens=reasoning_tokens,
         )
 
         setattr(response, "usage", usage)

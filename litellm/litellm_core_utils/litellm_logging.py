@@ -457,8 +457,12 @@ class Logging(LiteLLMLoggingBaseClass):
         non_default_params: dict,
         prompt_id: str,
         prompt_variables: Optional[dict],
+        prompt_management_logger: Optional[CustomLogger] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
-        custom_logger = self.get_custom_logger_for_prompt_management(model)
+        custom_logger = (
+            prompt_management_logger
+            or self.get_custom_logger_for_prompt_management(model)
+        )
         if custom_logger:
             (
                 model,
