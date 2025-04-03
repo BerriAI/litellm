@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union
 
 from httpx import Headers, Response
 
+from litellm.constants import DEFAULT_MAX_TOKENS
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
@@ -27,7 +28,7 @@ class PredibaseConfig(BaseConfig):
     decoder_input_details: Optional[bool] = None
     details: bool = True  # enables returning logprobs + best of
     max_new_tokens: int = (
-        256  # openai default - requests hang if max_new_tokens not given
+        DEFAULT_MAX_TOKENS  # openai default - requests hang if max_new_tokens not given
     )
     repetition_penalty: Optional[float] = None
     return_full_text: Optional[

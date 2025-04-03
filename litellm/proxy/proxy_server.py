@@ -25,7 +25,10 @@ from typing import (
     get_type_hints,
 )
 
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.constants import (
+    DEFAULT_MAX_RECURSE_DEPTH,
+    DEFAULT_SLACK_ALERTING_THRESHOLD,
+)
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -118,7 +121,16 @@ import litellm
 from litellm import Router
 from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
-from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.constants import (
+    DAYS_IN_A_MONTH,
+    DEFAULT_HEALTH_CHECK_INTERVAL,
+    DEFAULT_MODEL_CREATED_AT_TIME,
+    LITELLM_PROXY_ADMIN_NAME,
+    PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
+    PROXY_BATCH_WRITE_AT,
+    PROXY_BUDGET_RESCHEDULER_MAX_TIME,
+    PROXY_BUDGET_RESCHEDULER_MIN_TIME,
+)
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.core_helpers import (
@@ -287,7 +299,7 @@ from litellm.router import (
     LiteLLM_Params,
     ModelGroupInfo,
 )
-from litellm.scheduler import DefaultPriorities, FlowItem, Scheduler
+from litellm.scheduler import FlowItem, Scheduler
 from litellm.secret_managers.aws_secret_manager import load_aws_kms
 from litellm.secret_managers.google_kms import load_google_kms
 from litellm.secret_managers.main import (
@@ -307,6 +319,7 @@ from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import DeploymentTypedDict
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import RouterGeneralSettings, updateDeployment
+from litellm.types.scheduler import DefaultPriorities
 from litellm.types.utils import CredentialItem, CustomHuggingfaceTokenizer
 from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.types.utils import RawRequestTypedDict, StandardLoggingPayload
@@ -779,9 +792,9 @@ queue: List = []
 litellm_proxy_budget_name = "litellm-proxy-budget"
 litellm_proxy_admin_name = LITELLM_PROXY_ADMIN_NAME
 ui_access_mode: Literal["admin", "all"] = "all"
-proxy_budget_rescheduler_min_time = 597
-proxy_budget_rescheduler_max_time = 605
-proxy_batch_write_at = 10  # in seconds
+proxy_budget_rescheduler_min_time = PROXY_BUDGET_RESCHEDULER_MIN_TIME
+proxy_budget_rescheduler_max_time = PROXY_BUDGET_RESCHEDULER_MAX_TIME
+proxy_batch_write_at = PROXY_BATCH_WRITE_AT
 litellm_master_key_hash = None
 disable_spend_logs = False
 jwt_handler = JWTHandler()
@@ -1846,7 +1859,9 @@ class ProxyConfig:
             use_background_health_checks = general_settings.get(
                 "background_health_checks", False
             )
-            health_check_interval = general_settings.get("health_check_interval", 300)
+            health_check_interval = general_settings.get(
+                "health_check_interval", DEFAULT_HEALTH_CHECK_INTERVAL
+            )
             health_check_details = general_settings.get("health_check_details", True)
 
             ### RBAC ###
@@ -3145,7 +3160,7 @@ class ProxyStartupEvent:
                 scheduler.add_job(
                     proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus,
                     "cron",
-                    hour=9,
+                    hour=PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
                     minute=0,
                     timezone=ZoneInfo("America/Los_Angeles"),  # Pacific Time
                 )
@@ -3278,7 +3293,7 @@ async def model_list(
             {
                 "id": model,
                 "object": "model",
-                "created": 1677610602,
+                "created": DEFAULT_MODEL_CREATED_AT_TIME,
                 "owned_by": "openai",
             }
             for model in all_models
@@ -5592,7 +5607,7 @@ async def model_metrics(
             param="None",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-    startTime = startTime or datetime.now() - timedelta(days=30)
+    startTime = startTime or datetime.now() - timedelta(days=DAYS_IN_A_MONTH)
     endTime = endTime or datetime.now()
 
     if api_key is None or api_key == "undefined":
@@ -5713,11 +5728,12 @@ async def model_metrics_slow_responses(
     if customer is None or customer == "undefined":
         customer = "null"
 
-    startTime = startTime or datetime.now() - timedelta(days=30)
+    startTime = startTime or datetime.now() - timedelta(days=DAYS_IN_A_MONTH)
     endTime = endTime or datetime.now()
 
     alerting_threshold = (
-        proxy_logging_obj.slack_alerting_instance.alerting_threshold or 300
+        proxy_logging_obj.slack_alerting_instance.alerting_threshold
+        or DEFAULT_SLACK_ALERTING_THRESHOLD
     )
     alerting_threshold = int(alerting_threshold)
 
@@ -5797,7 +5813,7 @@ async def model_metrics_exceptions(
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
-    startTime = startTime or datetime.now() - timedelta(days=30)
+    startTime = startTime or datetime.now() - timedelta(days=DAYS_IN_A_MONTH)
     endTime = endTime or datetime.now()
 
     if api_key is None or api_key == "undefined":
