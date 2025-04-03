@@ -82,8 +82,6 @@ class OpenTelemetry(CustomLogger):
         **kwargs,
     ):
         from opentelemetry import trace
-        from opentelemetry.sdk.resources import Resource
-        from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.trace import SpanKind
 
         if config is None:
@@ -93,11 +91,16 @@ class OpenTelemetry(CustomLogger):
         self.OTEL_EXPORTER = self.config.exporter
         self.OTEL_ENDPOINT = self.config.endpoint
         self.OTEL_HEADERS = self.config.headers
-        provider = TracerProvider(resource=Resource(attributes=LITELLM_RESOURCE))
-        provider.add_span_processor(self._get_span_processor())
         self.callback_name = callback_name
 
-        trace.set_tracer_provider(provider)
+        if self.OTEL_EXPORTER != "none":
+            from opentelemetry.sdk.resources import Resource
+            from opentelemetry.sdk.trace import TracerProvider
+
+            provider = TracerProvider(resource=Resource(attributes=LITELLM_RESOURCE))
+            provider.add_span_processor(self._get_span_processor())
+            trace.set_tracer_provider(provider)
+
         self.tracer = trace.get_tracer(LITELLM_TRACER_NAME)
 
         self.span_kind = SpanKind
