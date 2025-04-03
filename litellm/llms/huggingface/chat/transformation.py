@@ -18,12 +18,6 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import HuggingFaceError, _fetch_inference_provider_mapping
 
-if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
-
-    LiteLLMLoggingObj = _LiteLLMLoggingObj
-else:
-    LiteLLMLoggingObj = Any
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +82,7 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         if api_base is not None:
             complete_url = api_base
         elif os.getenv("HF_API_BASE") or os.getenv("HUGGINGFACE_API_BASE"):
-            complete_url = os.getenv("HF_API_BASE") or os.getenv("HUGGINGFACE_API_BASE", "")
+            complete_url = str(os.getenv("HF_API_BASE")) or str(os.getenv("HUGGINGFACE_API_BASE"))
         elif model.startswith(("http://", "https://")):
             complete_url = model
         # 4. Default construction with provider
@@ -144,4 +138,4 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
             )
         mapped_model = provider_mapping["providerId"]
         messages = self._transform_messages(messages=messages, model=mapped_model)
-        return ChatCompletionRequest(model=mapped_model, messages=messages, **optional_params)
+        return dict(ChatCompletionRequest(model=mapped_model, messages=messages, **optional_params))

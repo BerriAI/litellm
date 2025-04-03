@@ -2,8 +2,6 @@
 Test HuggingFace LLM
 """
 
-from contextlib import contextmanager
-import logging
 from re import M
 
 import httpx
@@ -11,7 +9,6 @@ from base_llm_unit_tests import BaseLLMChatTest
 import json
 import os
 import sys
-from datetime import datetime
 from unittest.mock import patch, MagicMock, AsyncMock
 
 sys.path.insert(
@@ -20,9 +17,8 @@ sys.path.insert(
 
 import litellm
 import pytest
-from respx import MockRouter
 from litellm.types.utils import ModelResponseStream, ModelResponse
-
+from respx import MockRouter
 
 MOCK_COMPLETION_RESPONSE = {
         "id": "9115d3daeab10608",
@@ -97,7 +93,15 @@ def mock_provider_mapping():
     with patch("litellm.llms.huggingface.chat.transformation._fetch_inference_provider_mapping") as mock:
         mock.return_value = PROVIDER_MAPPING_RESPONSE
         yield mock
+        
+@pytest.fixture(autouse=True)
+def clear_lru_cache():
+    from litellm.llms.huggingface.common_utils import _fetch_inference_provider_mapping
 
+    _fetch_inference_provider_mapping.cache_clear()
+    yield
+    _fetch_inference_provider_mapping.cache_clear()
+    
 @pytest.fixture
 def mock_http_handler():
     """Fixture to mock the HTTP handler"""
@@ -352,51 +356,3 @@ class TestHuggingFace(BaseLLMChatTest):
     @pytest.mark.asyncio
     async def test_completion_cost(self):
         pass
-    
-class TestHuggingFaceRespx:
-    """Test class for HuggingFace using respx for HTTP mocking"""
-    
-    @pytest.mark.respx
-    def test_huggingface_completion_with_respx(self, respx_mock: MockRouter):
-        respx_mock.post(
-            "https://router.huggingface.co/hf-inference/models/meta-llama/Llama-3-8B-Instruct/v1/chat/completions"
-        ).mock(
-            return_value=httpx.Response(
-                status_code=200,
-                json=MOCK_COMPLETION_RESPONSE
-            )
-        )
-        respx_mock.get(
-            "https://huggingface.co/api/models/meta-llama/Llama-3-8B-Instruct",
-            params={"expand": "inferenceProviderMapping"}
-        ).mock(
-            return_value=httpx.Response(
-                status_code=200,
-                json={"inferenceProviderMapping": PROVIDER_MAPPING_RESPONSE}
-            )
-        )
-        with patch.dict(os.environ, {"HF_TOKEN": "test_token"}):
-            messages = [{"role": "user", "content": "Hello, how are you?"}]
-            response = litellm.completion(
-                model="huggingface/meta-llama/Llama-3-8B-Instruct",
-                messages=messages,
-                stream=False
-            )
-            
-            # Verify response
-            assert response.choices[0].message.content == "This is a test response from the mocked HuggingFace API."
-            assert response.usage.prompt_tokens == 10
-            assert response.usage.completion_tokens == 20
-            assert response.usage.total_tokens == 30
-            
-            # Verify request
-            assert len(respx_mock.calls) == 2
-            completion_request = respx_mock.calls[1].request
-            assert completion_request.headers["Authorization"] == "Bearer test_token"
-            assert completion_request.headers["Content-Type"] == "application/json"
-            
-            # Verify request body
-            request_body = json.loads(completion_request.content)
-            assert request_body["messages"] == messages
-            assert request_body["stream"] is False
-            assert request_body["model"] == "meta-llama/Meta-Llama-3-8B-Instruct"

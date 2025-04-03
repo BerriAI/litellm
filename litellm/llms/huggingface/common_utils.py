@@ -89,8 +89,14 @@ def _fetch_inference_provider_mapping(model: str) -> dict:
 
         return provider_mapping
     except httpx.HTTPError as e:
+        if hasattr(e, "response"):
+            status_code = getattr(e.response, "status_code", 500)
+            headers = getattr(e.response, "headers", {})
+        else:
+            status_code = 500
+            headers = {}
         raise HuggingFaceError(
             message=f"Failed to fetch provider mapping: {str(e)}",
-            status_code=getattr(e.response, "status_code", 500),
-            headers=getattr(e.response, "headers", {}),
+            status_code=status_code,
+            headers=headers,
         )

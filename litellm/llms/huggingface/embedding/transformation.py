@@ -217,7 +217,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
             )
 
         ## Load Config
-        config = litellm.HuggingfaceConfig.get_config()
+        config = litellm.HuggingFaceEmbeddingConfig.get_config()
         for k, v in config.items():
             if (
                 k not in optional_params
