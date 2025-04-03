@@ -56,6 +56,9 @@ from litellm.constants import (
     bedrock_embedding_models,
     known_tokenizer_config,
     BEDROCK_INVOKE_PROVIDERS_LITERAL,
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_SOFT_BUDGET,
+    DEFAULT_ALLOWED_FAILS,
 )
 from litellm.types.guardrails import GuardrailItem
 from litellm.proxy._types import (
@@ -155,7 +158,7 @@ token: Optional[
     str
 ] = None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 telemetry = True
-max_tokens = 256  # OpenAI Defaults
+max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
 drop_params = bool(os.getenv("LITELLM_DROP_PARAMS", False))
 modify_params = False
 retry = True
@@ -244,7 +247,7 @@ budget_duration: Optional[
     str
 ] = None  # proxy only - resets budget after fixed duration. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
 default_soft_budget: float = (
-    50.0  # by default all litellm proxy keys have a soft budget of 50.0
+    DEFAULT_SOFT_BUDGET  # by default all litellm proxy keys have a soft budget of 50.0
 )
 forward_traceparent_to_llm_provider: bool = False
 

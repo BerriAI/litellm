@@ -50,6 +50,7 @@ from litellm.caching.caching import (
     RedisCache,
     RedisClusterCache,
 )
+from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
@@ -5073,7 +5074,7 @@ class Router:
                     rpm_usage += t
         return tpm_usage, rpm_usage
 
-    @lru_cache(maxsize=64)
+    @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
     def _cached_get_model_group_info(
         self, model_group: str
     ) -> Optional[ModelGroupInfo]:
