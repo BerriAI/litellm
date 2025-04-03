@@ -442,6 +442,7 @@ async def test_streaming_handler_with_usage(
             audio_tokens=None, cached_tokens=1796, text_tokens=None, image_tokens=None
         ),
     )
+
     final_chunk = ModelResponseStream(
         id="chatcmpl-87291500-d8c5-428e-b187-36fe5a4c97ab",
         created=1742056047,
@@ -517,7 +518,13 @@ async def test_streaming_with_usage_and_logging(sync_mode: bool):
         completion_tokens=392,
         prompt_tokens=1799,
         total_tokens=2191,
-        completion_tokens_details=None,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            accepted_prediction_tokens=None,
+            audio_tokens=None,
+            reasoning_tokens=0,
+            rejected_prediction_tokens=None,
+            text_tokens=None,
+        ),
         prompt_tokens_details=PromptTokensDetailsWrapper(
             audio_tokens=None,
             cached_tokens=1796,
