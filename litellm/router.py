@@ -67,17 +67,11 @@ from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
     add_retry_headers_to_response,
 )
-from litellm.router_utils.batch_utils import (
-    _get_router_metadata_variable_name,
-    replace_model_in_jsonl,
-)
+from litellm.router_utils.batch_utils import _get_router_metadata_variable_name
 from litellm.router_utils.client_initalization_utils import InitalizeCachedClient
 from litellm.router_utils.clientside_credential_handler import (
     get_dynamic_litellm_params,
     is_clientside_credential,
-)
-from litellm.router_utils.common_utils import (
-    get_litellm_params_sensitive_credential_hash,
 )
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_handlers import (
@@ -110,7 +104,6 @@ from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.llms.openai import (
     AllMessageValues,
     Batch,
-    FileObject,
     FileTypes,
     OpenAIFileObject,
 )

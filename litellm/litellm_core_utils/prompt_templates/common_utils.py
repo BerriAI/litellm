@@ -8,7 +8,6 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
     ChatCompletionFileObject,
-    ChatCompletionFileObjectFile,
     ChatCompletionUserMessage,
 )
 from litellm.types.utils import Choices, ModelResponse, StreamingChoices

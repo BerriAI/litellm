@@ -3,24 +3,16 @@
 
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
-
-from fastapi import HTTPException
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Union, cast
 
 from litellm import verbose_logger
-from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
 )
 from litellm.proxy._types import CallTypes, SpecialEnums, UserAPIKeyAuth
-from litellm.types.llms.openai import (
-    AllMessageValues,
-    OpenAIFileObject,
-    OpenAIFilesPurpose,
-)
-from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.types.llms.openai import OpenAIFileObject, OpenAIFilesPurpose
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
