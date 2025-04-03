@@ -58,7 +58,7 @@ class LangFuseLogger:
             self.langfuse_host.startswith("http://")
             or self.langfuse_host.startswith("https://")
         ):
-            # add http:// if unset, assume communicating over private network - e.g. render
+            # add http:// if unset, assume communicating over private network - e.cg. render
             self.langfuse_host = "http://" + self.langfuse_host
         self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
@@ -226,8 +226,49 @@ class LangFuseLogger:
             verbose_logger.debug(
                 f"OUTPUT IN LANGFUSE: {output}; original: {response_obj}"
             )
+            if "usage_details" in kwargs:
+                verbose_logger.debug(f"USAGE DETAILS SENT TO LANGFUSE: {kwargs['usage_details']}")
+            if "cost_details" in kwargs:
+                verbose_logger.debug(f"COST DETAILS SENT TO LANGFUSE: {kwargs['cost_details']}")
             trace_id = None
             generation_id = None
+
+            # Prepare usage details if available
+            # Prepare usage details if available
+            if 'usage' in kwargs:
+                usage = kwargs['usage']
+                usage_details = {
+                    "input": usage.prompt_tokens,
+                    "output": usage.completion_tokens,
+                    "total": usage.total_tokens,
+                    "cache_read_input_tokens": (
+                        usage.cache_read_input_tokens 
+                        or getattr(usage.prompt_tokens_details, "cached_tokens", 0) 
+                        or usage.cache_creation_input_tokens 
+                        or 0
+                    ),
+                    "cache_read_output_tokens": usage.cache_read_output_tokens or getattr(usage.completion_tokens_details, "cached_tokens", 0),
+                }
+
+                if not usage_details["total"]:
+                    usage_details["total"] = (
+                        usage_details["input"] + usage_details["cache_read_input_tokens"] + usage_details["output"]
+                    )
+
+                # Attach usage_details and cost_details to kwargs
+                kwargs["usage_details"] = usage_details
+                kwargs["cost_details"] = {
+                    "input": usage_details["input"] * 0.0004,
+                    "output": usage_details["output"] * 0.0004,
+                    "total": usage_details["total"] * 0.0004,
+                    "cache_read_input_tokens": usage_details["cache_read_input_tokens"] * 0.0004,
+                    "cache_read_output_tokens": usage_details["cache_read_output_tokens"] * 0.0004,
+                }
+                if usage_details["total"] == 0:
+                    verbose_logger.warning("[WARNING] Usage total is zero. Check token usage extraction.")
+
+
+
             if self._is_langfuse_v2():
                 trace_id, generation_id = self._log_langfuse_v2(
                     user_id=user_id,
@@ -632,6 +673,7 @@ class LangFuseLogger:
                 #     "headers": clean_headers,
                 # }
             trace = self.Langfuse.trace(**trace_params)
+            
 
             # Log provider specific information as a span
             log_provider_specific_information_as_span(trace, clean_metadata)
@@ -653,6 +695,8 @@ class LangFuseLogger:
                         "prompt_tokens": _usage_obj.prompt_tokens,
                         "completion_tokens": _usage_obj.completion_tokens,
                         "total_cost": cost if self._supports_costs() else None,
+                        "cache_read_input_tokens": _usage_obj.prompt_tokens_details.cached_tokens or 0,
+                        "cache_read_output_tokens": getattr(_usage_obj, "cache_read_output_tokens", None) or 0
                     }
             generation_name = clean_metadata.pop("generation_name", None)
             if generation_name is None:
@@ -709,6 +753,22 @@ class LangFuseLogger:
                 generation_params["completion_start_time"] = kwargs.get(
                     "completion_start_time", None
                 )
+
+            # Explicitly log usage details with cached token tracking
+            if usage:
+                # Add usage details directly to generation_params
+                generation_params["usage_details"] = {
+                    "input": usage.get("prompt_tokens", 0),
+                    "output": usage.get("completion_tokens", 0),
+                    "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
+                    "cache_read_output_tokens": usage.get("cache_read_output_tokens", 0),
+                    "total": (
+                        usage.get("prompt_tokens", 0)
+                        + usage.get("completion_tokens", 0)
+                        + usage.get("cache_read_input_tokens", 0)
+                        + usage.get("cache_read_output_tokens", 0)
+                    ),
+                }
 
             generation_client = trace.generation(**generation_params)
 
