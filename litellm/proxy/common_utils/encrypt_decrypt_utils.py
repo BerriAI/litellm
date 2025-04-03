@@ -21,7 +21,6 @@ def _get_salt_key():
 
 
 def encrypt_value_helper(value: str, new_encryption_key: Optional[str] = None):
-
     signing_key = new_encryption_key or _get_salt_key()
 
     try:
@@ -41,7 +40,6 @@ def encrypt_value_helper(value: str, new_encryption_key: Optional[str] = None):
 
 
 def decrypt_value_helper(value: str):
-
     signing_key = _get_salt_key()
 
     try:

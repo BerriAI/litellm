@@ -32,7 +32,6 @@ DEFAULT_TIMEOUT = 600
 
 
 class BaseLLMAIOHTTPHandler:
-
     def __init__(self):
         self.client_session: Optional[aiohttp.ClientSession] = None
 
@@ -110,7 +109,6 @@ class BaseLLMAIOHTTPHandler:
         content: Any = None,
         params: Optional[dict] = None,
     ) -> httpx.Response:
-
         max_retry_on_unprocessable_entity_error = (
             provider_config.max_retry_on_unprocessable_entity_error
         )
@@ -232,6 +230,7 @@ class BaseLLMAIOHTTPHandler:
 
         api_base = provider_config.get_complete_url(
             api_base=api_base,
+            api_key=api_key,
             model=model,
             optional_params=optional_params,
             litellm_params=litellm_params,
@@ -482,6 +481,7 @@ class BaseLLMAIOHTTPHandler:
 
         api_base = provider_config.get_complete_url(
             api_base=api_base,
+            api_key=api_key,
             model=model,
             optional_params=optional_params,
             litellm_params=litellm_params,
@@ -521,7 +521,6 @@ class BaseLLMAIOHTTPHandler:
                 data=data,
                 headers=headers,
                 model_response=model_response,
-                api_key=api_key,
                 logging_obj=logging_obj,
                 model=model,
                 timeout=timeout,

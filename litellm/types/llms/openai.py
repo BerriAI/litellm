@@ -234,6 +234,59 @@ class Thread(BaseModel):
     """The object type, which is always `thread`."""
 
 
+OpenAICreateFileRequestOptionalParams = Literal["purpose",]
+
+
+class OpenAIFileObject(BaseModel):
+    id: str
+    """The file identifier, which can be referenced in the API endpoints."""
+
+    bytes: int
+    """The size of the file, in bytes."""
+
+    created_at: int
+    """The Unix timestamp (in seconds) for when the file was created."""
+
+    filename: str
+    """The name of the file."""
+
+    object: Literal["file"]
+    """The object type, which is always `file`."""
+
+    purpose: Literal[
+        "assistants",
+        "assistants_output",
+        "batch",
+        "batch_output",
+        "fine-tune",
+        "fine-tune-results",
+        "vision",
+        "user_data",
+    ]
+    """The intended purpose of the file.
+
+    Supported values are `assistants`, `assistants_output`, `batch`, `batch_output`,
+    `fine-tune`, `fine-tune-results`, `vision`, and `user_data`.
+    """
+
+    status: Literal["uploaded", "processed", "error"]
+    """Deprecated.
+
+    The current status of the file, which can be either `uploaded`, `processed`, or
+    `error`.
+    """
+
+    expires_at: Optional[int] = None
+    """The Unix timestamp (in seconds) for when the file will expire."""
+
+    status_details: Optional[str] = None
+    """Deprecated.
+
+    For details on why a fine-tuning training file failed validation, see the
+    `error` field on `fine_tuning.job`.
+    """
+
+
 # OpenAI Files Types
 class CreateFileRequest(TypedDict, total=False):
     """
@@ -505,10 +558,11 @@ class ChatCompletionDocumentObject(TypedDict):
     citations: Optional[CitationsObject]
 
 
-class ChatCompletionFileObjectFile(TypedDict):
-    file_data: Optional[str]
-    file_id: Optional[str]
-    filename: Optional[str]
+class ChatCompletionFileObjectFile(TypedDict, total=False):
+    file_data: str
+    file_id: str
+    filename: str
+    format: str
 
 
 class ChatCompletionFileObject(TypedDict):
@@ -722,12 +776,12 @@ class OpenAIChatCompletionChunk(ChatCompletionChunk):
 
 class Hyperparameters(BaseModel):
     batch_size: Optional[Union[str, int]] = None  # "Number of examples in each batch."
-    learning_rate_multiplier: Optional[Union[str, float]] = (
-        None  # Scaling factor for the learning rate
-    )
-    n_epochs: Optional[Union[str, int]] = (
-        None  # "The number of epochs to train the model for"
-    )
+    learning_rate_multiplier: Optional[
+        Union[str, float]
+    ] = None  # Scaling factor for the learning rate
+    n_epochs: Optional[
+        Union[str, int]
+    ] = None  # "The number of epochs to train the model for"
 
 
 class FineTuningJobCreate(BaseModel):
@@ -754,18 +808,18 @@ class FineTuningJobCreate(BaseModel):
 
     model: str  # "The name of the model to fine-tune."
     training_file: str  # "The ID of an uploaded file that contains training data."
-    hyperparameters: Optional[Hyperparameters] = (
-        None  # "The hyperparameters used for the fine-tuning job."
-    )
-    suffix: Optional[str] = (
-        None  # "A string of up to 18 characters that will be added to your fine-tuned model name."
-    )
-    validation_file: Optional[str] = (
-        None  # "The ID of an uploaded file that contains validation data."
-    )
-    integrations: Optional[List[str]] = (
-        None  # "A list of integrations to enable for your fine-tuning job."
-    )
+    hyperparameters: Optional[
+        Hyperparameters
+    ] = None  # "The hyperparameters used for the fine-tuning job."
+    suffix: Optional[
+        str
+    ] = None  # "A string of up to 18 characters that will be added to your fine-tuned model name."
+    validation_file: Optional[
+        str
+    ] = None  # "The ID of an uploaded file that contains validation data."
+    integrations: Optional[
+        List[str]
+    ] = None  # "A list of integrations to enable for your fine-tuning job."
     seed: Optional[int] = None  # "The seed controls the reproducibility of the job."
 
 
@@ -1112,3 +1166,6 @@ ResponsesAPIStreamingResponse = Annotated[
     ],
     Discriminator("type"),
 ]
+
+
+REASONING_EFFORT = Literal["low", "medium", "high"]

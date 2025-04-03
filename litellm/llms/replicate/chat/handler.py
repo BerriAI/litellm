@@ -170,6 +170,7 @@ def completion(
 
     prediction_url = replicate_config.get_complete_url(
         api_base=api_base,
+        api_key=api_key,
         model=model,
         optional_params=optional_params,
         litellm_params=litellm_params,
@@ -244,9 +245,9 @@ async def async_completion(
     print_verbose,
     headers: dict,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
-
     prediction_url = replicate_config.get_complete_url(
         api_base=api_base,
+        api_key=api_key,
         model=model,
         optional_params=optional_params,
         litellm_params=litellm_params,

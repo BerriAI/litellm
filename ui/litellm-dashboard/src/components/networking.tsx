@@ -1070,6 +1070,42 @@ export const organizationDeleteCall = async (
   }
 };
 
+
+export const userDailyActivityCall = async (accessToken: String, startTime: Date, endTime: Date) => {
+  /**
+   * Get daily user activity on proxy
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/daily/activity` : `/user/daily/activity`;
+    const queryParams = new URLSearchParams();
+    queryParams.append('start_date', startTime.toISOString());
+    queryParams.append('end_date', endTime.toISOString());
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
 export const getTotalSpendCall = async (accessToken: String) => {
   /**
    * Get all models on proxy
@@ -4045,6 +4081,76 @@ export const updateInternalUserSettings = async (accessToken: string, settings: 
     return data;
   } catch (error) {
     console.error("Failed to update internal user settings:", error);
+    throw error;
+  }
+};
+
+
+export const listMCPTools = async (accessToken: string) => {
+  try {
+    // Construct base URL
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/mcp/tools/list`
+      : `/mcp/tools/list`;
+
+    console.log("Fetching MCP tools from:", url);
+    
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Fetched MCP tools:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch MCP tools:", error);
+    throw error;
+  }
+};
+
+
+export const callMCPTool = async (accessToken: string, toolName: string, toolArguments: Record<string, any>) => {
+  try {
+    // Construct base URL
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/mcp/tools/call`
+      : `/mcp/tools/call`;
+
+    console.log("Calling MCP tool:", toolName, "with arguments:", toolArguments);
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        name: toolName,
+        arguments: toolArguments,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("MCP tool call response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to call MCP tool:", error);
     throw error;
   }
 };

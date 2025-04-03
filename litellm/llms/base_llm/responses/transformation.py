@@ -58,7 +58,6 @@ class BaseResponsesAPIConfig(ABC):
         model: str,
         drop_params: bool,
     ) -> Dict:
-
         pass
 
     @abstractmethod

@@ -3,6 +3,7 @@ This file contains the PrismaWrapper class, which is used to wrap the Prisma cli
 """
 
 import asyncio
+import glob
 import os
 import random
 import subprocess
@@ -179,6 +180,33 @@ class PrismaManager:
             return False
 
     @staticmethod
+    def _get_migration_names(migrations_dir: str) -> list:
+        """Get all migration directory names from the migrations folder"""
+        migration_paths = glob.glob(f"{migrations_dir}/*/migration.sql")
+        return [Path(p).parent.name for p in migration_paths]
+
+    @staticmethod
+    def _resolve_all_migrations(migrations_dir: str):
+        """Mark all existing migrations as applied"""
+        migration_names = PrismaManager._get_migration_names(migrations_dir)
+        for migration_name in migration_names:
+            try:
+                verbose_proxy_logger.info(f"Resolving migration: {migration_name}")
+                subprocess.run(
+                    ["prisma", "migrate", "resolve", "--applied", migration_name],
+                    timeout=60,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                verbose_proxy_logger.debug(f"Resolved migration: {migration_name}")
+            except subprocess.CalledProcessError as e:
+                if "is already recorded as applied in the database." not in e.stderr:
+                    verbose_proxy_logger.warning(
+                        f"Failed to resolve migration {migration_name}: {e.stderr}"
+                    )
+
+    @staticmethod
     def setup_database(use_migrate: bool = False) -> bool:
         """
         Set up the database using either prisma migrate or prisma db push
@@ -187,6 +215,7 @@ class PrismaManager:
             bool: True if setup was successful, False otherwise
         """
 
+        use_migrate = str_to_bool(os.getenv("USE_PRISMA_MIGRATE")) or use_migrate
         for attempt in range(4):
             original_dir = os.getcwd()
             prisma_dir = PrismaManager._get_prisma_dir()
@@ -194,36 +223,20 @@ class PrismaManager:
             os.chdir(prisma_dir)
             try:
                 if use_migrate:
-                    verbose_proxy_logger.info("Running prisma migrate deploy")
-                    # First try to run migrate deploy directly
                     try:
-                        subprocess.run(
-                            ["prisma", "migrate", "deploy"],
-                            timeout=60,
-                            check=True,
-                            capture_output=True,
-                            text=True,
+                        from litellm_proxy_extras.utils import ProxyExtrasDBManager
+                    except ImportError as e:
+                        verbose_proxy_logger.error(
+                            f"\033[1;31mLiteLLM: Failed to import proxy extras. Got {e}\033[0m"
                         )
-                        verbose_proxy_logger.info("prisma migrate deploy completed")
-                        return True
-                    except subprocess.CalledProcessError as e:
-                        # Check if this is the non-empty schema error
-                        if (
-                            "P3005" in e.stderr
-                            and "database schema is not empty" in e.stderr
-                        ):
-                            # Create baseline migration
-                            if PrismaManager._create_baseline_migration(schema_path):
-                                # Try migrate deploy again after baseline
-                                subprocess.run(
-                                    ["prisma", "migrate", "deploy"],
-                                    timeout=60,
-                                    check=True,
-                                )
-                                return True
-                        else:
-                            # If it's a different error, raise it
-                            raise e
+                        return False
+
+                    prisma_dir = PrismaManager._get_prisma_dir()
+                    schema_path = prisma_dir + "/schema.prisma"
+
+                    return ProxyExtrasDBManager.setup_database(
+                        schema_path=schema_path, use_migrate=use_migrate
+                    )
                 else:
                     # Use prisma db push with increased timeout
                     subprocess.run(

@@ -1720,23 +1720,25 @@ assert isinstance(
 ```
 
 
-## Usage - PDF / Videos / etc. Files 
+## Usage - PDF / Videos / Audio etc. Files 
 
 Pass any file supported by Vertex AI, through LiteLLM. 
 
-LiteLLM Supports the following image types passed in url
+LiteLLM Supports the following file types passed in url. 
+
+Using `file` message type for VertexAI is live from v1.65.1+ 
 
 ```
-Images with Cloud Storage URIs - gs://cloud-samples-data/generative-ai/image/boats.jpeg
-Images with direct links - https://storage.googleapis.com/github-repo/img/gemini/intro/landmark3.jpg
+Files with Cloud Storage URIs - gs://cloud-samples-data/generative-ai/image/boats.jpeg
+Files with direct links - https://storage.googleapis.com/github-repo/img/gemini/intro/landmark3.jpg
 Videos with Cloud Storage URIs - https://storage.googleapis.com/github-repo/img/gemini/multimodality_usecases_overview/pixel8.mp4
-Base64 Encoded Local Images
+Base64 Encoded Local Files
 ```
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
-### **Using `gs://`**
+### **Using `gs://` or any URL**
 ```python
 from litellm import completion
 
@@ -1748,8 +1750,11 @@ response = completion(
             "content": [
                 {"type": "text", "text": "You are a very professional document summarization specialist. Please summarize the given document."},
                 {
-                    "type": "image_url",
-                    "image_url": "gs://cloud-samples-data/generative-ai/pdf/2403.05530.pdf", # 👈 PDF
+                    "type": "file",
+                    "file": {
+                        "file_id": "gs://cloud-samples-data/generative-ai/pdf/2403.05530.pdf",
+                        "format": "application/pdf" # OPTIONAL - specify mime-type
+                    }
                 },
             ],
         }
@@ -1783,8 +1788,16 @@ response = completion(
             "content": [
                 {"type": "text", "text": "You are a very professional document summarization specialist. Please summarize the given document."},
                 {
-                    "type": "image_url",
-                    "image_url": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+                    "type": "file",
+                    "file": {
+                        "file_data": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+                    }  
+                },
+                {
+                    "type": "audio_input",
+                    "audio_input {
+                        "audio_input": f"data:audio/mp3;base64,{encoded_file}", # 👈 AUDIO File ('file' message works as too)
+                    }  
                 },
             ],
         }
@@ -1830,8 +1843,11 @@ curl http://0.0.0.0:4000/v1/chat/completions \
             "text": "You are a very professional document summarization specialist. Please summarize the given document"
           },
           {
-                "type": "image_url",
-                "image_url": "gs://cloud-samples-data/generative-ai/pdf/2403.05530.pdf" # 👈 PDF
+                "type": "file",
+                "file": {
+                    "file_id": "gs://cloud-samples-data/generative-ai/pdf/2403.05530.pdf",
+                    "format": "application/pdf" # OPTIONAL
+                }
             }
           }
         ]
@@ -1858,11 +1874,18 @@ curl http://0.0.0.0:4000/v1/chat/completions \
             "text": "You are a very professional document summarization specialist. Please summarize the given document"
           },
           {
-                "type": "image_url",
-                "image_url": "data:application/pdf;base64,{encoded_file}" # 👈 PDF
-            }
-          }
-        ]
+                "type": "file",
+                "file": {
+                    "file_data": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+                },
+            },
+            {
+                "type": "audio_input",
+                "audio_input {
+                    "audio_input": f"data:audio/mp3;base64,{encoded_file}", # 👈 AUDIO File ('file' message works as too)
+                }  
+            },
+    ]
       }
     ],
     "max_tokens": 300
@@ -1871,6 +1894,7 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 ```
 </TabItem>
 </Tabs>
+
 
 ## Chat Models
 | Model Name       | Function Call                        |
@@ -2080,7 +2104,12 @@ print(response)
 
 ## **Multi-Modal Embeddings**
 
-Usage
+
+Known Limitations:
+- Only supports 1 image / video / image per request
+- Only supports GCS or base64 encoded images / videos
+
+### Usage
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -2290,6 +2319,115 @@ embeddings = model.get_embeddings(
 )
 print(f"Image Embedding: {embeddings.image_embedding}")
 print(f"Text Embedding: {embeddings.text_embedding}")
+```
+
+</TabItem>
+</Tabs>
+
+
+### Text + Image + Video Embeddings
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+Text + Image 
+
+```python
+response = await litellm.aembedding(
+    model="vertex_ai/multimodalembedding@001",
+    input=["hey", "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"] # will be sent as a gcs image
+)
+```
+
+Text + Video 
+
+```python
+response = await litellm.aembedding(
+    model="vertex_ai/multimodalembedding@001",
+    input=["hey", "gs://my-bucket/embeddings/supermarket-video.mp4"] # will be sent as a gcs image
+)
+```
+
+Image + Video 
+
+```python
+response = await litellm.aembedding(
+    model="vertex_ai/multimodalembedding@001",
+    input=["gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png", "gs://my-bucket/embeddings/supermarket-video.mp4"] # will be sent as a gcs image
+)
+```
+
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM PROXY (Unified Endpoint)">
+
+1. Add model to config.yaml
+```yaml
+model_list:
+  - model_name: multimodalembedding@001
+    litellm_params:
+      model: vertex_ai/multimodalembedding@001
+      vertex_project: "adroit-crow-413218"
+      vertex_location: "us-central1"
+      vertex_credentials: adroit-crow-413218-a956eef1a2a8.json 
+
+litellm_settings:
+  drop_params: True
+```
+
+2. Start Proxy 
+
+```
+$ litellm --config /path/to/config.yaml
+```
+
+3. Make Request use OpenAI Python SDK, Langchain Python SDK
+
+
+Text + Image 
+
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+# # request sent to model set on litellm proxy, `litellm --model`
+response = client.embeddings.create(
+    model="multimodalembedding@001", 
+    input = ["hey", "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"],
+)
+
+print(response)
+```
+
+Text + Video 
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+# # request sent to model set on litellm proxy, `litellm --model`
+response = client.embeddings.create(
+    model="multimodalembedding@001", 
+    input = ["hey", "gs://my-bucket/embeddings/supermarket-video.mp4"],
+)
+
+print(response)
+```
+
+Image + Video 
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+# # request sent to model set on litellm proxy, `litellm --model`
+response = client.embeddings.create(
+    model="multimodalembedding@001", 
+    input = ["gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png", "gs://my-bucket/embeddings/supermarket-video.mp4"],
+)
+
+print(response)
 ```
 
 </TabItem>

@@ -233,7 +233,6 @@ class DataDogLogger(
         pass
 
     async def _log_async_event(self, kwargs, response_obj, start_time, end_time):
-
         dd_payload = self.create_datadog_logging_payload(
             kwargs=kwargs,
             response_obj=response_obj,

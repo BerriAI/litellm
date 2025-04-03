@@ -290,6 +290,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     def get_complete_url(
         self,
         api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
@@ -391,7 +392,6 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
 
 class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
-
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
             return ModelResponseStream(

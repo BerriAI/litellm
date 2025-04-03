@@ -467,6 +467,12 @@ class TestAnthropicCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
     def get_base_completion_call_args(self) -> dict:
         return {"model": "anthropic/claude-3-5-sonnet-20240620"}
 
+    def get_base_completion_call_args_with_thinking(self) -> dict:
+        return {
+            "model": "anthropic/claude-3-7-sonnet-latest",
+            "thinking": {"type": "enabled", "budget_tokens": 16000},
+        }
+
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         from litellm.litellm_core_utils.prompt_templates.factory import (
