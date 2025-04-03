@@ -76,6 +76,7 @@ from litellm.proxy.db.create_views import (
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.log_db_metrics import log_db_metrics
 from litellm.proxy.db.prisma_client import PrismaWrapper
+from litellm.proxy.hooks import PROXY_HOOKS, get_proxy_hook
 from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
 from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
 from litellm.proxy.hooks.parallel_request_limiter import (
@@ -352,10 +353,19 @@ class ProxyLogging:
             self.db_spend_update_writer.redis_update_buffer.redis_cache = redis_cache
             self.db_spend_update_writer.pod_lock_manager.redis_cache = redis_cache
 
+    def _add_proxy_hooks(self, llm_router: Optional[Router] = None):
+        for hook in PROXY_HOOKS:
+            proxy_hook = get_proxy_hook(hook)
+            import inspect
+
+            expected_args = inspect.getfullargspec(proxy_hook).args
+            if "internal_usage_cache" in expected_args:
+                litellm.logging_callback_manager.add_litellm_callback(proxy_hook(self.internal_usage_cache))  # type: ignore
+            else:
+                litellm.logging_callback_manager.add_litellm_callback(proxy_hook())  # type: ignore
+
     def _init_litellm_callbacks(self, llm_router: Optional[Router] = None):
-        litellm.logging_callback_manager.add_litellm_callback(self.max_parallel_request_limiter)  # type: ignore
-        litellm.logging_callback_manager.add_litellm_callback(self.max_budget_limiter)  # type: ignore
-        litellm.logging_callback_manager.add_litellm_callback(self.cache_control_check)  # type: ignore
+        self._add_proxy_hooks(llm_router)
         litellm.logging_callback_manager.add_litellm_callback(self.service_logging_obj)  # type: ignore
         for callback in litellm.callbacks:
             if isinstance(callback, str):
