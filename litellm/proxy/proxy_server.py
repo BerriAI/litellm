@@ -5333,6 +5333,26 @@ async def _check_if_model_is_user_added(
     return filtered_models
 
 
+def _check_if_model_is_team_model(
+    models: List[DeploymentTypedDict], user_row: LiteLLM_UserTable
+) -> List[Dict]:
+    """
+    Check if model is a team model
+
+    Check if user is a member of the team that the model belongs to
+    """
+
+    user_team_models: List[Dict] = []
+    for model in models:
+        model_team_id = model.get("model_info", {}).get("team_id", None)
+
+        if model_team_id is not None:
+            if model_team_id in user_row.teams:
+                user_team_models.append(cast(Dict, model))
+
+    return user_team_models
+
+
 @router.get(
     "/v2/model/info",
     description="v2 - returns models available to the user based on their API key permissions. Shows model info from config.yaml (except api key and api base). Filter to just user-added models with ?user_models_only=true",
@@ -5378,7 +5398,10 @@ async def model_info_v2(
     if model is not None:
         all_models = [m for m in all_models if m["model_name"] == model]
 
-    if user_models_only is True:
+    if (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+    ):
         """
         Check if model is in db
 
@@ -5386,10 +5409,25 @@ async def model_info_v2(
 
         Only return models that match
         """
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+        user_row = await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": user_api_key_dict.user_id}
+        )
+
+        if user_row is None:
+            raise HTTPException(status_code=400, detail={"error": "User not found"})
         all_models = await _check_if_model_is_user_added(
             models=all_models,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
+        )
+        all_models += _check_if_model_is_team_model(
+            models=llm_router.get_model_list() or [],
+            user_row=user_row,
         )
 
     # fill in model info based on config.yaml and litellm model_prices_and_context_window.json
