@@ -77,6 +77,7 @@ class CloudflareChatConfig(BaseConfig):
     def get_complete_url(
         self,
         api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
