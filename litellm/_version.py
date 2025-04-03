@@ -1,6 +1,6 @@
-import importlib_metadata
+import importlib.metadata
 
 try:
-    version = importlib_metadata.version("litellm")
+    version = importlib.metadata.version("litellm")
 except Exception:
     version = "unknown"
