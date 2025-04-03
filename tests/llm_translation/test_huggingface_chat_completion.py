@@ -302,7 +302,9 @@ class TestHuggingFace(BaseLLMChatTest):
             api_base=None,
             model=model,
             optional_params={},
-            stream=False
+            stream=False,
+            api_key="test_api_key",
+            litellm_params={}
         )
         assert url == expected_url
 
