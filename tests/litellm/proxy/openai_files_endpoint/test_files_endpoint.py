@@ -99,7 +99,7 @@ def test_invalid_purpose(mocker: MockerFixture, monkeypatch, llm_router: Router)
     assert "Invalid purpose: my-bad-purpose" in response.json()["error"]["message"]
 
 
-def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch):
+def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: Router):
     """
     Asserts 'create_file' is called with the correct arguments
     """
@@ -118,7 +118,7 @@ def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch):
         files={"file": test_file},
         data={
             "purpose": "user_data",
-            "target_model_names": ["azure-gpt-3-5-turbo", "gpt-3.5-turbo"],
+            "target_model_names": "azure-gpt-3-5-turbo, gpt-3.5-turbo",
         },
         headers={"Authorization": "Bearer test-key"},
     )
@@ -196,7 +196,7 @@ def test_create_file_and_call_chat_completion_e2e(
 
     # Mock the Gemini API endpoint with regex pattern matching
     gemini_route = respx.post(
-        url__regex=r".*generativelanguage\.googleapis\.com.*"
+        url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=None"
     ).mock(
         return_value=respx.MockResponse(status_code=200, json=mock_gemini_response),
     )
@@ -207,7 +207,7 @@ def test_create_file_and_call_chat_completion_e2e(
         files={"file": test_file},
         data={
             "purpose": "user_data",
-            "target_model_names": ["gemini-2.0-flash", "gpt-3.5-turbo"],
+            "target_model_names": "gemini-2.0-flash, gpt-3.5-turbo",
         },
         headers={"Authorization": "Bearer test-key"},
     )

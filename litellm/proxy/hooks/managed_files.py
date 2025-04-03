@@ -121,7 +121,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger):
             purpose=cast(OpenAIFilesPurpose, purpose),
             created_at=file_objects[0].created_at,
             bytes=1234,
-            filename=file_objects[0].filename or str(datetime.now().timestamp()),
+            filename=str(datetime.now().timestamp()),
             status="uploaded",
         )
 
