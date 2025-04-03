@@ -2335,6 +2335,21 @@ def test_completion_openrouter_reasoning_effort():
 
 # test_completion_openrouter1()
 
+def test_completion_datarobot():
+    try:
+        litellm.set_verbose = True
+        response = completion(
+            model="datarobot/azure/gpt-4",
+            messages=messages,
+            max_tokens=5,
+            client_id="custom-model"
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_datarobot()
+
 
 def test_completion_hf_model_no_provider():
     try:
