@@ -214,7 +214,7 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
 
     # Set up the Sentinel client
     sentinel = redis.Sentinel(
-        sentinel_nodes, 
+        sentinel_nodes,
         socket_timeout=0.1,
         password=sentinel_password,
     )

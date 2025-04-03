@@ -290,6 +290,7 @@ class Logging(LiteLLMLoggingBaseClass):
             "input": _input,
             "litellm_params": litellm_params,
             "applied_guardrails": applied_guardrails,
+            "model": model,
         }
 
     def process_dynamic_callbacks(self):
@@ -892,6 +893,7 @@ class Logging(LiteLLMLoggingBaseClass):
             ResponseCompletedEvent,
         ],
         cache_hit: Optional[bool] = None,
+        litellm_model_name: Optional[str] = None,
     ) -> Optional[float]:
         """
         Calculate response cost using result + logging object variables.
@@ -917,7 +919,7 @@ class Logging(LiteLLMLoggingBaseClass):
         try:
             response_cost_calculator_kwargs = {
                 "response_object": result,
-                "model": self.model,
+                "model": litellm_model_name or self.model,
                 "cache_hit": cache_hit,
                 "custom_llm_provider": self.model_call_details.get(
                     "custom_llm_provider", None
@@ -1008,6 +1010,10 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 return False
         return True
+
+    def _update_completion_start_time(self, completion_start_time: datetime.datetime):
+        self.completion_start_time = completion_start_time
+        self.model_call_details["completion_start_time"] = self.completion_start_time
 
     def _success_handler_helper_fn(
         self,

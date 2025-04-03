@@ -1259,19 +1259,43 @@ class SpendMetrics(BaseModel):
     prompt_tokens: int = Field(default=0)
     completion_tokens: int = Field(default=0)
     total_tokens: int = Field(default=0)
+    successful_requests: int = Field(default=0)
+    failed_requests: int = Field(default=0)
     api_requests: int = Field(default=0)
+
+
+class MetricBase(BaseModel):
+    metrics: SpendMetrics
+
+
+class MetricWithMetadata(MetricBase):
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class KeyMetadata(BaseModel):
+    """Metadata for a key"""
+
+    key_alias: Optional[str] = None
+
+
+class KeyMetricWithMetadata(MetricBase):
+    """Base class for metrics with additional metadata"""
+
+    metadata: KeyMetadata = Field(default_factory=KeyMetadata)
 
 
 class BreakdownMetrics(BaseModel):
     """Breakdown of spend by different dimensions"""
 
-    models: Dict[str, SpendMetrics] = Field(default_factory=dict)  # model -> metrics
-    providers: Dict[str, SpendMetrics] = Field(
+    models: Dict[str, MetricWithMetadata] = Field(
         default_factory=dict
-    )  # provider -> metrics
-    api_keys: Dict[str, SpendMetrics] = Field(
+    )  # model -> {metrics, metadata}
+    providers: Dict[str, MetricWithMetadata] = Field(
         default_factory=dict
-    )  # api_key -> metrics
+    )  # provider -> {metrics, metadata}
+    api_keys: Dict[str, KeyMetricWithMetadata] = Field(
+        default_factory=dict
+    )  # api_key -> {metrics, metadata}
 
 
 class DailySpendData(BaseModel):
@@ -1284,7 +1308,10 @@ class DailySpendMetadata(BaseModel):
     total_spend: float = Field(default=0.0)
     total_prompt_tokens: int = Field(default=0)
     total_completion_tokens: int = Field(default=0)
+    total_tokens: int = Field(default=0)
     total_api_requests: int = Field(default=0)
+    total_successful_requests: int = Field(default=0)
+    total_failed_requests: int = Field(default=0)
     page: int = Field(default=1)
     total_pages: int = Field(default=1)
     has_more: bool = Field(default=False)
@@ -1307,6 +1334,8 @@ class LiteLLM_DailyUserSpend(BaseModel):
     completion_tokens: int = 0
     spend: float = 0.0
     api_requests: int = 0
+    successful_requests: int = 0
+    failed_requests: int = 0
 
 
 class GroupedData(TypedDict):
@@ -1322,34 +1351,57 @@ def update_metrics(
     group_metrics.completion_tokens += record.completion_tokens
     group_metrics.total_tokens += record.prompt_tokens + record.completion_tokens
     group_metrics.api_requests += record.api_requests
+    group_metrics.successful_requests += record.successful_requests
+    group_metrics.failed_requests += record.failed_requests
     return group_metrics
 
 
 def update_breakdown_metrics(
-    breakdown: BreakdownMetrics, record: LiteLLM_DailyUserSpend
+    breakdown: BreakdownMetrics,
+    record: LiteLLM_DailyUserSpend,
+    model_metadata: Dict[str, Dict[str, Any]],
+    provider_metadata: Dict[str, Dict[str, Any]],
+    api_key_metadata: Dict[str, Dict[str, Any]],
 ) -> BreakdownMetrics:
     """Updates breakdown metrics for a single record using the existing update_metrics function"""
 
     # Update model breakdown
     if record.model not in breakdown.models:
-        breakdown.models[record.model] = SpendMetrics()
-    breakdown.models[record.model] = update_metrics(
-        breakdown.models[record.model], record
+        breakdown.models[record.model] = MetricWithMetadata(
+            metrics=SpendMetrics(),
+            metadata=model_metadata.get(
+                record.model, {}
+            ),  # Add any model-specific metadata here
+        )
+    breakdown.models[record.model].metrics = update_metrics(
+        breakdown.models[record.model].metrics, record
     )
 
     # Update provider breakdown
     provider = record.custom_llm_provider or "unknown"
     if provider not in breakdown.providers:
-        breakdown.providers[provider] = SpendMetrics()
-    breakdown.providers[provider] = update_metrics(
-        breakdown.providers[provider], record
+        breakdown.providers[provider] = MetricWithMetadata(
+            metrics=SpendMetrics(),
+            metadata=provider_metadata.get(
+                provider, {}
+            ),  # Add any provider-specific metadata here
+        )
+    breakdown.providers[provider].metrics = update_metrics(
+        breakdown.providers[provider].metrics, record
     )
 
     # Update api key breakdown
     if record.api_key not in breakdown.api_keys:
-        breakdown.api_keys[record.api_key] = SpendMetrics()
-    breakdown.api_keys[record.api_key] = update_metrics(
-        breakdown.api_keys[record.api_key], record
+        breakdown.api_keys[record.api_key] = KeyMetricWithMetadata(
+            metrics=SpendMetrics(),
+            metadata=KeyMetadata(
+                key_alias=api_key_metadata.get(record.api_key, {}).get(
+                    "key_alias", None
+                )
+            ),  # Add any api_key-specific metadata here
+        )
+    breakdown.api_keys[record.api_key].metrics = update_metrics(
+        breakdown.api_keys[record.api_key].metrics, record
     )
 
     return breakdown
@@ -1428,6 +1480,14 @@ async def get_user_daily_activity(
         if api_key:
             where_conditions["api_key"] = api_key
 
+        if (
+            user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+            and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+        ):
+            where_conditions[
+                "user_id"
+            ] = user_api_key_dict.user_id  # only allow access to own data
+
         # Get total count for pagination
         total_count = await prisma_client.db.litellm_dailyuserspend.count(
             where=where_conditions
@@ -1443,6 +1503,28 @@ async def get_user_daily_activity(
             take=page_size,
         )
 
+        daily_spend_data_pydantic_list = [
+            LiteLLM_DailyUserSpend(**record.model_dump()) for record in daily_spend_data
+        ]
+
+        # Get all unique API keys from the spend data
+        api_keys = set()
+        for record in daily_spend_data_pydantic_list:
+            if record.api_key:
+                api_keys.add(record.api_key)
+
+        # Fetch key aliases in bulk
+
+        api_key_metadata: Dict[str, Dict[str, Any]] = {}
+        model_metadata: Dict[str, Dict[str, Any]] = {}
+        provider_metadata: Dict[str, Dict[str, Any]] = {}
+        if api_keys:
+            key_records = await prisma_client.db.litellm_verificationtoken.find_many(
+                where={"token": {"in": list(api_keys)}}
+            )
+            api_key_metadata.update(
+                {k.token: {"key_alias": k.key_alias} for k in key_records}
+            )
         # Process results
         results = []
         total_metrics = SpendMetrics()
@@ -1450,7 +1532,7 @@ async def get_user_daily_activity(
         # Group data by date and other dimensions
 
         grouped_data: Dict[str, Dict[str, Any]] = {}
-        for record in daily_spend_data:
+        for record in daily_spend_data_pydantic_list:
             date_str = record.date
             if date_str not in grouped_data:
                 grouped_data[date_str] = {
@@ -1464,7 +1546,11 @@ async def get_user_daily_activity(
             )
             # Update breakdowns
             grouped_data[date_str]["breakdown"] = update_breakdown_metrics(
-                grouped_data[date_str]["breakdown"], record
+                grouped_data[date_str]["breakdown"],
+                record,
+                model_metadata,
+                provider_metadata,
+                api_key_metadata,
             )
 
             # Update total metrics
@@ -1474,7 +1560,9 @@ async def get_user_daily_activity(
             total_metrics.total_tokens += (
                 record.prompt_tokens + record.completion_tokens
             )
-            total_metrics.api_requests += 1
+            total_metrics.api_requests += record.api_requests
+            total_metrics.successful_requests += record.successful_requests
+            total_metrics.failed_requests += record.failed_requests
 
         # Convert grouped data to response format
         for date_str, data in grouped_data.items():
@@ -1495,7 +1583,10 @@ async def get_user_daily_activity(
                 total_spend=total_metrics.spend,
                 total_prompt_tokens=total_metrics.prompt_tokens,
                 total_completion_tokens=total_metrics.completion_tokens,
+                total_tokens=total_metrics.total_tokens,
                 total_api_requests=total_metrics.api_requests,
+                total_successful_requests=total_metrics.successful_requests,
+                total_failed_requests=total_metrics.failed_requests,
                 page=page,
                 total_pages=-(-total_count // page_size),  # Ceiling division
                 has_more=(page * page_size) < total_count,

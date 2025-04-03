@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
 )
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
@@ -128,6 +129,7 @@ class AmazonConverseConfig(BaseConfig):
             "claude-3-7" in model
         ):  # [TODO]: move to a 'supports_reasoning_content' param from model cost map
             supported_params.append("thinking")
+            supported_params.append("reasoning_effort")
         return supported_params
 
     def map_tool_choice_values(
@@ -218,9 +220,7 @@ class AmazonConverseConfig(BaseConfig):
         messages: Optional[List[AllMessageValues]] = None,
     ) -> dict:
         is_thinking_enabled = self.is_thinking_enabled(non_default_params)
-        self.update_optional_params_with_thinking_tokens(
-            non_default_params=non_default_params, optional_params=optional_params
-        )
+
         for param, value in non_default_params.items():
             if param == "response_format" and isinstance(value, dict):
                 ignore_response_format_types = ["text"]
@@ -297,6 +297,14 @@ class AmazonConverseConfig(BaseConfig):
                     optional_params["tool_choice"] = _tool_choice_value
             if param == "thinking":
                 optional_params["thinking"] = value
+            elif param == "reasoning_effort" and isinstance(value, str):
+                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+                    value
+                )
+
+        self.update_optional_params_with_thinking_tokens(
+            non_default_params=non_default_params, optional_params=optional_params
+        )
 
         return optional_params
 
