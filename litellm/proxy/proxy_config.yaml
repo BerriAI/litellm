@@ -13,3 +13,5 @@ litellm_settings:
   cache_params:
     type: redis
     supported_call_types: []
+  callbacks: ["prometheus"]
+  service_callback: ["prometheus_system"]
