@@ -21,7 +21,6 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.types.llms.anthropic import (
-    AnthropicChatCompletionUsageBlock,
     ContentBlockDelta,
     ContentBlockStart,
     ContentBlockStop,
@@ -32,22 +31,15 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.openai import (
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
-    ChatCompletionUsageBlock,
 )
 from litellm.types.utils import (
-    CompletionTokensDetailsWrapper,
     Delta,
     GenericStreamingChunk,
     ModelResponseStream,
     StreamingChoices,
     Usage,
 )
-from litellm.utils import (
-    CustomStreamWrapper,
-    ModelResponse,
-    ProviderConfigManager,
-    token_counter,
-)
+from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
 
 from ...base import BaseLLM
 from ..common_utils import AnthropicError, process_anthropic_headers
