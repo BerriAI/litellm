@@ -2329,7 +2329,7 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
             datarobot_headers = {
-                "Authorization": f"bearer {api_key}",
+                "Authorization": f"Bearer {api_key}",
             }
 
             _headers = headers or litellm.headers
