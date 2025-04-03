@@ -2843,6 +2843,7 @@ def get_optional_params(  # noqa: PLR0915
     api_version=None,
     parallel_tool_calls=None,
     drop_params=None,
+    allowed_openai_params: Optional[List[str]] = None,
     reasoning_effort=None,
     additional_drop_params=None,
     messages: Optional[List[AllMessageValues]] = None,
@@ -2928,6 +2929,7 @@ def get_optional_params(  # noqa: PLR0915
         "api_version": None,
         "parallel_tool_calls": None,
         "drop_params": None,
+        "allowed_openai_params": None,
         "additional_drop_params": None,
         "messages": None,
         "reasoning_effort": None,
@@ -2944,6 +2946,7 @@ def get_optional_params(  # noqa: PLR0915
             and k != "custom_llm_provider"
             and k != "api_version"
             and k != "drop_params"
+            and k != "allowed_openai_params"
             and k != "additional_drop_params"
             and k != "messages"
             and k in default_params
@@ -3053,6 +3056,12 @@ def get_optional_params(  # noqa: PLR0915
                 tool_function["parameters"] = new_parameters
 
     def _check_valid_arg(supported_params: List[str]):
+        """
+        Check if the params passed to completion() are supported by the provider
+
+        Args:
+            supported_params: List[str] - supported params from the litellm config
+        """
         verbose_logger.info(
             f"\nLiteLLM completion() model= {model}; provider = {custom_llm_provider}"
         )
@@ -3086,7 +3095,7 @@ def get_optional_params(  # noqa: PLR0915
             else:
                 raise UnsupportedParamsError(
                     status_code=500,
-                    message=f"{custom_llm_provider} does not support parameters: {unsupported_params}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
+                    message=f"{custom_llm_provider} does not support parameters: {list(unsupported_params.keys())}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n. \n If you want to use these params dynamically send allowed_openai_params={list(unsupported_params.keys())} in your request.",
                 )
 
     supported_params = get_supported_openai_params(
@@ -3096,7 +3105,14 @@ def get_optional_params(  # noqa: PLR0915
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider="openai"
         )
-    _check_valid_arg(supported_params=supported_params or [])
+
+    supported_params = supported_params or []
+    allowed_openai_params = allowed_openai_params or []
+    supported_params.extend(allowed_openai_params)
+
+    _check_valid_arg(
+        supported_params=supported_params or [],
+    )
     ## raise exception if provider doesn't support passed in param
     if custom_llm_provider == "anthropic":
         ## check if unsupported param passed in
@@ -3735,6 +3751,26 @@ def get_optional_params(  # noqa: PLR0915
             if k not in default_params.keys():
                 optional_params[k] = passed_params[k]
     print_verbose(f"Final returned optional params: {optional_params}")
+    optional_params = _apply_openai_param_overrides(
+        optional_params=optional_params,
+        non_default_params=non_default_params,
+        allowed_openai_params=allowed_openai_params,
+    )
+    return optional_params
+
+
+def _apply_openai_param_overrides(
+    optional_params: dict, non_default_params: dict, allowed_openai_params: list
+):
+    """
+    If user passes in allowed_openai_params, apply them to optional_params
+
+    These params will get passed as is to the LLM API since the user opted in to passing them in the request
+    """
+    if allowed_openai_params:
+        for param in allowed_openai_params:
+            if param not in optional_params:
+                optional_params[param] = non_default_params.pop(param, None)
     return optional_params
 
 
