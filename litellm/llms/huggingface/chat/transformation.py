@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -144,4 +144,4 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
             )
         mapped_model = provider_mapping["providerId"]
         messages = self._transform_messages(messages=messages, model=mapped_model)
-        return {"model": mapped_model, "messages": messages, **optional_params}
+        return ChatCompletionRequest(model=mapped_model, messages=messages, **optional_params)
