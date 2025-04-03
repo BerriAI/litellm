@@ -2325,13 +2325,13 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_base
                 or litellm.api_base
                 or get_secret_str("DATAROBOT_API_BASE")
-                or "https://staging.datarobot.com/api/v2/genai/llmgw/chat/"
+                or "https://staging.datarobot.com/api/v2/genai/llmgw/"
             )
 
             api_key = (
                 api_key
                 or litellm.api_key
-                or litellm.openrouter_key
+                or litellm.datarobot_key
                 or get_secret("DATAROBOT_API_KEY")
             )
 

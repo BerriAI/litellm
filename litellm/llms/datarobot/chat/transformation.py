@@ -6,16 +6,17 @@ Calls done in OpenAI/openai.py as OpenRouter is openai-compatible.
 Docs: https://openrouter.ai/docs/parameters
 """
 
-from typing import Any, AsyncIterator, Iterator, Optional, Union
+from typing import Any, AsyncIterator, Iterator, Optional, Union, List
 
 import httpx
 
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.openrouter import OpenRouterErrorMessage
 from litellm.types.utils import ModelResponse, ModelResponseStream
 
-from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+from ...openai.chat.gpt_transformation import OpenAIGPTConfig, LiteLLMLoggingObj
 from ..common_utils import DataRobotException
 
 
@@ -64,6 +65,14 @@ class DataRobotConfig(OpenAIGPTConfig):
             sync_stream=sync_stream,
             json_mode=json_mode,
         )
+
+    def get_complete_url(self, **kwargs):
+        return "https://staging.datarobot.com/api/v2/genai/llmgw/chat/completions/"
+
+    def transform_request(self, *args, **kwargs):
+        response = super().transform_request(*args, **kwargs)
+        response["clientId"] = "custom-model"
+        return response
 
 
 class DataRobotChatCompletionStreamingHandler(BaseModelResponseIterator):
