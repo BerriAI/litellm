@@ -3,7 +3,7 @@
 #    On success + failure, log events to Prometheus for litellm / adjacent services (litellm, redis, postgres, llm api providers)
 
 
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 from litellm._logging import print_verbose, verbose_logger
 from litellm.types.integrations.prometheus import LATENCY_BUCKETS
@@ -43,7 +43,9 @@ class PrometheusServicesLogger:
             verbose_logger.debug("in init prometheus services metrics")
 
             self.services = [item for item in ServiceTypes]
-            self.payload_to_prometheus_map = {}
+            self.payload_to_prometheus_map: Dict[
+                str, List[Union[Histogram, Counter, Gauge, Collector]]
+            ] = {}
 
             for service in self.services:
                 service_metrics: List[Union[Histogram, Counter, Gauge, Collector]] = []
@@ -78,7 +80,7 @@ class PrometheusServicesLogger:
                         service_metrics.append(gauge)
 
                 if service_metrics:
-                    self.payload_to_prometheus_map[service] = service_metrics
+                    self.payload_to_prometheus_map[service.value] = service_metrics
 
             self.prometheus_to_amount_map: dict = {}
             ### MOCK TESTING ###
