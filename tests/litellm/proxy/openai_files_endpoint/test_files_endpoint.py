@@ -158,7 +158,6 @@ def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: 
     assert openai_call_found, "OpenAI call not found with expected parameters"
 
 
-@respx.mock
 def test_create_file_and_call_chat_completion_e2e(
     mocker: MockerFixture, monkeypatch, llm_router: Router
 ):
@@ -167,131 +166,140 @@ def test_create_file_and_call_chat_completion_e2e(
     2. Call a chat completion with the file
     3. Assert the file is used in the chat completion
     """
-    from litellm.types.llms.openai import OpenAIFileObject
-
-    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
-    proxy_logging_object = setup_proxy_logging_object(monkeypatch, llm_router)
-
-    # Create a simple test file content
-    test_file_content = b"test audio content"
-    test_file = ("test.wav", test_file_content, "audio/wav")
-
-    # Mock the file creation response
-    mock_file_response = OpenAIFileObject(
-        id="test-file-id",
-        object="file",
-        bytes=123,
-        created_at=1234567890,
-        filename="test.wav",
-        purpose="user_data",
-        status="uploaded",
-    )
-    mock_file_response._hidden_params = {"model_id": "gemini-2.0-flash-id"}
-    mocker.patch.object(llm_router, "acreate_file", return_value=mock_file_response)
-
-    # Mock the Gemini API call using respx
-    mock_gemini_response = {
-        "candidates": [{"content": {"parts": [{"text": "This is a test audio file"}]}}]
-    }
-
-    # Mock the Gemini API endpoint with regex pattern matching
-    gemini_route = respx.post(
-        url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=None"
-    ).mock(
-        return_value=respx.MockResponse(status_code=200, json=mock_gemini_response),
-    )
-
-    # Print updated mock setup
-    print("\nAfter Adding Gemini Route:")
-    print("==========================")
-    print(f"Number of mocked routes: {len(respx.routes)}")
-    for route in respx.routes:
-        print(f"Mocked Route: {route}")
-        print(f"Pattern: {route.pattern}")
-
-    ## CREATE FILE
-    file = client.post(
-        "/v1/files",
-        files={"file": test_file},
-        data={
-            "purpose": "user_data",
-            "target_model_names": "gemini-2.0-flash, gpt-3.5-turbo",
-        },
-        headers={"Authorization": "Bearer test-key"},
-    )
-
-    print("\nAfter File Creation:")
-    print("====================")
-    print(f"File creation status: {file.status_code}")
-    print(f"Recorded calls so far: {len(respx.calls)}")
-    for call in respx.calls:
-        print(f"Call made to: {call.request.method} {call.request.url}")
-
-    assert file.status_code == 200
-    assert file.json()["id"] != "test-file-id"  # unified file id used
-
-    ## USE FILE IN CHAT COMPLETION
+    # Create and enable respx mock instance
+    mock = respx.mock()
+    mock.start()
     try:
-        completion = client.post(
-            "/v1/chat/completions",
-            json={
-                "model": "gemini-2.0-flash",
-                "modalities": ["text", "audio"],
-                "audio": {"voice": "alloy", "format": "wav"},
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": "What is in this recording?"},
-                            {
-                                "type": "file",
-                                "file": {
-                                    "file_id": file.json()["id"],
-                                    "filename": "my-test-name",
-                                    "format": "audio/wav",
-                                },
-                            },
-                        ],
-                    },
-                ],
-                "drop_params": True,
+        from litellm.types.llms.openai import OpenAIFileObject
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+        proxy_logging_object = setup_proxy_logging_object(monkeypatch, llm_router)
+
+        # Create a simple test file content
+        test_file_content = b"test audio content"
+        test_file = ("test.wav", test_file_content, "audio/wav")
+
+        # Mock the file creation response
+        mock_file_response = OpenAIFileObject(
+            id="test-file-id",
+            object="file",
+            bytes=123,
+            created_at=1234567890,
+            filename="test.wav",
+            purpose="user_data",
+            status="uploaded",
+        )
+        mock_file_response._hidden_params = {"model_id": "gemini-2.0-flash-id"}
+        mocker.patch.object(llm_router, "acreate_file", return_value=mock_file_response)
+
+        # Mock the Gemini API call using respx
+        mock_gemini_response = {
+            "candidates": [
+                {"content": {"parts": [{"text": "This is a test audio file"}]}}
+            ]
+        }
+
+        # Mock the Gemini API endpoint with a more flexible pattern
+        gemini_route = mock.post(
+            url__regex=r".*generativelanguage\.googleapis\.com.*"
+        ).mock(
+            return_value=respx.MockResponse(status_code=200, json=mock_gemini_response),
+        )
+
+        # Print updated mock setup
+        print("\nAfter Adding Gemini Route:")
+        print("==========================")
+        print(f"Number of mocked routes: {len(mock.routes)}")
+        for route in mock.routes:
+            print(f"Mocked Route: {route}")
+            print(f"Pattern: {route.pattern}")
+
+        ## CREATE FILE
+        file = client.post(
+            "/v1/files",
+            files={"file": test_file},
+            data={
+                "purpose": "user_data",
+                "target_model_names": "gemini-2.0-flash, gpt-3.5-turbo",
             },
             headers={"Authorization": "Bearer test-key"},
         )
-    except Exception as e:
-        print(f"error: {e}")
 
-    print("\nError occurred during chat completion:")
-    print("=====================================")
-    print("\nFinal Mock State:")
-    print("=================")
-    print(f"Total mocked routes: {len(respx.routes)}")
-    for route in respx.routes:
-        print(f"\nMocked Route: {route}")
-        print(f"  Called: {route.called}")
+        print("\nAfter File Creation:")
+        print("====================")
+        print(f"File creation status: {file.status_code}")
+        print(f"Recorded calls so far: {len(mock.calls)}")
+        for call in mock.calls:
+            print(f"Call made to: {call.request.method} {call.request.url}")
 
-    print("\nActual Requests Made:")
-    print("=====================")
-    print(f"Total calls recorded: {len(respx.calls)}")
-    for idx, call in enumerate(respx.calls):
-        print(f"\nCall {idx + 1}:")
-        print(f"  Method: {call.request.method}")
-        print(f"  URL: {call.request.url}")
-        print(f"  Headers: {dict(call.request.headers)}")
+        assert file.status_code == 200
+        assert file.json()["id"] != "test-file-id"  # unified file id used
+
+        ## USE FILE IN CHAT COMPLETION
         try:
-            print(f"  Body: {call.request.content.decode()}")
-        except:
-            print("  Body: <could not decode>")
+            completion = client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "gemini-2.0-flash",
+                    "modalities": ["text", "audio"],
+                    "audio": {"voice": "alloy", "format": "wav"},
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "What is in this recording?"},
+                                {
+                                    "type": "file",
+                                    "file": {
+                                        "file_id": file.json()["id"],
+                                        "filename": "my-test-name",
+                                        "format": "audio/wav",
+                                    },
+                                },
+                            ],
+                        },
+                    ],
+                    "drop_params": True,
+                },
+                headers={"Authorization": "Bearer test-key"},
+            )
+        except Exception as e:
+            print(f"error: {e}")
 
-    # Verify Gemini API was called
-    assert gemini_route.called, "Gemini API was not called"
+        print("\nError occurred during chat completion:")
+        print("=====================================")
+        print("\nFinal Mock State:")
+        print("=================")
+        print(f"Total mocked routes: {len(mock.routes)}")
+        for route in mock.routes:
+            print(f"\nMocked Route: {route}")
+            print(f"  Called: {route.called}")
 
-    # Print the call details
-    print("\nGemini API Call Details:")
-    print(f"URL: {gemini_route.calls.last.request.url}")
-    print(f"Method: {gemini_route.calls.last.request.method}")
-    print(f"Headers: {dict(gemini_route.calls.last.request.headers)}")
-    print(f"Content: {gemini_route.calls.last.request.content.decode()}")
-    print(f"Response: {gemini_route.calls.last.response.content.decode()}")
+        print("\nActual Requests Made:")
+        print("=====================")
+        print(f"Total calls recorded: {len(mock.calls)}")
+        for idx, call in enumerate(mock.calls):
+            print(f"\nCall {idx + 1}:")
+            print(f"  Method: {call.request.method}")
+            print(f"  URL: {call.request.url}")
+            print(f"  Headers: {dict(call.request.headers)}")
+            try:
+                print(f"  Body: {call.request.content.decode()}")
+            except:
+                print("  Body: <could not decode>")
 
-    assert "test-file-id" in gemini_route.calls.last.request.content.decode()
+        # Verify Gemini API was called
+        assert gemini_route.called, "Gemini API was not called"
+
+        # Print the call details
+        print("\nGemini API Call Details:")
+        print(f"URL: {gemini_route.calls.last.request.url}")
+        print(f"Method: {gemini_route.calls.last.request.method}")
+        print(f"Headers: {dict(gemini_route.calls.last.request.headers)}")
+        print(f"Content: {gemini_route.calls.last.request.content.decode()}")
+        print(f"Response: {gemini_route.calls.last.response.content.decode()}")
+
+        assert "test-file-id" in gemini_route.calls.last.request.content.decode()
+    finally:
+        # Stop the mock
+        mock.stop()
