@@ -6,17 +6,13 @@ Calls done in OpenAI/openai.py as OpenRouter is openai-compatible.
 Docs: https://openrouter.ai/docs/parameters
 """
 
-from typing import Any, AsyncIterator, Iterator, Optional, Union, List
+from typing import Optional, Union
 
 import httpx
 
-from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ModelResponse, ModelResponseStream
-
-from ...openai.chat.gpt_transformation import OpenAIGPTConfig, LiteLLMLoggingObj
 from ..common_utils import DataRobotException
+from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class DataRobotConfig(OpenAIGPTConfig):
@@ -45,9 +41,8 @@ class DataRobotConfig(OpenAIGPTConfig):
             api_base = "https://app.datarobot.com"
 
         if not api_base.endswith("/chat/completions/"):
-            api_base += "/api/v2/genai/llmgw/chat/completions/"
+            if api_base.endswith("/chat/completions"):
+                api_base += "/"
+            else:
+                api_base += "/api/v2/genai/llmgw/chat/completions/"
         return api_base
-
-    def transform_request(self, *args, **kwargs):
-        response = super().transform_request(*args, **kwargs)
-        return response
