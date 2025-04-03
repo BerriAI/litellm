@@ -8,7 +8,7 @@
 import asyncio
 import traceback
 from datetime import datetime
-from typing import Optional, cast
+from typing import Optional, cast, get_args
 
 import httpx
 from fastapi import (
@@ -173,13 +173,17 @@ async def create_file(
         target_model_names_list = [model.strip() for model in target_model_names_list]
         # Prepare the data for forwarding
 
-        if purpose not in OpenAIFilesPurpose.__args__:
+        # Replace with:
+        valid_purposes = get_args(OpenAIFilesPurpose)
+        if purpose not in valid_purposes:
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"Invalid purpose: {purpose}. Must be one of: {OpenAIFilesPurpose.__args__}",
+                    "error": f"Invalid purpose: {purpose}. Must be one of: {valid_purposes}",
                 },
             )
+        # Cast purpose to OpenAIFilesPurpose type
+        purpose = cast(OpenAIFilesPurpose, purpose)
 
         data = {"purpose": purpose}
 

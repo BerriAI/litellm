@@ -1065,7 +1065,9 @@ def completion(  # type: ignore # noqa: PLR0915
             messages = update_messages_with_model_file_ids(
                 messages=messages,
                 model_id=kwargs.get("model_info", {}).get("id", None),
-                model_file_id_mapping=kwargs.get("model_file_id_mapping"),
+                model_file_id_mapping=cast(
+                    Dict[str, Dict[str, str]], kwargs.get("model_file_id_mapping")
+                ),
             )
 
         provider_config: Optional[BaseConfig] = None
