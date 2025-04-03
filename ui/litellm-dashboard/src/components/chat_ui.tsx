@@ -25,6 +25,7 @@ import {
 import { message, Select } from "antd";
 import { modelAvailableCall } from "./networking";
 import { makeOpenAIChatCompletionRequest } from "./chat_ui/llm_calls/chat_completion";
+import { makeOpenAIImageGenerationRequest } from "./chat_ui/llm_calls/image_generation";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { Typography } from "antd";
 import { coy } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -49,13 +50,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
   );
   const [apiKey, setApiKey] = useState("");
   const [inputMessage, setInputMessage] = useState("");
-  const [chatHistory, setChatHistory] = useState<{ role: string; content: string; model?: string }[]>([]);
+  const [chatHistory, setChatHistory] = useState<{ role: string; content: string; model?: string; isImage?: boolean }[]>([]);
   const [selectedModel, setSelectedModel] = useState<string | undefined>(
     undefined
   );
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<any[]>([]);
   const customModelTimeout = useRef<NodeJS.Timeout | null>(null);
+  const [endpointType, setEndpointType] = useState<'chat' | 'image'>('chat');
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -66,8 +68,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
       console.log("useApiKey or token or userRole or userID is missing = ", useApiKey, token, userRole, userID);
       return;
     }
-
-    
 
     // Fetch model info and set the default selected model
     const fetchModelInfo = async () => {
@@ -122,11 +122,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
     }
   }, [chatHistory]);
 
-  const updateUI = (role: string, chunk: string, model?: string) => {
+  const updateTextUI = (role: string, chunk: string, model?: string) => {
     setChatHistory((prevHistory) => {
       const lastMessage = prevHistory[prevHistory.length - 1];
 
-      if (lastMessage && lastMessage.role === role) {
+      if (lastMessage && lastMessage.role === role && !lastMessage.isImage) {
         return [
           ...prevHistory.slice(0, prevHistory.length - 1),
           { role, content: lastMessage.content + chunk, model },
@@ -135,6 +135,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
         return [...prevHistory, { role, content: chunk, model }];
       }
     });
+  };
+
+  const updateImageUI = (imageUrl: string, model: string) => {
+    setChatHistory((prevHistory) => [
+      ...prevHistory,
+      { role: "assistant", content: imageUrl, model, isImage: true }
+    ]);
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -160,24 +167,34 @@ const ChatUI: React.FC<ChatUIProps> = ({
     // Create message object without model field for API call
     const newUserMessage = { role: "user", content: inputMessage };
     
-    // Create chat history for API call - strip out model field
-    const apiChatHistory = [...chatHistory.map(({ role, content }) => ({ role, content })), newUserMessage];
-    
-    // Update UI with full message object (including model field for display)
+    // Update UI with full message object
     setChatHistory([...chatHistory, newUserMessage]);
 
     try {
       if (selectedModel) {
-        await makeOpenAIChatCompletionRequest(
-          apiChatHistory,
-          (chunk, model) => updateUI("assistant", chunk, model),
-          selectedModel,
-          effectiveApiKey
-        );
+        if (endpointType === 'chat') {
+          // Create chat history for API call - strip out model field and isImage field
+          const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
+          
+          await makeOpenAIChatCompletionRequest(
+            apiChatHistory,
+            (chunk, model) => updateTextUI("assistant", chunk, model),
+            selectedModel,
+            effectiveApiKey
+          );
+        } else {
+          // For image generation
+          await makeOpenAIImageGenerationRequest(
+            inputMessage,
+            (imageUrl, model) => updateImageUI(imageUrl, model),
+            selectedModel,
+            effectiveApiKey
+          );
+        }
       }
     } catch (error) {
-      console.error("Error fetching model response", error);
-      updateUI("assistant", "Error fetching model response");
+      console.error("Error fetching response", error);
+      updateTextUI("assistant", "Error fetching response");
     }
 
     setInputMessage("");
@@ -198,10 +215,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
     );
   }
 
-  const onChange = (value: string) => {
+  const onModelChange = (value: string) => {
     console.log(`selected ${value}`);
     setSelectedModel(value);
     setShowCustomModelInput(value === 'custom');
+  };
+
+  const handleEndpointChange = (value: string) => {
+    setEndpointType(value as 'chat' | 'image');
   };
 
   return (
@@ -240,10 +261,21 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       )}
                     </Col>
                     <Col className="mx-2">
+                      <Text>Endpoint Type:</Text>
+                      <Select
+                        defaultValue="chat"
+                        style={{ width: "350px", marginBottom: "12px" }}
+                        onChange={handleEndpointChange}
+                        options={[
+                          { value: 'chat', label: '/chat/completions' },
+                          { value: 'image', label: '/images/generations' }
+                        ]}
+                      />
+                      
                       <Text>Select Model:</Text>
                       <Select
                         placeholder="Select a Model"
-                        onChange={onChange}
+                        onChange={onModelChange}
                         options={[
                           ...modelInfo,
                           { value: 'custom', label: 'Enter custom model' }
@@ -322,32 +354,40 @@ const ChatUI: React.FC<ChatUIProps> = ({
                             wordBreak: "break-word",
                             maxWidth: "100%"
                           }}>
-                            <ReactMarkdown
-                              components={{
-                                code({node, inline, className, children, ...props}: React.ComponentPropsWithoutRef<'code'> & {
-                                  inline?: boolean;
-                                  node?: any;
-                                }) {
-                                  const match = /language-(\w+)/.exec(className || '');
-                                  return !inline && match ? (
-                                    <SyntaxHighlighter
-                                      style={coy as any}
-                                      language={match[1]}
-                                      PreTag="div"
-                                      {...props}
-                                    >
-                                      {String(children).replace(/\n$/, '')}
-                                    </SyntaxHighlighter>
-                                  ) : (
-                                    <code className={className} {...props}>
-                                      {children}
-                                    </code>
-                                  );
-                                }
-                              }}
-                            >
-                              {message.content}
-                            </ReactMarkdown>
+                            {message.isImage ? (
+                              <img 
+                                src={message.content} 
+                                alt="Generated image" 
+                                style={{ maxWidth: '100%', maxHeight: '500px' }} 
+                              />
+                            ) : (
+                              <ReactMarkdown
+                                components={{
+                                  code({node, inline, className, children, ...props}: React.ComponentPropsWithoutRef<'code'> & {
+                                    inline?: boolean;
+                                    node?: any;
+                                  }) {
+                                    const match = /language-(\w+)/.exec(className || '');
+                                    return !inline && match ? (
+                                      <SyntaxHighlighter
+                                        style={coy as any}
+                                        language={match[1]}
+                                        PreTag="div"
+                                        {...props}
+                                      >
+                                        {String(children).replace(/\n$/, '')}
+                                      </SyntaxHighlighter>
+                                    ) : (
+                                      <code className={className} {...props}>
+                                        {children}
+                                      </code>
+                                    );
+                                  }
+                                }}
+                              >
+                                {message.content}
+                              </ReactMarkdown>
+                            )}
                           </div>
                         </TableCell>
                       </TableRow>
@@ -369,13 +409,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       value={inputMessage}
                       onChange={(e) => setInputMessage(e.target.value)}
                       onKeyDown={handleKeyDown}
-                      placeholder="Type your message..."
+                      placeholder={endpointType === 'chat' ? "Type your message..." : "Describe the image you want to generate..."}
                     />
                     <Button
                       onClick={handleSendMessage}
                       className="ml-2"
                     >
-                      Send
+                      {endpointType === 'chat' ? "Send" : "Generate"}
                     </Button>
                   </div>
                 </div>
