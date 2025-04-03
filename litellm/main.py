@@ -5799,6 +5799,19 @@ def stream_chunk_builder(  # noqa: PLR0915
                 "content"
             ] = processor.get_combined_content(content_chunks)
 
+        reasoning_chunks = [
+            chunk
+            for chunk in chunks
+            if len(chunk["choices"]) > 0
+            and "reasoning_content" in chunk["choices"][0]["delta"]
+            and chunk["choices"][0]["delta"]["reasoning_content"] is not None
+        ]
+
+        if len(reasoning_chunks) > 0:
+            response["choices"][0]["message"][
+                "reasoning_content"
+            ] = processor.get_combined_reasoning_content(reasoning_chunks)
+
         audio_chunks = [
             chunk
             for chunk in chunks
@@ -5813,11 +5826,14 @@ def stream_chunk_builder(  # noqa: PLR0915
 
         completion_output = get_content_from_model_response(response)
 
+        reasoning_tokens = processor.count_reasoning_tokens(response)
+
         usage = processor.calculate_usage(
             chunks=chunks,
             model=model,
             completion_output=completion_output,
             messages=messages,
+            reasoning_tokens=reasoning_tokens,
         )
 
         setattr(response, "usage", usage)

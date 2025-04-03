@@ -35,12 +35,19 @@ from litellm.types.llms.openai import (
     ChatCompletionUsageBlock,
 )
 from litellm.types.utils import (
+    CompletionTokensDetailsWrapper,
     Delta,
     GenericStreamingChunk,
     ModelResponseStream,
     StreamingChoices,
+    Usage,
 )
-from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
+from litellm.utils import (
+    CustomStreamWrapper,
+    ModelResponse,
+    ProviderConfigManager,
+    token_counter,
+)
 
 from ...base import BaseLLM
 from ..common_utils import AnthropicError, process_anthropic_headers
@@ -487,10 +494,8 @@ class ModelResponseIterator:
             return True
         return False
 
-    def _handle_usage(
-        self, anthropic_usage_chunk: Union[dict, UsageDelta]
-    ) -> AnthropicChatCompletionUsageBlock:
-        usage_block = AnthropicChatCompletionUsageBlock(
+    def _handle_usage(self, anthropic_usage_chunk: Union[dict, UsageDelta]) -> Usage:
+        usage_block = Usage(
             prompt_tokens=anthropic_usage_chunk.get("input_tokens", 0),
             completion_tokens=anthropic_usage_chunk.get("output_tokens", 0),
             total_tokens=anthropic_usage_chunk.get("input_tokens", 0)
@@ -581,7 +586,7 @@ class ModelResponseIterator:
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
             finish_reason = ""
-            usage: Optional[ChatCompletionUsageBlock] = None
+            usage: Optional[Usage] = None
             provider_specific_fields: Dict[str, Any] = {}
             reasoning_content: Optional[str] = None
             thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
