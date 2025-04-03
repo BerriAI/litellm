@@ -44,7 +44,7 @@ class BaseImageGenTest(ABC):
         pass
 
     @pytest.mark.asyncio(scope="module")
-    async def test_basic_image_generation(self):
+    async def test_async_basic_image_generation(self):
         """Test basic image generation"""
         try:
             custom_logger = TestCustomLogger()
