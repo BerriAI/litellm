@@ -195,8 +195,9 @@ def test_create_file_and_call_chat_completion_e2e(
     }
 
     # Mock the Gemini API endpoint
+    # Mock the Gemini API endpoint with a wildcard URL match
     gemini_route = respx.post(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+        url__startswith="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
     ).mock(return_value=respx.MockResponse(status_code=200, json=mock_gemini_response))
 
     ## CREATE FILE
