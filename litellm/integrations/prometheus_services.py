@@ -95,7 +95,7 @@ class PrometheusServicesLogger:
     def _get_service_metrics_initialize(
         self, service: ServiceTypes
     ) -> List[ServiceMetrics]:
-        DEFAULT_METRICS = [ServiceMetrics.COUNTER, ServiceMetrics.GAUGE]
+        DEFAULT_METRICS = [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]
         if service not in DEFAULT_SERVICE_CONFIGS:
             return DEFAULT_METRICS
 
