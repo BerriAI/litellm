@@ -201,6 +201,14 @@ def test_create_file_and_call_chat_completion_e2e(
         return_value=respx.MockResponse(status_code=200, json=mock_gemini_response),
     )
 
+    # Print updated mock setup
+    print("\nAfter Adding Gemini Route:")
+    print("==========================")
+    print(f"Number of mocked routes: {len(respx.routes)}")
+    for route in respx.routes:
+        print(f"Mocked Route: {route}")
+        print(f"Pattern: {route.pattern}")
+
     ## CREATE FILE
     file = client.post(
         "/v1/files",
@@ -211,6 +219,13 @@ def test_create_file_and_call_chat_completion_e2e(
         },
         headers={"Authorization": "Bearer test-key"},
     )
+
+    print("\nAfter File Creation:")
+    print("====================")
+    print(f"File creation status: {file.status_code}")
+    print(f"Recorded calls so far: {len(respx.calls)}")
+    for call in respx.calls:
+        print(f"Call made to: {call.request.method} {call.request.url}")
 
     assert file.status_code == 200
     assert file.json()["id"] != "test-file-id"  # unified file id used
@@ -245,6 +260,28 @@ def test_create_file_and_call_chat_completion_e2e(
         )
     except Exception as e:
         print(f"error: {e}")
+
+    print("\nError occurred during chat completion:")
+    print("=====================================")
+    print("\nFinal Mock State:")
+    print("=================")
+    print(f"Total mocked routes: {len(respx.routes)}")
+    for route in respx.routes:
+        print(f"\nMocked Route: {route}")
+        print(f"  Called: {route.called}")
+
+    print("\nActual Requests Made:")
+    print("=====================")
+    print(f"Total calls recorded: {len(respx.calls)}")
+    for idx, call in enumerate(respx.calls):
+        print(f"\nCall {idx + 1}:")
+        print(f"  Method: {call.request.method}")
+        print(f"  URL: {call.request.url}")
+        print(f"  Headers: {dict(call.request.headers)}")
+        try:
+            print(f"  Body: {call.request.content.decode()}")
+        except:
+            print("  Body: <could not decode>")
 
     # Verify Gemini API was called
     assert gemini_route.called, "Gemini API was not called"
