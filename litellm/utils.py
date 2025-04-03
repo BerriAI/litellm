@@ -6250,6 +6250,8 @@ class ProviderConfigManager:
             return litellm.TogetherAIConfig()
         elif litellm.LlmProviders.OPENROUTER == provider:
             return litellm.OpenrouterConfig()
+        elif litellm.LlmProviders.DATAROBOT == provider:
+            return litellm.DataRobotConfig()
         elif litellm.LlmProviders.GEMINI == provider:
             return litellm.GoogleAIStudioGeminiConfig()
         elif (
