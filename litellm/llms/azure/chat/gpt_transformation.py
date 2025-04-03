@@ -121,11 +121,11 @@ class AzureOpenAIConfig(BaseConfig):
     ) -> bool:
         """
         - check if api_version is supported for response_format
+        https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/structured-outputs?tabs=python-secure%2Cdotnet-entra-id&pivots=programming-language-csharp#api-support
         """
-
-        is_supported = int(api_version_year) <= 2024 and int(api_version_month) >= 8
-
-        return is_supported
+        year = int(api_version_year)
+        month = int(api_version_month)
+        return (year == 2024 and month >= 8) or year > 2024
 
     def map_openai_params(
         self,

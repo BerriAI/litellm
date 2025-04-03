@@ -290,6 +290,7 @@ def test_azure_openai_gpt_4o_naming(monkeypatch):
     [
         "2024-10-21",
         # "2024-02-15-preview",
+        "2025-02-01-preview",
     ],
 )
 def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
@@ -361,7 +362,7 @@ def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
 
         mock_post.assert_called_once()
 
-        if api_version == "2024-10-21":
+        if api_version == "2024-10-21" or api_version == "2025-02-01-preview":
             assert "response_format" in mock_post.call_args.kwargs
         else:
             assert "response_format" not in mock_post.call_args.kwargs
