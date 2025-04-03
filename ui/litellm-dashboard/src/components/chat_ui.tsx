@@ -24,8 +24,7 @@ import {
 
 import { message, Select } from "antd";
 import { modelAvailableCall } from "./networking";
-import openai from "openai";
-import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import { makeOpenAIChatCompletionRequest } from "./chat_ui/llm_calls/chat_completion";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { Typography } from "antd";
 import { coy } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -36,45 +35,6 @@ interface ChatUIProps {
   userRole: string | null;
   userID: string | null;
   disabledPersonalKeyCreation: boolean;
-}
-
-async function generateModelResponse(
-  chatHistory: { role: string; content: string }[],
-  updateUI: (chunk: string, model: string) => void,
-  selectedModel: string,
-  accessToken: string
-) {
-  // base url should be the current base_url
-  const isLocal = process.env.NODE_ENV === "development";
-  if (isLocal !== true) {
-    console.log = function () {};
-  }
-  console.log("isLocal:", isLocal);
-  const proxyBaseUrl = isLocal
-    ? "http://localhost:4000"
-    : window.location.origin;
-  const client = new openai.OpenAI({
-    apiKey: accessToken, // Replace with your OpenAI API key
-    baseURL: proxyBaseUrl, // Replace with your OpenAI API base URL
-    dangerouslyAllowBrowser: true, // using a temporary litellm proxy key
-  });
-
-  try {
-    const response = await client.chat.completions.create({
-      model: selectedModel,
-      stream: true,
-      messages: chatHistory as ChatCompletionMessageParam[],
-    });
-
-    for await (const chunk of response) {
-      console.log(chunk);
-      if (chunk.choices[0].delta.content) {
-        updateUI(chunk.choices[0].delta.content, chunk.model);
-      }
-    }
-  } catch (error) {
-    message.error(`Error occurred while generating model response. Please try again. Error: ${error}`, 20);
-  }
 }
 
 const ChatUI: React.FC<ChatUIProps> = ({
@@ -208,7 +168,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
     try {
       if (selectedModel) {
-        await generateModelResponse(
+        await makeOpenAIChatCompletionRequest(
           apiChatHistory,
           (chunk, model) => updateUI("assistant", chunk, model),
           selectedModel,
