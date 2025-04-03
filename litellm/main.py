@@ -2318,7 +2318,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_base
                 or litellm.api_base
                 or get_secret_str("DATAROBOT_API_BASE")
-                or "https://staging.datarobot.com/api/v2/genai/llmgw/"
+                or "https://app.datarobot.com"
             )
 
             api_key = (
@@ -2387,7 +2387,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 or litellm.api_key
                 or litellm.openrouter_key
                 or get_secret("OPENROUTER_API_KEY")
-                or get_secret("OR_API_KEY")
             )
 
             openrouter_site_url = get_secret("OR_SITE_URL") or "https://litellm.ai"

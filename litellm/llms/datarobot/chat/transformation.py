@@ -66,8 +66,24 @@ class DataRobotConfig(OpenAIGPTConfig):
             json_mode=json_mode,
         )
 
-    def get_complete_url(self, **kwargs):
-        return "https://staging.datarobot.com/api/v2/genai/llmgw/chat/completions/"
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        """
+        Ensure - /v1/chat/completions is at the end of the url
+
+        """
+        if api_base is None:
+            api_base = "https://app.datarobot.com"
+
+        if not api_base.endswith("/chat/completions/"):
+            api_base += "/api/v2/genai/llmgw/chat/completions/"
+        return api_base
 
     def transform_request(self, *args, **kwargs):
         response = super().transform_request(*args, **kwargs)
