@@ -303,7 +303,7 @@ class RedisCache(BaseCache):
             raise e
 
         key = self.check_and_fix_namespace(key=key)
-        ttl = self.get_ttl(**kwargs) or kwargs.get("ex", None)
+        ttl = self.get_ttl(**kwargs)
         nx = kwargs.get("nx", False)
         print_verbose(f"Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}")
 
