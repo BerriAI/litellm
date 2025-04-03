@@ -61,6 +61,7 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
         ## GET API URL
         api_base = watsonx_chat_transformation.get_complete_url(
             api_base=api_base,
+            api_key=api_key,
             model=model,
             optional_params=optional_params,
             litellm_params=litellm_params,

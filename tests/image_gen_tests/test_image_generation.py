@@ -167,7 +167,7 @@ class TestAzureOpenAIDalle3(BaseImageGenTest):
         litellm.set_verbose = True
         return {
             "model": "azure/dall-e-3-test",
-            "api_version": "2023-09-01-preview",
+            "api_version": "2023-12-01-preview",
             "metadata": {
                 "model_info": {
                     "base_model": "azure/dall-e-3",
