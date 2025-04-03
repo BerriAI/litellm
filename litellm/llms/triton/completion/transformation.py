@@ -7,6 +7,7 @@ from typing import Any, AsyncIterator, Dict, Iterator, List, Literal, Optional, 
 
 from httpx import Headers, Response
 
+from litellm.constants import DEFAULT_MAX_TOKENS_FOR_TRITON
 from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import (
@@ -196,7 +197,9 @@ class TritonGenerateConfig(TritonConfig):
         data_for_triton: Dict[str, Any] = {
             "text_input": prompt_factory(model=model, messages=messages),
             "parameters": {
-                "max_tokens": int(optional_params.get("max_tokens", 2000)),
+                "max_tokens": int(
+                    optional_params.get("max_tokens", DEFAULT_MAX_TOKENS_FOR_TRITON)
+                ),
                 "bad_words": [""],
                 "stop_words": [""],
             },

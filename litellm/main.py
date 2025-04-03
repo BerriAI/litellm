@@ -51,6 +51,10 @@ from litellm import (  # type: ignore
     get_litellm_params,
     get_optional_params,
 )
+from litellm.constants import (
+    DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
+    DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
+)
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_for_health_check
@@ -740,7 +744,12 @@ def mock_completion(
         setattr(
             model_response,
             "usage",
-            Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+            Usage(
+                prompt_tokens=DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
+                completion_tokens=DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
+                total_tokens=DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT
+                + DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
+            ),
         )
 
         try:
@@ -3067,7 +3076,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         "max_tokens": max_tokens,
                         "temperature": temperature,
                         "top_p": top_p,
-                        "top_k": kwargs.get("top_k", 40),
+                        "top_k": kwargs.get("top_k"),
                     },
                 },
             )
