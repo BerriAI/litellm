@@ -1950,6 +1950,7 @@ all_litellm_params = [
     "use_in_pass_through",
     "merge_reasoning_content_in_choices",
     "litellm_credential_name",
+    "allowed_openai_params",
 ] + list(StandardCallbackDynamicParams.__annotations__.keys())
 
 

@@ -1115,6 +1115,7 @@ def completion(  # type: ignore # noqa: PLR0915
             messages=messages,
             reasoning_effort=reasoning_effort,
             thinking=thinking,
+            allowed_openai_params=kwargs.get("allowed_openai_params"),
             **non_default_params,
         )
 
