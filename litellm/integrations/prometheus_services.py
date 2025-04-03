@@ -73,9 +73,7 @@ class PrometheusServicesLogger:
                         service_metrics.append(counter_total_requests)
 
                 if ServiceMetrics.GAUGE in metrics_to_initialize:
-                    gauge = self.create_gauge(
-                        service, type_of_request="pod_lock_manager"
-                    )
+                    gauge = self.create_gauge(service, type_of_request="size")
                     if gauge:
                         service_metrics.append(gauge)
 
@@ -95,12 +93,14 @@ class PrometheusServicesLogger:
     def _get_service_metrics_initialize(
         self, service: ServiceTypes
     ) -> List[ServiceMetrics]:
+        DEFAULT_METRICS = [ServiceMetrics.COUNTER, ServiceMetrics.GAUGE]
         if service not in DEFAULT_SERVICE_CONFIGS:
-            raise ValueError(f"Service {service} not found in DEFAULT_SERVICE_CONFIGS")
+            return DEFAULT_METRICS
 
         metrics = DEFAULT_SERVICE_CONFIGS.get(service, {}).get("metrics", [])
         if not metrics:
-            raise ValueError(f"No metrics found for service {service}")
+            verbose_logger.debug(f"No metrics found for service {service}")
+            return DEFAULT_METRICS
         return metrics
 
     def is_metric_registered(self, metric_name) -> bool:
