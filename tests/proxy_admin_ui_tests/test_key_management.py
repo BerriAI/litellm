@@ -907,143 +907,216 @@ async def test_list_key_helper(prisma_client):
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _list_key_helper,
     )
-
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        delete_key_fn,
+    )
+    import aiohttp
     # Setup - create multiple test keys
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     await litellm.proxy.proxy_server.prisma_client.connect()
+    
 
-    # Create test data
-    test_user_id = f"test_user_{uuid.uuid4()}"
-    test_team_id = f"test_team_{uuid.uuid4()}"
-    test_key_alias = f"test_alias_{uuid.uuid4()}"
+    base_url = "http://localhost:4000"
+    master_key = "sk-1234"  # This should match your proxy's master key
+    headers = {
+        "Authorization": f"Bearer {master_key}",
+        "Content-Type": "application/json"
+    }
 
-    # Create test data with clear patterns
-    test_keys = []
+    async with aiohttp.ClientSession() as session:
+        try:
+            # Create test data
+            test_user_id = f"test_user_{uuid.uuid4()}"
+            test_other_user_id = f"test_other_user_{uuid.uuid4()}"
+            test_team_id = f"test_team_{uuid.uuid4()}"
+            test_key_alias = f"test_alias_{uuid.uuid4()}"
 
-    # 1. Create 2 keys for test user + test team
-    for i in range(2):
-        key = await generate_key_fn(
-            data=GenerateKeyRequest(
+            user_data = {
+                "user_id": test_user_id,
+            }
+            other_user_data = {
+                "user_id": test_other_user_id,
+
+            }
+            team_data = {
+                "team_id": test_team_id,
+            }
+
+            async with session.post(
+                f"{base_url}/user/new", 
+                headers=headers, 
+                json=user_data
+            ) as response:
+                assert response.status == 200, f"Failed to create user: {await response.text()}"
+                user_response = await response.json()
+                print(f"Successfully created user: {test_user_id}")
+            
+            async with session.post(
+                f"{base_url}/user/new", 
+                headers=headers, 
+                json=other_user_data
+            ) as response:
+                assert response.status == 200, f"Failed to create user: {await response.text()}"
+                user_response = await response.json()
+                print(f"Successfully created user: {test_other_user_id}")
+
+            async with session.post(
+                f"{base_url}/team/new", 
+                headers=headers, 
+                json=team_data
+            ) as response:
+                assert response.status == 200, f"Failed to create team: {await response.text()}"
+                team_response = await response.json()
+                print(f"Successfully created team: {test_team_id}")
+
+            
+
+            # Create test data with clear patterns
+            test_keys = []
+
+            # 1. Create 2 keys for test user + test team
+            for i in range(2):
+                key = await generate_key_fn(
+                    data=GenerateKeyRequest(
+                        user_id=test_user_id,
+                        team_id=test_team_id,
+                        key_alias=f"team_key_{uuid.uuid4()}",  # Make unique with UUID
+                    ),
+                    user_api_key_dict=UserAPIKeyAuth(
+                        user_role=LitellmUserRoles.PROXY_ADMIN,
+                        api_key="sk-1234",
+                        user_id="admin",
+                    ),
+                )
+                test_keys.append(key)
+
+            # 2. Create 1 key for test user (no team)
+            key = await generate_key_fn(
+                data=GenerateKeyRequest(
+                    user_id=test_user_id,
+                    key_alias=test_key_alias,  # Already unique from earlier UUID generation
+                ),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                    api_key="sk-1234",
+                    user_id="admin",
+                ),
+            )
+            test_keys.append(key)
+
+            # 3. Create 2 keys for other users
+            for i in range(2):
+                key = await generate_key_fn(
+                    data=GenerateKeyRequest(
+                        user_id=test_other_user_id,
+                        key_alias=f"other_key_{uuid.uuid4()}",  # Make unique with UUID
+                    ),
+                    user_api_key_dict=UserAPIKeyAuth(
+                        user_role=LitellmUserRoles.PROXY_ADMIN,
+                        api_key="sk-1234",
+                        user_id="admin",
+                    ),
+                )
+                test_keys.append(key)
+
+            # Test 1: Basic pagination
+            result = await _list_key_helper(
+                prisma_client=prisma_client,
+                page=1,
+                size=2,
+                user_id=None,
+                team_id=None,
+                key_alias=None,
+                organization_id=None,
+            )
+            assert len(result["keys"]) == 2, "Should return exactly 2 keys"
+            assert result["total_count"] >= 5, "Should have at least 5 total keys"
+            assert result["current_page"] == 1
+            assert isinstance(result["keys"][0], str), "Should return token strings by default"
+
+            # Test 2: Filter by user_id
+            result = await _list_key_helper(
+                prisma_client=prisma_client,
+                page=1,
+                size=10,
                 user_id=test_user_id,
+                team_id=None,
+                key_alias=None,
+                organization_id=None,
+            )
+            assert len(result["keys"]) == 4, "Should return exactly 4 keys for test user (1 default key + 3 keys created)"
+
+            # Test 3: Filter by team_id
+            result = await _list_key_helper(
+                prisma_client=prisma_client,
+                page=1,
+                size=10,
+                user_id=None,
                 team_id=test_team_id,
-                key_alias=f"team_key_{uuid.uuid4()}",  # Make unique with UUID
-            ),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
-                user_id="admin",
-            ),
-        )
-        test_keys.append(key)
+                key_alias=None,
+                organization_id=None,
+            )
+            assert len(result["keys"]) == 2, "Should return exactly 2 keys for test team"
 
-    # 2. Create 1 key for test user (no team)
-    key = await generate_key_fn(
-        data=GenerateKeyRequest(
-            user_id=test_user_id,
-            key_alias=test_key_alias,  # Already unique from earlier UUID generation
-        ),
-        user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
-            user_id="admin",
-        ),
-    )
-    test_keys.append(key)
+            # Test 4: Filter by key_alias
+            result = await _list_key_helper(
+                prisma_client=prisma_client,
+                page=1,
+                size=10,
+                user_id=None,
+                team_id=None,
+                key_alias=test_key_alias,
+                organization_id=None,
+            )
+            assert len(result["keys"]) == 1, "Should return exactly 1 key with test alias"
 
-    # 3. Create 2 keys for other users
-    for i in range(2):
-        key = await generate_key_fn(
-            data=GenerateKeyRequest(
-                user_id=f"other_user_{i}",
-                key_alias=f"other_key_{uuid.uuid4()}",  # Make unique with UUID
-            ),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
-                user_id="admin",
-            ),
-        )
-        test_keys.append(key)
+            # Test 5: Return full object
+            result = await _list_key_helper(
+                prisma_client=prisma_client,
+                page=1,
+                size=10,
+                user_id=test_user_id,
+                team_id=None,
+                key_alias=None,
+                return_full_object=True,
+                organization_id=None,
+            )
+            assert all(
+                isinstance(key, UserAPIKeyAuth) for key in result["keys"]
+            ), "Should return UserAPIKeyAuth objects"
+            assert len(result["keys"]) == 4, "Should return exactly 4 keys for test user (1 default key + 3 keys created)"
 
-    # Test 1: Basic pagination
-    result = await _list_key_helper(
-        prisma_client=prisma_client,
-        page=1,
-        size=2,
-        user_id=None,
-        team_id=None,
-        key_alias=None,
-        organization_id=None,
-    )
-    assert len(result["keys"]) == 2, "Should return exactly 2 keys"
-    assert result["total_count"] >= 5, "Should have at least 5 total keys"
-    assert result["current_page"] == 1
-    assert isinstance(result["keys"][0], str), "Should return token strings by default"
+            # Clean up test keys
+            for key in test_keys:
+                await delete_key_fn(
+                    data=KeyRequest(keys=[key.key]),
+                    user_api_key_dict=UserAPIKeyAuth(
+                        user_role=LitellmUserRoles.PROXY_ADMIN,
+                        api_key="sk-1234",
+                        user_id="admin",
+                    ),
+                )
+        finally:
+            async with session.post(
+                f"{base_url}/user/delete", 
+                headers=headers,
+                json={"user_ids": [test_user_id]}
+            ) as response:
+                if response.status == 200:
+                    print(f"Successfully deleted user: {test_user_id}")
+                else:
+                    print(f"Warning: Failed to delete user: {await response.text()}") 
 
-    # Test 2: Filter by user_id
-    result = await _list_key_helper(
-        prisma_client=prisma_client,
-        page=1,
-        size=10,
-        user_id=test_user_id,
-        team_id=None,
-        key_alias=None,
-        organization_id=None,
-    )
-    assert len(result["keys"]) == 3, "Should return exactly 3 keys for test user"
-
-    # Test 3: Filter by team_id
-    result = await _list_key_helper(
-        prisma_client=prisma_client,
-        page=1,
-        size=10,
-        user_id=None,
-        team_id=test_team_id,
-        key_alias=None,
-        organization_id=None,
-    )
-    assert len(result["keys"]) == 2, "Should return exactly 2 keys for test team"
-
-    # Test 4: Filter by key_alias
-    result = await _list_key_helper(
-        prisma_client=prisma_client,
-        page=1,
-        size=10,
-        user_id=None,
-        team_id=None,
-        key_alias=test_key_alias,
-        organization_id=None,
-    )
-    assert len(result["keys"]) == 1, "Should return exactly 1 key with test alias"
-
-    # Test 5: Return full object
-    result = await _list_key_helper(
-        prisma_client=prisma_client,
-        page=1,
-        size=10,
-        user_id=test_user_id,
-        team_id=None,
-        key_alias=None,
-        return_full_object=True,
-        organization_id=None,
-    )
-    assert all(
-        isinstance(key, UserAPIKeyAuth) for key in result["keys"]
-    ), "Should return UserAPIKeyAuth objects"
-    assert len(result["keys"]) == 3, "Should return exactly 3 keys for test user"
-
-    # Clean up test keys
-    for key in test_keys:
-        await delete_key_fn(
-            data=KeyRequest(keys=[key.key]),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
-                user_id="admin",
-            ),
-        )
-
+            async with session.post(
+                f"{base_url}/team/delete", 
+                headers=headers,
+                json={"team_ids": [test_team_id]}
+            ) as response:
+                if response.status == 200:
+                    print(f"Successfully deleted team: {test_team_id}")
+                else:
+                    print(f"Warning: Failed to delete team: {await response.text()}")
 
 @pytest.mark.asyncio
 async def test_list_key_helper_team_filtering(prisma_client):
