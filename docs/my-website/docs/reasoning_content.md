@@ -48,7 +48,7 @@ response = completion(
   messages=[
     {"role": "user", "content": "What is the capital of France?"},
   ],
-  thinking={"type": "enabled", "budget_tokens": 1024} # 👈 REQUIRED FOR ANTHROPIC models (on `anthropic/`, `bedrock/`, `vertexai/`)
+  reasoning_effort="low", 
 )
 print(response.choices[0].message.content)
 ```
@@ -68,7 +68,7 @@ curl http://0.0.0.0:4000/v1/chat/completions \
         "content": "What is the capital of France?"
       }
     ],
-    "thinking": {"type": "enabled", "budget_tokens": 1024}
+    "reasoning_effort": "low"
 }'
 ```
 </TabItem>
@@ -150,7 +150,7 @@ response = litellm.completion(
     messages=messages,
     tools=tools,
     tool_choice="auto",  # auto is default, but we'll be explicit
-    thinking={"type": "enabled", "budget_tokens": 1024},
+    reasoning_effort="low",
 )
 print("Response\n", response)
 response_message = response.choices[0].message
@@ -198,9 +198,9 @@ if tool_calls:
         model=model,
         messages=messages,
         seed=22,
+        reasoning_effort="low",
         # tools=tools,
         drop_params=True,
-        thinking={"type": "enabled", "budget_tokens": 1024},
     )  # get a new response from the model where it can see the function response
     print("second response\n", second_response)
 ```
@@ -340,7 +340,7 @@ litellm.drop_params = True # 👈 EITHER GLOBALLY or per request
 response = litellm.completion(
   model="anthropic/claude-3-7-sonnet-20250219",
   messages=[{"role": "user", "content": "What is the capital of France?"}],
-  thinking={"type": "enabled", "budget_tokens": 1024},
+  reasoning_effort="low",
   drop_params=True,
 )
 
@@ -348,7 +348,7 @@ response = litellm.completion(
 response = litellm.completion(
   model="deepseek/deepseek-chat",
   messages=[{"role": "user", "content": "What is the capital of France?"}],
-  thinking={"type": "enabled", "budget_tokens": 1024},
+  reasoning_effort="low",
   drop_params=True,
 )
 ```
@@ -364,3 +364,36 @@ These fields can be accessed via `response.choices[0].message.reasoning_content`
   - `thinking` - str: The thinking from the model.
   - `signature` - str: The signature delta from the model.
 
+
+
+## Pass `thinking` to Anthropic models
+
+You can also pass the `thinking` parameter to Anthropic models.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+response = litellm.completion(
+  model="anthropic/claude-3-7-sonnet-20250219",
+  messages=[{"role": "user", "content": "What is the capital of France?"}],
+  thinking={"type": "enabled", "budget_tokens": 1024},
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "anthropic/claude-3-7-sonnet-20250219",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "thinking": {"type": "enabled", "budget_tokens": 1024}
+  }'
+```
+
+</TabItem>
+</Tabs>

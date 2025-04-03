@@ -1481,9 +1481,9 @@ class OpenAIFilesAPI(BaseLLM):
         self,
         create_file_data: CreateFileRequest,
         openai_client: AsyncOpenAI,
-    ) -> FileObject:
+    ) -> OpenAIFileObject:
         response = await openai_client.files.create(**create_file_data)
-        return response
+        return OpenAIFileObject(**response.model_dump())
 
     def create_file(
         self,
@@ -1495,7 +1495,7 @@ class OpenAIFilesAPI(BaseLLM):
         max_retries: Optional[int],
         organization: Optional[str],
         client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
-    ) -> Union[FileObject, Coroutine[Any, Any, FileObject]]:
+    ) -> Union[OpenAIFileObject, Coroutine[Any, Any, OpenAIFileObject]]:
         openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
@@ -1518,8 +1518,8 @@ class OpenAIFilesAPI(BaseLLM):
             return self.acreate_file(  # type: ignore
                 create_file_data=create_file_data, openai_client=openai_client
             )
-        response = openai_client.files.create(**create_file_data)
-        return response
+        response = cast(OpenAI, openai_client).files.create(**create_file_data)
+        return OpenAIFileObject(**response.model_dump())
 
     async def afile_content(
         self,
