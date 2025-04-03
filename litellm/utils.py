@@ -57,6 +57,8 @@ import litellm._service_logger  # for storing API inputs, outputs, and metadata
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.audio_utils.utils
 import litellm.litellm_core_utils.json_validation_rule
+import litellm.llms
+import litellm.llms.gemini
 from litellm.caching._internal_lru_cache import lru_cache_wrapper
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
@@ -207,6 +209,7 @@ from litellm.llms.base_llm.base_utils import (
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
+from litellm.llms.base_llm.files.transformation import BaseFilesConfig
 from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
 )
@@ -1259,6 +1262,7 @@ def client(original_function):  # noqa: PLR0915
                 logging_obj, kwargs = function_setup(
                     original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
+
             kwargs["litellm_logging_obj"] = logging_obj
             ## LOAD CREDENTIALS
             load_credentials_from_list(kwargs)
@@ -2624,7 +2628,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             non_default_params=non_default_params, optional_params={}, kwargs=kwargs
         )
         return optional_params
-    elif custom_llm_provider == "vertex_ai":
+    elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "gemini":
         supported_params = get_supported_openai_params(
             model=model,
             custom_llm_provider="vertex_ai",
@@ -5901,9 +5905,10 @@ class ModelResponseIterator:
 
 
 class ModelResponseListIterator:
-    def __init__(self, model_responses):
+    def __init__(self, model_responses, delay: Optional[float] = None):
         self.model_responses = model_responses
         self.index = 0
+        self.delay = delay
 
     # Sync iterator
     def __iter__(self):
@@ -5914,6 +5919,8 @@ class ModelResponseListIterator:
             raise StopIteration
         model_response = self.model_responses[self.index]
         self.index += 1
+        if self.delay:
+            time.sleep(self.delay)
         return model_response
 
     # Async iterator
@@ -5925,6 +5932,8 @@ class ModelResponseListIterator:
             raise StopAsyncIteration
         model_response = self.model_responses[self.index]
         self.index += 1
+        if self.delay:
+            await asyncio.sleep(self.delay)
         return model_response
 
 
@@ -6419,6 +6428,19 @@ class ProviderConfigManager:
             return litellm.OpenAIImageVariationConfig()
         elif LlmProviders.TOPAZ == provider:
             return litellm.TopazImageVariationConfig()
+        return None
+
+    @staticmethod
+    def get_provider_files_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseFilesConfig]:
+        if LlmProviders.GEMINI == provider:
+            from litellm.llms.gemini.files.transformation import (
+                GoogleAIStudioFilesHandler,  # experimental approach, to reduce bloat on __init__.py
+            )
+
+            return GoogleAIStudioFilesHandler()
         return None
 
 
