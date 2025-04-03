@@ -2394,6 +2394,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 or litellm.api_key
                 or litellm.openrouter_key
                 or get_secret("OPENROUTER_API_KEY")
+                or get_secret("OR_API_KEY")
             )
 
             openrouter_site_url = get_secret("OR_SITE_URL") or "https://litellm.ai"
