@@ -32,6 +32,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
 )
 from litellm.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.llms.openai import OpenAIFileObject, OpenAIFilesPurpose
 
@@ -104,6 +105,53 @@ def is_known_model(model: Optional[str], llm_router: Optional[Router]) -> bool:
         is_in_list = True
 
     return is_in_list
+
+
+async def _deprecated_loadbalanced_create_file(
+    llm_router: Optional[Router],
+    router_model: str,
+    _create_file_request: CreateFileRequest,
+) -> OpenAIFileObject:
+    if llm_router is None:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "LLM Router not initialized. Ensure models added to proxy."
+            },
+        )
+
+    response = await llm_router.acreate_file(model=router_model, **_create_file_request)
+    return response
+
+
+async def create_file_for_each_model(
+    llm_router: Optional[Router],
+    _create_file_request: CreateFileRequest,
+    target_model_names_list: List[str],
+    purpose: OpenAIFilesPurpose,
+    proxy_logging_obj: ProxyLogging,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> OpenAIFileObject:
+    if llm_router is None:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "LLM Router not initialized. Ensure models added to proxy."
+            },
+        )
+    responses = []
+    for model in target_model_names_list:
+        individual_response = await llm_router.acreate_file(
+            model=model, **_create_file_request
+        )
+        responses.append(individual_response)
+    response = await _PROXY_LiteLLMManagedFiles.return_unified_file_id(
+        file_objects=responses,
+        purpose=purpose,
+        internal_usage_cache=proxy_logging_obj.internal_usage_cache,
+        litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+    )
+    return response
 
 
 @router.post(
@@ -218,36 +266,19 @@ async def create_file(
             and is_router_model
             and router_model is not None
         ):
-            if llm_router is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail={
-                        "error": "LLM Router not initialized. Ensure models added to proxy."
-                    },
-                )
-
-            response = await llm_router.acreate_file(
-                model=router_model, **_create_file_request
+            response = await _deprecated_loadbalanced_create_file(
+                llm_router=llm_router,
+                router_model=router_model,
+                _create_file_request=_create_file_request,
             )
         elif target_model_names_list:
-            if llm_router is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail={
-                        "error": "LLM Router not initialized. Ensure models added to proxy."
-                    },
-                )
-            responses = []
-            for model in target_model_names_list:
-                individual_response = await llm_router.acreate_file(
-                    model=model, **_create_file_request
-                )
-                responses.append(individual_response)
-            response = await _PROXY_LiteLLMManagedFiles.return_unified_file_id(
-                file_objects=responses,
+            response = await create_file_for_each_model(
+                llm_router=llm_router,
+                _create_file_request=_create_file_request,
+                target_model_names_list=target_model_names_list,
                 purpose=purpose,
-                internal_usage_cache=proxy_logging_obj.internal_usage_cache,
-                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=user_api_key_dict,
             )
         else:
             # get configs for custom_llm_provider
