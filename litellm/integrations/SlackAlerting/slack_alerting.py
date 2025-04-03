@@ -16,6 +16,7 @@ import litellm.litellm_core_utils.litellm_logging
 import litellm.types
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.constants import HOURS_IN_A_DAY
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.exception_mapping_utils import (
@@ -195,12 +196,15 @@ class SlackAlerting(CustomBatchLogger):
         if self.alerting is None or self.alert_types is None:
             return
 
-        time_difference_float, model, api_base, messages = (
-            self._response_taking_too_long_callback_helper(
-                kwargs=kwargs,
-                start_time=start_time,
-                end_time=end_time,
-            )
+        (
+            time_difference_float,
+            model,
+            api_base,
+            messages,
+        ) = self._response_taking_too_long_callback_helper(
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
         )
         if litellm.turn_off_message_logging or litellm.redact_messages_in_exceptions:
             messages = "Message not logged. litellm.redact_messages_in_exceptions=True"
@@ -646,10 +650,10 @@ class SlackAlerting(CustomBatchLogger):
                 event_message += (
                     f"Budget Crossed\n Total Budget:`{user_info.max_budget}`"
                 )
-            elif percent_left <= 0.05:
+            elif percent_left <= SLACK_ALERTING_THRESHOLD_5_PERCENT:
                 event = "threshold_crossed"
                 event_message += "5% Threshold Crossed "
-            elif percent_left <= 0.15:
+            elif percent_left <= SLACK_ALERTING_THRESHOLD_15_PERCENT:
                 event = "threshold_crossed"
                 event_message += "15% Threshold Crossed"
         elif user_info.soft_budget is not None:
@@ -819,9 +823,9 @@ class SlackAlerting(CustomBatchLogger):
         ### UNIQUE CACHE KEY ###
         cache_key = provider + region_name
 
-        outage_value: Optional[ProviderRegionOutageModel] = (
-            await self.internal_usage_cache.async_get_cache(key=cache_key)
-        )
+        outage_value: Optional[
+            ProviderRegionOutageModel
+        ] = await self.internal_usage_cache.async_get_cache(key=cache_key)
 
         if (
             getattr(exception, "status_code", None) is None
@@ -1402,9 +1406,9 @@ Model Info:
             self.alert_to_webhook_url is not None
             and alert_type in self.alert_to_webhook_url
         ):
-            slack_webhook_url: Optional[Union[str, List[str]]] = (
-                self.alert_to_webhook_url[alert_type]
-            )
+            slack_webhook_url: Optional[
+                Union[str, List[str]]
+            ] = self.alert_to_webhook_url[alert_type]
         elif self.default_webhook_url is not None:
             slack_webhook_url = self.default_webhook_url
         else:
@@ -1715,7 +1719,7 @@ Model Info:
             await self.internal_usage_cache.async_set_cache(
                 key=_event_cache_key,
                 value="SENT",
-                ttl=(30 * 24 * 60 * 60),  # 1 month
+                ttl=(30 * HOURS_IN_A_DAY * 60 * 60),  # 1 month
             )
 
         except Exception as e:
@@ -1768,7 +1772,6 @@ Model Info:
         - Team Created, Updated, Deleted
         """
         try:
-
             message = f"`{event_name}`\n"
 
             key_event_dict = key_event.model_dump()

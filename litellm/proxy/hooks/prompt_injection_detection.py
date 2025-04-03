@@ -15,6 +15,7 @@ from fastapi import HTTPException
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.constants import DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.factory import (
     prompt_injection_detection_default_pt,
@@ -110,7 +111,9 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
         return combinations
 
     def check_user_input_similarity(
-        self, user_input: str, similarity_threshold: float = 0.7
+        self,
+        user_input: str,
+        similarity_threshold: float = DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD,
     ) -> bool:
         user_input_lower = user_input.lower()
         keywords = self.generate_injection_keywords()
@@ -196,7 +199,6 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             return data
 
         except HTTPException as e:
-
             if (
                 e.status_code == 400
                 and isinstance(e.detail, dict)

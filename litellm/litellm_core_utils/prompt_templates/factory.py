@@ -22,6 +22,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
     ChatCompletionAssistantToolCall,
+    ChatCompletionFileObject,
     ChatCompletionFunctionMessage,
     ChatCompletionImageObject,
     ChatCompletionTextObject,
@@ -166,76 +167,108 @@ def convert_to_ollama_image(openai_image_url: str):
         )
 
 
+def _handle_ollama_system_message(
+    messages: list, prompt: str, msg_i: int
+) -> Tuple[str, int]:
+    system_content_str = ""
+    ## MERGE CONSECUTIVE SYSTEM CONTENT ##
+    while msg_i < len(messages) and messages[msg_i]["role"] == "system":
+        msg_content = convert_content_list_to_str(messages[msg_i])
+        system_content_str += msg_content
+
+        msg_i += 1
+
+    return system_content_str, msg_i
+
+
 def ollama_pt(
-    model, messages
+    model: str, messages: list
 ) -> Union[
     str, OllamaVisionModelObject
 ]:  # https://github.com/ollama/ollama/blob/af4cf55884ac54b9e637cd71dadfe9b7a5685877/docs/modelfile.md#template
-    if "instruct" in model:
-        prompt = custom_prompt(
-            role_dict={
-                "system": {"pre_message": "### System:\n", "post_message": "\n"},
-                "user": {
-                    "pre_message": "### User:\n",
-                    "post_message": "\n",
-                },
-                "assistant": {
-                    "pre_message": "### Response:\n",
-                    "post_message": "\n",
-                },
-            },
-            final_prompt_value="### Response:",
-            messages=messages,
+    user_message_types = {"user", "tool", "function"}
+    msg_i = 0
+    images = []
+    prompt = ""
+    while msg_i < len(messages):
+        init_msg_i = msg_i
+        user_content_str = ""
+        ## MERGE CONSECUTIVE USER CONTENT ##
+        while msg_i < len(messages) and messages[msg_i]["role"] in user_message_types:
+            msg_content = messages[msg_i].get("content")
+            if msg_content:
+                if isinstance(msg_content, list):
+                    for m in msg_content:
+                        if m.get("type", "") == "image_url":
+                            if isinstance(m["image_url"], str):
+                                images.append(m["image_url"])
+                            elif isinstance(m["image_url"], dict):
+                                images.append(m["image_url"]["url"])
+                        elif m.get("type", "") == "text":
+                            user_content_str += m["text"]
+                else:
+                    # Tool message content will always be a string
+                    user_content_str += msg_content
+
+            msg_i += 1
+
+        if user_content_str:
+            prompt += f"### User:\n{user_content_str}\n\n"
+
+        system_content_str, msg_i = _handle_ollama_system_message(
+            messages, prompt, msg_i
         )
-    elif "llava" in model:
-        prompt = ""
-        images = []
-        for message in messages:
-            if isinstance(message["content"], str):
-                prompt += message["content"]
-            elif isinstance(message["content"], list):
-                # see https://docs.litellm.ai/docs/providers/openai#openai-vision-models
-                for element in message["content"]:
-                    if isinstance(element, dict):
-                        if element["type"] == "text":
-                            prompt += element["text"]
-                        elif element["type"] == "image_url":
-                            base64_image = convert_to_ollama_image(
-                                element["image_url"]["url"]
-                            )
-                            images.append(base64_image)
-        return {"prompt": prompt, "images": images}
-    else:
-        prompt = ""
-        for message in messages:
-            role = message["role"]
-            content = message.get("content", "")
+        if system_content_str:
+            prompt += f"### System:\n{system_content_str}\n\n"
 
-            if "tool_calls" in message:
-                tool_calls = []
+        assistant_content_str = ""
+        ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
+        while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
+            assistant_content_str += convert_content_list_to_str(messages[msg_i])
+            msg_i += 1
 
-                for call in message["tool_calls"]:
+            tool_calls = messages[msg_i].get("tool_calls")
+            ollama_tool_calls = []
+            if tool_calls:
+                for call in tool_calls:
                     call_id: str = call["id"]
                     function_name: str = call["function"]["name"]
                     arguments = json.loads(call["function"]["arguments"])
 
-                    tool_calls.append(
+                    ollama_tool_calls.append(
                         {
                             "id": call_id,
                             "type": "function",
-                            "function": {"name": function_name, "arguments": arguments},
+                            "function": {
+                                "name": function_name,
+                                "arguments": arguments,
+                            },
                         }
                     )
 
-                prompt += f"### Assistant:\nTool Calls: {json.dumps(tool_calls, indent=2)}\n\n"
+            if ollama_tool_calls:
+                assistant_content_str += (
+                    f"Tool Calls: {json.dumps(ollama_tool_calls, indent=2)}"
+                )
 
-            elif "tool_call_id" in message:
-                prompt += f"### User:\n{message['content']}\n\n"
+            msg_i += 1
 
-            elif content:
-                prompt += f"### {role.capitalize()}:\n{content}\n\n"
+        if assistant_content_str:
+            prompt += f"### Assistant:\n{assistant_content_str}\n\n"
 
-    return prompt
+        if msg_i == init_msg_i:  # prevent infinite loops
+            raise litellm.BadRequestError(
+                message=BAD_MESSAGE_ERROR_STR + f"passed in {messages[msg_i]}",
+                model=model,
+                llm_provider="ollama",
+            )
+
+    response_dict: OllamaVisionModelObject = {
+        "prompt": prompt,
+        "images": images,
+    }
+
+    return response_dict
 
 
 def mistral_instruct_pt(messages):
@@ -1010,10 +1043,10 @@ def convert_to_gemini_tool_call_invoke(
         if tool_calls is not None:
             for tool in tool_calls:
                 if "function" in tool:
-                    gemini_function_call: Optional[VertexFunctionCall] = (
-                        _gemini_tool_call_invoke_helper(
-                            function_call_params=tool["function"]
-                        )
+                    gemini_function_call: Optional[
+                        VertexFunctionCall
+                    ] = _gemini_tool_call_invoke_helper(
+                        function_call_params=tool["function"]
                     )
                     if gemini_function_call is not None:
                         _parts_list.append(
@@ -1400,9 +1433,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
 
                             if "cache_control" in _content_element:
-                                _anthropic_content_element["cache_control"] = (
-                                    _content_element["cache_control"]
-                                )
+                                _anthropic_content_element[
+                                    "cache_control"
+                                ] = _content_element["cache_control"]
                             user_content.append(_anthropic_content_element)
                         elif m.get("type", "") == "text":
                             m = cast(ChatCompletionTextObject, m)
@@ -1423,6 +1456,25 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             user_content.append(_content_element)
                         elif m.get("type", "") == "document":
                             user_content.append(cast(AnthropicMessagesDocumentParam, m))
+                        elif m.get("type", "") == "file":
+                            file_message = cast(ChatCompletionFileObject, m)
+                            file_data = file_message["file"].get("file_data")
+                            if file_data:
+                                image_chunk = convert_to_anthropic_image_obj(
+                                    openai_image_url=file_data,
+                                    format=file_message["file"].get("format"),
+                                )
+                                anthropic_document_param = (
+                                    AnthropicMessagesDocumentParam(
+                                        type="document",
+                                        source=AnthropicContentParamSource(
+                                            type="base64",
+                                            media_type=image_chunk["media_type"],
+                                            data=image_chunk["data"],
+                                        ),
+                                    )
+                                )
+                                user_content.append(anthropic_document_param)
                 elif isinstance(user_message_types_block["content"], str):
                     _anthropic_content_text_element: AnthropicMessagesTextParam = {
                         "type": "text",
@@ -1434,9 +1486,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     )
 
                     if "cache_control" in _content_element:
-                        _anthropic_content_text_element["cache_control"] = (
-                            _content_element["cache_control"]
-                        )
+                        _anthropic_content_text_element[
+                            "cache_control"
+                        ] = _content_element["cache_control"]
 
                     user_content.append(_anthropic_content_text_element)
 
@@ -1501,7 +1553,6 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     "content"
                 ]  # don't pass empty text blocks. anthropic api raises errors.
             ):
-
                 _anthropic_text_content_element = AnthropicMessagesTextParam(
                     type="text",
                     text=assistant_content_block["content"],
@@ -1537,7 +1588,6 @@ def anthropic_messages_pt(  # noqa: PLR0915
             msg_i += 1
 
         if assistant_content:
-
             new_messages.append({"role": "assistant", "content": assistant_content})
 
         if msg_i == init_msg_i:  # prevent infinite loops
@@ -2213,7 +2263,6 @@ class BedrockImageProcessor:
     @staticmethod
     async def get_image_details_async(image_url) -> Tuple[str, str]:
         try:
-
             client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.PromptFactory,
                 params={"concurrent_limit": 1},
@@ -2580,7 +2629,6 @@ def get_user_message_block_or_continue_message(
         for item in modified_content_block:
             # Check if the list is empty
             if item["type"] == "text":
-
                 if not item["text"].strip():
                     # Replace empty text with continue message
                     _user_continue_message = ChatCompletionUserMessage(
@@ -2857,6 +2905,11 @@ class BedrockConverseMessagesProcessor:
                                     image_url=image_url, format=format
                                 )
                                 _parts.append(_part)  # type: ignore
+                            elif element["type"] == "file":
+                                _part = await BedrockConverseMessagesProcessor._async_process_file_message(
+                                    message=cast(ChatCompletionFileObject, element)
+                                )
+                                _parts.append(_part)
                             _cache_point_block = (
                                 litellm.AmazonConverseConfig()._get_cache_point_block(
                                     message_block=cast(
@@ -3026,6 +3079,45 @@ class BedrockConverseMessagesProcessor:
             reasoning_content_blocks.append(bedrock_content_block)
         return reasoning_content_blocks
 
+    @staticmethod
+    def _process_file_message(message: ChatCompletionFileObject) -> BedrockContentBlock:
+        file_message = message["file"]
+        file_data = file_message.get("file_data")
+        file_id = file_message.get("file_id")
+
+        if file_data is None and file_id is None:
+            raise litellm.BadRequestError(
+                message="file_data and file_id cannot both be None. Got={}".format(
+                    message
+                ),
+                model="",
+                llm_provider="bedrock",
+            )
+        format = file_message.get("format")
+        return BedrockImageProcessor.process_image_sync(
+            image_url=cast(str, file_id or file_data), format=format
+        )
+
+    @staticmethod
+    async def _async_process_file_message(
+        message: ChatCompletionFileObject,
+    ) -> BedrockContentBlock:
+        file_message = message["file"]
+        file_data = file_message.get("file_data")
+        file_id = file_message.get("file_id")
+        format = file_message.get("format")
+        if file_data is None and file_id is None:
+            raise litellm.BadRequestError(
+                message="file_data and file_id cannot both be None. Got={}".format(
+                    message
+                ),
+                model="",
+                llm_provider="bedrock",
+            )
+        return await BedrockImageProcessor.process_image_async(
+            image_url=cast(str, file_id or file_data), format=format
+        )
+
 
 def _bedrock_converse_messages_pt(  # noqa: PLR0915
     messages: List,
@@ -3098,6 +3190,13 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                 format=format,
                             )
                             _parts.append(_part)  # type: ignore
+                        elif element["type"] == "file":
+                            _part = (
+                                BedrockConverseMessagesProcessor._process_file_message(
+                                    message=cast(ChatCompletionFileObject, element)
+                                )
+                            )
+                            _parts.append(_part)
                         _cache_point_block = (
                             litellm.AmazonConverseConfig()._get_cache_point_block(
                                 message_block=cast(
@@ -3175,7 +3274,6 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
         assistant_content: List[BedrockContentBlock] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
-
             assistant_message_block = get_assistant_message_block_or_continue_message(
                 message=messages[msg_i],
                 assistant_continue_message=assistant_continue_message,
@@ -3378,7 +3476,6 @@ def response_schema_prompt(model: str, response_schema: dict) -> str:
         {"role": "user", "content": "{}".format(response_schema)}
     ]
     if f"{model}/response_schema_prompt" in litellm.custom_prompt_dict:
-
         custom_prompt_details = litellm.custom_prompt_dict[
             f"{model}/response_schema_prompt"
         ]  # allow user to define custom response schema prompt by model

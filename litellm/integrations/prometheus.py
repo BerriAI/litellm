@@ -988,9 +988,9 @@ class PrometheusLogger(CustomLogger):
     ):
         try:
             verbose_logger.debug("setting remaining tokens requests metric")
-            standard_logging_payload: Optional[StandardLoggingPayload] = (
-                request_kwargs.get("standard_logging_object")
-            )
+            standard_logging_payload: Optional[
+                StandardLoggingPayload
+            ] = request_kwargs.get("standard_logging_object")
 
             if standard_logging_payload is None:
                 return

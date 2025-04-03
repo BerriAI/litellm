@@ -303,6 +303,24 @@ def test_aget_valid_models():
     os.environ = old_environ
 
 
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "anthropic", "xai"])
+def test_get_valid_models_with_custom_llm_provider(custom_llm_provider):
+    from litellm.utils import ProviderConfigManager
+    from litellm.types.utils import LlmProviders
+
+    provider_config = ProviderConfigManager.get_provider_model_info(
+        model=None,
+        provider=LlmProviders(custom_llm_provider),
+    )
+    assert provider_config is not None
+    valid_models = get_valid_models(
+        check_provider_endpoint=True, custom_llm_provider=custom_llm_provider
+    )
+    print(valid_models)
+    assert len(valid_models) > 0
+    assert provider_config.get_models() == valid_models
+
+
 # test_get_valid_models()
 
 
@@ -473,6 +491,25 @@ def test_token_counter():
 def test_supports_function_calling(model, expected_bool):
     try:
         assert litellm.supports_function_calling(model=model) == expected_bool
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize(
+    "model, expected_bool",
+    [
+        ("gpt-4o-mini-search-preview", True),
+        ("openai/gpt-4o-mini-search-preview", True),
+        ("gpt-4o-search-preview", True),
+        ("openai/gpt-4o-search-preview", True),
+        ("groq/deepseek-r1-distill-llama-70b", False),
+        ("groq/llama-3.3-70b-versatile", False),
+        ("codestral/codestral-latest", False),
+    ],
+)
+def test_supports_web_search(model, expected_bool):
+    try:
+        assert litellm.supports_web_search(model=model) == expected_bool
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -1094,6 +1131,26 @@ def test_is_base64_encoded_2():
     [
         ([{"role": "user", "content": "hi"}], True),
         ([{"role": "user", "content": [{"type": "text", "text": "hi"}]}], True),
+        (
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "file",
+                            "file": {
+                                "file_id": "123",
+                                "file_name": "test.txt",
+                                "file_size": 100,
+                                "file_type": "text/plain",
+                                "file_url": "https://example.com/test.txt",
+                            },
+                        }
+                    ],
+                }
+            ],
+            True,
+        ),
         (
             [
                 {
@@ -2035,3 +2092,13 @@ def test_delta_object():
     assert delta.role == "user"
     assert not hasattr(delta, "thinking_blocks")
     assert not hasattr(delta, "reasoning_content")
+
+
+def test_get_provider_audio_transcription_config():
+    from litellm.utils import ProviderConfigManager
+    from litellm.types.utils import LlmProviders
+
+    for provider in LlmProviders:
+        config = ProviderConfigManager.get_provider_audio_transcription_config(
+            model="whisper-1", provider=provider
+        )

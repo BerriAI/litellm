@@ -77,6 +77,16 @@ def convert_content_list_to_str(message: AllMessageValues) -> str:
     return texts
 
 
+def get_str_from_messages(messages: List[AllMessageValues]) -> str:
+    """
+    Converts a list of messages to a string
+    """
+    text = ""
+    for message in messages:
+        text += convert_content_list_to_str(message=message)
+    return text
+
+
 def is_non_content_values_set(message: AllMessageValues) -> bool:
     ignore_keys = ["content", "role", "name"]
     return any(
@@ -247,7 +257,6 @@ def _insert_assistant_continue_message(
             and message.get("role") == "user"  # Current is user
             and messages[i + 1].get("role") == "user"
         ):  # Next is user
-
             # Insert assistant message
             continue_message = (
                 assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE

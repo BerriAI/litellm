@@ -1,5 +1,6 @@
 import asyncio
 import collections.abc
+import datetime
 import json
 import threading
 import time
@@ -84,9 +85,9 @@ class CustomStreamWrapper:
 
         self.system_fingerprint: Optional[str] = None
         self.received_finish_reason: Optional[str] = None
-        self.intermittent_finish_reason: Optional[str] = (
-            None  # finish reasons that show up mid-stream
-        )
+        self.intermittent_finish_reason: Optional[
+            str
+        ] = None  # finish reasons that show up mid-stream
         self.special_tokens = [
             "<|assistant|>",
             "<|system|>",
@@ -591,7 +592,10 @@ class CustomStreamWrapper:
                 if isinstance(chunk, bytes):
                     chunk = chunk.decode("utf-8")
                 if "text_output" in chunk:
-                    response = chunk.replace("data: ", "").strip()
+                    response = (
+                        CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
+                    )
+                    response = response.strip()
                     parsed_response = json.loads(response)
                 else:
                     return {
@@ -750,6 +754,10 @@ class CustomStreamWrapper:
                 "provider_specific_fields" in response_obj
                 and response_obj["provider_specific_fields"] is not None
             )
+            or (
+                "annotations" in model_response.choices[0].delta
+                and model_response.choices[0].delta.annotations is not None
+            )
         ):
             return True
         else:
@@ -761,7 +769,6 @@ class CustomStreamWrapper:
         model_response: ModelResponseStream,
         response_obj: Dict[str, Any],
     ):
-
         print_verbose(
             f"completion_obj: {completion_obj}, model_response.choices[0]: {model_response.choices[0]}, response_obj: {response_obj}"
         )
@@ -849,6 +856,8 @@ class CustomStreamWrapper:
                     return model_response
 
                 # Default - return StopIteration
+                if hasattr(model_response, "usage"):
+                    self.chunks.append(model_response)
                 raise StopIteration
             # flush any remaining holding chunk
             if len(self.holding_chunk) > 0:
@@ -888,7 +897,6 @@ class CustomStreamWrapper:
             and model_response.choices[0].delta.audio is not None
         ):
             return model_response
-
         else:
             if hasattr(model_response, "usage"):
                 self.chunks.append(model_response)
@@ -954,7 +962,6 @@ class CustomStreamWrapper:
                 self.custom_llm_provider
                 and self.custom_llm_provider in litellm._custom_providers
             ):
-
                 if self.received_finish_reason is not None:
                     if "provider_specific_fields" not in chunk:
                         raise StopIteration
@@ -1320,9 +1327,9 @@ class CustomStreamWrapper:
                             _json_delta = delta.model_dump()
                             print_verbose(f"_json_delta: {_json_delta}")
                             if "role" not in _json_delta or _json_delta["role"] is None:
-                                _json_delta["role"] = (
-                                    "assistant"  # mistral's api returns role as None
-                                )
+                                _json_delta[
+                                    "role"
+                                ] = "assistant"  # mistral's api returns role as None
                             if "tool_calls" in _json_delta and isinstance(
                                 _json_delta["tool_calls"], list
                             ):
@@ -1416,6 +1423,24 @@ class CustomStreamWrapper:
         """
         self.logging_loop = loop
 
+    def cache_streaming_response(self, processed_chunk, cache_hit: bool):
+        """
+        Caches the streaming response
+        """
+        if not cache_hit and self.logging_obj._llm_caching_handler is not None:
+            self.logging_obj._llm_caching_handler._sync_add_streaming_response_to_cache(
+                processed_chunk
+            )
+
+    async def async_cache_streaming_response(self, processed_chunk, cache_hit: bool):
+        """
+        Caches the streaming response
+        """
+        if not cache_hit and self.logging_obj._llm_caching_handler is not None:
+            await self.logging_obj._llm_caching_handler._add_streaming_response_to_cache(
+                processed_chunk
+            )
+
     def run_success_logging_and_cache_storage(self, processed_chunk, cache_hit: bool):
         """
         Runs success logging in a thread and adds the response to the cache
@@ -1446,12 +1471,6 @@ class CustomStreamWrapper:
             )
         ## SYNC LOGGING
         self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
-
-        ## Sync store in cache
-        if self.logging_obj._llm_caching_handler is not None:
-            self.logging_obj._llm_caching_handler._sync_add_streaming_response_to_cache(
-                processed_chunk
-            )
 
     def finish_reason_handler(self):
         model_response = self.model_response_creator()
@@ -1498,11 +1517,16 @@ class CustomStreamWrapper:
 
                     if response is None:
                         continue
+                    if self.logging_obj.completion_start_time is None:
+                        self.logging_obj._update_completion_start_time(
+                            completion_start_time=datetime.datetime.now()
+                        )
                     ## LOGGING
-                    threading.Thread(
-                        target=self.run_success_logging_and_cache_storage,
-                        args=(response, cache_hit),
-                    ).start()  # log response
+                    executor.submit(
+                        self.run_success_logging_and_cache_storage,
+                        response,
+                        cache_hit,
+                    )  # log response
                     choice = response.choices[0]
                     if isinstance(choice, StreamingChoices):
                         self.response_uptil_now += choice.delta.get("content", "") or ""
@@ -1546,13 +1570,27 @@ class CustomStreamWrapper:
                         "usage",
                         getattr(complete_streaming_response, "usage"),
                     )
-
-                ## LOGGING
-                threading.Thread(
-                    target=self.logging_obj.success_handler,
-                    args=(response, None, None, cache_hit),
-                ).start()  # log response
-
+                    self.cache_streaming_response(
+                        processed_chunk=complete_streaming_response.model_copy(
+                            deep=True
+                        ),
+                        cache_hit=cache_hit,
+                    )
+                    executor.submit(
+                        self.logging_obj.success_handler,
+                        complete_streaming_response.model_copy(deep=True),
+                        None,
+                        None,
+                        cache_hit,
+                    )
+                else:
+                    executor.submit(
+                        self.logging_obj.success_handler,
+                        response,
+                        None,
+                        None,
+                        cache_hit,
+                    )
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
                     return response
@@ -1564,10 +1602,11 @@ class CustomStreamWrapper:
                     usage = calculate_total_usage(chunks=self.chunks)
                     processed_chunk._hidden_params["usage"] = usage
                 ## LOGGING
-                threading.Thread(
-                    target=self.run_success_logging_and_cache_storage,
-                    args=(processed_chunk, cache_hit),
-                ).start()  # log response
+                executor.submit(
+                    self.run_success_logging_and_cache_storage,
+                    processed_chunk,
+                    cache_hit,
+                )  # log response
                 return processed_chunk
         except Exception as e:
             traceback_exception = traceback.format_exc()
@@ -1636,11 +1675,9 @@ class CustomStreamWrapper:
                     if processed_chunk is None:
                         continue
 
-                    if self.logging_obj._llm_caching_handler is not None:
-                        asyncio.create_task(
-                            self.logging_obj._llm_caching_handler._add_streaming_response_to_cache(
-                                processed_chunk=cast(ModelResponse, processed_chunk),
-                            )
+                    if self.logging_obj.completion_start_time is None:
+                        self.logging_obj._update_completion_start_time(
+                            completion_start_time=datetime.datetime.now()
                         )
 
                     choice = processed_chunk.choices[0]
@@ -1678,9 +1715,9 @@ class CustomStreamWrapper:
                         chunk = next(self.completion_stream)
                     if chunk is not None and chunk != b"":
                         print_verbose(f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}")
-                        processed_chunk: Optional[ModelResponseStream] = (
-                            self.chunk_creator(chunk=chunk)
-                        )
+                        processed_chunk: Optional[
+                            ModelResponseStream
+                        ] = self.chunk_creator(chunk=chunk)
                         print_verbose(
                             f"PROCESSED CHUNK POST CHUNK CREATOR: {processed_chunk}"
                         )
@@ -1712,6 +1749,14 @@ class CustomStreamWrapper:
                         response,
                         "usage",
                         getattr(complete_streaming_response, "usage"),
+                    )
+                    asyncio.create_task(
+                        self.async_cache_streaming_response(
+                            processed_chunk=complete_streaming_response.model_copy(
+                                deep=True
+                            ),
+                            cache_hit=cache_hit,
+                        )
                     )
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
@@ -1776,6 +1821,42 @@ class CustomStreamWrapper:
                 completion_kwargs={},
                 extra_kwargs={},
             )
+
+    @staticmethod
+    def _strip_sse_data_from_chunk(chunk: Optional[str]) -> Optional[str]:
+        """
+        Strips the 'data: ' prefix from Server-Sent Events (SSE) chunks.
+
+        Some providers like sagemaker send it as `data:`, need to handle both
+
+        SSE messages are prefixed with 'data: ' which is part of the protocol,
+        not the actual content from the LLM. This method removes that prefix
+        and returns the actual content.
+
+        Args:
+            chunk: The SSE chunk that may contain the 'data: ' prefix (string or bytes)
+
+        Returns:
+            The chunk with the 'data: ' prefix removed, or the original chunk
+            if no prefix was found. Returns None if input is None.
+
+        See OpenAI Python Ref for this: https://github.com/openai/openai-python/blob/041bf5a8ec54da19aad0169671793c2078bd6173/openai/api_requestor.py#L100
+        """
+        if chunk is None:
+            return None
+
+        if isinstance(chunk, str):
+            # OpenAI sends `data: `
+            if chunk.startswith("data: "):
+                # Strip the prefix and any leading whitespace that might follow it
+                _length_of_sse_data_prefix = len("data: ")
+                return chunk[_length_of_sse_data_prefix:]
+            elif chunk.startswith("data:"):
+                # Sagemaker sends `data:`, no trailing whitespace
+                _length_of_sse_data_prefix = len("data:")
+                return chunk[_length_of_sse_data_prefix:]
+
+        return chunk
 
 
 def calculate_total_usage(chunks: List[ModelResponse]) -> Usage:

@@ -239,15 +239,31 @@ def _parse_content_for_reasoning(
     return None, message_text
 
 
-class LiteLLMResponseObjectHandler:
+def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Extract reasoning content and main content from a message.
 
+    Args:
+        message (dict): The message dictionary that may contain reasoning_content
+
+    Returns:
+        tuple[Optional[str], Optional[str]]: A tuple of (reasoning_content, content)
+    """
+    if "reasoning_content" in message:
+        return message["reasoning_content"], message["content"]
+    elif "reasoning" in message:
+        return message["reasoning"], message["content"]
+    else:
+        return _parse_content_for_reasoning(message.get("content"))
+
+
+class LiteLLMResponseObjectHandler:
     @staticmethod
     def convert_to_image_response(
         response_object: dict,
         model_response_object: Optional[ImageResponse] = None,
         hidden_params: Optional[dict] = None,
     ) -> ImageResponse:
-
         response_object.update({"hidden_params": hidden_params})
 
         if model_response_object is None:
@@ -452,13 +468,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
                             provider_specific_fields[field] = choice["message"][field]
 
                     # Handle reasoning models that display `reasoning_content` within `content`
-                    if "reasoning_content" in choice["message"]:
-                        reasoning_content = choice["message"]["reasoning_content"]
-                        content = choice["message"]["content"]
-                    else:
-                        reasoning_content, content = _parse_content_for_reasoning(
-                            choice["message"].get("content")
-                        )
+                    reasoning_content, content = _extract_reasoning_content(
+                        choice["message"]
+                    )
 
                     # Handle thinking models that display `thinking_blocks` within `content`
                     thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
@@ -467,9 +479,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         provider_specific_fields["thinking_blocks"] = thinking_blocks
 
                     if reasoning_content:
-                        provider_specific_fields["reasoning_content"] = (
-                            reasoning_content
-                        )
+                        provider_specific_fields[
+                            "reasoning_content"
+                        ] = reasoning_content
 
                     message = Message(
                         content=content,
@@ -480,6 +492,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         provider_specific_fields=provider_specific_fields,
                         reasoning_content=reasoning_content,
                         thinking_blocks=thinking_blocks,
+                        annotations=choice["message"].get("annotations", None),
                     )
                     finish_reason = choice.get("finish_reason", None)
                 if finish_reason is None:

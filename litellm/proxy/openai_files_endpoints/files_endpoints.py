@@ -27,6 +27,7 @@ from litellm import CreateFileRequest, get_secret_str
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
 )
@@ -61,7 +62,7 @@ def get_files_provider_config(
     if custom_llm_provider == "vertex_ai":
         return None
     if files_config is None:
-        raise ValueError("files_config is not set, set it on your config.yaml file.")
+        raise ValueError("files_settings is not set, set it on your config.yaml file.")
     for setting in files_config:
         if setting.get("custom_llm_provider") == custom_llm_provider:
             return setting
@@ -145,7 +146,6 @@ async def create_file(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
-        get_custom_headers,
         llm_router,
         proxy_config,
         proxy_logging_obj,
@@ -234,7 +234,7 @@ async def create_file(
         api_base = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
-            get_custom_headers(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
@@ -309,7 +309,6 @@ async def get_file_content(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
-        get_custom_headers,
         proxy_config,
         proxy_logging_obj,
         version,
@@ -317,7 +316,6 @@ async def get_file_content(
 
     data: Dict = {}
     try:
-
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
             data=data,
@@ -351,7 +349,7 @@ async def get_file_content(
         api_base = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
-            get_custom_headers(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
@@ -437,7 +435,6 @@ async def get_file(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
-        get_custom_headers,
         proxy_config,
         proxy_logging_obj,
         version,
@@ -477,7 +474,7 @@ async def get_file(
         api_base = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
-            get_custom_headers(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
@@ -554,7 +551,6 @@ async def delete_file(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
-        get_custom_headers,
         proxy_config,
         proxy_logging_obj,
         version,
@@ -595,7 +591,7 @@ async def delete_file(
         api_base = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
-            get_custom_headers(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
@@ -671,7 +667,6 @@ async def list_files(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
-        get_custom_headers,
         proxy_config,
         proxy_logging_obj,
         version,
@@ -712,7 +707,7 @@ async def list_files(
         api_base = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
-            get_custom_headers(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,

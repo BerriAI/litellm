@@ -36,7 +36,7 @@ from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
 from litellm.llms.anthropic.common_utils import process_anthropic_headers
 from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
 from httpx import Headers
-from base_llm_unit_tests import BaseLLMChatTest
+from base_llm_unit_tests import BaseLLMChatTest, BaseAnthropicChatTest
 
 
 def streaming_format_tests(chunk: dict, idx: int):
@@ -455,16 +455,23 @@ def test_create_json_tool_call_for_response_format():
     _input_schema = tool.get("input_schema")
     assert _input_schema is not None
     assert _input_schema.get("type") == "object"
-    assert _input_schema.get("properties") == {"values": custom_schema}
+    assert _input_schema.get("name") == custom_schema["name"]
+    assert _input_schema.get("age") == custom_schema["age"]
     assert "additionalProperties" not in _input_schema
 
 
 from litellm import completion
 
 
-class TestAnthropicCompletion(BaseLLMChatTest):
+class TestAnthropicCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
     def get_base_completion_call_args(self) -> dict:
         return {"model": "anthropic/claude-3-5-sonnet-20240620"}
+
+    def get_base_completion_call_args_with_thinking(self) -> dict:
+        return {
+            "model": "anthropic/claude-3-7-sonnet-latest",
+            "thinking": {"type": "enabled", "budget_tokens": 16000},
+        }
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
@@ -992,8 +999,8 @@ def test_anthropic_thinking_output(model):
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic/claude-3-7-sonnet-20250219",
-        # "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        # "anthropic/claude-3-7-sonnet-20250219",
+        "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
         # "bedrock/invoke/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
     ],
 )
@@ -1011,8 +1018,11 @@ def test_anthropic_thinking_output_stream(model):
 
         reasoning_content_exists = False
         signature_block_exists = False
+        tool_call_exists = False
         for chunk in resp:
             print(f"chunk 2: {chunk}")
+            if chunk.choices[0].delta.tool_calls:
+                tool_call_exists = True
             if (
                 hasattr(chunk.choices[0].delta, "thinking_blocks")
                 and chunk.choices[0].delta.thinking_blocks is not None
@@ -1025,6 +1035,7 @@ def test_anthropic_thinking_output_stream(model):
                 print(chunk.choices[0].delta.thinking_blocks[0])
                 if chunk.choices[0].delta.thinking_blocks[0].get("signature"):
                     signature_block_exists = True
+        assert not tool_call_exists
         assert reasoning_content_exists
         assert signature_block_exists
     except litellm.Timeout:

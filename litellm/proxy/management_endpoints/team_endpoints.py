@@ -40,6 +40,7 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
     SpecialManagementEndpointEnums,
+    SpecialModelNames,
     TeamAddMemberResponse,
     TeamInfoResponseObject,
     TeamListResponseObject,
@@ -70,6 +71,7 @@ from litellm.proxy.utils import (
     _premium_user_check,
     handle_exception_on_proxy,
 )
+from litellm.router import Router
 
 router = APIRouter()
 
@@ -468,7 +470,7 @@ async def update_team(
 
     if existing_team_row is None:
         raise HTTPException(
-            status_code=400,
+            status_code=404,
             detail={"error": f"Team not found, passed team_id={data.team_id}"},
         )
 
@@ -504,12 +506,12 @@ async def update_team(
             updated_kv["model_id"] = _model_id
 
     updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
-    team_row: Optional[LiteLLM_TeamTable] = (
-        await prisma_client.db.litellm_teamtable.update(
-            where={"team_id": data.team_id},
-            data=updated_kv,
-            include={"litellm_model_table": True},  # type: ignore
-        )
+    team_row: Optional[
+        LiteLLM_TeamTable
+    ] = await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": data.team_id},
+        data=updated_kv,
+        include={"litellm_model_table": True},  # type: ignore
     )
 
     if team_row is None or team_row.team_id is None:
@@ -1135,14 +1137,16 @@ async def delete_team(
     team_rows: List[LiteLLM_TeamTable] = []
     for team_id in data.team_ids:
         try:
-            team_row_base: BaseModel = (
-                await prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": team_id}
-                )
+            team_row_base: Optional[
+                BaseModel
+            ] = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id}
             )
+            if team_row_base is None:
+                raise Exception
         except Exception:
             raise HTTPException(
-                status_code=400,
+                status_code=404,
                 detail={"error": f"Team not found, passed team_id={team_id}"},
             )
         team_row_pydantic = LiteLLM_TeamTable(**team_row_base.model_dump())
@@ -1238,6 +1242,23 @@ def validate_membership(
         )
 
 
+def _unfurl_all_proxy_models(
+    team_info: LiteLLM_TeamTable, llm_router: Router
+) -> LiteLLM_TeamTable:
+    if (
+        SpecialModelNames.all_proxy_models.value in team_info.models
+        and llm_router is not None
+    ):
+        team_models: set[str] = set()  # make set to avoid duplicates
+        for model in team_info.models:
+            if model != SpecialModelNames.all_proxy_models.value:
+                team_models.add(model)
+        for model in llm_router.get_model_names():
+            team_models.add(model)
+        team_info.models = list(team_models)
+    return team_info
+
+
 @router.get(
     "/team/info", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
@@ -1277,10 +1298,10 @@ async def team_info(
             )
 
         try:
-            team_info: Optional[BaseModel] = (
-                await prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": team_id}
-                )
+            team_info: Optional[
+                BaseModel
+            ] = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id}
             )
             if team_info is None:
                 raise Exception
@@ -1333,6 +1354,9 @@ async def team_info(
         else:
             _team_info = LiteLLM_TeamTable()
 
+        # ## UNFURL 'all-proxy-models' into the team_info.models list ##
+        # if llm_router is not None:
+        #     _team_info = _unfurl_all_proxy_models(_team_info, llm_router)
         response_object = TeamInfoResponseObject(
             team_id=team_id,
             team_info=_team_info,

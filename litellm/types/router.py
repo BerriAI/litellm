@@ -95,18 +95,16 @@ class ModelInfo(BaseModel):
     id: Optional[
         str
     ]  # Allow id to be optional on input, but it will always be present as a str in the model instance
-    db_model: bool = (
-        False  # used for proxy - to separate models which are stored in the db vs. config.
-    )
+    db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
     updated_at: Optional[datetime.datetime] = None
     updated_by: Optional[str] = None
 
     created_at: Optional[datetime.datetime] = None
     created_by: Optional[str] = None
 
-    base_model: Optional[str] = (
-        None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
-    )
+    base_model: Optional[
+        str
+    ] = None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
     tier: Optional[Literal["free", "paid"]] = None
 
     """
@@ -144,7 +142,26 @@ class ModelInfo(BaseModel):
         setattr(self, key, value)
 
 
-class GenericLiteLLMParams(BaseModel):
+class CredentialLiteLLMParams(BaseModel):
+    api_key: Optional[str] = None
+    api_base: Optional[str] = None
+    api_version: Optional[str] = None
+    ## VERTEX AI ##
+    vertex_project: Optional[str] = None
+    vertex_location: Optional[str] = None
+    vertex_credentials: Optional[Union[str, dict]] = None
+    ## UNIFIED PROJECT/REGION ##
+    region_name: Optional[str] = None
+
+    ## AWS BEDROCK / SAGEMAKER ##
+    aws_access_key_id: Optional[str] = None
+    aws_secret_access_key: Optional[str] = None
+    aws_region_name: Optional[str] = None
+    ## IBM WATSONX ##
+    watsonx_region_name: Optional[str] = None
+
+
+class GenericLiteLLMParams(CredentialLiteLLMParams):
     """
     LiteLLM Params without 'model' arg (used across completion / assistants api)
     """
@@ -152,33 +169,19 @@ class GenericLiteLLMParams(BaseModel):
     custom_llm_provider: Optional[str] = None
     tpm: Optional[int] = None
     rpm: Optional[int] = None
-    api_key: Optional[str] = None
-    api_base: Optional[str] = None
-    api_version: Optional[str] = None
-    timeout: Optional[Union[float, str, httpx.Timeout]] = (
-        None  # if str, pass in as os.environ/
-    )
-    stream_timeout: Optional[Union[float, str]] = (
-        None  # timeout when making stream=True calls, if str, pass in as os.environ/
-    )
+    timeout: Optional[
+        Union[float, str, httpx.Timeout]
+    ] = None  # if str, pass in as os.environ/
+    stream_timeout: Optional[
+        Union[float, str]
+    ] = None  # timeout when making stream=True calls, if str, pass in as os.environ/
     max_retries: Optional[int] = None
     organization: Optional[str] = None  # for openai orgs
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
 
     ## LOGGING PARAMS ##
     litellm_trace_id: Optional[str] = None
-    ## UNIFIED PROJECT/REGION ##
-    region_name: Optional[str] = None
-    ## VERTEX AI ##
-    vertex_project: Optional[str] = None
-    vertex_location: Optional[str] = None
-    vertex_credentials: Optional[Union[str, dict]] = None
-    ## AWS BEDROCK / SAGEMAKER ##
-    aws_access_key_id: Optional[str] = None
-    aws_secret_access_key: Optional[str] = None
-    aws_region_name: Optional[str] = None
-    ## IBM WATSONX ##
-    watsonx_region_name: Optional[str] = None
+
     ## CUSTOM PRICING ##
     input_cost_per_token: Optional[float] = None
     output_cost_per_token: Optional[float] = None
@@ -245,7 +248,11 @@ class GenericLiteLLMParams(BaseModel):
         args.pop("__class__", None)
         if max_retries is not None and isinstance(max_retries, str):
             max_retries = int(max_retries)  # cast to int
-        super().__init__(max_retries=max_retries, **args, **params)
+        # We need to keep max_retries in args since it's a parameter of GenericLiteLLMParams
+        args[
+            "max_retries"
+        ] = max_retries  # Put max_retries back in args after popping it
+        super().__init__(**args, **params)
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -550,6 +557,7 @@ class ModelGroupInfo(BaseModel):
     rpm: Optional[int] = None
     supports_parallel_function_calling: bool = Field(default=False)
     supports_vision: bool = Field(default=False)
+    supports_web_search: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
     supported_openai_params: Optional[List[str]] = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
@@ -567,7 +575,6 @@ class AssistantsTypedDict(TypedDict):
 
 
 class FineTuningConfig(BaseModel):
-
     custom_llm_provider: Literal["azure", "openai"]
 
 
