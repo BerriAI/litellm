@@ -1029,7 +1029,7 @@ class VertexLLM(VertexBase):
             input=messages,
             api_key="",
             additional_args={
-                "complete_input_dict": data,
+                "complete_input_dict": request_body,
                 "api_base": api_base,
                 "headers": headers,
             },
