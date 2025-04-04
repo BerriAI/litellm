@@ -51,25 +51,21 @@ class TestVertexBase:
                 print(f"result: {result}")
 
     @pytest.mark.asyncio
-    async def test_dynamic_credential_updates(self):
+    async def test_cached_credentials(self):
         vertex_base = VertexBase()
 
         # Initial credentials
-        mock_creds_1 = MagicMock()
-        mock_creds_1.token = "token-1"
-        mock_creds_1.expired = False
-        mock_creds_1.project_id = "project-1"
+        mock_creds = MagicMock()
+        mock_creds.token = "token-1"
+        mock_creds.expired = False
+        mock_creds.project_id = "project-1"
+        mock_creds.quota_project_id = "project-1"
 
-        # Updated credentials
-        mock_creds_2 = MagicMock()
-        mock_creds_2.token = "token-2"
-        mock_creds_2.expired = False
-        mock_creds_2.project_id = "project-1"
-
-        # Test case 1: Initial credential load
+        # Test initial credential load and caching
         with patch.object(
-            vertex_base, "load_auth", return_value=(mock_creds_1, "project-1")
+            vertex_base, "load_auth", return_value=(mock_creds, "project-1")
         ):
+            # First call should load credentials
             token, project = await vertex_base._ensure_access_token_async(
                 credentials={"type": "service_account"},
                 project_id="project-1",
@@ -77,25 +73,45 @@ class TestVertexBase:
             )
             assert token == "token-1"
 
-        # Test case 2: Credential refresh when expired
-        mock_creds_1.expired = True
-        mock_creds_1.token = None
+            # Second call should use cached credentials
+            token2, project2 = await vertex_base._ensure_access_token_async(
+                credentials={"type": "service_account"},
+                project_id="project-1",
+                custom_llm_provider="vertex_ai",
+            )
+            assert token2 == "token-1"
+            assert project2 == "project-1"
 
-        with patch.object(vertex_base, "refresh_auth") as mock_refresh:
+    @pytest.mark.asyncio
+    async def test_credential_refresh(self):
+        vertex_base = VertexBase()
 
-            async def mock_refresh_impl(creds):
+        # Create expired credentials
+        mock_creds = MagicMock()
+        mock_creds.token = "my-token"
+        mock_creds.expired = True
+        mock_creds.project_id = "project-1"
+        mock_creds.quota_project_id = "project-1"
+
+        with patch.object(
+            vertex_base, "load_auth", return_value=(mock_creds, "project-1")
+        ), patch.object(vertex_base, "refresh_auth") as mock_refresh:
+
+            def mock_refresh_impl(creds):
                 creds.token = "refreshed-token"
                 creds.expired = False
 
             mock_refresh.side_effect = mock_refresh_impl
 
             token, project = await vertex_base._ensure_access_token_async(
-                credentials=None,  # Use existing credentials
+                credentials={"type": "service_account"},
                 project_id="project-1",
                 custom_llm_provider="vertex_ai",
             )
-            assert token == "refreshed-token"
+
             assert mock_refresh.called
+            assert token == "refreshed-token"
+            assert not mock_creds.expired
 
     @pytest.mark.asyncio
     async def test_gemini_credentials(self):

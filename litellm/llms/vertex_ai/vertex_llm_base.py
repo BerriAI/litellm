@@ -313,9 +313,6 @@ class VertexBase(BaseLLM):
 
             self._credentials_project_mapping[credential_cache_key] = _credentials
 
-        if _credentials is None:
-            raise ValueError("Could not resolve credentials")
-
         ## VALIDATE CREDENTIALS
         verbose_logger.debug(f"Validating credentials for project_id: {project_id}")
         if (
@@ -367,38 +364,6 @@ class VertexBase(BaseLLM):
                 credentials=credentials,
                 project_id=project_id,
             )
-        if self.access_token is not None:
-            if project_id is not None:
-                return self.access_token, project_id
-            elif self.project_id is not None:
-                return self.access_token, self.project_id
-
-        if not self._credentials:
-            try:
-                self._credentials, cred_project_id = await asyncify(self.load_auth)(
-                    credentials=credentials, project_id=project_id
-                )
-            except Exception:
-                verbose_logger.exception(
-                    "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information."
-                )
-                raise
-            if not self.project_id:
-                self.project_id = project_id or cred_project_id
-        else:
-            if self._credentials.expired or not self._credentials.token:
-                await asyncify(self.refresh_auth)(self._credentials)
-
-            if not self.project_id:
-                self.project_id = self._credentials.quota_project_id
-
-        if not self.project_id or self.project_id != self._credentials.quota_project_id:
-            raise ValueError("Could not resolve project_id")
-
-        if not self._credentials or not self._credentials.token:
-            raise RuntimeError("Could not resolve API token from the environment")
-
-        return self._credentials.token, project_id or self.project_id
 
     def set_headers(
         self, auth_header: Optional[str], extra_headers: Optional[dict]
