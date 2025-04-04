@@ -1252,3 +1252,16 @@ class BaseAnthropicChatTest(ABC):
             assert signature_block_exists
         except litellm.Timeout:
             pytest.skip("Model is timing out")
+
+    def test_anthropic_reasoning_effort_thinking_translation(self):
+        base_completion_call_args = self.get_base_completion_call_args_with_thinking()
+        _, provider, _, _ = litellm.get_llm_provider(
+            model=base_completion_call_args["model"]
+        )
+
+        optional_params = get_optional_params(
+            model=base_completion_call_args.get("model"),
+            custom_llm_provider=provider,
+            reasoning_effort="high",
+        )
+        assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 4096}

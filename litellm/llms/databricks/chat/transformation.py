@@ -196,6 +196,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = True,
     ) -> dict:
+        is_thinking_enabled = self.is_thinking_enabled(non_default_params)
         mapped_params = super().map_openai_params(
             non_default_params, optional_params, model, drop_params
         )
@@ -213,7 +214,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 model,
                 non_default_params["response_format"],
                 mapped_params,
-                self.is_thinking_enabled(non_default_params),
+                is_thinking_enabled,
             )
 
             if _tool is not None:
@@ -225,6 +226,10 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 "response_format", None
             )  # unsupported for claude models - if json_schema -> convert to tool call
 
+        if "reasoning_effort" in non_default_params and "claude" in model:
+            optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+                non_default_params.get("reasoning_effort")
+            )
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
             non_default_params=non_default_params, optional_params=mapped_params
