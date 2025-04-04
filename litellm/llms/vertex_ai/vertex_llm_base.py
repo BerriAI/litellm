@@ -274,7 +274,10 @@ class VertexBase(BaseLLM):
             )
             _credentials = self._credentials_project_mapping[credential_cache_key]
             verbose_logger.debug("Using cached credentials")
-            credential_project_id = _credentials.quota_project_id
+            credential_project_id = _credentials.quota_project_id or getattr(
+                _credentials, "project_id", None
+            )
+
         else:
             verbose_logger.debug(
                 f"Credential cache key not found for project_id: {project_id}, loading new credentials"
@@ -304,10 +307,12 @@ class VertexBase(BaseLLM):
                     _credentials.quota_project_id, project_id
                 )
             )
-        else:
-            project_id = cast(
-                Optional[str], _credentials.quota_project_id
-            )  # if none set, use credential project_id
+        elif (
+            project_id is None
+            and credential_project_id is not None
+            and isinstance(credential_project_id, str)
+        ):
+            project_id = credential_project_id
 
         if _credentials.expired:
             self.refresh_auth(_credentials)
