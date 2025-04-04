@@ -25,7 +25,8 @@ import {
 import { message, Select } from "antd";
 import { makeOpenAIChatCompletionRequest } from "./chat_ui/llm_calls/chat_completion";
 import { makeOpenAIImageGenerationRequest } from "./chat_ui/llm_calls/image_generation";
-import { fetchAvailableModels } from "./chat_ui/llm_calls/fetch_models";
+import { fetchAvailableModels, ModelGroup  } from "./chat_ui/llm_calls/fetch_models";
+import { litellmModeMapping, ModelMode, EndpointType } from "./chat_ui/mode_endpoint_mapping";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { Typography } from "antd";
 import { coy } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -55,7 +56,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     undefined
   );
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
-  const [modelInfo, setModelInfo] = useState<any[]>([]);
+  const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const customModelTimeout = useRef<NodeJS.Timeout | null>(null);
   const [endpointType, setEndpointType] = useState<'chat' | 'image'>('chat');
 
@@ -74,15 +75,18 @@ const ChatUI: React.FC<ChatUIProps> = ({
       try {
         const uniqueModels = await fetchAvailableModels(
           useApiKey,
-          userID,
-          userRole
         );
   
         console.log("Fetched models:", uniqueModels);
   
         if (uniqueModels.length > 0) {
           setModelInfo(uniqueModels);
-          setSelectedModel(uniqueModels[0].value);
+          setSelectedModel(uniqueModels[0].model_group);
+          // Auto-set endpoint based on the first model's mode if available
+          const firstMode = uniqueModels[0].mode as ModelMode;
+          if (firstMode && litellmModeMapping[firstMode]) {
+            setEndpointType(litellmModeMapping[firstMode] as EndpointType);
+          }
         }
       } catch (error) {
         console.error("Error fetching model info:", error);
@@ -202,6 +206,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const onModelChange = (value: string) => {
     console.log(`selected ${value}`);
     setSelectedModel(value);
+    // Look up the selected model to auto-select the endpoint type
+    const selectedOption = modelInfo.find((option) => option.model_group === value);
+    if (selectedOption && selectedOption.mode) {
+      const mode = selectedOption.mode as ModelMode;
+      if (litellmModeMapping[mode]) {
+        setEndpointType(litellmModeMapping[mode] as EndpointType);
+      }
+    }
     setShowCustomModelInput(value === 'custom');
   };
 
@@ -245,23 +257,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       )}
                     </Col>
                     <Col className="mx-2">
-                      <Text>Endpoint Type:</Text>
-                      <Select
-                        defaultValue="chat"
-                        style={{ width: "350px", marginBottom: "12px" }}
-                        onChange={handleEndpointChange}
-                        options={[
-                          { value: 'chat', label: '/chat/completions' },
-                          { value: 'image', label: '/images/generations' }
-                        ]}
-                      />
-                      
                       <Text>Select Model:</Text>
                       <Select
                         placeholder="Select a Model"
                         onChange={onModelChange}
                         options={[
-                          ...modelInfo,
+                          ...modelInfo.map((option) => ({
+                            value: option.model_group,
+                            label: option.model_group
+                          })),
                           { value: 'custom', label: 'Enter custom model' }
                         ]}
                         style={{ width: "350px" }}
@@ -283,7 +287,19 @@ const ChatUI: React.FC<ChatUIProps> = ({
                           }}
                         />
                       )}
+                      <Text>Endpoint Type:</Text>
+                      <Select
+                        defaultValue="chat"
+                        style={{ width: "350px", marginBottom: "12px" }}
+                        onChange={handleEndpointChange}
+                        options={[
+                          { value: 'chat', label: '/chat/completions' },
+                          { value: 'image', label: '/images/generations' }
+                        ]}
+                      />
+                      
                     </Col>
+
                   </Grid>
 
                   {/* Clear Chat Button */}

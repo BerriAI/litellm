@@ -1,54 +1,35 @@
-import { modelAvailableCall } from "../../networking";
+// fetch_models.ts
 
-interface ModelOption {
-  value: string;
-  label: string;
+import { modelHubCall } from "../../networking";
+
+export interface ModelGroup {
+  model_group: string;
+  mode?: string;
 }
 
 /**
- * Fetches available models for the user and formats them as options
- * for selection dropdowns
+ * Fetches available models using modelHubCall and formats them for the selection dropdown.
  */
 export const fetchAvailableModels = async (
-  apiKey: string | null,
-  userID: string,
-  userRole: string,
-  teamID: string | null = null
-): Promise<ModelOption[]> => {
+  accessToken: string
+): Promise<ModelGroup[]> => {
   try {
-    const fetchedAvailableModels = await modelAvailableCall(
-      apiKey ?? '', // Use empty string if apiKey is null
-      userID,
-      userRole,
-      false,
-      teamID
-    );
+    const fetchedModels = await modelHubCall(accessToken);
+    console.log("model_info:", fetchedModels);
 
-    console.log("model_info:", fetchedAvailableModels);
+    if (fetchedModels?.data.length > 0) {
+      const models: ModelGroup[] = fetchedModels.data.map((item: any) => ({
+        model_group: item.model_group, // Display the model_group to the user
+        mode: item?.model_info?.mode, // Save the mode for auto-selection of endpoint type
+      }));
 
-    if (fetchedAvailableModels?.data.length > 0) {
-      // Create a Map to store unique models using the model ID as key
-      const uniqueModelsMap = new Map();
-      
-      fetchedAvailableModels["data"].forEach((item: { id: string }) => {
-        uniqueModelsMap.set(item.id, {
-          value: item.id,
-          label: item.id
-        });
-      });
-
-      // Convert Map values back to array
-      const uniqueModels = Array.from(uniqueModelsMap.values());
-
-      // Sort models alphabetically
-      uniqueModels.sort((a, b) => a.label.localeCompare(b.label));
-
-      return uniqueModels;
+      // Sort models alphabetically by label
+      models.sort((a, b) => a.model_group.localeCompare(b.model_group));
+      return models;
     }
-    
     return [];
   } catch (error) {
     console.error("Error fetching model info:", error);
     throw error;
   }
-}; 
+};
