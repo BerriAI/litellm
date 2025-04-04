@@ -1886,6 +1886,7 @@ all_litellm_params = [
     "logger_fn",
     "verbose",
     "custom_llm_provider",
+    "model_file_id_mapping",
     "litellm_logging_obj",
     "litellm_call_id",
     "use_client",
