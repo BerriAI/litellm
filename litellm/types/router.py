@@ -18,6 +18,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from ..exceptions import RateLimitError
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
+from .llms.openai import OpenAIFileObject
 from .llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from .utils import ModelResponse, ProviderSpecificModelInfo
 
@@ -703,3 +704,12 @@ class GenericBudgetWindowDetails(BaseModel):
 
 
 OptionalPreCallChecks = List[Literal["prompt_caching", "router_budget_limiting"]]
+
+
+class LiteLLM_RouterFileObject(TypedDict, total=False):
+    """
+    Tracking the litellm params hash, used for mapping the file id to the right model
+    """
+
+    litellm_params_sensitive_credential_hash: str
+    file_object: OpenAIFileObject

@@ -7,6 +7,7 @@ from typing import Dict, List, Literal, Optional, Union, cast
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
+    ChatCompletionFileObject,
     ChatCompletionUserMessage,
 )
 from litellm.types.utils import Choices, ModelResponse, StreamingChoices
@@ -291,4 +292,59 @@ def get_completion_messages(
     messages = _insert_assistant_continue_message(
         messages, assistant_continue_message, ensure_alternating_roles
     )
+    return messages
+
+
+def get_file_ids_from_messages(messages: List[AllMessageValues]) -> List[str]:
+    """
+    Gets file ids from messages
+    """
+    file_ids = []
+    for message in messages:
+        if message.get("role") == "user":
+            content = message.get("content")
+            if content:
+                if isinstance(content, str):
+                    continue
+                for c in content:
+                    if c["type"] == "file":
+                        file_object = cast(ChatCompletionFileObject, c)
+                        file_object_file_field = file_object["file"]
+                        file_id = file_object_file_field.get("file_id")
+                        if file_id:
+                            file_ids.append(file_id)
+    return file_ids
+
+
+def update_messages_with_model_file_ids(
+    messages: List[AllMessageValues],
+    model_id: str,
+    model_file_id_mapping: Dict[str, Dict[str, str]],
+) -> List[AllMessageValues]:
+    """
+    Updates messages with model file ids.
+
+    model_file_id_mapping: Dict[str, Dict[str, str]] = {
+        "litellm_proxy/file_id": {
+            "model_id": "provider_file_id"
+        }
+    }
+    """
+    for message in messages:
+        if message.get("role") == "user":
+            content = message.get("content")
+            if content:
+                if isinstance(content, str):
+                    continue
+                for c in content:
+                    if c["type"] == "file":
+                        file_object = cast(ChatCompletionFileObject, c)
+                        file_object_file_field = file_object["file"]
+                        file_id = file_object_file_field.get("file_id")
+                        if file_id:
+                            provider_file_id = (
+                                model_file_id_mapping.get(file_id, {}).get(model_id)
+                                or file_id
+                            )
+                            file_object_file_field["file_id"] = provider_file_id
     return messages

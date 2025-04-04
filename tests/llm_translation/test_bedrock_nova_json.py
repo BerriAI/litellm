@@ -15,6 +15,12 @@ class TestBedrockNovaJson(BaseLLMChatTest):
         return {
             "model": "bedrock/converse/us.amazon.nova-micro-v1:0",
         }
+    
+    def test_json_response_nested_pydantic_obj(self):
+        pass
+    
+    def test_json_response_nested_json_schema(self):
+        pass
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""

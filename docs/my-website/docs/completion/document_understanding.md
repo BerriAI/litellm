@@ -80,11 +80,13 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -d '{
     "model": "bedrock-model",
     "messages": [
-        {"role": "user", "content": {"type": "text", "text": "What's this file about?"}},
-        {
-            "type": "image_url",
-            "image_url": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-        }
+        {"role": "user", "content": [
+            {"type": "text", "text": "What's this file about?"},
+            {
+                "type": "image_url",
+                "image_url": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+            }
+        ]},
     ]
 }'
 ```
@@ -133,6 +135,46 @@ response = completion(
     messages=[{"role": "user", "content": image_content}],
 )
 assert response is not None
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: bedrock-model
+    litellm_params:
+      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_region_name: os.environ/AWS_REGION_NAME
+```
+
+2. Start the proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "bedrock-model",
+    "messages": [
+        {"role": "user", "content": [
+            {"type": "text", "text": "What's this file about?"},
+            {
+                "type": "image_url",
+                "image_url": "data:application/pdf;base64...",
+            }
+        ]},
+    ]
+}'
 ```
 </TabItem>
 </Tabs>
