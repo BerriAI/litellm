@@ -53,7 +53,7 @@ const Createuser: React.FC<CreateuserProps> = ({
   const [uiSettings, setUISettings] = useState<UISettings | null>(null);
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
-  const [apiuser, setApiuser] = useState<string | null>(null);
+  const [apiuser, setApiuser] = useState<boolean>(false);
   const [userModels, setUserModels] = useState<string[]>([]);
   const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] =
     useState(false);
@@ -113,7 +113,7 @@ const Createuser: React.FC<CreateuserProps> = ({
 
   const handleCancel = () => {
     setIsModalVisible(false);
-    setApiuser(null);
+    setApiuser(false);
     form.resetFields();
   };
 
@@ -130,7 +130,7 @@ const Createuser: React.FC<CreateuserProps> = ({
       console.log("formValues in create user:", formValues);
       const response = await userCreateCall(accessToken, null, formValues);
       console.log("user create Response:", response);
-      setApiuser(response["key"]);
+      setApiuser(true);
       const user_id = response.data?.user_id || response.user_id;
 
       // Call the callback if provided (for embedded mode)
