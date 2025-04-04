@@ -1116,3 +1116,6 @@ def test_anthropic_thinking_in_assistant_message(model):
     response = litellm.completion(**params)
 
     assert response is not None
+
+
+

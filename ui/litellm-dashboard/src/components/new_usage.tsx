@@ -13,7 +13,7 @@ import {
   TabPanel, TabPanels, DonutChart,
   Table, TableHead, TableRow, 
   TableHeaderCell, TableBody, TableCell,
-  Subtitle
+  Subtitle, DateRangePicker, DateRangePickerValue
 } from "@tremor/react";
 import { AreaChart } from "@tremor/react";
 
@@ -40,6 +40,12 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
     results: DailyData[];
     metadata: any;
   }>({ results: [], metadata: {} });
+
+  // Add date range state
+  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
+    from: new Date(Date.now() - 28 * 24 * 60 * 60 * 1000),
+    to: new Date(),
+  });
 
   // Derived states from userSpendData
   const totalSpend = userSpendData.metadata?.total_spend || 0;
@@ -168,22 +174,34 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
   };
 
   const fetchUserSpendData = async () => {
-    if (!accessToken) return;
-    const startTime = new Date(Date.now() - 28 * 24 * 60 * 60 * 1000);
-    const endTime = new Date();
+    if (!accessToken || !dateValue.from || !dateValue.to) return;
+    const startTime = dateValue.from;
+    const endTime = dateValue.to;
     const data = await userDailyActivityCall(accessToken, startTime, endTime);
     setUserSpendData(data);
   };
 
   useEffect(() => {
     fetchUserSpendData();
-  }, [accessToken]);
+  }, [accessToken, dateValue]);
 
   const modelMetrics = processActivityData(userSpendData);
 
   return (
     <div style={{ width: "100%" }} className="p-8">
       <Text>Experimental Usage page, using new `/user/daily/activity` endpoint.</Text>
+      <Grid numItems={2} className="gap-2 w-full mb-4">
+        <Col>
+          <Text>Select Time Range</Text>
+          <DateRangePicker
+            enableSelect={true}
+            value={dateValue}
+            onValueChange={(value) => {
+              setDateValue(value);
+            }}
+          />
+        </Col>
+      </Grid>
       <TabGroup>
         <TabList variant="solid" className="mt-1">
           <Tab>Cost</Tab>

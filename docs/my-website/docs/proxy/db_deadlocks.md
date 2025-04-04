@@ -31,6 +31,15 @@ Each instance writes updates to redis
 
 A single instance will acquire a lock on the DB and flush all elements in the redis queue to the DB. 
 
+- 1 instance will attempt to acquire the lock for the DB update job 
+- The status of the lock is stored in redis
+- If the instance acquires the lock to write to DB
+    - It will read all updates from redis
+    - Aggregate all updates into 1 transaction
+    - Write updates to DB
+    - Release the lock
+- Note: Only 1 instance can acquire the lock at a time, this limits the number of instances that can write to the DB at once
+
 
 <Image img={require('../../img/deadlock_fix_2.png')}  style={{ width: '900px', height: 'auto' }} />
 <p style={{textAlign: 'left', color: '#666'}}>
