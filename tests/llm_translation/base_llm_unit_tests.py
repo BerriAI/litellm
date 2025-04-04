@@ -1213,3 +1213,39 @@ class BaseAnthropicChatTest(ABC):
         assert len(response.choices[0].message.thinking_blocks) > 0
 
         assert response.choices[0].message.thinking_blocks[0]["signature"] is not None
+
+    def test_anthropic_thinking_output_stream(self):
+        # litellm.set_verbose = True
+        try:
+            base_completion_call_args = self.get_base_completion_call_args_with_thinking()
+            resp = litellm.completion(
+                **base_completion_call_args,
+                messages=[{"role": "user", "content": "Tell me a joke."}],
+                stream=True,
+                timeout=10,
+            )
+
+            reasoning_content_exists = False
+            signature_block_exists = False
+            tool_call_exists = False
+            for chunk in resp:
+                print(f"chunk 2: {chunk}")
+                if chunk.choices[0].delta.tool_calls:
+                    tool_call_exists = True
+                if (
+                    hasattr(chunk.choices[0].delta, "thinking_blocks")
+                    and chunk.choices[0].delta.thinking_blocks is not None
+                    and chunk.choices[0].delta.reasoning_content is not None
+                    and isinstance(chunk.choices[0].delta.thinking_blocks, list)
+                    and len(chunk.choices[0].delta.thinking_blocks) > 0
+                    and isinstance(chunk.choices[0].delta.reasoning_content, str)
+                ):
+                    reasoning_content_exists = True
+                    print(chunk.choices[0].delta.thinking_blocks[0])
+                    if chunk.choices[0].delta.thinking_blocks[0].get("signature"):
+                        signature_block_exists = True
+            assert not tool_call_exists
+            assert reasoning_content_exists
+            assert signature_block_exists
+        except litellm.Timeout:
+            pytest.skip("Model is timing out")

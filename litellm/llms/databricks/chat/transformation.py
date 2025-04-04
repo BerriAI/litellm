@@ -2,7 +2,18 @@
 Translates from OpenAI's `/v1/chat/completions` to Databricks' `/chat/completions`
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast
+import json
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import httpx
 from pydantic import BaseModel
@@ -14,13 +25,22 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
     strip_name_from_messages,
 )
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.llms.databricks import (
     AllDatabricksContentValues,
     DatabricksChoice,
     DatabricksResponse,
 )
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionThinkingBlock
-from litellm.types.utils import Choices, Message, ModelResponse, ProviderField, Usage
+from litellm.types.utils import (
+    Choices,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+    ProviderField,
+    StreamingChoices,
+    Usage,
+)
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from ..common_utils import DatabricksBase, DatabricksException
@@ -181,7 +201,8 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig):
         new_messages = strip_name_from_messages(new_messages)
         return super()._transform_messages(messages=new_messages, model=model)
 
-    def extract_content_str(self, content: AllDatabricksContentValues) -> str:
+    @staticmethod
+    def extract_content_str(content: AllDatabricksContentValues) -> str:
         if isinstance(content, str):
             return content
         elif isinstance(content, list):
@@ -193,8 +214,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig):
         else:
             raise Exception(f"Unsupported content type: {type(content)}")
 
+    @staticmethod
     def extract_reasoning_content(
-        self, content: AllDatabricksContentValues
+        content: AllDatabricksContentValues,
     ) -> Tuple[Optional[str], Optional[List[ChatCompletionThinkingBlock]]]:
         """
         Extract and return the reasoning content and thinking blocks
@@ -222,12 +244,15 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig):
         transformed_choices = []
         for choice in choices:
             ## get the content str
-            content_str = self.extract_content_str(choice["message"]["content"])
-
-            ## get the reasoning content
-            reasoning_content, thinking_blocks = self.extract_reasoning_content(
+            content_str = DatabricksConfig.extract_content_str(
                 choice["message"]["content"]
             )
+
+            ## get the reasoning content
+            (
+                reasoning_content,
+                thinking_blocks,
+            ) = DatabricksConfig.extract_reasoning_content(choice["message"]["content"])
 
             translated_message = Message(
                 role="assistant",
@@ -294,3 +319,53 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig):
         )
 
         return model_response
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ):
+        return DatabricksChatResponseIterator(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
+
+class DatabricksChatResponseIterator(BaseModelResponseIterator):
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+        try:
+            translated_choices = []
+            for choice in chunk["choices"]:
+                # extract the content str
+                content_str = DatabricksConfig.extract_content_str(
+                    choice["delta"]["content"]
+                )
+
+                # extract the reasoning content
+                (
+                    reasoning_content,
+                    thinking_blocks,
+                ) = DatabricksConfig.extract_reasoning_content(
+                    choice["delta"]["content"]
+                )
+
+                choice["delta"]["content"] = content_str
+                choice["delta"]["reasoning_content"] = reasoning_content
+                choice["delta"]["thinking_blocks"] = thinking_blocks
+                translated_choices.append(choice)
+            return ModelResponseStream(
+                id=chunk["id"],
+                object="chat.completion.chunk",
+                created=chunk["created"],
+                model=chunk["model"],
+                choices=translated_choices,
+            )
+        except KeyError as e:
+            raise DatabricksException(
+                message=f"KeyError: {e}, Got unexpected response from Databricks: {chunk}",
+                status_code=400,
+            )
+        except Exception as e:
+            raise e
