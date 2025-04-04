@@ -86,6 +86,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
     // Fetch model info and set the default selected model
     const loadModels = async () => {
       try {
+        if (!userApiKey) {
+          console.log("userApiKey is missing");
+          return;
+        }
         const uniqueModels = await fetchAvailableModels(
           userApiKey,
         );
