@@ -14,7 +14,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
     strip_name_from_messages,
 )
-from litellm.types.llms.databricks import AllDatabricksContentValues, DatabricksResponse
+from litellm.types.llms.databricks import (
+    AllDatabricksContentValues,
+    DatabricksChoice,
+    DatabricksResponse,
+)
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionThinkingBlock
 from litellm.types.utils import Choices, Message, ModelResponse, ProviderField, Usage
 
@@ -214,6 +218,37 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig):
                         thinking_blocks.append(thinking_block)
         return reasoning_content, thinking_blocks
 
+    def _transform_choices(self, choices: List[DatabricksChoice]) -> List[Choices]:
+        transformed_choices = []
+        for choice in choices:
+            ## get the content str
+            content_str = self.extract_content_str(choice["message"]["content"])
+
+            ## get the reasoning content
+            reasoning_content, thinking_blocks = self.extract_reasoning_content(
+                choice["message"]["content"]
+            )
+
+            translated_message = Message(
+                role="assistant",
+                content=content_str,
+                reasoning_content=reasoning_content,
+                thinking_blocks=thinking_blocks,
+                tool_calls=choice["message"].get("tool_calls"),
+            )
+
+            translated_choice = Choices(
+                finish_reason=choice["finish_reason"],
+                index=choice["index"],
+                message=translated_message,
+                logprobs=None,
+                enhancements=None,
+            )
+
+            transformed_choices.append(translated_choice)
+
+        return transformed_choices
+
     def transform_response(
         self,
         model: str,
@@ -254,31 +289,8 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig):
         model_response.created = completion_response["created"]
         setattr(model_response, "usage", Usage(**completion_response["usage"]))
 
-        for choice in completion_response["choices"]:
-            ## get the content str
-            content_str = self.extract_content_str(choice["message"]["content"])
-
-            ## get the reasoning content
-            reasoning_content, thinking_blocks = self.extract_reasoning_content(
-                choice["message"]["content"]
-            )
-
-            translated_message = Message(
-                role="assistant",
-                content=content_str,
-                reasoning_content=reasoning_content,
-                thinking_blocks=thinking_blocks,
-                tool_calls=choice["message"].get("tool_calls"),
-            )
-
-            translated_choice = Choices(
-                finish_reason=choice["finish_reason"],
-                index=choice["index"],
-                message=translated_message,
-                logprobs=None,
-                enhancements=None,
-            )
-
-            model_response.choices.append(translated_choice)
+        model_response.choices = self._transform_choices(  # type: ignore
+            choices=completion_response["choices"]
+        )
 
         return model_response

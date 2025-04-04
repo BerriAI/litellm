@@ -660,7 +660,7 @@ class TestDatabricksCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
     def get_base_completion_call_args_with_thinking(self) -> dict:
         return {
             "model": "databricks/databricks-claude-3-7-sonnet",
-            "thinking": {"type": "enabled", "budget_tokens": 16000},
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
         }
 
     def test_pdf_handling(self, pdf_messages):
