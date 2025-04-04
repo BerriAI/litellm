@@ -78,7 +78,18 @@ DEFAULT_SERVICE_CONFIGS = {
     ServiceTypes.PROXY_PRE_CALL.value: {
         "metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]
     },
+    # Operational metrics for DB Transaction Queues
     ServiceTypes.POD_LOCK_MANAGER.value: {"metrics": [ServiceMetrics.GAUGE]},
+    ServiceTypes.IN_MEMORY_DAILY_SPEND_UPDATE_QUEUE.value: {
+        "metrics": [ServiceMetrics.GAUGE]
+    },
+    ServiceTypes.REDIS_DAILY_SPEND_UPDATE_QUEUE.value: {
+        "metrics": [ServiceMetrics.GAUGE]
+    },
+    ServiceTypes.IN_MEMORY_SPEND_UPDATE_QUEUE.value: {
+        "metrics": [ServiceMetrics.GAUGE]
+    },
+    ServiceTypes.REDIS_SPEND_UPDATE_QUEUE.value: {"metrics": [ServiceMetrics.GAUGE]},
 }
 
 
