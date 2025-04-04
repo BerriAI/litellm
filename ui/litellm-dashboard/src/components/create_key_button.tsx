@@ -92,7 +92,7 @@ const getPredefinedTags = (data: any[] | null) => {
   return uniqueTags;
 }
 
-export const fetchTeamModels = async (userID: string, userRole: string, accessToken: string, teamID: string): Promise<string[]> => {
+export const fetchTeamModels = async (userID: string, userRole: string, accessToken: string, teamID: string | null): Promise<string[]> => {
   try {
     if (userID === null || userRole === null) {
       return [];
@@ -177,6 +177,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const handleCancel = () => {
     setIsModalVisible(false);
     setApiKey(null);
+    setSelectedCreateKeyTeam(null);
     form.resetFields();
   };
 
@@ -291,14 +292,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   };
 
   useEffect(() => {
-    if (userID && userRole && accessToken && selectedCreateKeyTeam) {
-      fetchTeamModels(userID, userRole, accessToken, selectedCreateKeyTeam.team_id).then((models) => {
-        let allModels = Array.from(new Set([...selectedCreateKeyTeam.models, ...models]));
+    if (userID && userRole && accessToken) {
+      fetchTeamModels(userID, userRole, accessToken, selectedCreateKeyTeam?.team_id ?? null).then((models) => {
+        let allModels = Array.from(new Set([...(selectedCreateKeyTeam?.models ?? []), ...models]));
         setModelsToPick(allModels);
       });
     }
     form.setFieldValue('models', []);
-  }, [selectedCreateKeyTeam]);
+  }, [selectedCreateKeyTeam, accessToken, userID, userRole]);
 
   // Add a callback function to handle user creation
   const handleUserCreated = (userId: string) => {
