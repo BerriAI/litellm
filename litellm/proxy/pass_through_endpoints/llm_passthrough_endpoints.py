@@ -448,6 +448,8 @@ async def vertex_proxy_route(
         get_vertex_project_id_from_url,
     )
 
+    vertex_llm_base = VertexBase()
+
     encoded_endpoint = httpx.URL(endpoint).path
     verbose_proxy_logger.debug("requested endpoint %s", endpoint)
     headers: dict = {}
