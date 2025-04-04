@@ -52,7 +52,7 @@ class AnthropicMessagesTextParam(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
-class AnthropicMessagesToolUseParam(TypedDict):
+class AnthropicMessagesToolUseParam(TypedDict, total=False):
     type: Required[Literal["tool_use"]]
     id: str
     name: str

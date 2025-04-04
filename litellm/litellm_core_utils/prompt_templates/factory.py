@@ -1254,7 +1254,6 @@ def convert_function_to_anthropic_tool_invoke(
                 id=str(uuid.uuid4()),
                 name=_name,
                 input=json.loads(_arguments) if _arguments else {},
-                cache_control=None,
             )
         ]
         return anthropic_tool_invoke
@@ -1309,14 +1308,16 @@ def convert_to_anthropic_tool_invoke(
 
         _anthropic_tool_use_param = AnthropicMessagesToolUseParam(
             type="tool_use",
-            id=get_attribute_or_key(tool, "id"),
-            name=get_attribute_or_key(get_attribute_or_key(tool, "function"), "name"),
+            id=cast(str, get_attribute_or_key(tool, "id")),
+            name=cast(
+                str,
+                get_attribute_or_key(get_attribute_or_key(tool, "function"), "name"),
+            ),
             input=json.loads(
                 get_attribute_or_key(
                     get_attribute_or_key(tool, "function"), "arguments"
                 )
             ),
-            cache_control=None,
         )
 
         _content_element = add_cache_control_to_content(
