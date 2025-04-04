@@ -26,6 +26,7 @@ REDIS_UPDATE_BUFFER_KEY = "litellm_spend_update_buffer"
 REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_spend_update_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT = 100
 MAX_SIZE_IN_MEMORY_QUEUE = 10000
+MAX_IN_MEMORY_QUEUE_FLUSH_COUNT = 1000
 ###############################################################################################
 MINIMUM_PROMPT_CACHE_TOKEN_COUNT = (
     1024  # minimum number of tokens to cache a prompt by Anthropic

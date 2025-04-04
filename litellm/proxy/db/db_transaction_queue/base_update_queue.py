@@ -4,7 +4,7 @@ Base class for in memory buffer for database transactions
 import asyncio
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import MAX_SIZE_IN_MEMORY_QUEUE
+from litellm.constants import MAX_IN_MEMORY_QUEUE_FLUSH_COUNT, MAX_SIZE_IN_MEMORY_QUEUE
 
 
 class BaseUpdateQueue:
@@ -23,5 +23,11 @@ class BaseUpdateQueue:
         """Get all updates from the queue."""
         updates = []
         while not self.update_queue.empty():
+            if len(updates) >= MAX_IN_MEMORY_QUEUE_FLUSH_COUNT:
+                # circuit breaker to ensure we're not stuck dequeuing updates
+                verbose_proxy_logger.warning(
+                    "Max in memory queue flush count reached, stopping flush"
+                )
+                break
             updates.append(await self.update_queue.get())
         return updates
