@@ -6,7 +6,7 @@ Handles Authentication and generating request urls for Vertex AI and Google AI S
 
 import json
 import os
-from typing import TYPE_CHECKING, Any, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, cast
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
@@ -28,6 +28,10 @@ class VertexBase(BaseLLM):
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
         self._credentials: Optional[GoogleCredentialsObject] = None
+        self._credentials_project_mapping: Dict[
+            Tuple[Optional[VERTEX_CREDENTIALS_TYPES], Optional[str]],
+            GoogleCredentialsObject,
+        ] = {}
         self.project_id: Optional[str] = None
         self.async_handler: Optional[AsyncHTTPHandler] = None
 
@@ -259,6 +263,92 @@ class VertexBase(BaseLLM):
             url=url,
         )
 
+    async def get_access_token(
+        self,
+        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
+        project_id: Optional[str],
+    ) -> Tuple[str, str]:
+        """
+        Get access token and project id
+
+        1. Check if credentials are already in self._credentials_project_mapping
+        2. If not, load credentials and add to self._credentials_project_mapping
+        3. Check if loaded credentials have expired
+        4. If expired, refresh credentials
+        5. Return access token and project id
+        """
+
+        # Convert dict credentials to string for caching
+        cache_credentials = (
+            json.dumps(credentials) if isinstance(credentials, dict) else credentials
+        )
+        credential_cache_key = (cache_credentials, project_id)
+        _credentials: Optional[GoogleCredentialsObject] = None
+
+        verbose_logger.debug(
+            f"Checking cached credentials for project_id: {project_id}"
+        )
+
+        if credential_cache_key in self._credentials_project_mapping:
+            verbose_logger.debug(
+                f"Cached credentials found for project_id: {project_id}."
+            )
+            _credentials = self._credentials_project_mapping[credential_cache_key]
+            verbose_logger.debug("Using cached credentials")
+            credential_project_id = _credentials.quota_project_id
+        else:
+            verbose_logger.debug(
+                f"Credential cache key not found for project_id: {project_id}, loading new credentials"
+            )
+            _credentials, credential_project_id = await asyncify(self.load_auth)(
+                credentials=credentials, project_id=project_id
+            )
+
+            if _credentials is None:
+                raise ValueError(
+                    "Could not resolve credentials - either dynamically or from environment, for project_id: {}".format(
+                        project_id
+                    )
+                )
+
+            self._credentials_project_mapping[credential_cache_key] = _credentials
+
+        if _credentials is None:
+            raise ValueError("Could not resolve credentials")
+
+        ## VALIDATE CREDENTIALS
+        verbose_logger.debug(f"Validating credentials for project_id: {project_id}")
+        if (
+            project_id is not None
+            and credential_project_id
+            and credential_project_id != project_id
+        ):
+            raise ValueError(
+                "Could not resolve project_id. Credential project_id: {} does not match requested project_id: {}".format(
+                    _credentials.quota_project_id, project_id
+                )
+            )
+        else:
+            project_id = cast(
+                Optional[str], _credentials.quota_project_id
+            )  # if none set, use credential project_id
+
+        if _credentials.expired:
+            await asyncify(self.refresh_auth)(_credentials)
+
+        ## VALIDATION STEP
+        if _credentials.token is None or not isinstance(_credentials.token, str):
+            raise ValueError(
+                "Could not resolve credentials token. Got None or non-string token - {}".format(
+                    _credentials.token
+                )
+            )
+
+        if project_id is None:
+            raise ValueError("Could not resolve project_id")
+
+        return _credentials.token, project_id
+
     async def _ensure_access_token_async(
         self,
         credentials: Optional[VERTEX_CREDENTIALS_TYPES],
@@ -272,6 +362,11 @@ class VertexBase(BaseLLM):
         """
         if custom_llm_provider == "gemini":
             return "", ""
+        else:
+            return await self.get_access_token(
+                credentials=credentials,
+                project_id=project_id,
+            )
         if self.access_token is not None:
             if project_id is not None:
                 return self.access_token, project_id
@@ -297,7 +392,7 @@ class VertexBase(BaseLLM):
             if not self.project_id:
                 self.project_id = self._credentials.quota_project_id
 
-        if not self.project_id:
+        if not self.project_id or self.project_id != self._credentials.quota_project_id:
             raise ValueError("Could not resolve project_id")
 
         if not self._credentials or not self._credentials.token:
