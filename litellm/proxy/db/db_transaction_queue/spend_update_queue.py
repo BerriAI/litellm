@@ -1,5 +1,5 @@
 import asyncio
-from typing import List
+from typing import Dict, List
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
@@ -26,6 +26,97 @@ class SpendUpdateQueue(BaseUpdateQueue):
         updates = await self.flush_all_updates_from_in_memory_queue()
         verbose_proxy_logger.debug("Aggregating updates by entity type: %s", updates)
         return self.get_aggregated_db_spend_update_transactions(updates)
+
+    async def add_update(self, update: SpendUpdateQueueItem):
+        """Enqueue an update to the spend update queue"""
+        if self.update_queue.qsize() >= self.MAX_SIZE_IN_MEMORY_QUEUE:
+            verbose_proxy_logger.warning(
+                "Spend update queue is full. Aggregating all entries in queue to concatenate entries."
+            )
+            await self.aggregate_queue_updates()
+        else:
+            verbose_proxy_logger.debug("Adding update to queue: %s", update)
+            await self.update_queue.put(update)
+
+    async def aggregate_queue_updates(self):
+        """Concatenate all updates in the queue to reduce the size of in-memory queue"""
+        updates: List[
+            SpendUpdateQueueItem
+        ] = await self.flush_all_updates_from_in_memory_queue()
+        aggregated_updates = self._get_aggregated_spend_update_queue_item(updates)
+        for update in aggregated_updates:
+            await self.update_queue.put(update)
+        return
+
+    def _get_aggregated_spend_update_queue_item(
+        self, updates: List[SpendUpdateQueueItem]
+    ) -> List[SpendUpdateQueueItem]:
+        """
+        This is used to reduce the size of the in-memory queue by aggregating updates by entity type + id
+
+
+        Aggregate updates by entity type + id
+
+        eg.
+
+        ```
+        [
+            {
+                "entity_type": "user",
+                "entity_id": "123",
+                "response_cost": 100
+            },
+            {
+                "entity_type": "user",
+                "entity_id": "123",
+                "response_cost": 200
+            }
+        ]
+
+        ```
+
+        becomes
+
+        ```
+
+        [
+            {
+                "entity_type": "user",
+                "entity_id": "123",
+                "response_cost": 300
+            }
+        ]
+
+        ```
+        """
+        verbose_proxy_logger.debug(
+            "Aggregating spend updates, current queue size: %s",
+            self.update_queue.qsize(),
+        )
+        aggregated_spend_updates: List[SpendUpdateQueueItem] = []
+
+        _in_memory_map: Dict[str, SpendUpdateQueueItem] = {}
+        """
+        Used for combining several updates into a single update
+        Key=entity_type:entity_id
+        Value=SpendUpdateQueueItem
+        """
+        for update in updates:
+            _key = f"{update.get('entity_type')}:{update.get('entity_id')}"
+            if _key not in _in_memory_map:
+                _in_memory_map[_key] = update
+            else:
+                current_cost = _in_memory_map[_key].get("response_cost", 0) or 0
+                update_cost = update.get("response_cost", 0) or 0
+                _in_memory_map[_key]["response_cost"] = current_cost + update_cost
+
+        for _key, update in _in_memory_map.items():
+            aggregated_spend_updates.append(update)
+
+        verbose_proxy_logger.debug(
+            "Aggregated spend updates: %s", aggregated_spend_updates
+        )
+        return aggregated_spend_updates
 
     def get_aggregated_db_spend_update_transactions(
         self, updates: List[SpendUpdateQueueItem]
