@@ -29,14 +29,15 @@ class SpendUpdateQueue(BaseUpdateQueue):
 
     async def add_update(self, update: SpendUpdateQueueItem):
         """Enqueue an update to the spend update queue"""
+        verbose_proxy_logger.debug("Adding update to queue: %s", update)
+        await self.update_queue.put(update)
+
+        # if the queue is full, aggregate the updates
         if self.update_queue.qsize() >= self.MAX_SIZE_IN_MEMORY_QUEUE:
             verbose_proxy_logger.warning(
                 "Spend update queue is full. Aggregating all entries in queue to concatenate entries."
             )
             await self.aggregate_queue_updates()
-        else:
-            verbose_proxy_logger.debug("Adding update to queue: %s", update)
-            await self.update_queue.put(update)
 
     async def aggregate_queue_updates(self):
         """Concatenate all updates in the queue to reduce the size of in-memory queue"""
