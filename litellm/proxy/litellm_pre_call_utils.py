@@ -491,12 +491,15 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         )
     )
 
+    # Make a copy of the data *before* adding the proxy_server_request key
+    original_data_copy = copy.deepcopy(data)  # Use deepcopy for nested structures
+
     # Include original request and headers in the data
     data["proxy_server_request"] = {
         "url": str(request.url),
         "method": request.method,
         "headers": _headers,
-        "body": copy.copy(data),  # use copy instead of deepcopy
+        "body": original_data_copy,  # Use the deep copy without the circular reference
     }
 
     ## Dynamic api version (Azure OpenAI endpoints) ##
