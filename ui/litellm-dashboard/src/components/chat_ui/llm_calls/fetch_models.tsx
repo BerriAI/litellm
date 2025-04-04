@@ -20,7 +20,7 @@ export const fetchAvailableModels = async (
     if (fetchedModels?.data.length > 0) {
       const models: ModelGroup[] = fetchedModels.data.map((item: any) => ({
         model_group: item.model_group, // Display the model_group to the user
-        mode: item?.model_info?.mode, // Save the mode for auto-selection of endpoint type
+        mode: item?.mode, // Save the mode for auto-selection of endpoint type
       }));
 
       // Sort models alphabetically by label
