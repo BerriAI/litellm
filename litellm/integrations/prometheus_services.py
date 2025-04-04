@@ -42,12 +42,11 @@ class PrometheusServicesLogger:
 
             verbose_logger.debug("in init prometheus services metrics")
 
-            self.services: List[ServiceTypes] = [item for item in ServiceTypes]
             self.payload_to_prometheus_map: Dict[
                 str, List[Union[Histogram, Counter, Gauge, Collector]]
             ] = {}
 
-            for service in self.services:
+            for service in ServiceTypes:
                 service_metrics: List[Union[Histogram, Counter, Gauge, Collector]] = []
 
                 metrics_to_initialize = self._get_service_metrics_initialize(service)
