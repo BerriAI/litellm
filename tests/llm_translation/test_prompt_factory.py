@@ -345,7 +345,7 @@ def test_anthropic_cache_controls_tool_calls_pt():
     assert translated_messages[1]["role"] == "assistant"
     for content_item in translated_messages[1]["content"]:
         if content_item["type"] == "tool_use":
-            assert content_item["cache_control"] is None
+            assert "cache_control" not in content_item
             assert content_item["name"] == "get_weather"
 
     assert translated_messages[2]["role"] == "user"
