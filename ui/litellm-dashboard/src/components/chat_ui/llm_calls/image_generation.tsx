@@ -5,7 +5,8 @@ export async function makeOpenAIImageGenerationRequest(
   prompt: string,
   updateUI: (imageUrl: string, model: string) => void,
   selectedModel: string,
-  accessToken: string
+  accessToken: string,
+  signal?: AbortSignal
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
@@ -26,7 +27,7 @@ export async function makeOpenAIImageGenerationRequest(
     const response = await client.images.generate({
       model: selectedModel,
       prompt: prompt,
-    });
+    }, { signal });
 
     console.log(response.data);
     
@@ -46,6 +47,11 @@ export async function makeOpenAIImageGenerationRequest(
       throw new Error("Invalid response format");
     }
   } catch (error) {
-    message.error(`Error occurred while generating image. Please try again. Error: ${error}`, 20);
+    if (signal?.aborted) {
+      console.log("Image generation request was cancelled");
+    } else {
+      message.error(`Error occurred while generating image. Please try again. Error: ${error}`, 20);
+    }
+    throw error; // Re-throw to allow the caller to handle the error
   }
 }
