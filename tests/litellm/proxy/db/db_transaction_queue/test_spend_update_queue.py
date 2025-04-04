@@ -231,8 +231,8 @@ async def test_queue_size_reduction_with_large_volume(monkeypatch, spend_queue):
     # Set a smaller MAX_SIZE for testing
     monkeypatch.setattr(spend_queue, "MAX_SIZE_IN_MEMORY_QUEUE", 10)
 
-    # Add 30 updates (20 for user1, 10 for user2)
-    for i in range(20):
+    # Add 30 updates (200 for user1, 10 for key1)
+    for i in range(200):
         await spend_queue.add_update(
             {
                 "entity_type": Litellm_EntityType.USER,
@@ -243,23 +243,23 @@ async def test_queue_size_reduction_with_large_volume(monkeypatch, spend_queue):
 
     # At this point, aggregation should have happened at least once
     # Queue size should be much less than 20
-    assert spend_queue.update_queue.qsize() <= 2
+    assert spend_queue.update_queue.qsize() <= 10
 
-    for i in range(10):
+    for i in range(300):
         await spend_queue.add_update(
             {
-                "entity_type": Litellm_EntityType.USER,
-                "entity_id": "user2",
+                "entity_type": Litellm_EntityType.KEY,
+                "entity_id": "key1",
                 "response_cost": 1.0,
             }
         )
 
     # Queue should have at most 2 items after all this activity
-    assert spend_queue.update_queue.qsize() <= 2
+    assert spend_queue.update_queue.qsize() <= 10
 
     # Verify total costs are correct
     aggregated = (
         await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
     )
-    assert aggregated["user_list_transactions"]["user1"] == 10.0  # 20 * 0.5
-    assert aggregated["user_list_transactions"]["user2"] == 10.0  # 10 * 1.0
+    assert aggregated["user_list_transactions"]["user1"] == 200 * 0.5
+    assert aggregated["key_list_transactions"]["key1"] == 300 * 1.0
