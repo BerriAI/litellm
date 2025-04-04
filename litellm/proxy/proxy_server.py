@@ -5353,6 +5353,43 @@ def _check_if_model_is_team_model(
     return user_team_models
 
 
+async def non_admin_all_models(
+    all_models: List[Dict],
+    llm_router: Router,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: Optional[PrismaClient],
+):
+    """
+    Check if model is in db
+
+    Check if db model is 'created_by' == user_api_key_dict.user_id
+
+    Only return models that match
+    """
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+    user_row = await prisma_client.db.litellm_usertable.find_unique(
+        where={"user_id": user_api_key_dict.user_id}
+    )
+
+    if user_row is None:
+        raise HTTPException(status_code=400, detail={"error": "User not found"})
+    all_models = await _check_if_model_is_user_added(
+        models=all_models,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
+    all_models += _check_if_model_is_team_model(
+        models=llm_router.get_model_list() or [],
+        user_row=user_row,
+    )
+
+    return all_models
+
+
 @router.get(
     "/v2/model/info",
     description="v2 - returns models available to the user based on their API key permissions. Shows model info from config.yaml (except api key and api base). Filter to just user-added models with ?user_models_only=true",
@@ -5402,32 +5439,11 @@ async def model_info_v2(
         user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
         and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
     ):
-        """
-        Check if model is in db
-
-        Check if db model is 'created_by' == user_api_key_dict.user_id
-
-        Only return models that match
-        """
-        if prisma_client is None:
-            raise HTTPException(
-                status_code=500,
-                detail={"error": CommonProxyErrors.db_not_connected_error.value},
-            )
-        user_row = await prisma_client.db.litellm_usertable.find_unique(
-            where={"user_id": user_api_key_dict.user_id}
-        )
-
-        if user_row is None:
-            raise HTTPException(status_code=400, detail={"error": "User not found"})
-        all_models = await _check_if_model_is_user_added(
-            models=all_models,
+        all_models = await non_admin_all_models(
+            all_models=all_models,
+            llm_router=llm_router,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
-        )
-        all_models += _check_if_model_is_team_model(
-            models=llm_router.get_model_list() or [],
-            user_row=user_row,
         )
 
     # fill in model info based on config.yaml and litellm model_prices_and_context_window.json
