@@ -77,10 +77,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    let useApiKey = apiKeySource === 'session' ? accessToken : apiKey;
-    console.log("useApiKey:", useApiKey);
-    if (!useApiKey || !token || !userRole || !userID) {
-      console.log("useApiKey or token or userRole or userID is missing = ", useApiKey, token, userRole, userID);
+    let userApiKey = apiKeySource === 'session' ? accessToken : apiKey;
+    if (!userApiKey || !token || !userRole || !userID) {
+      console.log("userApiKey or token or userRole or userID is missing = ", userApiKey, token, userRole, userID);
       return;
     }
 
@@ -88,7 +87,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     const loadModels = async () => {
       try {
         const uniqueModels = await fetchAvailableModels(
-          useApiKey,
+          userApiKey,
         );
   
         console.log("Fetched models:", uniqueModels);
