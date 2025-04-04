@@ -350,7 +350,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response = DatabricksResponse(**raw_response.json())
+            completion_response = DatabricksResponse(**raw_response.json())  # type: ignore
         except Exception as e:
             response_headers = getattr(raw_response, "headers", None)
             raise DatabricksException(
