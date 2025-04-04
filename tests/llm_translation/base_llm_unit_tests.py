@@ -1179,6 +1179,7 @@ class BaseAnthropicChatTest(ABC):
 
     def test_completion_thinking_with_response_format(self):
         from pydantic import BaseModel
+        litellm._turn_on_debug()
 
         class RFormat(BaseModel):
             question: str

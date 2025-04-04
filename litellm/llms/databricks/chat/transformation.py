@@ -3,6 +3,7 @@ Translates from OpenAI's `/v1/chat/completions` to Databricks' `/chat/completion
 """
 
 import json
+import uuid
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -18,6 +19,7 @@ from typing import (
 import httpx
 from pydantic import BaseModel
 
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     convert_to_model_response_object,
 )
@@ -26,12 +28,20 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_name_from_messages,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
+from litellm.types.llms.anthropic import AnthropicMessagesTool
 from litellm.types.llms.databricks import (
     AllDatabricksContentValues,
     DatabricksChoice,
+    DatabricksFunction,
     DatabricksResponse,
+    DatabricksTool,
 )
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionThinkingBlock
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionThinkingBlock,
+    ChatCompletionToolCallChunk,
+    ChatCompletionToolCallFunctionChunk,
+)
 from litellm.types.utils import (
     Choices,
     Message,
@@ -42,6 +52,7 @@ from litellm.types.utils import (
     Usage,
 )
 
+from ...anthropic.chat.transformation import AnthropicConfig
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from ..common_utils import DatabricksBase, DatabricksException
 
@@ -53,7 +64,7 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig):
+class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     """
     Reference: https://docs.databricks.com/en/machine-learning/foundation-models/api-reference.html#chat-request
     """
@@ -147,6 +158,36 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig):
             "thinking",
         ]
 
+    def convert_anthropic_tool_to_databricks_tool(
+        self, tool: Optional[AnthropicMessagesTool]
+    ) -> Optional[DatabricksTool]:
+        if tool is None:
+            return None
+
+        return DatabricksTool(
+            type="function",
+            function=DatabricksFunction(
+                name=tool["name"],
+                parameters=cast(dict, tool.get("input_schema") or {}),
+            ),
+        )
+
+    def map_response_format_to_databricks_tool(
+        self,
+        model: str,
+        value: Optional[dict],
+        optional_params: dict,
+        is_thinking_enabled: bool,
+    ) -> Optional[DatabricksTool]:
+        if value is None:
+            return None
+
+        tool = self.map_response_format_to_anthropic_tool(
+            value, optional_params, is_thinking_enabled
+        )
+        databricks_tool = self.convert_anthropic_tool_to_databricks_tool(tool)
+        return databricks_tool
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -167,10 +208,26 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig):
             ]  # most openai-compatible providers support 'max_tokens' not 'max_completion_tokens'
             mapped_params.pop("max_completion_tokens", None)
 
+        if "response_format" in non_default_params and "claude" in model:
+            _tool = self.map_response_format_to_databricks_tool(
+                model,
+                non_default_params["response_format"],
+                mapped_params,
+                self.is_thinking_enabled(non_default_params),
+            )
+
+            if _tool is not None:
+                self._add_tools_to_optional_params(
+                    optional_params=optional_params, tools=[_tool]
+                )
+                optional_params["json_mode"] = True
+                optional_params.pop("response_format", None)
+
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
-            non_default_params=non_default_params, optional_params=optional_params
+            non_default_params=non_default_params, optional_params=mapped_params
         )
+
         return mapped_params
 
     def _should_fake_stream(self, optional_params: dict) -> bool:

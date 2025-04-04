@@ -47,10 +47,22 @@ AllDatabricksContentListValues = Union[
 AllDatabricksContentValues = Union[str, List[AllDatabricksContentListValues]]
 
 
+class DatabricksFunction(TypedDict, total=False):
+    name: Required[str]
+    description: dict
+    parameters: dict
+    strict: bool
+
+
+class DatabricksTool(TypedDict, total=False):
+    function: DatabricksFunction
+    type: Literal["function"]
+
+
 class DatabricksMessage(TypedDict, total=False):
     role: Required[str]
     content: Required[AllDatabricksContentValues]
-    tool_calls: Optional[List[ChatCompletionToolCallChunk]]
+    tool_calls: Optional[List[DatabricksTool]]
 
 
 class DatabricksChoice(TypedDict, total=False):
