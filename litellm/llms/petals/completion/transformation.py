@@ -37,9 +37,9 @@ class PetalsConfig(BaseConfig):
     """
 
     max_length: Optional[int] = None
-    max_new_tokens: Optional[int] = (
-        litellm.max_tokens
-    )  # petals requires max tokens to be set
+    max_new_tokens: Optional[
+        int
+    ] = litellm.max_tokens  # petals requires max tokens to be set
     do_sample: Optional[bool] = None
     temperature: Optional[float] = None
     top_k: Optional[int] = None

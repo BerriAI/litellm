@@ -258,14 +258,12 @@ def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[s
 
 
 class LiteLLMResponseObjectHandler:
-
     @staticmethod
     def convert_to_image_response(
         response_object: dict,
         model_response_object: Optional[ImageResponse] = None,
         hidden_params: Optional[dict] = None,
     ) -> ImageResponse:
-
         response_object.update({"hidden_params": hidden_params})
 
         if model_response_object is None:
@@ -481,9 +479,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         provider_specific_fields["thinking_blocks"] = thinking_blocks
 
                     if reasoning_content:
-                        provider_specific_fields["reasoning_content"] = (
-                            reasoning_content
-                        )
+                        provider_specific_fields[
+                            "reasoning_content"
+                        ] = reasoning_content
 
                     message = Message(
                         content=content,
@@ -494,6 +492,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         provider_specific_fields=provider_specific_fields,
                         reasoning_content=reasoning_content,
                         thinking_blocks=thinking_blocks,
+                        annotations=choice["message"].get("annotations", None),
                     )
                     finish_reason = choice.get("finish_reason", None)
                 if finish_reason is None:

@@ -14,7 +14,6 @@ from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
 def _get_request_ip_address(
     request: Request, use_x_forwarded_for: Optional[bool] = False
 ) -> Optional[str]:
-
     client_ip = None
     if use_x_forwarded_for is True and "x-forwarded-for" in request.headers:
         client_ip = request.headers["x-forwarded-for"]
@@ -321,6 +320,7 @@ async def check_if_request_size_is_safe(request: Request) -> bool:
     from litellm.proxy.proxy_server import general_settings, premium_user
 
     max_request_size_mb = general_settings.get("max_request_size_mb", None)
+
     if max_request_size_mb is not None:
         # Check if premium user
         if premium_user is not True:
@@ -468,7 +468,6 @@ def should_run_auth_on_pass_through_provider_route(route: str) -> bool:
     from litellm.proxy.proxy_server import general_settings, premium_user
 
     if premium_user is not True:
-
         return False
 
     # premium use has opted into using client credentials

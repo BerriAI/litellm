@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, Mock, patch
 import os
 import uuid
 import time
+import base64
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -20,6 +21,7 @@ from litellm.utils import (
     get_optional_params,
     ProviderConfigManager,
 )
+from litellm.main import stream_chunk_builder
 from typing import Union
 
 # test_example.py
@@ -196,6 +198,42 @@ class BaseLLMChatTest(ABC):
             messages=image_messages,
         )
         assert response is not None
+    
+    def test_file_data_unit_test(self, pdf_messages):
+        from litellm.utils import supports_pdf_input, return_raw_request
+        from litellm.types.utils import CallTypes
+        from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_image_obj
+
+        media_chunk = convert_to_anthropic_image_obj(
+            openai_image_url=pdf_messages,
+            format=None,
+        )
+
+        file_content = [
+            {"type": "text", "text": "What's this file about?"},
+            {
+                "type": "file",
+                "file": {
+                    "file_data": pdf_messages,
+                }
+            },
+        ]
+
+        image_messages = [{"role": "user", "content": file_content}]
+
+        base_completion_call_args = self.get_base_completion_call_args()
+
+        if not supports_pdf_input(base_completion_call_args["model"], None):
+            pytest.skip("Model does not support image input")
+
+        raw_request = return_raw_request(
+            endpoint=CallTypes.completion,
+            kwargs={**base_completion_call_args, "messages": image_messages},
+        )
+
+        print("RAW REQUEST", raw_request)
+
+        assert media_chunk["data"] in json.dumps(raw_request)
 
     def test_message_with_name(self):
         try:
@@ -338,7 +376,7 @@ class BaseLLMChatTest(ABC):
 
     @pytest.mark.flaky(retries=6, delay=1)
     def test_json_response_pydantic_obj(self):
-        litellm.set_verbose = True
+        litellm._turn_on_debug()
         from pydantic import BaseModel
         from litellm.utils import supports_response_schema
 
@@ -888,6 +926,74 @@ class BaseLLMChatTest(ABC):
 
         assert cost > 0
 
+    @pytest.mark.parametrize("input_type", ["input_audio", "audio_url"])
+    def test_supports_audio_input(self, input_type):
+        from litellm.utils import return_raw_request, supports_audio_input
+        from litellm.types.utils import CallTypes
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+
+        litellm.drop_params = True
+        base_completion_call_args = self.get_base_completion_call_args()
+        if not supports_audio_input(base_completion_call_args["model"], None):
+            print("Model does not support audio input")
+            pytest.skip("Model does not support audio input")
+
+        url = "https://openaiassets.blob.core.windows.net/$web/API/docs/audio/alloy.wav"
+        response = httpx.get(url)
+        response.raise_for_status()
+        wav_data = response.content
+        audio_format = "wav"
+        encoded_string = base64.b64encode(wav_data).decode("utf-8")
+
+        audio_content = [
+            {
+                "type": "text",
+                "text": "What is in this recording?"
+            }
+        ]
+
+        test_file_id = "gs://bucket/file.wav"
+
+        if input_type == "input_audio":
+            audio_content.append({
+                "type": "input_audio",
+                "input_audio": {"data": encoded_string, "format": audio_format},
+            })
+        elif input_type == "audio_url":
+            audio_content.append(
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": test_file_id,
+                        "filename": "my-sample-audio-file",
+                    }
+                }
+            )
+            
+                
+
+        raw_request = return_raw_request(
+            endpoint=CallTypes.completion,
+            kwargs={
+                **base_completion_call_args, 
+                "modalities": ["text", "audio"],
+                "audio": {"voice": "alloy", "format": audio_format},
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": audio_content,
+                    },
+                ]
+            }
+        )
+        print("raw_request: ", raw_request)
+
+        if input_type == "input_audio":
+            assert encoded_string in json.dumps(raw_request), "Audio data not sent to gemini"
+        elif input_type == "audio_url":
+            assert test_file_id in json.dumps(raw_request), "Audio URL not sent to gemini"
 
 class BaseOSeriesModelsTest(ABC):  # test across azure/openai
     @abstractmethod
@@ -995,3 +1101,98 @@ class BaseOSeriesModelsTest(ABC):  # test across azure/openai
             ), "temperature should not be in the request body"
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
+
+
+class BaseAnthropicChatTest(ABC):
+    """
+    Ensures consistent result across anthropic model usage
+    """
+
+    @abstractmethod
+    def get_base_completion_call_args(self) -> dict:
+        """Must return the base completion call args"""
+        pass
+
+    @abstractmethod
+    def get_base_completion_call_args_with_thinking(self) -> dict:
+        """Must return the base completion call args"""
+        pass
+
+    @property
+    def completion_function(self):
+        return litellm.completion
+
+    def test_anthropic_response_format_streaming_vs_non_streaming(self):
+        litellm.set_verbose = True
+        args = {
+            "messages": [
+                {
+                    "content": "Your goal is to summarize the previous agent's thinking process into short descriptions to let user better understand the research progress. If no information is available, just say generic phrase like 'Doing some research...' with the given output format. Make sure to adhere to the output format no matter what, even if you don't have any information or you are not allowed to respond to the given input information (then just say generic phrase like 'Doing some research...').",
+                    "role": "system",
+                },
+                {
+                    "role": "user",
+                    "content": "Here is the input data (previous agent's output): \n\n Let's try to refine our search further, focusing more on the technical aspects of home automation and home energy system management:",
+                },
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "final_output",
+                    "strict": True,
+                    "schema": {
+                        "description": 'Progress report for the thinking process\n\nThis model represents a snapshot of the agent\'s current progress during\nthe thinking process, providing a brief description of the current activity.\n\nAttributes:\n    agent_doing: Brief description of what the agent is currently doing.\n                Should be kept under 10 words. Example: "Learning about home automation"',
+                        "properties": {
+                            "agent_doing": {"title": "Agent Doing", "type": "string"}
+                        },
+                        "required": ["agent_doing"],
+                        "title": "ThinkingStep",
+                        "type": "object",
+                        "additionalProperties": False,
+                    },
+                },
+            },
+        }
+
+        base_completion_call_args = self.get_base_completion_call_args()
+
+        response = self.completion_function(
+            **base_completion_call_args, **args, stream=True
+        )
+
+        chunks = []
+        for chunk in response:
+            print(f"chunk: {chunk}")
+            chunks.append(chunk)
+
+        print(f"chunks: {chunks}")
+        built_response = stream_chunk_builder(chunks=chunks)
+
+        non_stream_response = self.completion_function(
+            **base_completion_call_args, **args, stream=False
+        )
+
+        assert (
+            json.loads(built_response.choices[0].message.content).keys()
+            == json.loads(non_stream_response.choices[0].message.content).keys()
+        ), f"Got={json.loads(built_response.choices[0].message.content)}, Expected={json.loads(non_stream_response.choices[0].message.content)}"
+
+    def test_completion_thinking_with_response_format(self):
+        from pydantic import BaseModel
+
+        class RFormat(BaseModel):
+            question: str
+            answer: str
+
+        base_completion_call_args = self.get_base_completion_call_args_with_thinking()
+
+        messages = [{"role": "user", "content": "Generate 5 question + answer pairs"}]
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages=messages,
+            response_format=RFormat,
+        )
+
+        print(response)
+
+ 

@@ -21,7 +21,6 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.types.llms.anthropic import (
-    AnthropicChatCompletionUsageBlock,
     ContentBlockDelta,
     ContentBlockStart,
     ContentBlockStop,
@@ -32,13 +31,13 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.openai import (
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
-    ChatCompletionUsageBlock,
 )
 from litellm.types.utils import (
     Delta,
     GenericStreamingChunk,
     ModelResponseStream,
     StreamingChoices,
+    Usage,
 )
 from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
 
@@ -290,7 +289,6 @@ class AnthropicChatCompletion(BaseLLM):
         headers={},
         client=None,
     ):
-
         optional_params = copy.deepcopy(optional_params)
         stream = optional_params.pop("stream", None)
         json_mode: bool = optional_params.pop("json_mode", False)
@@ -488,11 +486,8 @@ class ModelResponseIterator:
             return True
         return False
 
-    def _handle_usage(
-        self, anthropic_usage_chunk: Union[dict, UsageDelta]
-    ) -> AnthropicChatCompletionUsageBlock:
-
-        usage_block = AnthropicChatCompletionUsageBlock(
+    def _handle_usage(self, anthropic_usage_chunk: Union[dict, UsageDelta]) -> Usage:
+        usage_block = Usage(
             prompt_tokens=anthropic_usage_chunk.get("input_tokens", 0),
             completion_tokens=anthropic_usage_chunk.get("output_tokens", 0),
             total_tokens=anthropic_usage_chunk.get("input_tokens", 0)
@@ -515,7 +510,9 @@ class ModelResponseIterator:
 
         return usage_block
 
-    def _content_block_delta_helper(self, chunk: dict) -> Tuple[
+    def _content_block_delta_helper(
+        self, chunk: dict
+    ) -> Tuple[
         str,
         Optional[ChatCompletionToolCallChunk],
         List[ChatCompletionThinkingBlock],
@@ -581,7 +578,7 @@ class ModelResponseIterator:
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
             finish_reason = ""
-            usage: Optional[ChatCompletionUsageBlock] = None
+            usage: Optional[Usage] = None
             provider_specific_fields: Dict[str, Any] = {}
             reasoning_content: Optional[str] = None
             thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
@@ -592,9 +589,12 @@ class ModelResponseIterator:
                 Anthropic content chunk
                 chunk = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': 'Hello'}}
                 """
-                text, tool_use, thinking_blocks, provider_specific_fields = (
-                    self._content_block_delta_helper(chunk=chunk)
-                )
+                (
+                    text,
+                    tool_use,
+                    thinking_blocks,
+                    provider_specific_fields,
+                ) = self._content_block_delta_helper(chunk=chunk)
                 if thinking_blocks:
                     reasoning_content = self._handle_reasoning_content(
                         thinking_blocks=thinking_blocks
@@ -620,7 +620,6 @@ class ModelResponseIterator:
                         "index": self.tool_index,
                     }
             elif type_chunk == "content_block_stop":
-
                 ContentBlockStop(**chunk)  # type: ignore
                 # check if tool call content block
                 is_empty = self.check_empty_tool_call_args()

@@ -16,7 +16,6 @@ from .auth_checks_organization import _user_is_org_admin
 
 
 class RouteChecks:
-
     @staticmethod
     def non_proxy_admin_allowed_routes_check(
         user_obj: Optional[LiteLLM_UserTable],
@@ -24,7 +23,6 @@ class RouteChecks:
         route: str,
         request: Request,
         valid_token: UserAPIKeyAuth,
-        api_key: str,
         request_data: dict,
     ):
         """
@@ -68,7 +66,6 @@ class RouteChecks:
             and getattr(valid_token, "permissions", None) is not None
             and "get_spend_routes" in getattr(valid_token, "permissions", [])
         ):
-
             pass
         elif _user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value:
             if RouteChecks.is_llm_api_route(route=route):
@@ -81,7 +78,6 @@ class RouteChecks:
             ):
                 # the Admin Viewer is only allowed to call /user/update for their own user_id and can only update
                 if route == "/user/update":
-
                     # Check the Request params are valid for PROXY_ADMIN_VIEW_ONLY
                     if request_data is not None and isinstance(request_data, dict):
                         _params_updated = request_data.keys()

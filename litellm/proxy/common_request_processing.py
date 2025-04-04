@@ -57,7 +57,9 @@ class ProxyBaseLLMRequestProcessing:
             "x-litellm-call-id": call_id,
             "x-litellm-model-id": model_id,
             "x-litellm-cache-key": cache_key,
-            "x-litellm-model-api-base": api_base,
+            "x-litellm-model-api-base": (
+                api_base.split("?")[0] if api_base else None
+            ),  # don't include query params, risk of leaking sensitive info
             "x-litellm-version": version,
             "x-litellm-model-region": model_region,
             "x-litellm-response-cost": str(response_cost),
@@ -121,6 +123,7 @@ class ProxyBaseLLMRequestProcessing:
         """
         Common request processing logic for both chat completions and responses API endpoints
         """
+
         verbose_proxy_logger.debug(
             "Request received by LiteLLM:\n{}".format(json.dumps(self.data, indent=4)),
         )

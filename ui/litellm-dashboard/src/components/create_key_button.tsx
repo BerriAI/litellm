@@ -40,6 +40,7 @@ import { Tooltip } from 'antd';
 import Createuser from "./create_user_button";
 import debounce from 'lodash/debounce';
 import { rolesWithWriteAccess } from '../utils/roles';
+import BudgetDurationDropdown from "./common_components/budget_duration_dropdown";
 
 
 
@@ -91,7 +92,7 @@ const getPredefinedTags = (data: any[] | null) => {
   return uniqueTags;
 }
 
-export const fetchTeamModels = async (userID: string, userRole: string, accessToken: string, teamID: string): Promise<string[]> => {
+export const fetchTeamModels = async (userID: string, userRole: string, accessToken: string, teamID: string | null): Promise<string[]> => {
   try {
     if (userID === null || userRole === null) {
       return [];
@@ -176,6 +177,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const handleCancel = () => {
     setIsModalVisible(false);
     setApiKey(null);
+    setSelectedCreateKeyTeam(null);
     form.resetFields();
   };
 
@@ -290,14 +292,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   };
 
   useEffect(() => {
-    if (userID && userRole && accessToken && selectedCreateKeyTeam) {
-      fetchTeamModels(userID, userRole, accessToken, selectedCreateKeyTeam.team_id).then((models) => {
-        let allModels = Array.from(new Set([...selectedCreateKeyTeam.models, ...models]));
+    if (userID && userRole && accessToken) {
+      fetchTeamModels(userID, userRole, accessToken, selectedCreateKeyTeam?.team_id ?? null).then((models) => {
+        let allModels = Array.from(new Set([...(selectedCreateKeyTeam?.models ?? []), ...models]));
         setModelsToPick(allModels);
       });
     }
     form.setFieldValue('models', []);
-  }, [selectedCreateKeyTeam]);
+  }, [selectedCreateKeyTeam, accessToken, userID, userRole]);
 
   // Add a callback function to handle user creation
   const handleUserCreated = (userId: string) => {
@@ -572,11 +574,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   name="budget_duration"
                   help={`Team Reset Budget: ${team?.budget_duration !== null && team?.budget_duration !== undefined ? team?.budget_duration : "None"}`}
                 >
-                  <Select defaultValue={null} placeholder="n/a">
-                    <Select.Option value="24h">daily</Select.Option>
-                    <Select.Option value="7d">weekly</Select.Option>
-                    <Select.Option value="30d">monthly</Select.Option>
-                  </Select>
+                  <BudgetDurationDropdown onChange={(value) => form.setFieldValue('budget_duration', value)} />
                 </Form.Item>
                 <Form.Item
                   className="mt-4"

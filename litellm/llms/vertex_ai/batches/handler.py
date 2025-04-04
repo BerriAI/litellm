@@ -35,7 +35,6 @@ class VertexAIBatchPrediction(VertexLLM):
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
     ) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
-
         sync_handler = _get_httpx_client()
 
         access_token, project_id = self._ensure_access_token(
@@ -69,10 +68,8 @@ class VertexAIBatchPrediction(VertexLLM):
             "Authorization": f"Bearer {access_token}",
         }
 
-        vertex_batch_request: VertexAIBatchPredictionJob = (
-            VertexAIBatchTransformation.transform_openai_batch_request_to_vertex_ai_batch_request(
-                request=create_batch_data
-            )
+        vertex_batch_request: VertexAIBatchPredictionJob = VertexAIBatchTransformation.transform_openai_batch_request_to_vertex_ai_batch_request(
+            request=create_batch_data
         )
 
         if _is_async is True:

@@ -5,7 +5,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 import httpx
 
 import litellm
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.constants import (
+    DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,
+    RESPONSE_FORMAT_TOOL_NAME,
+)
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
@@ -18,8 +21,10 @@ from litellm.types.llms.anthropic import (
     AnthropicMessagesTool,
     AnthropicMessagesToolChoice,
     AnthropicSystemMessageContent,
+    AnthropicThinkingParam,
 )
 from litellm.types.llms.openai import (
+    REASONING_EFFORT,
     AllMessageValues,
     ChatCompletionCachedContent,
     ChatCompletionSystemMessage,
@@ -28,9 +33,16 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
 )
+from litellm.types.utils import CompletionTokensDetailsWrapper
 from litellm.types.utils import Message as LitellmMessage
 from litellm.types.utils import PromptTokensDetailsWrapper
-from litellm.utils import ModelResponse, Usage, add_dummy_tool, has_tool_call_blocks
+from litellm.utils import (
+    ModelResponse,
+    Usage,
+    add_dummy_tool,
+    has_tool_call_blocks,
+    token_counter,
+)
 
 from ..common_utils import AnthropicError, process_anthropic_headers
 
@@ -49,9 +61,9 @@ class AnthropicConfig(BaseConfig):
     to pass metadata to anthropic, it's {"user_id": "any-relevant-information"}
     """
 
-    max_tokens: Optional[int] = (
-        4096  # anthropic requires a default value (Opus, Sonnet, and Haiku have the same default)
-    )
+    max_tokens: Optional[
+        int
+    ] = DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS  # anthropic requires a default value (Opus, Sonnet, and Haiku have the same default)
     stop_sequences: Optional[list] = None
     temperature: Optional[int] = None
     top_p: Optional[int] = None
@@ -63,7 +75,7 @@ class AnthropicConfig(BaseConfig):
         self,
         max_tokens: Optional[
             int
-        ] = 4096,  # You can pass in a value yourself or use the default value 4096
+        ] = DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,  # You can pass in a value yourself or use the default value 4096
         stop_sequences: Optional[list] = None,
         temperature: Optional[int] = None,
         top_p: Optional[int] = None,
@@ -94,6 +106,7 @@ class AnthropicConfig(BaseConfig):
             "parallel_tool_calls",
             "response_format",
             "user",
+            "reasoning_effort",
         ]
 
         if "claude-3-7-sonnet" in model:
@@ -104,7 +117,6 @@ class AnthropicConfig(BaseConfig):
     def get_json_schema_from_pydantic_object(
         self, response_format: Union[Any, Dict, None]
     ) -> Optional[dict]:
-
         return type_to_response_format_param(
             response_format, ref_template="/$defs/{model}"
         )  # Relevant issue: https://github.com/BerriAI/litellm/issues/7755
@@ -125,7 +137,6 @@ class AnthropicConfig(BaseConfig):
         is_vertex_request: bool = False,
         user_anthropic_beta_headers: Optional[List[str]] = None,
     ) -> dict:
-
         betas = set()
         if prompt_caching_set:
             betas.add("prompt-caching-2024-07-31")
@@ -293,6 +304,21 @@ class AnthropicConfig(BaseConfig):
                 new_stop = new_v
         return new_stop
 
+    @staticmethod
+    def _map_reasoning_effort(
+        reasoning_effort: Optional[Union[REASONING_EFFORT, str]]
+    ) -> Optional[AnthropicThinkingParam]:
+        if reasoning_effort is None:
+            return None
+        elif reasoning_effort == "low":
+            return AnthropicThinkingParam(type="enabled", budget_tokens=1024)
+        elif reasoning_effort == "medium":
+            return AnthropicThinkingParam(type="enabled", budget_tokens=2048)
+        elif reasoning_effort == "high":
+            return AnthropicThinkingParam(type="enabled", budget_tokens=4096)
+        else:
+            raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -300,6 +326,10 @@ class AnthropicConfig(BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        is_thinking_enabled = self.is_thinking_enabled(
+            non_default_params=non_default_params
+        )
+
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_tokens"] = value
@@ -312,11 +342,11 @@ class AnthropicConfig(BaseConfig):
                     optional_params=optional_params, tools=tool_value
                 )
             if param == "tool_choice" or param == "parallel_tool_calls":
-                _tool_choice: Optional[AnthropicMessagesToolChoice] = (
-                    self._map_tool_choice(
-                        tool_choice=non_default_params.get("tool_choice"),
-                        parallel_tool_use=non_default_params.get("parallel_tool_calls"),
-                    )
+                _tool_choice: Optional[
+                    AnthropicMessagesToolChoice
+                ] = self._map_tool_choice(
+                    tool_choice=non_default_params.get("tool_choice"),
+                    parallel_tool_use=non_default_params.get("parallel_tool_calls"),
                 )
 
                 if _tool_choice is not None:
@@ -332,7 +362,6 @@ class AnthropicConfig(BaseConfig):
             if param == "top_p":
                 optional_params["top_p"] = value
             if param == "response_format" and isinstance(value, dict):
-
                 ignore_response_format_types = ["text"]
                 if value["type"] in ignore_response_format_types:  # value is a no-op
                     continue
@@ -349,19 +378,31 @@ class AnthropicConfig(BaseConfig):
                 - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
                 """
 
-                _tool_choice = {"name": RESPONSE_FORMAT_TOOL_NAME, "type": "tool"}
+                if not is_thinking_enabled:
+                    _tool_choice = {"name": RESPONSE_FORMAT_TOOL_NAME, "type": "tool"}
+                    optional_params["tool_choice"] = _tool_choice
+
                 _tool = self._create_json_tool_call_for_response_format(
                     json_schema=json_schema,
                 )
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=[_tool]
                 )
-                optional_params["tool_choice"] = _tool_choice
+
                 optional_params["json_mode"] = True
             if param == "user":
                 optional_params["metadata"] = {"user_id": value}
             if param == "thinking":
                 optional_params["thinking"] = value
+            elif param == "reasoning_effort" and isinstance(value, str):
+                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+                    value
+                )
+
+        ## handle thinking tokens
+        self.update_optional_params_with_thinking_tokens(
+            non_default_params=non_default_params, optional_params=optional_params
+        )
         return optional_params
 
     def _create_json_tool_call_for_response_format(
@@ -387,7 +428,7 @@ class AnthropicConfig(BaseConfig):
             _input_schema["additionalProperties"] = True
             _input_schema["properties"] = {}
         else:
-            _input_schema["properties"] = {"values": json_schema}
+            _input_schema.update(cast(AnthropicInputSchema, json_schema))
 
         _tool = AnthropicMessagesTool(
             name=RESPONSE_FORMAT_TOOL_NAME, input_schema=_input_schema
@@ -457,9 +498,9 @@ class AnthropicConfig(BaseConfig):
                         text=system_message_block["content"],
                     )
                     if "cache_control" in system_message_block:
-                        anthropic_system_message_content["cache_control"] = (
-                            system_message_block["cache_control"]
-                        )
+                        anthropic_system_message_content[
+                            "cache_control"
+                        ] = system_message_block["cache_control"]
                     anthropic_system_message_list.append(
                         anthropic_system_message_content
                     )
@@ -473,9 +514,9 @@ class AnthropicConfig(BaseConfig):
                             )
                         )
                         if "cache_control" in _content:
-                            anthropic_system_message_content["cache_control"] = (
-                                _content["cache_control"]
-                            )
+                            anthropic_system_message_content[
+                                "cache_control"
+                            ] = _content["cache_control"]
 
                         anthropic_system_message_list.append(
                             anthropic_system_message_content
@@ -584,7 +625,9 @@ class AnthropicConfig(BaseConfig):
                 )
         return _message
 
-    def extract_response_content(self, completion_response: dict) -> Tuple[
+    def extract_response_content(
+        self, completion_response: dict
+    ) -> Tuple[
         str,
         Optional[List[Any]],
         Optional[List[ChatCompletionThinkingBlock]],
@@ -680,9 +723,13 @@ class AnthropicConfig(BaseConfig):
             reasoning_content: Optional[str] = None
             tool_calls: List[ChatCompletionToolCallChunk] = []
 
-            text_content, citations, thinking_blocks, reasoning_content, tool_calls = (
-                self.extract_response_content(completion_response=completion_response)
-            )
+            (
+                text_content,
+                citations,
+                thinking_blocks,
+                reasoning_content,
+                tool_calls,
+            ) = self.extract_response_content(completion_response=completion_response)
 
             _message = litellm.Message(
                 tool_calls=tool_calls,
@@ -732,6 +779,15 @@ class AnthropicConfig(BaseConfig):
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens
         )
+        completion_token_details = (
+            CompletionTokensDetailsWrapper(
+                reasoning_tokens=token_counter(
+                    text=reasoning_content, count_response_tokens=True
+                )
+            )
+            if reasoning_content
+            else None
+        )
         total_tokens = prompt_tokens + completion_tokens
         usage = Usage(
             prompt_tokens=prompt_tokens,
@@ -740,6 +796,7 @@ class AnthropicConfig(BaseConfig):
             prompt_tokens_details=prompt_tokens_details,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
+            completion_tokens_details=completion_token_details,
         )
 
         setattr(model_response, "usage", usage)  # type: ignore

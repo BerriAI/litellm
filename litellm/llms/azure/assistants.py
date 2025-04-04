@@ -43,6 +43,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
                 api_base=api_base,
                 model_name="",
                 api_version=api_version,
+                is_async=False,
             )
             azure_openai_client = AzureOpenAI(**azure_client_params)  # type: ignore
         else:
@@ -68,6 +69,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
                 api_base=api_base,
                 model_name="",
                 api_version=api_version,
+                is_async=True,
             )
 
             azure_openai_client = AsyncAzureOpenAI(**azure_client_params)

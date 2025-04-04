@@ -11,7 +11,7 @@ import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
+)  # Adds the parent directory to the system path
 
 
 import os
@@ -4364,14 +4364,14 @@ async def test_dynamic_azure_params(stream, sync_mode):
 
     ## recreate mock client
     if sync_mode:
-        mock_client = MagicMock(return_value="Hello world!")
+        new_mock_client = MagicMock(return_value="Hello world!")
     else:
-        mock_client = AsyncMock(return_value="Hello world!")
+        new_mock_client = AsyncMock(return_value="Hello world!")
 
     ## CHECK IF NEW CLIENT IS USED (PARAM CHANGE)
     with patch.object(
-        client.chat.completions.with_raw_response, "create", new=mock_client
-    ) as mock_client:
+        client.chat.completions.with_raw_response, "create", new=new_mock_client
+    ) as new_mock_client:
         try:
             if sync_mode:
                 _ = completion(
@@ -4393,7 +4393,7 @@ async def test_dynamic_azure_params(stream, sync_mode):
             pass
 
         try:
-            mock_client.assert_not_called()
+            new_mock_client.assert_called()
         except Exception as e:
             raise e
 

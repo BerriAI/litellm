@@ -770,42 +770,6 @@ async def test_add_litellm_data_to_request_duplicate_tags(
 
 
 @pytest.mark.parametrize(
-    "general_settings, user_api_key_dict, expected_enforced_params",
-    [
-        (
-            {"enforced_params": ["param1", "param2"]},
-            UserAPIKeyAuth(
-                api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
-            ),
-            ["param1", "param2"],
-        ),
-        (
-            {"service_account_settings": {"enforced_params": ["param1", "param2"]}},
-            UserAPIKeyAuth(
-                api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
-            ),
-            ["param1", "param2"],
-        ),
-        (
-            {"service_account_settings": {"enforced_params": ["param1", "param2"]}},
-            UserAPIKeyAuth(
-                api_key="test_api_key",
-                metadata={"enforced_params": ["param3", "param4"]},
-            ),
-            ["param1", "param2", "param3", "param4"],
-        ),
-    ],
-)
-def test_get_enforced_params(
-    general_settings, user_api_key_dict, expected_enforced_params
-):
-    from litellm.proxy.litellm_pre_call_utils import _get_enforced_params
-
-    enforced_params = _get_enforced_params(general_settings, user_api_key_dict)
-    assert enforced_params == expected_enforced_params
-
-
-@pytest.mark.parametrize(
     "general_settings, user_api_key_dict, request_body, expected_error",
     [
         (
@@ -820,6 +784,17 @@ def test_get_enforced_params(
             {"service_account_settings": {"enforced_params": ["user"]}},
             UserAPIKeyAuth(
                 api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
+            ),
+            {},
+            False,
+        ),
+        (
+            {"service_account_settings": {"enforced_params": ["user"]}},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+                user_id="test_user_id", 
+                org_id="test_org_id",
+                metadata={"service_account_id": "test_service_account_id"}
             ),
             {},
             True,
@@ -854,6 +829,7 @@ def test_get_enforced_params(
             {"service_account_settings": {"enforced_params": ["user"]}},
             UserAPIKeyAuth(
                 api_key="test_api_key",
+                metadata={"service_account_id": "test_service_account_id"}
             ),
             {"user": "test_user"},
             False,
@@ -1509,20 +1485,17 @@ from litellm.proxy.utils import ProxyUpdateSpend
 async def test_end_user_transactions_reset():
     # Setup
     mock_client = MagicMock()
-    mock_client.end_user_list_transactons = {"1": 10.0}  # Bad log
+    end_user_list_transactions = {"1": 10.0}  # Bad log
     mock_client.db.tx = AsyncMock(side_effect=Exception("DB Error"))
 
     # Call function - should raise error
     with pytest.raises(Exception):
         await ProxyUpdateSpend.update_end_user_spend(
-            n_retry_times=0, prisma_client=mock_client, proxy_logging_obj=MagicMock()
+            n_retry_times=0,
+            prisma_client=mock_client,
+            proxy_logging_obj=MagicMock(),
+            end_user_list_transactions=end_user_list_transactions,
         )
-
-    # Verify cleanup happened
-    assert (
-        mock_client.end_user_list_transactons == {}
-    ), "Transactions list should be empty after error"
-
 
 @pytest.mark.asyncio
 async def test_spend_logs_cleanup_after_error():

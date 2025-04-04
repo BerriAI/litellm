@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import json
 import os
@@ -11,12 +12,23 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
 
+from unittest.mock import MagicMock, patch
+
+import litellm
+from litellm.proxy._types import SpendLogsPayload
+from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.proxy_server import app, prisma_client
+from litellm.router import Router
 
 
 @pytest.fixture
 def client():
     return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def add_anthropic_api_key_to_env(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-1234567890")
 
 
 @pytest.mark.asyncio
@@ -400,3 +412,273 @@ async def test_ui_view_spend_logs_unauthorized(client):
         headers={"Authorization": "Bearer invalid-token"},
     )
     assert response.status_code == 401 or response.status_code == 403
+
+
+class TestSpendLogsPayload:
+    @pytest.mark.asyncio
+    async def test_spend_logs_payload_e2e(self):
+        litellm.callbacks = [_ProxyDBLogger(message_logging=False)]
+        # litellm._turn_on_debug()
+
+        with patch.object(
+            litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter,
+            "_set_spend_logs_payload",
+        ) as mock_client, patch.object(litellm.proxy.proxy_server, "prisma_client"):
+            response = await litellm.acompletion(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": "Hello, world!"}],
+                mock_response="Hello, world!",
+                metadata={"user_api_key_end_user_id": "test_user_1"},
+            )
+
+            assert response.choices[0].message.content == "Hello, world!"
+
+            await asyncio.sleep(1)
+
+            mock_client.assert_called_once()
+
+            kwargs = mock_client.call_args.kwargs
+            payload: SpendLogsPayload = kwargs["payload"]
+            expected_payload = SpendLogsPayload(
+                **{
+                    "request_id": "chatcmpl-34df56d5-4807-45c1-bb99-61e52586b802",
+                    "call_type": "acompletion",
+                    "api_key": "",
+                    "cache_hit": "None",
+                    "startTime": datetime.datetime(
+                        2025, 3, 24, 22, 2, 42, 975883, tzinfo=datetime.timezone.utc
+                    ),
+                    "endTime": datetime.datetime(
+                        2025, 3, 24, 22, 2, 42, 989132, tzinfo=datetime.timezone.utc
+                    ),
+                    "completionStartTime": datetime.datetime(
+                        2025, 3, 24, 22, 2, 42, 989132, tzinfo=datetime.timezone.utc
+                    ),
+                    "model": "gpt-4o",
+                    "user": "",
+                    "team_id": "",
+                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": null}}',
+                    "cache_key": "Cache OFF",
+                    "spend": 0.00022500000000000002,
+                    "total_tokens": 30,
+                    "prompt_tokens": 10,
+                    "completion_tokens": 20,
+                    "request_tags": "[]",
+                    "end_user": "test_user_1",
+                    "api_base": "",
+                    "model_group": "",
+                    "model_id": "",
+                    "requester_ip_address": None,
+                    "custom_llm_provider": "openai",
+                    "messages": "{}",
+                    "response": "{}",
+                }
+            )
+
+            for key, value in expected_payload.items():
+                if key in [
+                    "request_id",
+                    "startTime",
+                    "endTime",
+                    "completionStartTime",
+                    "endTime",
+                ]:
+                    assert payload[key] is not None
+                else:
+                    assert (
+                        payload[key] == value
+                    ), f"Expected {key} to be {value}, but got {payload[key]}"
+
+    def mock_anthropic_response(*args, **kwargs):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "application/json"}
+        mock_response.json.return_value = {
+            "content": [{"text": "Hi! My name is Claude.", "type": "text"}],
+            "id": "msg_013Zva2CMHLNnXjNJJKqJ2EF",
+            "model": "claude-3-7-sonnet-20250219",
+            "role": "assistant",
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "type": "message",
+            "usage": {"input_tokens": 2095, "output_tokens": 503},
+        }
+        return mock_response
+
+    @pytest.mark.asyncio
+    async def test_spend_logs_payload_success_log_with_api_base(self, monkeypatch):
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+        litellm.callbacks = [_ProxyDBLogger(message_logging=False)]
+        # litellm._turn_on_debug()
+
+        client = AsyncHTTPHandler()
+
+        with patch.object(
+            litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter,
+            "_set_spend_logs_payload",
+        ) as mock_client, patch.object(
+            litellm.proxy.proxy_server, "prisma_client"
+        ), patch.object(
+            client, "post", side_effect=self.mock_anthropic_response
+        ):
+            response = await litellm.acompletion(
+                model="claude-3-7-sonnet-20250219",
+                messages=[{"role": "user", "content": "Hello, world!"}],
+                metadata={"user_api_key_end_user_id": "test_user_1"},
+                client=client,
+            )
+
+            assert response.choices[0].message.content == "Hi! My name is Claude."
+
+            await asyncio.sleep(1)
+
+            mock_client.assert_called_once()
+
+            kwargs = mock_client.call_args.kwargs
+            payload: SpendLogsPayload = kwargs["payload"]
+            expected_payload = SpendLogsPayload(
+                **{
+                    "request_id": "chatcmpl-34df56d5-4807-45c1-bb99-61e52586b802",
+                    "call_type": "acompletion",
+                    "api_key": "",
+                    "cache_hit": "None",
+                    "startTime": datetime.datetime(
+                        2025, 3, 24, 22, 2, 42, 975883, tzinfo=datetime.timezone.utc
+                    ),
+                    "endTime": datetime.datetime(
+                        2025, 3, 24, 22, 2, 42, 989132, tzinfo=datetime.timezone.utc
+                    ),
+                    "completionStartTime": datetime.datetime(
+                        2025, 3, 24, 22, 2, 42, 989132, tzinfo=datetime.timezone.utc
+                    ),
+                    "model": "claude-3-7-sonnet-20250219",
+                    "user": "",
+                    "team_id": "",
+                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
+                    "cache_key": "Cache OFF",
+                    "spend": 0.01383,
+                    "total_tokens": 2598,
+                    "prompt_tokens": 2095,
+                    "completion_tokens": 503,
+                    "request_tags": "[]",
+                    "end_user": "test_user_1",
+                    "api_base": "https://api.anthropic.com/v1/messages",
+                    "model_group": "",
+                    "model_id": "",
+                    "requester_ip_address": None,
+                    "custom_llm_provider": "anthropic",
+                    "messages": "{}",
+                    "response": "{}",
+                }
+            )
+
+            for key, value in expected_payload.items():
+                if key in [
+                    "request_id",
+                    "startTime",
+                    "endTime",
+                    "completionStartTime",
+                    "endTime",
+                ]:
+                    assert payload[key] is not None
+                else:
+                    assert (
+                        payload[key] == value
+                    ), f"Expected {key} to be {value}, but got {payload[key]}"
+
+    @pytest.mark.asyncio
+    async def test_spend_logs_payload_success_log_with_router(self):
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+        litellm.callbacks = [_ProxyDBLogger(message_logging=False)]
+        # litellm._turn_on_debug()
+
+        client = AsyncHTTPHandler()
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "my-anthropic-model-group",
+                    "litellm_params": {
+                        "model": "claude-3-7-sonnet-20250219",
+                    },
+                    "model_info": {
+                        "id": "my-unique-model-id",
+                    },
+                }
+            ]
+        )
+
+        with patch.object(
+            litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter,
+            "_set_spend_logs_payload",
+        ) as mock_client, patch.object(
+            litellm.proxy.proxy_server, "prisma_client"
+        ), patch.object(
+            client, "post", side_effect=self.mock_anthropic_response
+        ):
+            response = await router.acompletion(
+                model="my-anthropic-model-group",
+                messages=[{"role": "user", "content": "Hello, world!"}],
+                metadata={"user_api_key_end_user_id": "test_user_1"},
+                client=client,
+            )
+
+            assert response.choices[0].message.content == "Hi! My name is Claude."
+
+            await asyncio.sleep(1)
+
+            mock_client.assert_called_once()
+
+            kwargs = mock_client.call_args.kwargs
+            payload: SpendLogsPayload = kwargs["payload"]
+            expected_payload = SpendLogsPayload(
+                **{
+                    "request_id": "chatcmpl-34df56d5-4807-45c1-bb99-61e52586b802",
+                    "call_type": "acompletion",
+                    "api_key": "",
+                    "cache_hit": "None",
+                    "startTime": datetime.datetime(
+                        2025, 3, 24, 22, 2, 42, 975883, tzinfo=datetime.timezone.utc
+                    ),
+                    "endTime": datetime.datetime(
+                        2025, 3, 24, 22, 2, 42, 989132, tzinfo=datetime.timezone.utc
+                    ),
+                    "completionStartTime": datetime.datetime(
+                        2025, 3, 24, 22, 2, 42, 989132, tzinfo=datetime.timezone.utc
+                    ),
+                    "model": "claude-3-7-sonnet-20250219",
+                    "user": "",
+                    "team_id": "",
+                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
+                    "cache_key": "Cache OFF",
+                    "spend": 0.01383,
+                    "total_tokens": 2598,
+                    "prompt_tokens": 2095,
+                    "completion_tokens": 503,
+                    "request_tags": "[]",
+                    "end_user": "test_user_1",
+                    "api_base": "https://api.anthropic.com/v1/messages",
+                    "model_group": "my-anthropic-model-group",
+                    "model_id": "my-unique-model-id",
+                    "requester_ip_address": None,
+                    "custom_llm_provider": "anthropic",
+                    "messages": "{}",
+                    "response": "{}",
+                }
+            )
+
+            for key, value in expected_payload.items():
+                if key in [
+                    "request_id",
+                    "startTime",
+                    "endTime",
+                    "completionStartTime",
+                    "endTime",
+                ]:
+                    assert payload[key] is not None
+                else:
+                    assert (
+                        payload[key] == value
+                    ), f"Expected {key} to be {value}, but got {payload[key]}"

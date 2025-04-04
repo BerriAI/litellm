@@ -207,6 +207,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "extra_headers",
             "seed",
             "logprobs",
+            "top_logprobs",  # Added this to list of supported openAI params
         ]
 
     def map_tool_choice_values(
@@ -245,9 +246,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         value = _remove_strict_from_schema(value)
 
         for tool in value:
-            openai_function_object: Optional[ChatCompletionToolParamFunctionChunk] = (
-                None
-            )
+            openai_function_object: Optional[
+                ChatCompletionToolParamFunctionChunk
+            ] = None
             if "function" in tool:  # tools list
                 _openai_function_object = ChatCompletionToolParamFunctionChunk(  # type: ignore
                     **tool["function"]
@@ -365,6 +366,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["presence_penalty"] = value
             if param == "logprobs":
                 optional_params["responseLogprobs"] = value
+            if param == "top_logprobs":
+                optional_params["logprobs"] = value
             if (param == "tools" or param == "functions") and isinstance(value, list):
                 optional_params["tools"] = self._map_function(value=value)
                 optional_params["litellm_param_is_function_call"] = (
@@ -415,6 +418,49 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "europe-west8",
             "europe-west9",
         ]
+
+    @staticmethod
+    def get_model_for_vertex_ai_url(model: str) -> str:
+        """
+        Returns the model name to use in the request to Vertex AI
+
+        Handles 2 cases:
+        1. User passed `model="vertex_ai/gemini/ft-uuid"`, we need to return `ft-uuid` for the request to Vertex AI
+        2. User passed `model="vertex_ai/gemini-2.0-flash-001"`, we need to return `gemini-2.0-flash-001` for the request to Vertex AI
+
+        Args:
+            model (str): The model name to use in the request to Vertex AI
+
+        Returns:
+            str: The model name to use in the request to Vertex AI
+        """
+        if VertexGeminiConfig._is_model_gemini_spec_model(model):
+            return VertexGeminiConfig._get_model_name_from_gemini_spec_model(model)
+        return model
+
+    @staticmethod
+    def _is_model_gemini_spec_model(model: Optional[str]) -> bool:
+        """
+        Returns true if user is trying to call custom model in `/gemini` request/response format
+        """
+        if model is None:
+            return False
+        if "gemini/" in model:
+            return True
+        return False
+
+    @staticmethod
+    def _get_model_name_from_gemini_spec_model(model: str) -> str:
+        """
+        Returns the model name if model="vertex_ai/gemini/<unique_id>"
+
+        Example:
+        - model = "gemini/1234567890"
+        - returns "1234567890"
+        """
+        if "gemini/" in model:
+            return model.split("/")[-1]
+        return model
 
     def get_flagged_finish_reasons(self) -> Dict[str, str]:
         """
@@ -597,16 +643,25 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         completion_response: GenerateContentResponseBody,
     ) -> Usage:
         cached_tokens: Optional[int] = None
+        audio_tokens: Optional[int] = None
+        text_tokens: Optional[int] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         if "cachedContentTokenCount" in completion_response["usageMetadata"]:
             cached_tokens = completion_response["usageMetadata"][
                 "cachedContentTokenCount"
             ]
+        if "promptTokensDetails" in completion_response["usageMetadata"]:
+            for detail in completion_response["usageMetadata"]["promptTokensDetails"]:
+                if detail["modality"] == "AUDIO":
+                    audio_tokens = detail["tokenCount"]
+                elif detail["modality"] == "TEXT":
+                    text_tokens = detail["tokenCount"]
 
-        if cached_tokens is not None:
-            prompt_tokens_details = PromptTokensDetailsWrapper(
-                cached_tokens=cached_tokens,
-            )
+        prompt_tokens_details = PromptTokensDetailsWrapper(
+            cached_tokens=cached_tokens,
+            audio_tokens=audio_tokens,
+            text_tokens=text_tokens,
+        )
         ## GET USAGE ##
         usage = Usage(
             prompt_tokens=completion_response["usageMetadata"].get(
@@ -620,6 +675,66 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         )
 
         return usage
+
+    def _process_candidates(self, _candidates, model_response, litellm_params):
+        """Helper method to process candidates and extract metadata"""
+        grounding_metadata: List[dict] = []
+        safety_ratings: List = []
+        citation_metadata: List = []
+        chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
+        chat_completion_logprobs: Optional[ChoiceLogprobs] = None
+        tools: Optional[List[ChatCompletionToolCallChunk]] = []
+        functions: Optional[ChatCompletionToolCallFunctionChunk] = None
+        
+        for idx, candidate in enumerate(_candidates):
+            if "content" not in candidate:
+                continue
+
+            if "groundingMetadata" in candidate:
+                grounding_metadata.append(candidate["groundingMetadata"])  # type: ignore
+
+            if "safetyRatings" in candidate:
+                safety_ratings.append(candidate["safetyRatings"])
+
+            if "citationMetadata" in candidate:
+                citation_metadata.append(candidate["citationMetadata"])
+                
+            if "parts" in candidate["content"]:
+                chat_completion_message["content"] = VertexGeminiConfig().get_assistant_content_message(
+                    parts=candidate["content"]["parts"]
+                )
+
+                functions, tools = self._transform_parts(
+                    parts=candidate["content"]["parts"],
+                    index=candidate.get("index", idx),
+                    is_function_call=litellm_params.get("litellm_param_is_function_call"),
+                )
+
+            if "logprobsResult" in candidate:
+                chat_completion_logprobs = self._transform_logprobs(
+                    logprobs_result=candidate["logprobsResult"]
+                )
+            # Handle avgLogprobs for Gemini Flash 2.0
+            elif "avgLogprobs" in candidate:
+                chat_completion_logprobs = candidate["avgLogprobs"]
+
+            if tools:
+                chat_completion_message["tool_calls"] = tools
+
+            if functions is not None:
+                chat_completion_message["function_call"] = functions
+                
+            choice = litellm.Choices(
+                finish_reason=candidate.get("finishReason", "stop"),
+                index=candidate.get("index", idx),
+                message=chat_completion_message,  # type: ignore
+                logprobs=chat_completion_logprobs,
+                enhancements=None,
+            )
+
+            model_response.choices.append(choice)
+            
+        return grounding_metadata, safety_ratings, citation_metadata
 
     def transform_response(
         self,
@@ -670,9 +785,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         _candidates = completion_response.get("candidates")
         if _candidates and len(_candidates) > 0:
-            content_policy_violations = (
-                VertexGeminiConfig().get_flagged_finish_reasons()
-            )
+            content_policy_violations = VertexGeminiConfig().get_flagged_finish_reasons()
             if (
                 "finishReason" in _candidates[0]
                 and _candidates[0]["finishReason"] in content_policy_violations.keys()
@@ -685,87 +798,25 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model_response.choices = []  # type: ignore
 
         try:
-            ## CHECK IF GROUNDING METADATA IN REQUEST
-            grounding_metadata: List[dict] = []
-            safety_ratings: List = []
-            citation_metadata: List = []
-            ## GET TEXT ##
-            chat_completion_message: ChatCompletionResponseMessage = {
-                "role": "assistant"
-            }
-            chat_completion_logprobs: Optional[ChoiceLogprobs] = None
-            tools: Optional[List[ChatCompletionToolCallChunk]] = []
-            functions: Optional[ChatCompletionToolCallFunctionChunk] = None
+            grounding_metadata, safety_ratings, citation_metadata = [], [], []
             if _candidates:
-                for idx, candidate in enumerate(_candidates):
-                    if "content" not in candidate:
-                        continue
-
-                    if "groundingMetadata" in candidate:
-                        grounding_metadata.append(candidate["groundingMetadata"])  # type: ignore
-
-                    if "safetyRatings" in candidate:
-                        safety_ratings.append(candidate["safetyRatings"])
-
-                    if "citationMetadata" in candidate:
-                        citation_metadata.append(candidate["citationMetadata"])
-                    if "parts" in candidate["content"]:
-                        chat_completion_message[
-                            "content"
-                        ] = VertexGeminiConfig().get_assistant_content_message(
-                            parts=candidate["content"]["parts"]
-                        )
-
-                        functions, tools = self._transform_parts(
-                            parts=candidate["content"]["parts"],
-                            index=candidate.get("index", idx),
-                            is_function_call=litellm_params.get(
-                                "litellm_param_is_function_call"
-                            ),
-                        )
-
-                    if "logprobsResult" in candidate:
-                        chat_completion_logprobs = self._transform_logprobs(
-                            logprobs_result=candidate["logprobsResult"]
-                        )
-
-                    if tools:
-                        chat_completion_message["tool_calls"] = tools
-
-                    if functions is not None:
-                        chat_completion_message["function_call"] = functions
-                    choice = litellm.Choices(
-                        finish_reason=candidate.get("finishReason", "stop"),
-                        index=candidate.get("index", idx),
-                        message=chat_completion_message,  # type: ignore
-                        logprobs=chat_completion_logprobs,
-                        enhancements=None,
-                    )
-
-                    model_response.choices.append(choice)
+                grounding_metadata, safety_ratings, citation_metadata = self._process_candidates(
+                    _candidates, model_response, litellm_params
+                )
 
             usage = self._calculate_usage(completion_response=completion_response)
             setattr(model_response, "usage", usage)
 
-            ## ADD GROUNDING METADATA ##
+            ## ADD METADATA TO RESPONSE ##
             setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)
-            model_response._hidden_params[
-                "vertex_ai_grounding_metadata"
-            ] = (  # older approach - maintaining to prevent regressions
-                grounding_metadata
-            )
-
-            ## ADD SAFETY RATINGS ##
+            model_response._hidden_params["vertex_ai_grounding_metadata"] = grounding_metadata
+            
             setattr(model_response, "vertex_ai_safety_results", safety_ratings)
-            model_response._hidden_params["vertex_ai_safety_results"] = (
-                safety_ratings  # older approach - maintaining to prevent regressions
-            )
-
+            model_response._hidden_params["vertex_ai_safety_results"] = safety_ratings  # older approach - maintaining to prevent regressions
+            
             ## ADD CITATION METADATA ##
             setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)
-            model_response._hidden_params["vertex_ai_citation_metadata"] = (
-                citation_metadata  # older approach - maintaining to prevent regressions
-            )
+            model_response._hidden_params["vertex_ai_citation_metadata"] = citation_metadata  # older approach - maintaining to prevent regressions
 
         except Exception as e:
             raise VertexAIError(
@@ -973,7 +1024,7 @@ class VertexLLM(VertexBase):
             input=messages,
             api_key="",
             additional_args={
-                "complete_input_dict": data,
+                "complete_input_dict": request_body,
                 "api_base": api_base,
                 "headers": headers,
             },
