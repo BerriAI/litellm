@@ -235,7 +235,8 @@ const sidebars = {
         "providers/sambanova",
         "providers/custom_llm_server",
         "providers/petals",
-        "providers/snowflake"
+        "providers/snowflake",
+        "providers/bitdeerai"
       ],
     },
     {
