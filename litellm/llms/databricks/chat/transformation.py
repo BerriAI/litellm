@@ -2,8 +2,6 @@
 Translates from OpenAI's `/v1/chat/completions` to Databricks' `/chat/completions`
 """
 
-import json
-import uuid
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -19,10 +17,6 @@ from typing import (
 import httpx
 from pydantic import BaseModel
 
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
-from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    convert_to_model_response_object,
-)
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
     strip_name_from_messages,
@@ -36,19 +30,13 @@ from litellm.types.llms.databricks import (
     DatabricksResponse,
     DatabricksTool,
 )
-from litellm.types.llms.openai import (
-    AllMessageValues,
-    ChatCompletionThinkingBlock,
-    ChatCompletionToolCallChunk,
-    ChatCompletionToolCallFunctionChunk,
-)
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionThinkingBlock
 from litellm.types.utils import (
     Choices,
     Message,
     ModelResponse,
     ModelResponseStream,
     ProviderField,
-    StreamingChoices,
     Usage,
 )
 
