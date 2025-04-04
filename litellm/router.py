@@ -54,6 +54,7 @@ from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
@@ -4506,25 +4507,51 @@ class Router:
                 passthrough_endpoint_router,
             )
 
+            if deployment.litellm_params.litellm_credential_name is not None:
+                credential_dict = CredentialAccessor.get_credential_values(
+                    deployment.litellm_params.litellm_credential_name
+                )
+            else:
+                credential_dict = {}
             if custom_llm_provider == "vertex_ai":
+                vertex_project = (
+                    credential_dict.get("vertex_project")
+                    or deployment.litellm_params.vertex_project
+                )
+                vertex_location = (
+                    credential_dict.get("vertex_location")
+                    or deployment.litellm_params.vertex_location
+                )
+                vertex_credentials = (
+                    credential_dict.get("vertex_credentials")
+                    or deployment.litellm_params.vertex_credentials
+                )
+
                 if (
-                    deployment.litellm_params.vertex_project is None
-                    or deployment.litellm_params.vertex_location is None
-                    or deployment.litellm_params.vertex_credentials is None
+                    vertex_project is None
+                    or vertex_location is None
+                    or vertex_credentials is None
                 ):
                     raise ValueError(
                         "vertex_project, vertex_location, and vertex_credentials must be set in litellm_params for pass-through endpoints"
                     )
                 passthrough_endpoint_router.add_vertex_credentials(
-                    project_id=deployment.litellm_params.vertex_project,
-                    location=deployment.litellm_params.vertex_location,
-                    vertex_credentials=deployment.litellm_params.vertex_credentials,
+                    project_id=vertex_project,
+                    location=vertex_location,
+                    vertex_credentials=vertex_credentials,
                 )
             else:
+                api_base = (
+                    credential_dict.get("api_base")
+                    or deployment.litellm_params.api_base
+                )
+                api_key = (
+                    credential_dict.get("api_key") or deployment.litellm_params.api_key
+                )
                 passthrough_endpoint_router.set_pass_through_credentials(
                     custom_llm_provider=custom_llm_provider,
-                    api_base=deployment.litellm_params.api_base,
-                    api_key=deployment.litellm_params.api_key,
+                    api_base=api_base,
+                    api_key=api_key,
                 )
             pass
         pass
