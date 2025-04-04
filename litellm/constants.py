@@ -20,9 +20,13 @@ DEFAULT_IMAGE_HEIGHT = 300
 DEFAULT_MAX_TOKENS = 256  # used when providers need a default
 MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = 1024  # 1MB = 1024KB
 SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD = 1000  # Minimum number of requests to consider "reasonable traffic". Used for single-deployment cooldown logic.
+
+########### v2 Architecture constants for managing writing updates to the database ###########
 REDIS_UPDATE_BUFFER_KEY = "litellm_spend_update_buffer"
 REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_spend_update_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT = 100
+MAX_SIZE_IN_MEMORY_QUEUE = 10000
+###############################################################################################
 MINIMUM_PROMPT_CACHE_TOKEN_COUNT = (
     1024  # minimum number of tokens to cache a prompt by Anthropic
 )
