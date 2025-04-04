@@ -282,9 +282,16 @@ class VertexBase(BaseLLM):
             verbose_logger.debug(
                 f"Credential cache key not found for project_id: {project_id}, loading new credentials"
             )
-            _credentials, credential_project_id = self.load_auth(
-                credentials=credentials, project_id=project_id
-            )
+
+            try:
+                _credentials, credential_project_id = self.load_auth(
+                    credentials=credentials, project_id=project_id
+                )
+            except Exception as e:
+                verbose_logger.exception(
+                    "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information."
+                )
+                raise e
 
             if _credentials is None:
                 raise ValueError(
@@ -344,10 +351,13 @@ class VertexBase(BaseLLM):
         if custom_llm_provider == "gemini":
             return "", ""
         else:
-            return await asyncify(self.get_access_token)(
-                credentials=credentials,
-                project_id=project_id,
-            )
+            try:
+                return await asyncify(self.get_access_token)(
+                    credentials=credentials,
+                    project_id=project_id,
+                )
+            except Exception as e:
+                raise e
 
     def set_headers(
         self, auth_header: Optional[str], extra_headers: Optional[dict]
