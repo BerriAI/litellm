@@ -4,6 +4,7 @@ Base class for in memory buffer for database transactions
 import asyncio
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import MAX_SIZE_IN_MEMORY_QUEUE
 
 
 class BaseUpdateQueue:
@@ -11,6 +12,7 @@ class BaseUpdateQueue:
 
     def __init__(self):
         self.update_queue = asyncio.Queue()
+        self.MAX_SIZE_IN_MEMORY_QUEUE = MAX_SIZE_IN_MEMORY_QUEUE
 
     async def add_update(self, update):
         """Enqueue an update."""
