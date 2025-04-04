@@ -28,9 +28,10 @@ const EndpointSelector: React.FC<EndpointSelectorProps> = ({
       <Text>Endpoint Type:</Text>
       <Select
         value={endpointType}
-        style={{ width: "100%", marginBottom: "12px" }}
+        style={{ width: "100%" }}
         onChange={onEndpointChange}
         options={endpointOptions}
+        className="rounded-md"
       />
     </div>
   );
