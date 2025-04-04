@@ -132,32 +132,11 @@ class VertexBase(BaseLLM):
         """
         if custom_llm_provider == "gemini":
             return "", ""
-        if self.access_token is not None:
-            if project_id is not None:
-                return self.access_token, project_id
-            elif self.project_id is not None:
-                return self.access_token, self.project_id
-
-        if not self._credentials:
-            self._credentials, cred_project_id = self.load_auth(
-                credentials=credentials, project_id=project_id
-            )
-            if not self.project_id:
-                self.project_id = project_id or cred_project_id
         else:
-            if self._credentials.expired or not self._credentials.token:
-                self.refresh_auth(self._credentials)
-
-            if not self.project_id:
-                self.project_id = self._credentials.quota_project_id
-
-        if not self.project_id:
-            raise ValueError("Could not resolve project_id")
-
-        if not self._credentials or not self._credentials.token:
-            raise RuntimeError("Could not resolve API token from the environment")
-
-        return self._credentials.token, project_id or self.project_id
+            return self.get_access_token(
+                credentials=credentials,
+                project_id=project_id,
+            )
 
     def is_using_v1beta1_features(self, optional_params: dict) -> bool:
         """
@@ -263,7 +242,7 @@ class VertexBase(BaseLLM):
             url=url,
         )
 
-    async def get_access_token(
+    def get_access_token(
         self,
         credentials: Optional[VERTEX_CREDENTIALS_TYPES],
         project_id: Optional[str],
@@ -300,7 +279,7 @@ class VertexBase(BaseLLM):
             verbose_logger.debug(
                 f"Credential cache key not found for project_id: {project_id}, loading new credentials"
             )
-            _credentials, credential_project_id = await asyncify(self.load_auth)(
+            _credentials, credential_project_id = self.load_auth(
                 credentials=credentials, project_id=project_id
             )
 
@@ -331,7 +310,7 @@ class VertexBase(BaseLLM):
             )  # if none set, use credential project_id
 
         if _credentials.expired:
-            await asyncify(self.refresh_auth)(_credentials)
+            self.refresh_auth(_credentials)
 
         ## VALIDATION STEP
         if _credentials.token is None or not isinstance(_credentials.token, str):
@@ -360,7 +339,7 @@ class VertexBase(BaseLLM):
         if custom_llm_provider == "gemini":
             return "", ""
         else:
-            return await self.get_access_token(
+            return await asyncify(self.get_access_token)(
                 credentials=credentials,
                 project_id=project_id,
             )
