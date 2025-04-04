@@ -1254,6 +1254,7 @@ def convert_function_to_anthropic_tool_invoke(
                 id=str(uuid.uuid4()),
                 name=_name,
                 input=json.loads(_arguments) if _arguments else {},
+                cache_control=None,
             )
         ]
         return anthropic_tool_invoke
@@ -1300,8 +1301,13 @@ def convert_to_anthropic_tool_invoke(
       ]
     }
     """
-    anthropic_tool_invoke = [
-        AnthropicMessagesToolUseParam(
+    anthropic_tool_invoke = []
+
+    for tool in tool_calls:
+        if not get_attribute_or_key(tool, "type") == "function":
+            continue
+
+        _anthropic_tool_use_param = AnthropicMessagesToolUseParam(
             type="tool_use",
             id=get_attribute_or_key(tool, "id"),
             name=get_attribute_or_key(get_attribute_or_key(tool, "function"), "name"),
@@ -1310,10 +1316,20 @@ def convert_to_anthropic_tool_invoke(
                     get_attribute_or_key(tool, "function"), "arguments"
                 )
             ),
+            cache_control=None,
         )
-        for tool in tool_calls
-        if get_attribute_or_key(tool, "type") == "function"
-    ]
+
+        _content_element = add_cache_control_to_content(
+            anthropic_content_element=_anthropic_tool_use_param,
+            orignal_content_element=dict(tool),
+        )
+
+        if "cache_control" in _content_element:
+            _anthropic_tool_use_param["cache_control"] = _content_element[
+                "cache_control"
+            ]
+
+        anthropic_tool_invoke.append(_anthropic_tool_use_param)
 
     return anthropic_tool_invoke
 
@@ -1324,6 +1340,7 @@ def add_cache_control_to_content(
         AnthropicMessagesImageParam,
         AnthropicMessagesTextParam,
         AnthropicMessagesDocumentParam,
+        AnthropicMessagesToolUseParam,
         ChatCompletionThinkingBlock,
     ],
     orignal_content_element: Union[dict, AllMessageValues],

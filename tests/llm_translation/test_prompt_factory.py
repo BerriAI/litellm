@@ -300,6 +300,60 @@ def test_anthropic_cache_controls_pt():
     print("translated_messages: ", translated_messages)
 
 
+def test_anthropic_cache_controls_tool_calls_pt():
+    """
+    Tests that cache_control is properly set in tool_calls when converting messages
+    for the Anthropic API.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": "Can you help me get the weather?",
+        },
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "weather-tool-id-123",
+                    "function": {
+                        "arguments": '{"location": "San Francisco"}',
+                        "name": "get_weather",
+                    },
+                    "type": "function",
+                }
+            ],
+            "cache_control": {"type": "ephemeral"},
+        },
+        {
+            "role": "function",
+            "content": '{"temperature": 72, "unit": "fahrenheit", "description": "sunny"}',
+            "name": "get_weather",
+            "tool_call_id": "weather-tool-id-123",
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+
+    translated_messages = anthropic_messages_pt(
+        messages, model="claude-3-sonnet-20240229", llm_provider="anthropic"
+    )
+
+    print("Translated tool call messages:", translated_messages)
+
+    assert translated_messages[0]["role"] == "user"
+
+    assert translated_messages[1]["role"] == "assistant"
+    for content_item in translated_messages[1]["content"]:
+        if content_item["type"] == "tool_use":
+            assert content_item["cache_control"] is None
+            assert content_item["name"] == "get_weather"
+
+    assert translated_messages[2]["role"] == "user"
+    for content_item in translated_messages[2]["content"]:
+        if content_item["type"] == "tool_result":
+            assert content_item["cache_control"] == {"type": "ephemeral"}
+
+
 @pytest.mark.parametrize("provider", ["bedrock", "anthropic"])
 def test_bedrock_parallel_tool_calling_pt(provider):
     """
@@ -701,7 +755,7 @@ def test_hf_chat_template():
             "add_eos_token": False,
             "bos_token": {
                 "__type": "AddedToken",
-                "content": "<｜begin▁of▁sentence｜>",
+                "content": "",
                 "lstrip": False,
                 "normalized": True,
                 "rstrip": False,
@@ -710,7 +764,7 @@ def test_hf_chat_template():
             "clean_up_tokenization_spaces": False,
             "eos_token": {
                 "__type": "AddedToken",
-                "content": "<｜end▁of▁sentence｜>",
+                "content": "",
                 "lstrip": False,
                 "normalized": True,
                 "rstrip": False,
@@ -720,7 +774,7 @@ def test_hf_chat_template():
             "model_max_length": 16384,
             "pad_token": {
                 "__type": "AddedToken",
-                "content": "<｜end▁of▁sentence｜>",
+                "content": "",
                 "lstrip": False,
                 "normalized": True,
                 "rstrip": False,
@@ -729,7 +783,7 @@ def test_hf_chat_template():
             "sp_model_kwargs": {},
             "unk_token": None,
             "tokenizer_class": "LlamaTokenizerFast",
-            "chat_template": "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% set ns = namespace(is_first=false, is_tool=false, is_output_first=true, system_prompt='') %}{%- for message in messages %}{%- if message['role'] == 'system' %}{% set ns.system_prompt = message['content'] %}{%- endif %}{%- endfor %}{{bos_token}}{{ns.system_prompt}}{%- for message in messages %}{%- if message['role'] == 'user' %}{%- set ns.is_tool = false -%}{{'<｜User｜>' + message['content']}}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is none %}{%- set ns.is_tool = false -%}{%- for tool in message['tool_calls']%}{%- if not ns.is_first %}{{'<｜Assistant｜><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\\n' + '```json' + '\\n' + tool['function']['arguments'] + '\\n' + '```' + '<｜tool▁call▁end｜>'}}{%- set ns.is_first = true -%}{%- else %}{{'\\n' + '<｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\\n' + '```json' + '\\n' + tool['function']['arguments'] + '\\n' + '```' + '<｜tool▁call▁end｜>'}}{{'<｜tool▁calls▁end｜><｜end▁of▁sentence｜>'}}{%- endif %}{%- endfor %}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is not none %}{%- if ns.is_tool %}{{'<｜tool▁outputs▁end｜>' + message['content'] + '<｜end▁of▁sentence｜>'}}{%- set ns.is_tool = false -%}{%- else %}{% set content = message['content'] %}{% if '</think>' in content %}{% set content = content.split('</think>')[-1] %}{% endif %}{{'<｜Assistant｜>' + content + '<｜end▁of▁sentence｜>'}}{%- endif %}{%- endif %}{%- if message['role'] == 'tool' %}{%- set ns.is_tool = true -%}{%- if ns.is_output_first %}{{'<｜tool▁outputs▁begin｜><｜tool▁output▁begin｜>' + message['content'] + '<｜tool▁output▁end｜>'}}{%- set ns.is_output_first = false %}{%- else %}{{'\\n<｜tool▁output▁begin｜>' + message['content'] + '<｜tool▁output▁end｜>'}}{%- endif %}{%- endif %}{%- endfor -%}{% if ns.is_tool %}{{'<｜tool▁outputs▁end｜>'}}{% endif %}{% if add_generation_prompt and not ns.is_tool %}{{'<｜Assistant｜><think>\\n'}}{% endif %}",
+            "chat_template": "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% set ns = namespace(is_first=false, is_tool=false, is_output_first=true, system_prompt='') %}{%- for message in messages %}{%- if message['role'] == 'system' %}{% set ns.system_prompt = message['content'] %}{%- endif %}{%- endfor %}{{bos_token}}{{ns.system_prompt}}{%- for message in messages %}{%- if message['role'] == 'user' %}{%- set ns.is_tool = false -%}{{' ' + message['content']}}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is none %}{%- set ns.is_tool = false -%}{%- for tool in message['tool_calls']%}{%- if not ns.is_first %}{{' ' + tool['type'] + ' ' + tool['function']['name'] + '\n' + '```json' + '\n' + tool['function']['arguments'] + '\n' + '```' + ' '}}{%- set ns.is_first = true -%}{%- else %}{{' ' + tool['type'] + ' ' + tool['function']['name'] + '\n' + '```json' + '\n' + tool['function']['arguments'] + '\n' + '```' + ' '}}{{' '}}{%- endif %}{%- endfor %}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is not none %}{%- if ns.is_tool %}{{' ' + message['content'] + ' '}}{%- set ns.is_tool = false -%}{%- else %}{% set content = message['content'] %}{% if '</think>' in content %}{% set content = content.split('</think>')[-1] %}{% endif %}{{' ' + content + ' '}}{%- endif %}{%- endif %}{%- if message['role'] == 'tool' %}{%- set ns.is_tool = true -%}{%- if ns.is_output_first %}{{' ' + message['content'] + ' '}}{%- set ns.is_output_first = false %}{%- else %}{{' ' + message['content'] + ' '}}{%- endif %}{%- endif %}{%- endfor -%}{% if ns.is_tool %}{{' '}}{% endif %}{% if add_generation_prompt and not ns.is_tool %}{{' '}}{% endif %}",
         },
     )
 
@@ -741,7 +795,9 @@ def test_hf_chat_template():
     print(chat_template)
     assert (
         chat_template.rstrip()
-        == """<｜begin▁of▁sentence｜>You are a helpful assistant.<｜User｜>What is the weather in Copenhagen?<｜Assistant｜><think>"""
+        == """You are a helpful assistant.
+What is the weather in Copenhagen?
+"""
     )
 
 

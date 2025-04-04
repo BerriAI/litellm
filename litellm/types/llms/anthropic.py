@@ -57,6 +57,7 @@ class AnthropicMessagesToolUseParam(TypedDict):
     id: str
     name: str
     input: dict
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
 AnthropicMessagesAssistantMessageValues = Union[
