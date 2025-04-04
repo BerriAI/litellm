@@ -23,9 +23,9 @@ import {
 } from "@tremor/react";
 
 import { message, Select } from "antd";
-import { modelAvailableCall } from "./networking";
 import { makeOpenAIChatCompletionRequest } from "./chat_ui/llm_calls/chat_completion";
 import { makeOpenAIImageGenerationRequest } from "./chat_ui/llm_calls/image_generation";
+import { fetchAvailableModels } from "./chat_ui/llm_calls/fetch_models";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { Typography } from "antd";
 import { coy } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -70,33 +70,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
     }
 
     // Fetch model info and set the default selected model
-    const fetchModelInfo = async () => {
+    const loadModels = async () => {
       try {
-        const fetchedAvailableModels = await modelAvailableCall(
-          useApiKey ?? '', // Use empty string if useApiKey is null,
+        const uniqueModels = await fetchAvailableModels(
+          useApiKey,
           userID,
           userRole
         );
   
-        console.log("model_info:", fetchedAvailableModels);
+        console.log("Fetched models:", uniqueModels);
   
-        if (fetchedAvailableModels?.data.length > 0) {
-          // Create a Map to store unique models using the model ID as key
-          const uniqueModelsMap = new Map();
-          
-          fetchedAvailableModels["data"].forEach((item: { id: string }) => {
-            uniqueModelsMap.set(item.id, {
-              value: item.id,
-              label: item.id
-            });
-          });
-
-          // Convert Map values back to array
-          const uniqueModels = Array.from(uniqueModelsMap.values());
-
-          // Sort models alphabetically
-          uniqueModels.sort((a, b) => a.label.localeCompare(b.label));
-
+        if (uniqueModels.length > 0) {
           setModelInfo(uniqueModels);
           setSelectedModel(uniqueModels[0].value);
         }
@@ -105,7 +89,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       }
     };
   
-    fetchModelInfo();
+    loadModels();
   }, [accessToken, userID, userRole, apiKeySource, apiKey]);
   
 
