@@ -655,7 +655,7 @@ def test_embeddings_uses_databricks_sdk_if_api_key_and_base_not_specified(monkey
 
 class TestDatabricksCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
     def get_base_completion_call_args(self) -> dict:
-        return {"model": "databricks/databricks-dbrx-instruct"}
+        return {"model": "databricks/databricks-claude-3-7-sonnet"}
 
     def get_base_completion_call_args_with_thinking(self) -> dict:
         return {

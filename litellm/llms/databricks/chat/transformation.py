@@ -221,7 +221,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                     optional_params=optional_params, tools=[_tool]
                 )
                 optional_params["json_mode"] = True
-                optional_params.pop("response_format", None)
+            optional_params.pop(
+                "response_format", None
+            )  # unsupported for claude models - if json_schema -> convert to tool call
 
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(

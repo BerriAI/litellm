@@ -330,6 +330,7 @@ class BaseLLMChatTest(ABC):
             }
         ]
         try:
+            print(f"MAKING LLM CALL")
             response = self.completion_function(
                 **base_completion_call_args,
                 messages=messages,
@@ -337,6 +338,7 @@ class BaseLLMChatTest(ABC):
                 tools=tools,
                 drop_params=True,
             )
+            print(f"RESPONSE={response}")
         except litellm.ContextWindowExceededError:
             pytest.skip("Model exceeded context window")
         assert response is not None
