@@ -494,6 +494,7 @@ async def auth_callback(request: Request):  # noqa: PLR0915
             redirect_url=redirect_url,
         )
     # User is Authe'd in - generate key for the UI to access Proxy
+    verbose_proxy_logger.debug(f"SSO callback result: {result}")
     user_email: Optional[str] = getattr(result, "email", None)
     user_id: Optional[str] = getattr(result, "id", None) if result is not None else None
 
