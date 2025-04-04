@@ -80,11 +80,13 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -d '{
     "model": "bedrock-model",
     "messages": [
-        {"role": "user", "content": {"type": "text", "text": "What's this file about?"}},
-        {
-            "type": "image_url",
-            "image_url": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-        }
+        {"role": "user", "content": [
+            {"type": "text", "text": "What's this file about?"},
+            {
+                "type": "image_url",
+                "image_url": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+            }
+        ]},
     ]
 }'
 ```
