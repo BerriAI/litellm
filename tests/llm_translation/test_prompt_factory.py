@@ -795,9 +795,7 @@ def test_hf_chat_template():
     print(chat_template)
     assert (
         chat_template.rstrip()
-        == """You are a helpful assistant.
-What is the weather in Copenhagen?
-"""
+        == "You are a helpful assistant. What is the weather in Copenhagen?"
     )
 
 
