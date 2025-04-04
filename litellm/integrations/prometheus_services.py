@@ -42,7 +42,7 @@ class PrometheusServicesLogger:
 
             verbose_logger.debug("in init prometheus services metrics")
 
-            self.services = [item for item in ServiceTypes]
+            self.services: List[ServiceTypes] = [item for item in ServiceTypes]
             self.payload_to_prometheus_map: Dict[
                 str, List[Union[Histogram, Counter, Gauge, Collector]]
             ] = {}
@@ -55,27 +55,27 @@ class PrometheusServicesLogger:
                 # Initialize only the configured metrics for each service
                 if ServiceMetrics.HISTOGRAM in metrics_to_initialize:
                     histogram = self.create_histogram(
-                        service, type_of_request="latency"
+                        service.value, type_of_request="latency"
                     )
                     if histogram:
                         service_metrics.append(histogram)
 
                 if ServiceMetrics.COUNTER in metrics_to_initialize:
                     counter_failed_request = self.create_counter(
-                        service,
+                        service.value,
                         type_of_request="failed_requests",
                         additional_labels=FAILED_REQUESTS_LABELS,
                     )
                     if counter_failed_request:
                         service_metrics.append(counter_failed_request)
                     counter_total_requests = self.create_counter(
-                        service, type_of_request="total_requests"
+                        service.value, type_of_request="total_requests"
                     )
                     if counter_total_requests:
                         service_metrics.append(counter_total_requests)
 
                 if ServiceMetrics.GAUGE in metrics_to_initialize:
-                    gauge = self.create_gauge(service, type_of_request="size")
+                    gauge = self.create_gauge(service.value, type_of_request="size")
                     if gauge:
                         service_metrics.append(gauge)
 
