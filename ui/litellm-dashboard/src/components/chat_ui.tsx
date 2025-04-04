@@ -226,206 +226,185 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
   return (
     <div style={{ width: "100%", position: "relative" }}>
-      <Grid className="gap-2 p-8 h-[80vh] w-full mt-2">
-        <Card>
+      <div className="flex h-[80vh] w-full mt-2">
+        {/* Left Sidebar with Controls */}
+        <div className="w-1/4 p-4 border-r">
+          <div className="mb-6">
+            <Text className="font-medium block mb-2">API Key Source</Text>
+            <Select
+              disabled={disabledPersonalKeyCreation}
+              defaultValue="session"
+              style={{ width: "100%" }}
+              onChange={(value) => setApiKeySource(value as "session" | "custom")}
+              options={[
+                { value: 'session', label: 'Current UI Session' },
+                { value: 'custom', label: 'Virtual Key' },
+              ]}
+            />
+            {apiKeySource === 'custom' && (
+              <TextInput
+                className="mt-2"
+                placeholder="Enter custom API key"
+                type="password"
+                onValueChange={setApiKey}
+                value={apiKey}
+              />
+            )}
+          </div>
           
-          <TabGroup>
-            <TabList>
-              <Tab>Chat</Tab>
-            </TabList>
-            <TabPanels>
-              <TabPanel>
-                <div className="sm:max-w-2xl">
-                  <Grid numItems={2}>
-                    <Col>
-                      <Text>API Key Source</Text>
-                      <Select
-                        disabled={disabledPersonalKeyCreation}
-                        defaultValue="session"
-                        style={{ width: "100%" }}
-                        onChange={(value) => setApiKeySource(value as "session" | "custom")}
-                        options={[
-                          { value: 'session', label: 'Current UI Session' },
-                          { value: 'custom', label: 'Virtual Key' },
-                        ]}
+          <div className="mb-6">
+            <Text className="font-medium block mb-2">Select Model:</Text>
+            <Select
+              placeholder="Select a Model"
+              onChange={onModelChange}
+              options={[
+                ...modelInfo.map((option) => ({
+                  value: option.model_group,
+                  label: option.model_group
+                })),
+                { value: 'custom', label: 'Enter custom model' }
+              ]}
+              style={{ width: "100%" }}
+              showSearch={true}
+            />
+            {showCustomModelInput && (
+              <TextInput
+                className="mt-2"
+                placeholder="Enter custom model name"
+                onValueChange={(value) => {
+                  // Using setTimeout to create a simple debounce effect
+                  if (customModelTimeout.current) {
+                    clearTimeout(customModelTimeout.current);
+                  }
+                  
+                  customModelTimeout.current = setTimeout(() => {
+                    setSelectedModel(value);
+                  }, 500); // 500ms delay after typing stops
+                }}
+              />
+            )}
+          </div>
+          
+          <div className="mb-6">
+            <EndpointSelector 
+              endpointType={endpointType}
+              onEndpointChange={handleEndpointChange}
+            />
+          </div>
+          
+          <Button
+            onClick={clearChatHistory}
+            className="w-full"
+          >
+            Clear Chat
+          </Button>
+        </div>
+        
+        {/* Main Chat Area */}
+        <div className="w-3/4 flex flex-col">
+          <div className="flex-1 overflow-auto p-4">
+            {chatHistory.map((message, index) => (
+              <div 
+                key={index} 
+                className={`mb-4 ${message.role === "user" ? "text-right" : "text-left"}`}
+              >
+                <div style={{ 
+                  display: 'inline-block',
+                  maxWidth: '80%',
+                  borderRadius: '8px',
+                  padding: '10px 14px',
+                  backgroundColor: message.role === "user" ? '#f0f0f0' : '#f9f9f9',
+                  textAlign: 'left'
+                }}>
+                  <div style={{ 
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    marginBottom: '4px'
+                  }}>
+                    <strong>{message.role}</strong>
+                    {message.role === "assistant" && message.model && (
+                      <span style={{
+                        fontSize: '12px',
+                        color: '#666',
+                        backgroundColor: '#f5f5f5',
+                        padding: '2px 6px',
+                        borderRadius: '4px',
+                        fontWeight: 'normal'
+                      }}>
+                        {message.model}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ 
+                    whiteSpace: "pre-wrap", 
+                    wordBreak: "break-word",
+                    maxWidth: "100%"
+                  }}>
+                    {message.isImage ? (
+                      <img 
+                        src={message.content} 
+                        alt="Generated image" 
+                        style={{ maxWidth: '100%', maxHeight: '500px' }} 
                       />
-                      {apiKeySource === 'custom' && (
-                        <TextInput
-                          className="mt-2"
-                          placeholder="Enter custom API key"
-                          type="password"
-                          onValueChange={setApiKey}
-                          value={apiKey}
-                        />
-                      )}
-                    </Col>
-                    <Col className="mx-2">
-                      <Text>Select Model:</Text>
-                      <Select
-                        placeholder="Select a Model"
-                        onChange={onModelChange}
-                        options={[
-                          ...modelInfo.map((option) => ({
-                            value: option.model_group,
-                            label: option.model_group
-                          })),
-                          { value: 'custom', label: 'Enter custom model' }
-                        ]}
-                        style={{ width: "350px" }}
-                        showSearch={true}
-                      />
-                      {showCustomModelInput && (
-                        <TextInput
-                          className="mt-2"
-                          placeholder="Enter custom model name"
-                          onValueChange={(value) => {
-                            // Using setTimeout to create a simple debounce effect
-                            if (customModelTimeout.current) {
-                              clearTimeout(customModelTimeout.current);
-                            }
-                            
-                            customModelTimeout.current = setTimeout(() => {
-                              setSelectedModel(value);
-                            }, 500); // 500ms delay after typing stops
-                          }}
-                        />
-                      )}
-                      <EndpointSelector 
-                        endpointType={endpointType}
-                        onEndpointChange={handleEndpointChange}
-                        className="mt-2"
-                      />
-                    </Col>
-
-                  </Grid>
-
-                  {/* Clear Chat Button */}
-                  <Button
-                    onClick={clearChatHistory}
-                    className="mt-4"
-                  >
-                    Clear Chat
-                  </Button>
-                </div>
-                <Table
-                  className="mt-5"
-                  style={{
-                    display: "block",
-                    maxHeight: "60vh",
-                    overflowY: "auto",
-                  }}
-                >
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>
-                        {/* <Title>Chat</Title> */}
-                      </TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {chatHistory.map((message, index) => (
-                      <TableRow key={index}>
-                        <TableCell>
-                          <div style={{ 
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '8px',
-                            marginBottom: '4px'
-                          }}>
-                            <strong>{message.role}</strong>
-                            {message.role === "assistant" && message.model && (
-                              <span style={{
-                                fontSize: '12px',
-                                color: '#666',
-                                backgroundColor: '#f5f5f5',
-                                padding: '2px 6px',
-                                borderRadius: '4px',
-                                fontWeight: 'normal'
-                              }}>
-                                {message.model}
-                              </span>
-                            )}
-                          </div>
-                          <div style={{ 
-                            whiteSpace: "pre-wrap", 
-                            wordBreak: "break-word",
-                            maxWidth: "100%"
-                          }}>
-                            {message.isImage ? (
-                              <img 
-                                src={message.content} 
-                                alt="Generated image" 
-                                style={{ maxWidth: '100%', maxHeight: '500px' }} 
-                              />
-                            ) : (
-                              <ReactMarkdown
-                                components={{
-                                  code({node, inline, className, children, ...props}: React.ComponentPropsWithoutRef<'code'> & {
-                                    inline?: boolean;
-                                    node?: any;
-                                  }) {
-                                    const match = /language-(\w+)/.exec(className || '');
-                                    return !inline && match ? (
-                                      <SyntaxHighlighter
-                                        style={coy as any}
-                                        language={match[1]}
-                                        PreTag="div"
-                                        {...props}
-                                      >
-                                        {String(children).replace(/\n$/, '')}
-                                      </SyntaxHighlighter>
-                                    ) : (
-                                      <code className={className} {...props}>
-                                        {children}
-                                      </code>
-                                    );
-                                  }
-                                }}
+                    ) : (
+                      <ReactMarkdown
+                        components={{
+                          code({node, inline, className, children, ...props}: React.ComponentPropsWithoutRef<'code'> & {
+                            inline?: boolean;
+                            node?: any;
+                          }) {
+                            const match = /language-(\w+)/.exec(className || '');
+                            return !inline && match ? (
+                              <SyntaxHighlighter
+                                style={coy as any}
+                                language={match[1]}
+                                PreTag="div"
+                                {...props}
                               >
-                                {message.content}
-                              </ReactMarkdown>
-                            )}
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                    <TableRow>
-                      <TableCell>
-                        <div ref={chatEndRef} style={{ height: "1px" }} />
-                      </TableCell>
-                    </TableRow>
-                  </TableBody>
-                </Table>
-                <div
-                  className="mt-3"
-                  style={{ position: "absolute", bottom: 5, width: "95%" }}
-                >
-                  <div className="flex" style={{ marginTop: "16px" }}>
-                    <TextInput
-                      type="text"
-                      value={inputMessage}
-                      onChange={(e) => setInputMessage(e.target.value)}
-                      onKeyDown={handleKeyDown}
-                      placeholder={
-                        endpointType === EndpointType.CHAT 
-                          ? "Type your message..." 
-                          : "Describe the image you want to generate..."
-                      }
-                    />
-                    <Button
-                      onClick={handleSendMessage}
-                      className="ml-2"
-                    >
-                      {endpointType === EndpointType.CHAT ? "Send" : "Generate"}
-                    </Button>
+                                {String(children).replace(/\n$/, '')}
+                              </SyntaxHighlighter>
+                            ) : (
+                              <code className={className} {...props}>
+                                {children}
+                              </code>
+                            );
+                          }
+                        }}
+                      >
+                        {message.content}
+                      </ReactMarkdown>
+                    )}
                   </div>
                 </div>
-              </TabPanel>
-              
-            </TabPanels>
-          </TabGroup>
-        </Card>
-      </Grid>
+              </div>
+            ))}
+            <div ref={chatEndRef} style={{ height: "1px" }} />
+          </div>
+          
+          <div className="p-4 border-t">
+            <div className="flex">
+              <TextInput
+                type="text"
+                value={inputMessage}
+                onChange={(e) => setInputMessage(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder={
+                  endpointType === EndpointType.CHAT 
+                    ? "Type your message..." 
+                    : "Describe the image you want to generate..."
+                }
+              />
+              <Button
+                onClick={handleSendMessage}
+                className="ml-2"
+              >
+                {endpointType === EndpointType.CHAT ? "Send" : "Generate"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };
