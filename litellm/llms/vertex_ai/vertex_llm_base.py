@@ -6,7 +6,7 @@ Handles Authentication and generating request urls for Vertex AI and Google AI S
 
 import json
 import os
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
