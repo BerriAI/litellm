@@ -52,6 +52,28 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
             Dict[str, DailyUserSpendTransaction]
         ] = asyncio.Queue()
 
+    async def add_update(self, update: Dict[str, DailyUserSpendTransaction]):
+        """Enqueue an update."""
+        if self.update_queue.qsize() >= self.MAX_SIZE_IN_MEMORY_QUEUE:
+            verbose_proxy_logger.warning(
+                "Spend update queue is full. Aggregating all entries in queue to concatenate entries."
+            )
+            aggregated_updates = await self.aggregate_queue_updates()
+            await self.update_queue.put(aggregated_updates)
+        else:
+            verbose_proxy_logger.debug("Adding update to queue: %s", update)
+            await self.update_queue.put(update)
+
+    async def aggregate_queue_updates(self):
+        """Combine all updates in the queue into a single update."""
+        updates: List[
+            Dict[str, DailyUserSpendTransaction]
+        ] = await self.flush_all_updates_from_in_memory_queue()
+        aggregated_updates = self.get_aggregated_daily_spend_update_transactions(
+            updates
+        )
+        return aggregated_updates
+
     async def flush_and_get_aggregated_daily_spend_update_transactions(
         self,
     ) -> Dict[str, DailyUserSpendTransaction]:
