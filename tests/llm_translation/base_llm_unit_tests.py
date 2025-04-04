@@ -1195,4 +1195,13 @@ class BaseAnthropicChatTest(ABC):
 
         print(response)
 
- 
+    def test_completion_with_thinking_basic(self):
+        base_completion_call_args = self.get_base_completion_call_args_with_thinking()
+
+        messages = [{"role": "user", "content": "Generate 5 question + answer pairs"}]
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages=messages,
+        )
+
+        print(f"response: {response}")

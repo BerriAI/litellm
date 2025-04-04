@@ -15,7 +15,7 @@ import litellm
 from litellm.exceptions import BadRequestError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.utils import CustomStreamWrapper
-from base_llm_unit_tests import BaseLLMChatTest
+from base_llm_unit_tests import BaseLLMChatTest, BaseAnthropicChatTest
 
 try:
     import databricks.sdk
@@ -653,9 +653,15 @@ def test_embeddings_uses_databricks_sdk_if_api_key_and_base_not_specified(monkey
         )
 
 
-class TestDatabricksCompletion(BaseLLMChatTest):
+class TestDatabricksCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
     def get_base_completion_call_args(self) -> dict:
         return {"model": "databricks/databricks-dbrx-instruct"}
+
+    def get_base_completion_call_args_with_thinking(self) -> dict:
+        return {
+            "model": "databricks/databricks-claude-3-7-sonnet",
+            "thinking": {"type": "enabled", "budget_tokens": 16000},
+        }
 
     def test_pdf_handling(self, pdf_messages):
         pytest.skip("Databricks does not support PDF handling")
