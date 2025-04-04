@@ -453,6 +453,7 @@ async def test_async_vertexai_response():
             or "ultra" in model
             or "002" in model
             or "gemini-2.0-flash-thinking-exp" in model
+            or "gemini-2.0-pro-exp-02-05" in model
         ):
             # our account does not have access to this model
             continue
@@ -499,6 +500,7 @@ async def test_async_vertexai_streaming_response():
             or "ultra" in model
             or "002" in model
             or "gemini-2.0-flash-thinking-exp" in model
+            or "gemini-2.0-pro-exp-02-05" in model
         ):
             # our account does not have access to this model
             continue
