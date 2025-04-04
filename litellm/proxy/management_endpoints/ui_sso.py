@@ -502,8 +502,6 @@ async def auth_callback(request: Request):  # noqa: PLR0915
         )
     # User is Authe'd in - generate key for the UI to access Proxy
     verbose_proxy_logger.debug(f"SSO callback result: {result}")
-    result = cast(CustomOpenID, result)
-    result.team_ids = jwt_handler.get_team_ids_from_jwt(cast(dict, result))
     user_email: Optional[str] = getattr(result, "email", None)
     user_id: Optional[str] = getattr(result, "id", None) if result is not None else None
 
