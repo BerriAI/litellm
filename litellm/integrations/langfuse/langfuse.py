@@ -448,9 +448,8 @@ class LangFuseLogger:
                 if self._supports_tags()
                 else []
             )
-
+            end_user_id = None
             if standard_logging_object is None:
-                end_user_id = None
                 prompt_management_metadata: Optional[
                     StandardLoggingPromptManagementMetadata
                 ] = None
@@ -508,6 +507,9 @@ class LangFuseLogger:
             debug = clean_metadata.pop("debug_langfuse", None)
             mask_input = clean_metadata.pop("mask_input", False)
             mask_output = clean_metadata.pop("mask_output", False)
+            user_api_key_alias = cast(
+                    Optional[str], clean_metadata.get("user_api_key_alias", None)
+                )
 
             clean_metadata = redact_user_api_key_info(metadata=clean_metadata)
 
@@ -553,7 +555,6 @@ class LangFuseLogger:
                     "version": clean_metadata.pop(
                         "trace_version", clean_metadata.get("version", None)
                     ),  # If provided just version, it will applied to the trace as well, if applied a trace version it will take precedence
-                    "user_id": end_user_id,
                 }
                 for key in list(
                     filter(lambda key: key.startswith("trace_"), clean_metadata.keys())
@@ -631,6 +632,7 @@ class LangFuseLogger:
                 #     "url": url,
                 #     "headers": clean_headers,
                 # }
+            trace_params["user_id"]= user_api_key_alias or end_user_id
             trace = self.Langfuse.trace(**trace_params)
 
             # Log provider specific information as a span
@@ -659,14 +661,11 @@ class LangFuseLogger:
                 # if `generation_name` is None, use sensible default values
                 # If using litellm proxy user `key_alias` if not None
                 # If `key_alias` is None, just log `litellm-{call_type}` as the generation name
-                _user_api_key_alias = cast(
-                    Optional[str], clean_metadata.get("user_api_key_alias", None)
-                )
                 generation_name = (
                     f"litellm-{cast(str, kwargs.get('call_type', 'completion'))}"
                 )
-                if _user_api_key_alias is not None:
-                    generation_name = f"litellm:{_user_api_key_alias}"
+                if user_api_key_alias is not None:
+                    generation_name = f"litellm:{user_api_key_alias}"
 
             if response_obj is not None:
                 system_fingerprint = getattr(response_obj, "system_fingerprint", None)
