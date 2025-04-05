@@ -804,6 +804,35 @@ class BaseLLMChatTest(ABC):
         url = f"data:application/pdf;base64,{encoded_file}"
 
         return url
+    
+    def test_empty_tools(self):
+        """
+        Related Issue: https://github.com/BerriAI/litellm/issues/9080
+        """
+        try:
+            from litellm import completion, ModelResponse
+
+            litellm.set_verbose = True
+            litellm._turn_on_debug()
+            from litellm.utils import supports_function_calling
+
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+            litellm.model_cost = litellm.get_model_cost_map(url="")
+
+            base_completion_call_args = self.get_base_completion_call_args()
+            if not supports_function_calling(base_completion_call_args["model"], None):
+                print("Model does not support function calling")
+                pytest.skip("Model does not support function calling")
+            
+            response = completion(**base_completion_call_args, messages=[{"role": "user", "content": "Hello, how are you?"}], tools=[], max_tokens=1) # just make sure call doesn't fail
+            print("response: ", response)
+            assert response is not None
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
+        except litellm.RateLimitError:
+            pass
+        except Exception as e:
+            pytest.fail(f"Error occurred: {e}")
 
     def test_basic_tool_calling(self):
         try:
