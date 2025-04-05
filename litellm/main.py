@@ -141,6 +141,7 @@ from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks.chat.handler import DatabricksChatCompletion
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha, palm
+from .llms.diffusers.diffusers import DiffusersImageHandler
 from .llms.groq.chat.handler import GroqChatCompletion
 from .llms.huggingface.chat.handler import Huggingface
 from .llms.nlp_cloud.chat.handler import completion as nlp_cloud_chat_completion
@@ -229,6 +230,7 @@ codestral_text_completions = CodestralTextCompletion()
 bedrock_converse_chat_completion = BedrockConverseLLM()
 bedrock_embedding = BedrockEmbedding()
 bedrock_image_generation = BedrockImageGeneration()
+diffusers_image_generation = DiffusersImageHandler()
 vertex_chat_completion = VertexLLM()
 vertex_embedding = VertexEmbedding()
 vertex_multimodal_embedding = VertexMultimodalEmbedding()
@@ -2676,9 +2678,9 @@ def completion(  # type: ignore # noqa: PLR0915
                     "aws_region_name" not in optional_params
                     or optional_params["aws_region_name"] is None
                 ):
-                    optional_params[
-                        "aws_region_name"
-                    ] = aws_bedrock_client.meta.region_name
+                    optional_params["aws_region_name"] = (
+                        aws_bedrock_client.meta.region_name
+                    )
 
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             if bedrock_route == "converse":
@@ -4384,9 +4386,9 @@ def adapter_completion(
     new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
     response: Union[ModelResponse, CustomStreamWrapper] = completion(**new_kwargs)  # type: ignore
-    translated_response: Optional[
-        Union[BaseModel, AdapterCompletionStreamWrapper]
-    ] = None
+    translated_response: Optional[Union[BaseModel, AdapterCompletionStreamWrapper]] = (
+        None
+    )
     if isinstance(response, ModelResponse):
         translated_response = translation_obj.translate_completion_output_params(
             response=response
@@ -4535,7 +4537,7 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
 
 
 @client
-def image_generation(  # noqa: PLR0915
+def image_generation(
     prompt: str,
     model: Optional[str] = None,
     n: Optional[int] = None,
@@ -4544,45 +4546,75 @@ def image_generation(  # noqa: PLR0915
     size: Optional[str] = None,
     style: Optional[str] = None,
     user: Optional[str] = None,
-    timeout=600,  # default to 10 minutes
+    timeout=600,
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
     custom_llm_provider=None,
+    device: Optional[str] = None,
     **kwargs,
 ) -> ImageResponse:
     """
-    Maps the https://api.openai.com/v1/images/generations endpoint.
-
-    Currently supports just Azure + OpenAI.
+    Handles image generation for various providers including local Diffusers models.
     """
     try:
         args = locals()
         aimg_generation = kwargs.get("aimg_generation", False)
         litellm_call_id = kwargs.get("litellm_call_id", None)
         logger_fn = kwargs.get("logger_fn", None)
-        mock_response: Optional[str] = kwargs.get("mock_response", None)  # type: ignore
+        mock_response = kwargs.get("mock_response", None)
         proxy_server_request = kwargs.get("proxy_server_request", None)
         azure_ad_token_provider = kwargs.get("azure_ad_token_provider", None)
         model_info = kwargs.get("model_info", None)
         metadata = kwargs.get("metadata", {})
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj = kwargs.get("litellm_logging_obj")
         client = kwargs.get("client", None)
         extra_headers = kwargs.get("extra_headers", None)
-        headers: dict = kwargs.get("headers", None) or {}
+        headers = kwargs.get("headers", None) or {}
+
         if extra_headers is not None:
             headers.update(extra_headers)
-        model_response: ImageResponse = litellm.utils.ImageResponse()
+
+        model_response = litellm.utils.ImageResponse()
+
+        # Get model provider info
         if model is not None or custom_llm_provider is not None:
             model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
-                model=model,  # type: ignore
+                model=model,
                 custom_llm_provider=custom_llm_provider,
                 api_base=api_base,
             )
         else:
             model = "dall-e-2"
-            custom_llm_provider = "openai"  # default to dall-e-2 on openai
+            custom_llm_provider = "openai"
+
         model_response._hidden_params["model"] = model
+
+        # Handle Diffusers/local models
+        if model.startswith("diffusers/") or custom_llm_provider == "diffusers":
+            from .llms.diffusers.diffusers import DiffusersImageHandler
+
+            model_path = model.replace("diffusers/", "")
+            width, height = (512, 512)
+            if size:
+                width, height = map(int, size.split("x"))
+
+            handler = DiffusersImageHandler()
+            diffusers_response = handler.generate_image(
+                prompt=prompt,
+                model=model_path,
+                height=height,
+                width=width,
+                num_images_per_prompt=n or 1,
+                device=device,  # Pass through device parameter
+                **kwargs,
+            )
+
+            model_response.created = diffusers_response.created
+            model_response.data = diffusers_response.data
+            return model_response
+
+        # Original provider handling remains the same
         openai_params = [
             "user",
             "request_timeout",
@@ -4600,11 +4632,12 @@ def image_generation(  # noqa: PLR0915
             "size",
             "style",
         ]
+
         litellm_params = all_litellm_params
         default_params = openai_params + litellm_params
         non_default_params = {
             k: v for k, v in kwargs.items() if k not in default_params
-        }  # model-specific params - pass them straight to the model/provider
+        }
 
         optional_params = get_optional_params_image_gen(
             model=model,
@@ -4620,7 +4653,7 @@ def image_generation(  # noqa: PLR0915
 
         litellm_params_dict = get_litellm_params(**kwargs)
 
-        logging: Logging = litellm_logging_obj
+        logging = litellm_logging_obj
         logging.update_environment_variables(
             model=model,
             user=user,
@@ -4638,6 +4671,7 @@ def image_generation(  # noqa: PLR0915
             },
             custom_llm_provider=custom_llm_provider,
         )
+
         if "custom_llm_provider" not in logging.model_call_details:
             logging.model_call_details["custom_llm_provider"] = custom_llm_provider
         if mock_response is not None:
@@ -5806,9 +5840,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(content_chunks) > 0:
-            response["choices"][0]["message"][
-                "content"
-            ] = processor.get_combined_content(content_chunks)
+            response["choices"][0]["message"]["content"] = (
+                processor.get_combined_content(content_chunks)
+            )
 
         reasoning_chunks = [
             chunk
@@ -5819,9 +5853,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(reasoning_chunks) > 0:
-            response["choices"][0]["message"][
-                "reasoning_content"
-            ] = processor.get_combined_reasoning_content(reasoning_chunks)
+            response["choices"][0]["message"]["reasoning_content"] = (
+                processor.get_combined_reasoning_content(reasoning_chunks)
+            )
 
         audio_chunks = [
             chunk
