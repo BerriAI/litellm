@@ -343,7 +343,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         llm_provider=custom_llm_provider,
                     )
-                elif "Request too large" in error_str:
+                elif "Request too large" in error_str or "server overloaded, please try again later" in error_str:
                     exception_mapping_worked = True
                     raise RateLimitError(
                         message=f"RateLimitError: {exception_provider} - {message}",
