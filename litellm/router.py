@@ -4508,22 +4508,23 @@ class Router:
             )
 
             if deployment.litellm_params.litellm_credential_name is not None:
-                credential_dict = CredentialAccessor.get_credential_values(
+                credential_values = CredentialAccessor.get_credential_values(
                     deployment.litellm_params.litellm_credential_name
                 )
             else:
-                credential_dict = {}
+                credential_values = {}
+
             if custom_llm_provider == "vertex_ai":
                 vertex_project = (
-                    credential_dict.get("vertex_project")
+                    credential_values.get("vertex_project")
                     or deployment.litellm_params.vertex_project
                 )
                 vertex_location = (
-                    credential_dict.get("vertex_location")
+                    credential_values.get("vertex_location")
                     or deployment.litellm_params.vertex_location
                 )
                 vertex_credentials = (
-                    credential_dict.get("vertex_credentials")
+                    credential_values.get("vertex_credentials")
                     or deployment.litellm_params.vertex_credentials
                 )
 
@@ -4542,11 +4543,12 @@ class Router:
                 )
             else:
                 api_base = (
-                    credential_dict.get("api_base")
+                    credential_values.get("api_base")
                     or deployment.litellm_params.api_base
                 )
                 api_key = (
-                    credential_dict.get("api_key") or deployment.litellm_params.api_key
+                    credential_values.get("api_key")
+                    or deployment.litellm_params.api_key
                 )
                 passthrough_endpoint_router.set_pass_through_credentials(
                     custom_llm_provider=custom_llm_provider,
