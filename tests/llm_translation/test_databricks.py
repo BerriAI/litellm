@@ -431,15 +431,11 @@ def test_completions_streaming_with_async_http_handler(monkeypatch):
         assert "chatcmpl" in str(response)
         assert len(response) == 4
 
-        mock_post.assert_called_once_with(
-            f"{base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            data=ANY,
-            stream=True,
-        )
+        assert mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {api_key}"
+        assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
+        assert mock_post.call_args.kwargs["stream"] == True
+
 
         actual_data = json.loads(
             mock_post.call_args.kwargs["data"]

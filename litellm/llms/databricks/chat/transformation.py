@@ -126,6 +126,8 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             custom_endpoint=False,
             headers=headers,
         )
+        # Ensure Content-Type header is set
+        headers["Content-Type"] = "application/json"
         return headers
 
     def get_complete_url(
@@ -345,8 +347,8 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 convert_tool_call_to_json_mode=json_mode,
             ):
                 # to support response_format on claude models
-                json_mode_content_str: Optional[str] = tool_calls[0]["function"].get(
-                    "arguments"
+                json_mode_content_str: Optional[str] = (
+                    str(tool_calls[0]["function"].get("arguments", "")) or None
                 )
                 if json_mode_content_str is not None:
                     translated_message = Message(content=json_mode_content_str)
