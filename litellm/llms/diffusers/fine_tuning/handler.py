@@ -1,16 +1,14 @@
 from typing import Any, Coroutine, Optional, Union, Dict, List
-from pathlib import Path
 import logging
 
 try:
     from dataclasses import dataclass
     import torch
-    from diffusers import DiffusionPipeline, UNet2DConditionModel
+    from diffusers import UNet2DConditionModel
     from diffusers.optimization import get_scheduler
     from transformers import CLIPTextModel, CLIPTokenizer
 except:
     pass
-import httpx
 
 verbose_logger = logging.getLogger(__name__)
 

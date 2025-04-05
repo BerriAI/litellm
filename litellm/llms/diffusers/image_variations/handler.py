@@ -1,8 +1,7 @@
-from typing import Optional, Union
+from typing import Union
 from PIL import Image
 import io
 import base64
-import time
 
 try:
     from diffusers import StableDiffusionPipeline

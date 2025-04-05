@@ -1,12 +1,13 @@
-from typing import Optional, Union, List, Dict, Any
-from PIL import Image
+from typing import Optional, Union, List, Dict
+
 import io
 import base64
 import time
 
 try:
+    from PIL import Image
     from diffusers import StableDiffusionPipeline
-except:
+except ModuleNotFoundError:
     pass
 from pydantic import BaseModel
 
