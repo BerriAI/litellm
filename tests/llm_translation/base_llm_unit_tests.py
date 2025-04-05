@@ -1125,7 +1125,6 @@ class BaseAnthropicChatTest(ABC):
         return litellm.completion
 
     def test_anthropic_response_format_streaming_vs_non_streaming(self):
-        litellm.set_verbose = True
         args = {
             "messages": [
                 {
@@ -1174,6 +1173,8 @@ class BaseAnthropicChatTest(ABC):
             **base_completion_call_args, **args, stream=False
         )
 
+        print("built_response.choices[0].message.content", built_response.choices[0].message.content)
+        print("non_stream_response.choices[0].message.content", non_stream_response.choices[0].message.content)
         assert (
             json.loads(built_response.choices[0].message.content).keys()
             == json.loads(non_stream_response.choices[0].message.content).keys()

@@ -54,7 +54,7 @@ class DatabricksFunction(TypedDict, total=False):
     strict: bool
 
 
-class DatabricksTool(TypedDict, total=False):
+class DatabricksTool(TypedDict):
     function: DatabricksFunction
     type: Literal["function"]
 
