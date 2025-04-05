@@ -251,3 +251,21 @@ def test_generate_streaming_content():
     assert chunk_count > 1
 
     print(f"Number of chunks: {chunk_count}")
+
+def test_caching_stable_with_mutation():
+    """
+    Test that caching is stable with mutation
+    """
+    litellm.cache = Cache()
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello, world!"}],
+        "temperature": 0.7,
+        "litellm_params": {},
+    }
+    cache_key = litellm.cache.get_cache_key(**kwargs)
+    
+    # mutate kwargs
+    kwargs["temperature"] = 0.8
+    cache_key_2 = litellm.cache.get_cache_key(**kwargs)
+    assert cache_key == cache_key_2

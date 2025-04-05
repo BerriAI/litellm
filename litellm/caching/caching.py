@@ -331,10 +331,9 @@ class Cache:
         """
         Get the preset cache key from kwargs["litellm_params"]
 
-        We use _get_preset_cache_keys for two reasons
+        Is set after the cache is first calculated in order to not mutate between request and response time,
+        in case the implementation mutates the original objects (and avoids doing duplicate key calculations)
 
-        1. optional params like max_tokens, get transformed for bedrock -> max_new_tokens
-        2. avoid doing duplicate / repeated work
         """
         if kwargs:
             if "litellm_params" in kwargs:
