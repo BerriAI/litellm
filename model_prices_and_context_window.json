@@ -105,7 +105,7 @@
         "supports_response_schema": true,  
         "supports_system_messages": true,  
         "deprecation_date": null  
-    }
+    },
     "gpt-4o-search-preview-2025-03-11": {
         "max_tokens": 16384,
         "max_input_tokens": 128000,
