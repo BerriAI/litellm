@@ -125,13 +125,15 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         """
         Get the object name for the request
         """
+        extracted_file_data_content = extracted_file_data.get("content")
         if (
             purpose == "batch"
             and extracted_file_data.get("content_type") == "application/jsonl"
+            and extracted_file_data_content is not None
         ):
             ## 1. If jsonl, check if there's a model name
             file_content = self._get_content_from_openai_file(
-                extracted_file_data.get("content")
+                extracted_file_data_content
             )
 
             # Split into lines and parse each line as JSON
@@ -257,14 +259,15 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         if file_data is None:
             raise ValueError("file is required")
         extracted_file_data = extract_file_data(file_data)
-
+        extracted_file_data_content = extracted_file_data.get("content")
         if (
             create_file_data.get("purpose") == "batch"
             and extracted_file_data.get("content_type") == "application/jsonl"
+            and extracted_file_data_content is not None
         ):
             ## 1. If jsonl, check if there's a model name
             file_content = self._get_content_from_openai_file(
-                extracted_file_data.get("content")
+                extracted_file_data_content
             )
 
             # Split into lines and parse each line as JSON

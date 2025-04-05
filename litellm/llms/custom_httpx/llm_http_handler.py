@@ -1238,6 +1238,8 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             data=create_file_data,
         )
+        if api_base is None:
+            raise ValueError("api_base is required for create_file")
 
         # Get the transformed request data for both steps
         transformed_request = provider_config.transform_create_file_request(
