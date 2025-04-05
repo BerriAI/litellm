@@ -3225,7 +3225,7 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "huggingface":
-        optional_params = litellm.HuggingfaceConfig().map_openai_params(
+        optional_params = litellm.HuggingFaceChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -6270,7 +6270,7 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.REPLICATE == provider:
             return litellm.ReplicateConfig()
         elif litellm.LlmProviders.HUGGINGFACE == provider:
-            return litellm.HuggingfaceConfig()
+            return litellm.HuggingFaceChatConfig()
         elif litellm.LlmProviders.TOGETHER_AI == provider:
             return litellm.TogetherAIConfig()
         elif litellm.LlmProviders.OPENROUTER == provider:

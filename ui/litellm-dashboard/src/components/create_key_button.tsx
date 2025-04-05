@@ -17,11 +17,11 @@ import {
   Modal,
   Form,
   Input,
-  InputNumber,
   Select,
   message,
   Radio,
 } from "antd";
+import NumericalInput from "./shared/numerical_input";
 import { unfurlWildcardModelsInList, getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import SchemaFormFields from './common_components/check_openapi_schema';
 import {
@@ -559,7 +559,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     },
                   ]}
                 >
-                  <InputNumber step={0.01} precision={2} width={200} />
+                  <NumericalInput step={0.01} precision={2} width={200} />
                 </Form.Item>
                 <Form.Item
                   className="mt-4"
@@ -605,7 +605,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     },
                   ]}
                 >
-                  <InputNumber step={1} width={400} />
+                  <NumericalInput step={1} width={400} />
                 </Form.Item>
                 <Form.Item
                   className="mt-4"
@@ -636,7 +636,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     },
                   ]}
                 >
-                  <InputNumber step={1} width={400} />
+                  <NumericalInput step={1} width={400} />
                 </Form.Item>
                 <Form.Item
                   label={
