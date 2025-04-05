@@ -281,6 +281,17 @@ Here is a screenshot of the metrics you can monitor with the LiteLLM Grafana Das
 
 
 
+## Add authentication on /metrics endpoint
+
+**By default /metrics endpoint is unauthenticated.** 
+
+You can opt into running litellm authentication on the /metrics endpoint by setting the following on the config 
+
+```yaml
+litellm_settings:
+  require_auth_for_metrics_endpoint: true
+```
+
 ## FAQ 
 
 ### What are `_created` vs. `_total` metrics?
