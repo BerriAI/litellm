@@ -10,6 +10,7 @@ from litellm._service_logger import ServiceLogging
 service_logger_obj = (
     ServiceLogging()
 )  # used for tracking metrics for In memory buffer, redis buffer, pod lock manager
+from litellm.constants import MAX_IN_MEMORY_QUEUE_FLUSH_COUNT, MAX_SIZE_IN_MEMORY_QUEUE
 
 
 class BaseUpdateQueue:
@@ -17,6 +18,7 @@ class BaseUpdateQueue:
 
     def __init__(self):
         self.update_queue = asyncio.Queue()
+        self.MAX_SIZE_IN_MEMORY_QUEUE = MAX_SIZE_IN_MEMORY_QUEUE
 
     async def add_update(self, update):
         """Enqueue an update."""
@@ -30,6 +32,12 @@ class BaseUpdateQueue:
         """Get all updates from the queue."""
         updates = []
         while not self.update_queue.empty():
+            # Circuit breaker to ensure we're not stuck dequeuing updates. Protect CPU utilization
+            if len(updates) >= MAX_IN_MEMORY_QUEUE_FLUSH_COUNT:
+                verbose_proxy_logger.warning(
+                    "Max in memory queue flush count reached, stopping flush"
+                )
+                break
             updates.append(await self.update_queue.get())
         return updates
 
