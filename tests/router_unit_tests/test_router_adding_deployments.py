@@ -9,23 +9,48 @@ from litellm.router import Deployment, LiteLLM_Params
 from unittest.mock import patch
 import json
 
-
-def test_initialize_deployment_for_pass_through_success():
+@pytest.mark.parametrize("reusable_credentials", [True, False])
+def test_initialize_deployment_for_pass_through_success(reusable_credentials):
     """
     Test successful initialization of a Vertex AI pass-through deployment
     """
+    from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+    from litellm.types.utils import CredentialItem
+
+    vertex_project="test-project"
+    vertex_location="us-central1"
+    vertex_credentials=json.dumps({"type": "service_account", "project_id": "test"})
+
+    if not reusable_credentials:
+        litellm_params = LiteLLM_Params(
+            model="vertex_ai/test-model",
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_credentials=vertex_credentials,
+            use_in_pass_through=True,
+        )
+    else:
+        # add credentials to the credential accessor
+        CredentialAccessor.upsert_credentials([
+            CredentialItem(
+                credential_name="vertex_credentials",
+                credential_values={
+                    "vertex_project": vertex_project,
+                    "vertex_location": vertex_location,
+                    "vertex_credentials": vertex_credentials,
+                },
+                credential_info={}
+            )
+        ])
+        litellm_params = LiteLLM_Params(
+            model="vertex_ai/test-model",
+            litellm_credential_name="vertex_credentials",
+            use_in_pass_through=True,
+        )
     router = Router(model_list=[])
     deployment = Deployment(
         model_name="vertex-test",
-        litellm_params=LiteLLM_Params(
-            model="vertex_ai/test-model",
-            vertex_project="test-project",
-            vertex_location="us-central1",
-            vertex_credentials=json.dumps(
-                {"type": "service_account", "project_id": "test"}
-            ),
-            use_in_pass_through=True,
-        ),
+        litellm_params=litellm_params,
     )
 
     # Test the initialization

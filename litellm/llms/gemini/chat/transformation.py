@@ -81,6 +81,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             "stop",
             "logprobs",
             "frequency_penalty",
+            "modalities",
         ]
 
     def map_openai_params(

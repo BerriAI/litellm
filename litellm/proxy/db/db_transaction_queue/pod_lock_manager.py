@@ -1,9 +1,12 @@
+import asyncio
 import uuid
 from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
+from litellm.proxy.db.db_transaction_queue.base_update_queue import service_logger_obj
+from litellm.types.services import ServiceTypes
 
 if TYPE_CHECKING:
     ProxyLogging = Any
@@ -57,6 +60,7 @@ class PodLockManager:
                     self.pod_id,
                     self.cronjob_id,
                 )
+
                 return True
             else:
                 # Check if the current pod already holds the lock
@@ -70,6 +74,7 @@ class PodLockManager:
                             self.pod_id,
                             self.cronjob_id,
                         )
+                        self._emit_acquired_lock_event(self.cronjob_id, self.pod_id)
                         return True
             return False
         except Exception as e:
@@ -104,6 +109,7 @@ class PodLockManager:
                             self.pod_id,
                             self.cronjob_id,
                         )
+                        self._emit_released_lock_event(self.cronjob_id, self.pod_id)
                     else:
                         verbose_proxy_logger.debug(
                             "Pod %s failed to release Redis lock for cronjob_id=%s",
@@ -127,3 +133,31 @@ class PodLockManager:
             verbose_proxy_logger.error(
                 f"Error releasing Redis lock for {self.cronjob_id}: {e}"
             )
+
+    @staticmethod
+    def _emit_acquired_lock_event(cronjob_id: str, pod_id: str):
+        asyncio.create_task(
+            service_logger_obj.async_service_success_hook(
+                service=ServiceTypes.POD_LOCK_MANAGER,
+                duration=DEFAULT_CRON_JOB_LOCK_TTL_SECONDS,
+                call_type="_emit_acquired_lock_event",
+                event_metadata={
+                    "gauge_labels": f"{cronjob_id}:{pod_id}",
+                    "gauge_value": 1,
+                },
+            )
+        )
+
+    @staticmethod
+    def _emit_released_lock_event(cronjob_id: str, pod_id: str):
+        asyncio.create_task(
+            service_logger_obj.async_service_success_hook(
+                service=ServiceTypes.POD_LOCK_MANAGER,
+                duration=DEFAULT_CRON_JOB_LOCK_TTL_SECONDS,
+                call_type="_emit_released_lock_event",
+                event_metadata={
+                    "gauge_labels": f"{cronjob_id}:{pod_id}",
+                    "gauge_value": 0,
+                },
+            )
+        )
