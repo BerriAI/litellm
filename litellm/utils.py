@@ -6112,6 +6112,8 @@ def validate_and_fix_openai_messages(messages: List):
     for message in messages:
         if not message.get("role"):
             message["role"] = "assistant"
+        if message.get("tool_calls"):
+            message["tool_calls"] = jsonify_tools(tools=message["tool_calls"])
     return validate_chat_completion_messages(messages=messages)
 
 
@@ -6705,3 +6707,20 @@ def return_raw_request(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict
         return RawRequestTypedDict(
             error=received_exception,
         )
+
+
+def jsonify_tools(tools: List[Any]) -> List[Dict]:
+    """
+    Fixes https://github.com/BerriAI/litellm/issues/9321
+
+    Where user passes in a pydantic base model
+    """
+    new_tools: List[Dict] = []
+    for tool in tools:
+        if isinstance(tool, BaseModel):
+            tool = tool.model_dump(exclude_none=True)
+        elif isinstance(tool, dict):
+            tool = tool.copy()
+        if isinstance(tool, dict):
+            new_tools.append(tool)
+    return new_tools
