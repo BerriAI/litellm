@@ -1742,19 +1742,6 @@ class PrometheusLogger(CustomLogger):
                 f"Prometheus metrics are only available for premium users. {CommonProxyErrors.not_premium_user.value}"
             )
 
-        if PrometheusLogger._should_init_metrics_with_auth():
-            PrometheusLogger._mount_metrics_endpoint_with_auth()
-        else:
-            # Mount metrics directly without authentication
-            PrometheusLogger._mount_metrics_endpoint_without_auth()
-
-    @staticmethod
-    def _mount_metrics_endpoint_without_auth():
-        from prometheus_client import make_asgi_app
-
-        from litellm._logging import verbose_proxy_logger
-        from litellm.proxy.proxy_server import app
-
         # Create metrics ASGI app
         metrics_app = make_asgi_app()
 
@@ -1763,37 +1750,6 @@ class PrometheusLogger(CustomLogger):
         verbose_proxy_logger.debug(
             "Starting Prometheus Metrics on /metrics (no authentication)"
         )
-
-    @staticmethod
-    def _mount_metrics_endpoint_with_auth():
-        from fastapi import APIRouter, Depends
-        from prometheus_client import make_asgi_app
-
-        from litellm._logging import verbose_proxy_logger
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-        from litellm.proxy.proxy_server import app
-
-        # Create metrics ASGI app
-        metrics_app = make_asgi_app()
-
-        # Create a router for authenticated metrics
-        metrics_router = APIRouter()
-
-        # Add metrics endpoint with authentication
-        @metrics_router.get("/metrics", dependencies=[Depends(user_api_key_auth)])
-        async def authenticated_metrics():
-            verbose_proxy_logger.debug("Serving authenticated metrics endpoint")
-            return metrics_app
-
-        # Mount the router to the app
-        app.include_router(metrics_router)
-        verbose_proxy_logger.debug(
-            "Starting Prometheus Metrics on /metrics with authentication"
-        )
-
-    @staticmethod
-    def _should_init_metrics_with_auth():
-        return litellm.require_auth_for_metrics_endpoint
 
 
 def prometheus_label_factory(
