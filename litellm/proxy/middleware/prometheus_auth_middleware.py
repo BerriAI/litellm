@@ -11,6 +11,19 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 
 class PrometheusAuthMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware to authenticate requests to the metrics endpoint
+
+    By default, auth is not run on the metrics endpoint
+
+    Enabled by setting the following in proxy_config.yaml:
+
+    ```yaml
+    litellm_settings:
+        require_auth_for_metrics_endpoint: true
+    ```
+    """
+
     async def dispatch(self, request: Request, call_next):
         # Check if this is a request to the metrics endpoint
 
