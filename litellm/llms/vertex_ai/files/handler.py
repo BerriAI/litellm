@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any, Coroutine, Optional, Union
 
 import httpx
@@ -92,5 +93,15 @@ class VertexAIFilesHandler(GCSBucketBase):
                 timeout=timeout,
                 max_retries=max_retries,
             )
-
-        return None  # type: ignore
+        else:
+            return asyncio.run(
+                self.async_create_file(
+                    create_file_data=create_file_data,
+                    api_base=api_base,
+                    vertex_credentials=vertex_credentials,
+                    vertex_project=vertex_project,
+                    vertex_location=vertex_location,
+                    timeout=timeout,
+                    max_retries=max_retries,
+                )
+            )
