@@ -1676,14 +1676,11 @@ class ProxyConfig:
                                 callback
                             )
                             if "prometheus" in callback:
-                                verbose_proxy_logger.debug(
-                                    "Starting Prometheus Metrics on /metrics"
+                                from litellm.integrations.prometheus import (
+                                    PrometheusLogger,
                                 )
-                                from prometheus_client import make_asgi_app
 
-                                # Add prometheus asgi middleware to route /metrics requests
-                                metrics_app = make_asgi_app()
-                                app.mount("/metrics", metrics_app)
+                                PrometheusLogger._mount_metrics_endpoint(premium_user)
                     print(  # noqa
                         f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}"
                     )  # noqa
