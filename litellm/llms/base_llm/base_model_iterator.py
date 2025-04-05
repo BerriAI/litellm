@@ -36,9 +36,17 @@ class BaseModelResponseIterator:
     ) -> Union[GenericStreamingChunk, ModelResponseStream]:
         # chunk is a str at this point
 
-        stripped_json_chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(
+        stripped_chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(
             str_line
         )
+        try:
+            if stripped_chunk is not None:
+                stripped_json_chunk: Optional[dict] = json.loads(stripped_chunk)
+            else:
+                stripped_json_chunk = None
+        except json.JSONDecodeError:
+            stripped_json_chunk = None
+
         if "[DONE]" in str_line:
             return GenericStreamingChunk(
                 text="",
@@ -49,7 +57,7 @@ class BaseModelResponseIterator:
                 tool_use=None,
             )
         elif stripped_json_chunk:
-            return self.chunk_parser(chunk=json.loads(stripped_json_chunk))
+            return self.chunk_parser(chunk=stripped_json_chunk)
         else:
             return GenericStreamingChunk(
                 text="",
