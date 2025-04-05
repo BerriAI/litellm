@@ -330,6 +330,7 @@ class BaseLLMChatTest(ABC):
             }
         ]
         try:
+            print(f"MAKING LLM CALL")
             response = self.completion_function(
                 **base_completion_call_args,
                 messages=messages,
@@ -337,6 +338,7 @@ class BaseLLMChatTest(ABC):
                 tools=tools,
                 drop_params=True,
             )
+            print(f"RESPONSE={response}")
         except litellm.ContextWindowExceededError:
             pytest.skip("Model exceeded context window")
         assert response is not None
@@ -921,10 +923,9 @@ class BaseLLMChatTest(ABC):
             **self.get_base_completion_call_args(),
             messages=[{"role": "user", "content": "Hello, how are you?"}],
         )
-        print(response._hidden_params)
-        cost = completion_cost(response)
+        print(response._hidden_params["response_cost"])
 
-        assert cost > 0
+        assert response._hidden_params["response_cost"] > 0
 
     @pytest.mark.parametrize("input_type", ["input_audio", "audio_url"])
     def test_supports_audio_input(self, input_type):
@@ -1123,7 +1124,6 @@ class BaseAnthropicChatTest(ABC):
         return litellm.completion
 
     def test_anthropic_response_format_streaming_vs_non_streaming(self):
-        litellm.set_verbose = True
         args = {
             "messages": [
                 {
@@ -1172,6 +1172,8 @@ class BaseAnthropicChatTest(ABC):
             **base_completion_call_args, **args, stream=False
         )
 
+        print("built_response.choices[0].message.content", built_response.choices[0].message.content)
+        print("non_stream_response.choices[0].message.content", non_stream_response.choices[0].message.content)
         assert (
             json.loads(built_response.choices[0].message.content).keys()
             == json.loads(non_stream_response.choices[0].message.content).keys()
@@ -1179,6 +1181,7 @@ class BaseAnthropicChatTest(ABC):
 
     def test_completion_thinking_with_response_format(self):
         from pydantic import BaseModel
+        litellm._turn_on_debug()
 
         class RFormat(BaseModel):
             question: str
@@ -1195,4 +1198,70 @@ class BaseAnthropicChatTest(ABC):
 
         print(response)
 
- 
+    def test_completion_with_thinking_basic(self):
+        litellm._turn_on_debug()
+        base_completion_call_args = self.get_base_completion_call_args_with_thinking()
+
+        messages = [{"role": "user", "content": "Generate 5 question + answer pairs"}]
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages=messages,
+        )
+
+        print(f"response: {response}")
+        assert response.choices[0].message.reasoning_content is not None
+        assert isinstance(response.choices[0].message.reasoning_content, str)
+        assert response.choices[0].message.thinking_blocks is not None
+        assert isinstance(response.choices[0].message.thinking_blocks, list)
+        assert len(response.choices[0].message.thinking_blocks) > 0
+
+        assert response.choices[0].message.thinking_blocks[0]["signature"] is not None
+
+    def test_anthropic_thinking_output_stream(self):
+        # litellm.set_verbose = True
+        try:
+            base_completion_call_args = self.get_base_completion_call_args_with_thinking()
+            resp = litellm.completion(
+                **base_completion_call_args,
+                messages=[{"role": "user", "content": "Tell me a joke."}],
+                stream=True,
+                timeout=10,
+            )
+
+            reasoning_content_exists = False
+            signature_block_exists = False
+            tool_call_exists = False
+            for chunk in resp:
+                print(f"chunk 2: {chunk}")
+                if chunk.choices[0].delta.tool_calls:
+                    tool_call_exists = True
+                if (
+                    hasattr(chunk.choices[0].delta, "thinking_blocks")
+                    and chunk.choices[0].delta.thinking_blocks is not None
+                    and chunk.choices[0].delta.reasoning_content is not None
+                    and isinstance(chunk.choices[0].delta.thinking_blocks, list)
+                    and len(chunk.choices[0].delta.thinking_blocks) > 0
+                    and isinstance(chunk.choices[0].delta.reasoning_content, str)
+                ):
+                    reasoning_content_exists = True
+                    print(chunk.choices[0].delta.thinking_blocks[0])
+                    if chunk.choices[0].delta.thinking_blocks[0].get("signature"):
+                        signature_block_exists = True
+            assert not tool_call_exists
+            assert reasoning_content_exists
+            assert signature_block_exists
+        except litellm.Timeout:
+            pytest.skip("Model is timing out")
+
+    def test_anthropic_reasoning_effort_thinking_translation(self):
+        base_completion_call_args = self.get_base_completion_call_args_with_thinking()
+        _, provider, _, _ = litellm.get_llm_provider(
+            model=base_completion_call_args["model"]
+        )
+
+        optional_params = get_optional_params(
+            model=base_completion_call_args.get("model"),
+            custom_llm_provider=provider,
+            reasoning_effort="high",
+        )
+        assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
