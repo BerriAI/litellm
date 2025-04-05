@@ -573,7 +573,6 @@ class HTTPHandler:
                 setattr(e, "text", error_text)
 
             setattr(e, "status_code", e.response.status_code)
-
             raise e
         except Exception as e:
             raise e

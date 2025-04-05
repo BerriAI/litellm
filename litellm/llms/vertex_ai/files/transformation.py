@@ -63,6 +63,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             )
             if not api_key:
                 raise ValueError("api_key is required")
+            headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
     def _get_content_from_openai_file(self, openai_file_content: FileTypes) -> str:
