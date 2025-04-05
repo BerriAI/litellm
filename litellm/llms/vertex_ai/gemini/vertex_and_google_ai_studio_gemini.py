@@ -313,6 +313,30 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             old_schema = _build_vertex_schema(parameters=old_schema)
         return old_schema
 
+    def apply_response_schema_transformation(self, value: dict, optional_params: dict):
+        # remove 'additionalProperties' from json schema
+        value = _remove_additional_properties(value)
+        # remove 'strict' from json schema
+        value = _remove_strict_from_schema(value)
+        if value["type"] == "json_object":
+            optional_params["response_mime_type"] = "application/json"
+        elif value["type"] == "text":
+            optional_params["response_mime_type"] = "text/plain"
+        if "response_schema" in value:
+            optional_params["response_mime_type"] = "application/json"
+            optional_params["response_schema"] = value["response_schema"]
+        elif value["type"] == "json_schema":  # type: ignore
+            if "json_schema" in value and "schema" in value["json_schema"]:  # type: ignore
+                optional_params["response_mime_type"] = "application/json"
+                optional_params["response_schema"] = value["json_schema"]["schema"]  # type: ignore
+
+        if "response_schema" in optional_params and isinstance(
+            optional_params["response_schema"], dict
+        ):
+            optional_params["response_schema"] = self._map_response_schema(
+                value=optional_params["response_schema"]
+            )
+
     def map_openai_params(
         self,
         non_default_params: Dict,
@@ -339,28 +363,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_output_tokens"] = value
             elif param == "response_format" and isinstance(value, dict):  # type: ignore
-                # remove 'additionalProperties' from json schema
-                value = _remove_additional_properties(value)
-                # remove 'strict' from json schema
-                value = _remove_strict_from_schema(value)
-                if value["type"] == "json_object":
-                    optional_params["response_mime_type"] = "application/json"
-                elif value["type"] == "text":
-                    optional_params["response_mime_type"] = "text/plain"
-                if "response_schema" in value:
-                    optional_params["response_mime_type"] = "application/json"
-                    optional_params["response_schema"] = value["response_schema"]
-                elif value["type"] == "json_schema":  # type: ignore
-                    if "json_schema" in value and "schema" in value["json_schema"]:  # type: ignore
-                        optional_params["response_mime_type"] = "application/json"
-                        optional_params["response_schema"] = value["json_schema"]["schema"]  # type: ignore
-
-                if "response_schema" in optional_params and isinstance(
-                    optional_params["response_schema"], dict
-                ):
-                    optional_params["response_schema"] = self._map_response_schema(
-                        value=optional_params["response_schema"]
-                    )
+                self.apply_response_schema_transformation(
+                    value=value, optional_params=optional_params
+                )
             elif param == "frequency_penalty":
                 optional_params["frequency_penalty"] = value
             elif param == "presence_penalty":
@@ -701,7 +706,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         chat_completion_logprobs: Optional[ChoiceLogprobs] = None
         tools: Optional[List[ChatCompletionToolCallChunk]] = []
         functions: Optional[ChatCompletionToolCallFunctionChunk] = None
-        
+
         for idx, candidate in enumerate(_candidates):
             if "content" not in candidate:
                 continue
@@ -714,16 +719,20 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             if "citationMetadata" in candidate:
                 citation_metadata.append(candidate["citationMetadata"])
-                
+
             if "parts" in candidate["content"]:
-                chat_completion_message["content"] = VertexGeminiConfig().get_assistant_content_message(
+                chat_completion_message[
+                    "content"
+                ] = VertexGeminiConfig().get_assistant_content_message(
                     parts=candidate["content"]["parts"]
                 )
 
                 functions, tools = self._transform_parts(
                     parts=candidate["content"]["parts"],
                     index=candidate.get("index", idx),
-                    is_function_call=litellm_params.get("litellm_param_is_function_call"),
+                    is_function_call=litellm_params.get(
+                        "litellm_param_is_function_call"
+                    ),
                 )
 
             if "logprobsResult" in candidate:
@@ -739,7 +748,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             if functions is not None:
                 chat_completion_message["function_call"] = functions
-                
+
             choice = litellm.Choices(
                 finish_reason=candidate.get("finishReason", "stop"),
                 index=candidate.get("index", idx),
@@ -749,7 +758,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             )
 
             model_response.choices.append(choice)
-            
+
         return grounding_metadata, safety_ratings, citation_metadata
 
     def transform_response(
@@ -801,7 +810,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         _candidates = completion_response.get("candidates")
         if _candidates and len(_candidates) > 0:
-            content_policy_violations = VertexGeminiConfig().get_flagged_finish_reasons()
+            content_policy_violations = (
+                VertexGeminiConfig().get_flagged_finish_reasons()
+            )
             if (
                 "finishReason" in _candidates[0]
                 and _candidates[0]["finishReason"] in content_policy_violations.keys()
@@ -816,7 +827,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         try:
             grounding_metadata, safety_ratings, citation_metadata = [], [], []
             if _candidates:
-                grounding_metadata, safety_ratings, citation_metadata = self._process_candidates(
+                (
+                    grounding_metadata,
+                    safety_ratings,
+                    citation_metadata,
+                ) = self._process_candidates(
                     _candidates, model_response, litellm_params
                 )
 
@@ -825,14 +840,20 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             ## ADD METADATA TO RESPONSE ##
             setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)
-            model_response._hidden_params["vertex_ai_grounding_metadata"] = grounding_metadata
-            
+            model_response._hidden_params[
+                "vertex_ai_grounding_metadata"
+            ] = grounding_metadata
+
             setattr(model_response, "vertex_ai_safety_results", safety_ratings)
-            model_response._hidden_params["vertex_ai_safety_results"] = safety_ratings  # older approach - maintaining to prevent regressions
-            
+            model_response._hidden_params[
+                "vertex_ai_safety_results"
+            ] = safety_ratings  # older approach - maintaining to prevent regressions
+
             ## ADD CITATION METADATA ##
             setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)
-            model_response._hidden_params["vertex_ai_citation_metadata"] = citation_metadata  # older approach - maintaining to prevent regressions
+            model_response._hidden_params[
+                "vertex_ai_citation_metadata"
+            ] = citation_metadata  # older approach - maintaining to prevent regressions
 
         except Exception as e:
             raise VertexAIError(
