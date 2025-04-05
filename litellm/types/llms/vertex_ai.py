@@ -29,7 +29,7 @@ class FileDataType(TypedDict):
 
 
 class BlobType(TypedDict):
-    mimeType: Required[str]
+    mime_type: Required[str]
     data: Required[str]
 
 
