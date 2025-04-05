@@ -63,26 +63,24 @@ def test_completion_pydantic_obj_2():
                     "events": {
                         "items": {
                             "properties": {
-                                "name": {"type": "string"},
-                                "date": {"type": "string"},
+                                "name": {"title": "Name", "type": "string"},
+                                "date": {"title": "Date", "type": "string"},
                                 "participants": {
                                     "items": {"type": "string"},
+                                    "title": "Participants",
                                     "type": "array",
                                 },
                             },
-                            "required": [
-                                "name",
-                                "date",
-                                "participants",
-                            ],
+                            "required": ["name", "date", "participants"],
+                            "title": "CalendarEvent",
                             "type": "object",
                         },
+                        "title": "Events",
                         "type": "array",
                     }
                 },
-                "required": [
-                    "events",
-                ],
+                "required": ["events"],
+                "title": "EventsList",
                 "type": "object",
             },
         },
@@ -91,12 +89,13 @@ def test_completion_pydantic_obj_2():
     with patch.object(client, "post", new=MagicMock()) as mock_post:
         mock_post.return_value = expected_request_body
         try:
-            litellm.completion(
+            response = litellm.completion(
                 model="gemini/gemini-1.5-pro",
                 messages=messages,
                 response_format=EventsList,
                 client=client,
             )
+            # print(response)
         except Exception as e:
             print(e)
 
