@@ -97,6 +97,7 @@
         "litellm_provider": "watsonx",  
         "mode": "chat",  
         "supports_function_calling": true,  
+        "supports_tool_choice": true,
         "supports_parallel_function_calling": false,  
         "supports_vision": false,  
         "supports_audio_input": false,  
