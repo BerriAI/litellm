@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import NumericalInput from "../shared/numerical_input";
 import {
   Card,
   Title,
@@ -20,7 +21,7 @@ import {
   Icon
 } from "@tremor/react";
 import { teamInfoCall, teamMemberDeleteCall, teamMemberAddCall, teamMemberUpdateCall, Member, teamUpdateCall } from "@/components/networking";
-import { Button, Form, Input, Select, message, InputNumber, Tooltip } from "antd";
+import { Button, Form, Input, Select, message, Tooltip } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import {
   Select as Select2,
@@ -390,7 +391,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </Form.Item>
 
                   <Form.Item label="Max Budget (USD)" name="max_budget">
-                    <InputNumber step={0.01} precision={2} style={{ width: "100%" }} />
+                    <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
                   </Form.Item>
 
                   <Form.Item label="Reset Budget" name="budget_duration">
@@ -402,11 +403,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </Form.Item>
 
                   <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
-                    <InputNumber step={1} style={{ width: "100%" }} />
+                    <NumericalInput step={1} style={{ width: "100%" }} />
                   </Form.Item>
 
                   <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
-                    <InputNumber step={1} style={{ width: "100%" }} />
+                    <NumericalInput step={1} style={{ width: "100%" }} />
                   </Form.Item>
 
                   <Form.Item
