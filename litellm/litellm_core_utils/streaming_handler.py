@@ -214,10 +214,7 @@ class CustomStreamWrapper:
         Output parse <s> / </s> special tokens for sagemaker + hf streaming.
         """
         hold = False
-        if (
-            self.custom_llm_provider != "huggingface"
-            and self.custom_llm_provider != "sagemaker"
-        ):
+        if self.custom_llm_provider != "sagemaker":
             return hold, chunk
 
         if finish_reason:
@@ -248,49 +245,6 @@ class CustomStreamWrapper:
         return hold, curr_chunk
 
     def handle_predibase_chunk(self, chunk):
-        try:
-            if not isinstance(chunk, str):
-                chunk = chunk.decode(
-                    "utf-8"
-                )  # DO NOT REMOVE this: This is required for HF inference API + Streaming
-            text = ""
-            is_finished = False
-            finish_reason = ""
-            print_verbose(f"chunk: {chunk}")
-            if chunk.startswith("data:"):
-                data_json = json.loads(chunk[5:])
-                print_verbose(f"data json: {data_json}")
-                if "token" in data_json and "text" in data_json["token"]:
-                    text = data_json["token"]["text"]
-                if data_json.get("details", False) and data_json["details"].get(
-                    "finish_reason", False
-                ):
-                    is_finished = True
-                    finish_reason = data_json["details"]["finish_reason"]
-                elif data_json.get(
-                    "generated_text", False
-                ):  # if full generated text exists, then stream is complete
-                    text = ""  # don't return the final bos token
-                    is_finished = True
-                    finish_reason = "stop"
-                elif data_json.get("error", False):
-                    raise Exception(data_json.get("error"))
-                return {
-                    "text": text,
-                    "is_finished": is_finished,
-                    "finish_reason": finish_reason,
-                }
-            elif "error" in chunk:
-                raise ValueError(chunk)
-            return {
-                "text": text,
-                "is_finished": is_finished,
-                "finish_reason": finish_reason,
-            }
-        except Exception as e:
-            raise e
-
-    def handle_huggingface_chunk(self, chunk):
         try:
             if not isinstance(chunk, str):
                 chunk = chunk.decode(
@@ -1046,11 +1000,6 @@ class CustomStreamWrapper:
                 response_obj = cast(Dict[str, Any], anthropic_response_obj)
             elif self.model == "replicate" or self.custom_llm_provider == "replicate":
                 response_obj = self.handle_replicate_chunk(chunk)
-                completion_obj["content"] = response_obj["text"]
-                if response_obj["is_finished"]:
-                    self.received_finish_reason = response_obj["finish_reason"]
-            elif self.custom_llm_provider and self.custom_llm_provider == "huggingface":
-                response_obj = self.handle_huggingface_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
