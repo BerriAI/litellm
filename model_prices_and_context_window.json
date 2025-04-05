@@ -104,8 +104,7 @@
         "supports_audio_output": false,  
         "supports_prompt_caching": true,  
         "supports_response_schema": true,  
-        "supports_system_messages": true,  
-        "deprecation_date": null  
+        "supports_system_messages": true
     },
     "gpt-4o-search-preview-2025-03-11": {
         "max_tokens": 16384,
