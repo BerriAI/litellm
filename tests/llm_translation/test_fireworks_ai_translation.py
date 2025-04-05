@@ -77,6 +77,7 @@ def test_map_response_format():
     }
 
 
+@pytest.mark.skip(reason="fireworks is having an active outage")
 class TestFireworksAIChatCompletion(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         return {
