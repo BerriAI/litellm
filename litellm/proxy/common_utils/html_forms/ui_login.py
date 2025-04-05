@@ -131,7 +131,7 @@ html_form = f"""
         }}
 
         input[type="submit"] {{
-            background-color: #3b82f6;
+            background-color: #5052BA;
             color: #fff;
             cursor: pointer;
             font-weight: 500;
@@ -145,7 +145,7 @@ html_form = f"""
         }}
 
         input[type="submit"]:hover {{
-            background-color: #2563eb;
+            background-color: #5d5fba;
         }}
         
         a {{
