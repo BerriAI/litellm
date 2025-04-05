@@ -896,6 +896,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: Dict,
+        litellm_params: Dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> Dict:
@@ -1013,7 +1014,7 @@ class VertexLLM(VertexBase):
         logging_obj,
         stream,
         optional_params: dict,
-        litellm_params=None,
+        litellm_params: dict,
         logger_fn=None,
         api_base: Optional[str] = None,
         client: Optional[AsyncHTTPHandler] = None,
@@ -1054,6 +1055,7 @@ class VertexLLM(VertexBase):
             model=model,
             messages=messages,
             optional_params=optional_params,
+            litellm_params=litellm_params,
         )
 
         ## LOGGING
@@ -1140,6 +1142,7 @@ class VertexLLM(VertexBase):
             model=model,
             messages=messages,
             optional_params=optional_params,
+            litellm_params=litellm_params,
         )
 
         request_body = await async_transform_request_body(**data)  # type: ignore
@@ -1313,6 +1316,7 @@ class VertexLLM(VertexBase):
             model=model,
             messages=messages,
             optional_params=optional_params,
+            litellm_params=litellm_params,
         )
 
         ## TRANSFORMATION ##

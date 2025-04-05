@@ -225,6 +225,7 @@ class BaseLLMAIOHTTPHandler:
             model=model,
             messages=messages,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             api_base=api_base,
         )
 
@@ -494,6 +495,7 @@ class BaseLLMAIOHTTPHandler:
             model=model,
             messages=[{"role": "user", "content": "test"}],
             optional_params=optional_params,
+            litellm_params=litellm_params,
             api_base=api_base,
         )
 
