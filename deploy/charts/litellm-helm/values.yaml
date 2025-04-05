@@ -195,9 +195,15 @@ migrationJob:
   annotations: {}
   ttlSecondsAfterFinished: 120
 
-# Additional environment variables to be added to the deployment
+# Additional environment variables to be added to the deployment as a map of key-value pairs
 envVars: {
     # USE_DDTRACE: "true"
+}
+
+# Additional environment variables to be added to the deployment as a list of k8s env vars
+extraEnvVars: {
+    # - name: EXTRA_ENV_VAR
+    #   value: EXTRA_ENV_VAR_VALUE
 }
 
 
