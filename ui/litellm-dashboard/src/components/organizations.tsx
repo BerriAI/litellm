@@ -19,8 +19,9 @@ import {
   TabPanels,
   TabPanel,
 } from "@tremor/react";
+import NumericalInput from "./shared/numerical_input";
 import { Input } from "antd";
-import { Modal, Form, InputNumber, Tooltip, Select as Select2 } from "antd";
+import { Modal, Form, Tooltip, Select as Select2 } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { PencilAltIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
 import { TextInput } from "@tremor/react";
@@ -321,7 +322,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                     </Form.Item>
 
                     <Form.Item label="Max Budget (USD)" name="max_budget">
-                      <InputNumber step={0.01} precision={2} width={200} />
+                      <NumericalInput step={0.01} precision={2} width={200} />
                     </Form.Item>
                     <Form.Item label="Reset Budget" name="budget_duration">
                       <Select2 defaultValue={null} placeholder="n/a">
@@ -331,10 +332,10 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                       </Select2>
                     </Form.Item>
                     <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
-                      <InputNumber step={1} width={400} />
+                      <NumericalInput step={1} width={400} />
                     </Form.Item>
                     <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
-                      <InputNumber step={1} width={400} />
+                      <NumericalInput step={1} width={400} />
                     </Form.Item>
 
                     <Form.Item label="Metadata" name="metadata">  
