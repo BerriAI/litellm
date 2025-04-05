@@ -392,6 +392,8 @@ class AnthropicConfig(BaseConfig):
                 _tool = self.map_response_format_to_anthropic_tool(
                     value, optional_params, is_thinking_enabled
                 )
+                if _tool is None:
+                    continue
                 if not is_thinking_enabled:
                     _tool_choice = {"name": RESPONSE_FORMAT_TOOL_NAME, "type": "tool"}
                     optional_params["tool_choice"] = _tool_choice
