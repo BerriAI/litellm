@@ -2,7 +2,7 @@ import json
 import os
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 from httpx import Headers, Response
 
@@ -280,8 +280,10 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 )
             )
             return json.dumps(vertex_jsonl_content)
-        else:
+        elif isinstance(extracted_file_data_content, bytes):
             return extracted_file_data_content
+        else:
+            raise ValueError("Unsupported file content type")
 
     def transform_create_file_response(
         self,
