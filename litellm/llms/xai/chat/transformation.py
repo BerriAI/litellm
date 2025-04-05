@@ -1,6 +1,10 @@
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    strip_name_from_messages,
+)
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import AllMessageValues
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -51,3 +55,21 @@ class XAIChatConfig(OpenAIGPTConfig):
                 if value is not None:
                     optional_params[param] = value
         return optional_params
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        """
+        Handle https://github.com/BerriAI/litellm/issues/9720
+
+        Filter out 'name' from messages
+        """
+        messages = strip_name_from_messages(messages)
+        return super().transform_request(
+            model, messages, optional_params, litellm_params, headers
+        )
