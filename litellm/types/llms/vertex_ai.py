@@ -482,6 +482,51 @@ class OutputConfig(TypedDict, total=False):
     gcsDestination: GcsDestination
 
 
+class GcsBucketResponse(TypedDict):
+    """
+    TypedDict for GCS bucket upload response
+
+    Attributes:
+        kind: The kind of item this is. For objects, this is always storage#object
+        id: The ID of the object
+        selfLink: The link to this object
+        mediaLink: The link to download the object
+        name: The name of the object
+        bucket: The name of the bucket containing this object
+        generation: The content generation of this object
+        metageneration: The metadata generation of this object
+        contentType: The content type of the object
+        storageClass: The storage class of the object
+        size: The size of the object in bytes
+        md5Hash: The MD5 hash of the object
+        crc32c: The CRC32c checksum of the object
+        etag: The ETag of the object
+        timeCreated: The creation time of the object
+        updated: The last update time of the object
+        timeStorageClassUpdated: The time the storage class was last updated
+        timeFinalized: The time the object was finalized
+    """
+
+    kind: Literal["storage#object"]
+    id: str
+    selfLink: str
+    mediaLink: str
+    name: str
+    bucket: str
+    generation: str
+    metageneration: str
+    contentType: str
+    storageClass: str
+    size: str
+    md5Hash: str
+    crc32c: str
+    etag: str
+    timeCreated: str
+    updated: str
+    timeStorageClassUpdated: str
+    timeFinalized: str
+
+
 class VertexAIBatchPredictionJob(TypedDict):
     displayName: str
     model: str

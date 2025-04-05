@@ -27,6 +27,7 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     PathLike,
 )
+from litellm.types.llms.vertex_ai import GcsBucketResponse
 from litellm.types.utils import ExtractedFileData, LlmProviders
 
 from ..common_utils import VertexAIError
@@ -288,8 +289,31 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         """
         Transform VertexAI File upload response into OpenAI-style FileObject
         """
-        return super().transform_create_file_response(
-            model, raw_response, logging_obj, litellm_params
+        response_json = raw_response.json()
+
+        try:
+            response_object = GcsBucketResponse(**response_json)  # type: ignore
+        except Exception as e:
+            raise VertexAIError(
+                status_code=raw_response.status_code,
+                message=f"Error reading GCS bucket response: {e}",
+                headers=raw_response.headers,
+            )
+
+        gcs_id = response_object.get("id", "")
+        # Remove the last numeric ID from the path
+        gcs_id = "/".join(gcs_id.split("/")[:-1]) if gcs_id else ""
+
+        return OpenAIFileObject(
+            purpose=response_object.get("purpose", "batch"),
+            id=f"gs://{gcs_id}",
+            filename=response_object.get("name", ""),
+            created_at=_convert_vertex_datetime_to_openai_datetime(
+                vertex_datetime=response_object.get("timeCreated", "")
+            ),
+            status="uploaded",
+            bytes=int(response_object.get("size", 0)),
+            object="file",
         )
 
     def get_error_class(
