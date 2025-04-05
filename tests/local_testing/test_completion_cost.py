@@ -1272,6 +1272,7 @@ def test_completion_cost_prompt_caching(model, custom_llm_provider):
         # "databricks/databricks-mixtral-8x7b-instruct",
     ],
 )
+@pytest.mark.skip(reason="databricks is having an active outage")
 def test_completion_cost_databricks(model):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
