@@ -713,7 +713,7 @@ async def test_async_post_call_failure_hook(prometheus_logger):
         team_alias="test_team_alias",
         user="test_user",
         exception_status="429",
-        exception_class="RateLimitError",
+        exception_class="Openai.RateLimitError",
     )
     prometheus_logger.litellm_proxy_failed_requests_metric.labels().inc.assert_called_once()
 
@@ -948,7 +948,7 @@ async def test_log_success_fallback_event(prometheus_logger):
         team="test_team",
         team_alias="test_team_alias",
         exception_status="429",
-        exception_class="RateLimitError",
+        exception_class="Openai.RateLimitError",
     )
     prometheus_logger.litellm_deployment_successful_fallbacks.labels().inc.assert_called_once()
 
@@ -985,7 +985,7 @@ async def test_log_failure_fallback_event(prometheus_logger):
         team="test_team",
         team_alias="test_team_alias",
         exception_status="429",
-        exception_class="RateLimitError",
+        exception_class="Openai.RateLimitError",
     )
     prometheus_logger.litellm_deployment_failed_fallbacks.labels().inc.assert_called_once()
 
