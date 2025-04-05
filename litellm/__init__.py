@@ -25,7 +25,7 @@ from typing import (
 import dotenv
 import httpx
 
-_LITELLM_LAZY_IMPORTS = os.getenv("LITELLM_LAZY_IMPORT", "True").lower() == "true"
+_LITELLM_LAZY_IMPORTS = os.getenv("LITELLM_LAZY_IMPORT", "true").lower() == "true"
 
 
 _import_structures: _ImportStructure = {}
@@ -89,6 +89,7 @@ if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
     )
     from litellm.types.guardrails import GuardrailItem
     from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
+    from litellm.types.llms.openai import CreateFileRequest
     from litellm.types.utils import (
         all_litellm_params,  # maintain backwards compatibility for root param
     )
@@ -98,6 +99,7 @@ if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
         CredentialItem,
         ImageObject,
         LlmProviders,
+        Message,
         StandardKeyGenerationConfig,
     )
 else:
@@ -192,6 +194,9 @@ else:
     _import_structures.setdefault("litellm.types.llms.bedrock", []).extend(
         ["COHERE_EMBEDDING_INPUT_TYPES"]
     )
+    _import_structures.setdefault("litellm.types.llms.openai", []).extend(
+        ["CreateFileRequest"]
+    )
     _import_structures.setdefault("litellm.types.utils", []).extend(
         [
             "all_litellm_params",  # maintain backwards compatibility for root param
@@ -200,6 +205,7 @@ else:
             "ImageObject",
             "LlmProviders",
             "StandardKeyGenerationConfig",
+            "Message",
             "Choices",
         ]
     )
@@ -688,6 +694,72 @@ if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
     from litellm.litellm_core_utils.litellm_logging import Logging, modify_integration
     from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
+    from litellm.utils import (
+        ALL_LITELLM_RESPONSE_TYPES,
+        OPENAI_RESPONSE_HEADERS,
+        BudgetConfig,
+        CallTypes,
+        ChatCompletionDeltaToolCall,
+        ChatCompletionMessageToolCall,
+        CostPerToken,
+        CredentialItem,
+        CustomHuggingfaceTokenizer,
+        Delta,
+        Embedding,
+        EmbeddingResponse,
+        Function,
+        ImageObject,
+        ImageResponse,
+        LlmProviders,
+        LlmProvidersSet,
+        ModelInfo,
+        ModelInfoBase,
+        ModelResponse,
+        ModelResponseListIterator,
+        ModelResponseStream,
+        ProviderField,
+        ProviderSpecificModelInfo,
+        RawRequestTypedDict,
+        SelectTokenizerResponse,
+        StandardKeyGenerationConfig,
+        StreamingChoices,
+        TextChoices,
+        TextCompletionResponse,
+        TranscriptionResponse,
+        Usage,
+        _calculate_retry_after,
+        _should_retry,
+        acreate,
+        all_litellm_params,
+        check_valid_key,
+        client,
+        create_pretrained_tokenizer,
+        create_tokenizer,
+        decode,
+        encode,
+        exception_type,
+        get_api_base,
+        get_first_chars_messages,
+        get_litellm_params,
+        get_max_tokens,
+        get_model_info,
+        get_optional_params,
+        get_provider_fields,
+        get_response_string,
+        get_supported_openai_params,
+        register_model,
+        register_prompt_template,
+        supports_audio_input,
+        supports_audio_output,
+        supports_function_calling,
+        supports_parallel_function_calling,
+        supports_response_schema,
+        supports_system_messages,
+        supports_vision,
+        supports_web_search,
+        token_counter,
+        validate_environment,
+    )
 
     from .cost_calculator import completion_cost
     from .llms.ai21.chat.transformation import AI21ChatConfig
@@ -1054,6 +1126,86 @@ else:
     )
     _import_structures.setdefault("litellm.utils", []).extend(
         [
+            "TextChoices",
+            "Usage",
+            "PromptTokenDetailsWrapper",
+            "CompletionTokensDetailsWrapper",
+            "ChatCompletionAudioResponse",
+            "ChatCompletionMessageToolCall",
+            "ChatCompletionDeltaToolCall",
+            "ChoiceLogprobs",
+            "Function",
+            "FunctionCall",
+            "CostPerToken",
+            "SupportedCacheControls",
+            "LiteLLMCommonStrings",
+            "StreamingChoices",
+            "StreamingChatCompletionChunk",
+            "ModelResponseBase",
+            "ModelResponseStream",
+            "ModelResponse",
+            "Embedding",
+            "EmbeddingResponse",
+            "Logprobs",
+            "TextChoices",
+            "ImageObject",
+            "TextCompletionResponse",
+            "LiteLLMPydanticObjectBase",
+            "CallTypesLiteral",
+            "ProviderSpecificModelInfo",
+            "ProviderField",
+            "CallTypes",
+            "SearchContextCostPerQuery",
+            "GenericStreamingChunk",
+            "ModelInfoBase",
+            "ModelInfo",
+            "ImageResponse",
+            "TranscriptionResponse",
+            "GenericImageParsingChunk",
+            "ResponseFormatChunk",
+            "LoggedLiteLLMParams",
+            "AdapterCompletionStreamWrapper",
+            "StandardLoggingUserAPIKeyMetadata",
+            "StandardLoggingMCPToolCall",
+            "StandardBuiltInToolsParams",
+            "StandardLoggingPromptManagementMetadata",
+            "StandardLoggingMetadata",
+            "StandardLoggingAdditionalHeaders",
+            "StandardLoggingHiddenParams",
+            "StandardLoggingModelInformation",
+            "StandardLoggingModelCostFailureDebugInformation",
+            "StandardLoggingPayloadErrorInformation",
+            "StandardLoggingGuardrailInformation",
+            "StandardLoggingPayloadStatus",
+            "CustomStreamingDecoder",
+            "StandardLoggingPayload",
+            "StandardPassThroughResponseObject",
+            "OPENAI_RESPONSE_HEADERS",
+            "StandardCallbackDynamicParams",
+            "all_litellm_params",
+            "KeyGenerationConfig",
+            "TeamUIKeyGenerationConfig",
+            "PersonalUIKeyGenerationConfig",
+            "StandardKeyGenerationConfig",
+            "BudgetConfig",
+            "GenericBudgetConfigType",
+            "LlmProviders",
+            "LlmProvidersSet",
+            "LiteLLMLoggingBaseClass",
+            "CustomHuggingfaceTokenizer",
+            "LITELLM_IMAGE_VARIATION_PROVIDERS",
+            "HttpHandlerRequestFields",
+            "ProviderSpecificHeader",
+            "SelectTokenizerResponse",
+            "LiteLLMBatch",
+            "RawRequestTypedDict",
+            "CredentialBase",
+            "CredentialItem",
+            "CreateCredentialItem",
+            "HiddenParams",
+            "Delta",
+            "ChatCompletionTokenLogprob",
+            "PassthroughCallTypes",
             "ALL_LITELLM_RESPONSE_TYPES",
             "EmbeddingResponse",
             "ImageResponse",
@@ -1608,6 +1760,12 @@ if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
         watsonx_chat_completion,
     )
 
+    from ._variables.misc import (
+        adapters,
+        custom_provider_map,
+        disable_hf_tokenizer_download,
+        global_disable_no_log_param,
+    )
     from .batch_completion.main import (
         batch_completion,
         batch_completion_models,
@@ -1689,6 +1847,7 @@ if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
     from .responses.main import *
     from .router import Router
     from .scheduler import *
+    from .secret_managers.main import get_secret, get_secret_str
 
     ### ADAPTERS ###
     from .types.adapter import AdapterItem
@@ -1696,16 +1855,6 @@ if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
     ### CUSTOM LLMs ###
     from .types.llms.custom_llm import CustomLLMItem
     from .types.utils import GenericStreamingChunk
-
-    adapters: List[AdapterItem] = []
-    custom_provider_map: List[CustomLLMItem] = []
-    _custom_providers: List[str] = (
-        []
-    )  # internal helper util, used to track names of custom providers
-    disable_hf_tokenizer_download: Optional[bool] = (
-        None  # disable huggingface tokenizer download. Defaults to openai clk100
-    )
-    global_disable_no_log_param: bool = False
 
 else:
     _import_structures.setdefault("litellm.assistants.main", []).extend(
@@ -2051,6 +2200,9 @@ else:
             "XAIModelInfo",
         ]
     )
+    _import_structures.setdefault("litellm.secret_managers.main", []).extend(
+        ["get_secret_str", "get_secret"]
+    )
     _import_structures.setdefault("litellm.main", []).extend(
         [
             "anthropic_chat_completions",
@@ -2158,21 +2310,20 @@ else:
         ]
     )
     _import_structures.setdefault("litellm.types.adapter", []).extend(["AdapterItem"])
-    _import_structures.setdefault("litellm.llms.custom_llm", []).extend(
+    _import_structures.setdefault("litellm.types.llms.custom_llm", []).extend(
         ["CustomLLMItem"]
     )
     _import_structures.setdefault("litellm.types.utils", []).extend(
         ["GenericStreamingChunk"]
     )
-    adapters = []
-    custom_provider_map = []
-    _custom_providers = (
-        []
-    )  # internal helper util, used to track names of custom providers
-    disable_hf_tokenizer_download = (
-        None  # disable huggingface tokenizer download. Defaults to openai clk100
+    _import_structures.setdefault("litellm._variables.misc", []).extend(
+        [
+            "adapters",
+            "custom_provider_map",
+            "disable_hf_tokenizer_download",
+            "global_disable_no_log_param",
+        ]
     )
-    global_disable_no_log_param = False
 
     # Lazy import for litellm module
     import sys
