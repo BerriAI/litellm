@@ -689,24 +689,6 @@ async def test_basic_gcs_logger_with_folder_in_bucket_name():
         os.environ["GCS_BUCKET_NAME"] = old_bucket_name
 
 
-
-def test_create_file_e2e():
-    """
-    Asserts 'create_file' is called with the correct arguments
-    """
-    load_vertex_ai_credentials()
-    test_file_content = b"test audio content"
-    test_file = ("test.wav", test_file_content, "audio/wav")
-
-    from litellm import create_file
-    response = create_file(
-        file=test_file,
-        purpose="user_data",
-        custom_llm_provider="vertex_ai",
-    )
-    print("response", response)
-    assert response is not None
-
 def test_create_file_e2e():
     """
     Asserts 'create_file' is called with the correct arguments
@@ -734,17 +716,24 @@ def test_create_file_e2e_jsonl():
     client = HTTPHandler()
 
     example_jsonl = [{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gemini-1.5-flash-001", "messages": [{"role": "system", "content": "You are a helpful assistant."},{"role": "user", "content": "Hello world!"}],"max_tokens": 10}},{"custom_id": "request-2", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gemini-1.5-flash-001", "messages": [{"role": "system", "content": "You are an unhelpful assistant."},{"role": "user", "content": "Hello world!"}],"max_tokens": 10}}]
-    ## create a jsonl file from the example_jsonl
-    with open("example.jsonl", "w") as f:
+    
+    # Create and write to the file
+    file_path = "example.jsonl"
+    with open(file_path, "w") as f:
         for item in example_jsonl:
             f.write(json.dumps(item) + "\n")
-
+    
+    # Verify file content
+    with open(file_path, "r") as f:
+        content = f.read()
+        print("File content:", content)
+        assert len(content) > 0, "File is empty"
 
     from litellm import create_file
     with patch.object(client, "post") as mock_create_file:
         try: 
             response = create_file(
-                file=open("example.jsonl", "rb"), 
+                file=open(file_path, "rb"), 
                 purpose="user_data",
                 custom_llm_provider="vertex_ai",
                 client=client,

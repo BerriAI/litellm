@@ -389,7 +389,6 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
             filename, file_content, content_type, file_headers = file_data
     else:
         file_content = file_data
-
     # Convert content to bytes
     if isinstance(file_content, (str, PathLike)):
         # If it's a path, open and read the file
@@ -398,8 +397,11 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
     elif isinstance(file_content, io.IOBase):
         # If it's a file-like object
         content = file_content.read()
+
         if isinstance(content, str):
             content = content.encode("utf-8")
+        # Reset file pointer to beginning
+        file_content.seek(0)
     elif isinstance(file_content, bytes):
         content = file_content
     else:

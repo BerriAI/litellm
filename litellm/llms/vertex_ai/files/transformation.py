@@ -257,6 +257,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         if file_data is None:
             raise ValueError("file is required")
         extracted_file_data = extract_file_data(file_data)
+
         if (
             create_file_data.get("purpose") == "batch"
             and extracted_file_data.get("content_type") == "application/jsonl"
