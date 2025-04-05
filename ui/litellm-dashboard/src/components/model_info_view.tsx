@@ -14,13 +14,15 @@ import {
   TextInput,
   NumberInput,
 } from "@tremor/react";
-import { ArrowLeftIcon, TrashIcon } from "@heroicons/react/outline";
-import { modelDeleteCall, modelUpdateCall } from "./networking";
-import { Button, Form, Input, InputNumber, message, Select } from "antd";
+import { ArrowLeftIcon, TrashIcon, KeyIcon } from "@heroicons/react/outline";
+import { modelDeleteCall, modelUpdateCall, CredentialItem, credentialGetCall, credentialCreateCall, modelInfoCall, modelInfoV1Call } from "./networking";
+import { Button, Form, Input, InputNumber, message, Select, Modal } from "antd";
 import EditModelModal from "./edit_model/edit_model_modal";
 import { handleEditModelSubmit } from "./edit_model/edit_model_modal";
 import { getProviderLogoAndName } from "./provider_info_helpers";
 import { getDisplayModelName } from "./view_model/model_name_display";
+import AddCredentialsModal from "./model_add/add_credentials_tab";
+import ReuseCredentialsModal from "./model_add/reuse_credentials";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -32,6 +34,7 @@ interface ModelInfoViewProps {
   editModel: boolean;
   setEditModalVisible: (visible: boolean) => void;
   setSelectedModel: (model: any) => void;
+  onModelUpdate?: (updatedModel: any) => void;
 }
 
 export default function ModelInfoView({ 
@@ -43,16 +46,66 @@ export default function ModelInfoView({
   userRole,
   editModel,
   setEditModalVisible,
-  setSelectedModel
+  setSelectedModel,
+  onModelUpdate
 }: ModelInfoViewProps) {
   const [form] = Form.useForm();
-  const [localModelData, setLocalModelData] = useState(modelData);
+  const [localModelData, setLocalModelData] = useState<any>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isCredentialModalOpen, setIsCredentialModalOpen] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [existingCredential, setExistingCredential] = useState<CredentialItem | null>(null);
 
-  const canEditModel = userRole === "Admin";
+  const canEditModel = userRole === "Admin" || modelData.model_info.created_by === userID;
+  const isAdmin = userRole === "Admin";
+
+  const usingExistingCredential = modelData.litellm_params?.litellm_credential_name != null && modelData.litellm_params?.litellm_credential_name != undefined;
+  console.log("usingExistingCredential, ", usingExistingCredential);
+  console.log("modelData.litellm_params.litellm_credential_name, ", modelData.litellm_params.litellm_credential_name);
+  
+
+  useEffect(() => {
+    const getExistingCredential = async () => {
+      console.log("accessToken, ", accessToken);
+      if (!accessToken) return;
+      if (usingExistingCredential) return;
+      let existingCredentialResponse = await credentialGetCall(accessToken, null, modelId);
+      console.log("existingCredentialResponse, ", existingCredentialResponse);
+      setExistingCredential({
+        credential_name: existingCredentialResponse["credential_name"],
+        credential_values: existingCredentialResponse["credential_values"], 
+        credential_info: existingCredentialResponse["credential_info"]
+      });
+    }
+
+    const getModelInfo = async () => {
+      if (!accessToken) return;
+      let modelInfoResponse = await modelInfoV1Call(accessToken, modelId);
+      console.log("modelInfoResponse, ", modelInfoResponse);
+      let specificModelData = modelInfoResponse.data[0];
+      setLocalModelData(specificModelData);
+    }
+    getExistingCredential();
+    getModelInfo();
+  }, [accessToken, modelId]);
+
+  const handleReuseCredential = async (values: any) => {
+    console.log("values, ", values);
+    if (!accessToken) return;
+    let credentialItem = {
+      credential_name: values.credential_name,
+      model_id: modelId,
+      credential_info: {
+        "custom_llm_provider": localModelData.litellm_params?.custom_llm_provider,
+      }
+    }
+    message.info("Storing credential..");
+    let credentialResponse = await credentialCreateCall(accessToken, credentialItem);
+    console.log("credentialResponse, ", credentialResponse);
+    message.success("Credential stored successfully");
+  }
 
   const handleModelUpdate = async (values: any) => {
     try {
@@ -78,17 +131,22 @@ export default function ModelInfoView({
         model_info: {
           id: modelId,
         }
-        
       };
 
       await modelUpdateCall(accessToken, updateData);
       
-      setLocalModelData({
+      const updatedModelData = {
         ...localModelData,
         model_name: values.model_name,
         litellm_model_name: values.litellm_model_name,
         litellm_params: updateData.litellm_params
-      });
+      };
+      
+      setLocalModelData(updatedModelData);
+
+      if (onModelUpdate) {
+        onModelUpdate(updatedModelData);
+      }
 
       message.success("Model settings updated successfully");
       setIsDirty(false);
@@ -121,6 +179,14 @@ export default function ModelInfoView({
       if (!accessToken) return;
       await modelDeleteCall(accessToken, modelId);
       message.success("Model deleted successfully");
+      
+      if (onModelUpdate) {
+        onModelUpdate({ 
+          deleted: true, 
+          model_info: { id: modelId } 
+        });
+      }
+      
       onClose();
     } catch (error) {
       console.error("Error deleting the model:", error);
@@ -143,8 +209,18 @@ export default function ModelInfoView({
           <Title>Public Model Name: {getDisplayModelName(modelData)}</Title>
           <Text className="text-gray-500 font-mono">{modelData.model_info.id}</Text>
         </div>
-        {canEditModel && (
-          <div className="flex gap-2">
+        <div className="flex gap-2">
+          {isAdmin && (
+            <TremorButton
+              icon={KeyIcon}
+              variant="secondary"
+              onClick={() => setIsCredentialModalOpen(true)}
+              className="flex items-center"
+            >
+              Re-use Credentials
+            </TremorButton>
+          )}
+          {canEditModel && (
             <TremorButton
               icon={TrashIcon}
               variant="secondary"
@@ -153,8 +229,8 @@ export default function ModelInfoView({
             >
               Delete Model
             </TremorButton>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       <TabGroup>
@@ -242,24 +318,25 @@ export default function ModelInfoView({
                   </TremorButton>
                 )}
               </div>
-              <Form
-                form={form}
-                onFinish={handleModelUpdate}
-                initialValues={{
+              {localModelData ? (
+                <Form
+                  form={form}
+                  onFinish={handleModelUpdate}
+                  initialValues={{
                   model_name: localModelData.model_name,
                   litellm_model_name: localModelData.litellm_model_name,
-                  api_base: localModelData.litellm_params?.api_base,
-                  custom_llm_provider: localModelData.litellm_params?.custom_llm_provider,
-                  organization: localModelData.litellm_params?.organization,
-                  tpm: localModelData.litellm_params?.tpm,
-                  rpm: localModelData.litellm_params?.rpm,
-                  max_retries: localModelData.litellm_params?.max_retries,
-                  timeout: localModelData.litellm_params?.timeout,
-                  stream_timeout: localModelData.litellm_params?.stream_timeout,
-                  input_cost: localModelData.litellm_params?.input_cost_per_token ? 
-                    (localModelData.litellm_params.input_cost_per_token * 1_000_000) : modelData.input_cost * 1_000_000,
+                  api_base: localModelData.litellm_params.api_base,
+                  custom_llm_provider: localModelData.litellm_params.custom_llm_provider,
+                  organization: localModelData.litellm_params.organization,
+                  tpm: localModelData.litellm_params.tpm,
+                  rpm: localModelData.litellm_params.rpm,
+                  max_retries: localModelData.litellm_params.max_retries,
+                  timeout: localModelData.litellm_params.timeout,
+                  stream_timeout: localModelData.litellm_params.stream_timeout,
+                  input_cost: localModelData.litellm_params.input_cost_per_token ? 
+                    (localModelData.litellm_params.input_cost_per_token * 1_000_000) : localModelData.model_info?.input_cost_per_token * 1_000_000 || null,
                   output_cost: localModelData.litellm_params?.output_cost_per_token ? 
-                    (localModelData.litellm_params.output_cost_per_token * 1_000_000) : modelData.output_cost * 1_000_000,
+                    (localModelData.litellm_params.output_cost_per_token * 1_000_000) : localModelData.model_info?.output_cost_per_token * 1_000_000 || null,
                 }}
                 layout="vertical"
                 onValuesChange={() => setIsDirty(true)}
@@ -296,9 +373,9 @@ export default function ModelInfoView({
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
-                          {localModelData.litellm_params?.input_cost_per_token 
-                            ? (localModelData.litellm_params.input_cost_per_token * 1_000_000).toFixed(4) 
-                            : modelData.input_cost * 1_000_000}
+                          {localModelData?.litellm_params?.input_cost_per_token 
+                            ? (localModelData.litellm_params?.input_cost_per_token * 1_000_000).toFixed(4) 
+                            : localModelData?.model_info?.input_cost_per_token ? (localModelData.model_info.input_cost_per_token * 1_000_000).toFixed(4) : null}
                         </div>
                       )}
                     </div>
@@ -311,9 +388,9 @@ export default function ModelInfoView({
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
-                          {localModelData.litellm_params?.output_cost_per_token 
+                          {localModelData?.litellm_params?.output_cost_per_token 
                             ? (localModelData.litellm_params.output_cost_per_token * 1_000_000).toFixed(4) 
-                            : modelData.output_cost * 1_000_000}
+                            : localModelData?.model_info?.output_cost_per_token ? (localModelData.model_info.output_cost_per_token * 1_000_000).toFixed(4) : null}
                         </div>
                       )}
                     </div>
@@ -452,7 +529,10 @@ export default function ModelInfoView({
                     </div>
                   )}
                 </div>
-              </Form>
+                </Form>
+              ) : (
+                <Text>Loading...</Text>
+              )}
             </Card>
           </TabPanel>
 
@@ -506,6 +586,25 @@ export default function ModelInfoView({
             </div>
           </div>
         </div>
+      )}
+
+      {isCredentialModalOpen && 
+      !usingExistingCredential ? (
+        <ReuseCredentialsModal
+          isVisible={isCredentialModalOpen}
+          onCancel={() => setIsCredentialModalOpen(false)}
+          onAddCredential={handleReuseCredential}
+          existingCredential={existingCredential}
+          setIsCredentialModalOpen={setIsCredentialModalOpen}
+        />
+      ): (
+        <Modal
+          open={isCredentialModalOpen}
+          onCancel={() => setIsCredentialModalOpen(false)}
+          title="Using Existing Credential"
+        >
+          <Text>{modelData.litellm_params.litellm_credential_name}</Text>
+        </Modal>
       )}
     </div>
   );

@@ -9,7 +9,12 @@ from litellm.llms.vertex_ai.gemini.transformation import _transform_request_body
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
-from litellm.types.llms.openai import CreateFileRequest, FileObject, FileTypes, PathLike
+from litellm.types.llms.openai import (
+    CreateFileRequest,
+    FileTypes,
+    OpenAIFileObject,
+    PathLike,
+)
 
 
 class VertexAIFilesTransformation(VertexGeminiConfig):
@@ -142,7 +147,7 @@ class VertexAIFilesTransformation(VertexGeminiConfig):
 
     def transform_gcs_bucket_response_to_openai_file_object(
         self, create_file_data: CreateFileRequest, gcs_upload_response: Dict[str, Any]
-    ) -> FileObject:
+    ) -> OpenAIFileObject:
         """
         Transforms GCS Bucket upload file response to OpenAI FileObject
         """
@@ -150,7 +155,7 @@ class VertexAIFilesTransformation(VertexGeminiConfig):
         # Remove the last numeric ID from the path
         gcs_id = "/".join(gcs_id.split("/")[:-1]) if gcs_id else ""
 
-        return FileObject(
+        return OpenAIFileObject(
             purpose=create_file_data.get("purpose", "batch"),
             id=f"gs://{gcs_id}",
             filename=gcs_upload_response.get("name", ""),

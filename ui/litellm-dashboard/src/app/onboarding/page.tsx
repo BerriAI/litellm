@@ -20,12 +20,12 @@ import {
 } from "@/components/networking";
 import { jwtDecode } from "jwt-decode";
 import { Form, Button as Button2, message } from "antd";
-import { getAuthToken, setAuthToken } from "@/utils/cookieUtils";
+import { getCookie } from "@/utils/cookieUtils";
 
 export default function Onboarding() {
   const [form] = Form.useForm();
   const searchParams = useSearchParams()!;
-  const token = getAuthToken();
+  const token = getCookie('token');
   const inviteID = searchParams.get("invitation_id");
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [defaultUserEmail, setDefaultUserEmail] = useState<string>("");
@@ -88,7 +88,7 @@ export default function Onboarding() {
       litellm_dashboard_ui += "?userID=" + user_id;
 
       // set cookie "token" to jwtToken
-      setAuthToken(jwtToken);
+      document.cookie = "token=" + jwtToken;
       console.log("redirecting to:", litellm_dashboard_ui);
 
       window.location.href = litellm_dashboard_ui;
@@ -110,7 +110,7 @@ export default function Onboarding() {
           color="sky"
         >
           <Grid numItems={2} className="flex justify-between items-center">
-            <Col>SSO is under the Enterprise Tirer.</Col>
+            <Col>SSO is under the Enterprise Tier.</Col>
 
             <Col>
               <Button variant="primary" className="mb-2">

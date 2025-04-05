@@ -15,10 +15,12 @@ from litellm.types.router import RouterErrors
 from litellm.types.utils import LiteLLMPydanticObjectBase, StandardLoggingPayload
 from litellm.utils import get_utc_datetime, print_verbose
 
+from .base_routing_strategy import BaseRoutingStrategy
+
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     Span = Any
 
@@ -27,7 +29,7 @@ class RoutingArgs(LiteLLMPydanticObjectBase):
     ttl: int = 1 * 60  # 1min (RPM/TPM expire key)
 
 
-class LowestTPMLoggingHandler_v2(CustomLogger):
+class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
     """
     Updated version of TPM/RPM Logging.
 
@@ -51,6 +53,12 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
         self.router_cache = router_cache
         self.model_list = model_list
         self.routing_args = RoutingArgs(**routing_args)
+        BaseRoutingStrategy.__init__(
+            self,
+            dual_cache=router_cache,
+            should_batch_redis_writes=True,
+            default_sync_interval=0.1,
+        )
 
     def pre_call_check(self, deployment: Dict) -> Optional[Dict]:
         """
@@ -61,14 +69,16 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
         Raises - RateLimitError if deployment over defined RPM limit
         """
         try:
-
             # ------------
             # Setup values
             # ------------
+
             dt = get_utc_datetime()
             current_minute = dt.strftime("%H-%M")
             model_id = deployment.get("model_info", {}).get("id")
-            rpm_key = f"{model_id}:rpm:{current_minute}"
+            deployment_name = deployment.get("litellm_params", {}).get("model")
+            rpm_key = f"{model_id}:{deployment_name}:rpm:{current_minute}"
+
             local_result = self.router_cache.get_cache(
                 key=rpm_key, local_only=True
             )  # check local result first
@@ -104,6 +114,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 )
             else:
                 # if local result below limit, check redis ## prevent unnecessary redis checks
+
                 result = self.router_cache.increment_cache(
                     key=rpm_key, value=1, ttl=self.routing_args.ttl
                 )
@@ -151,7 +162,9 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             dt = get_utc_datetime()
             current_minute = dt.strftime("%H-%M")
             model_id = deployment.get("model_info", {}).get("id")
-            rpm_key = f"{model_id}:rpm:{current_minute}"
+            deployment_name = deployment.get("litellm_params", {}).get("model")
+
+            rpm_key = f"{model_id}:{deployment_name}:rpm:{current_minute}"
             local_result = await self.router_cache.async_get_cache(
                 key=rpm_key, local_only=True
             )  # check local result first
@@ -186,11 +199,8 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 )
             else:
                 # if local result below limit, check redis ## prevent unnecessary redis checks
-                result = await self.router_cache.async_increment_cache(
-                    key=rpm_key,
-                    value=1,
-                    ttl=self.routing_args.ttl,
-                    parent_otel_span=parent_otel_span,
+                result = await self._increment_value_in_current_window(
+                    key=rpm_key, value=1, ttl=self.routing_args.ttl
                 )
                 if result is not None and result > deployment_rpm:
                     raise litellm.RateLimitError(
@@ -228,8 +238,9 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             if standard_logging_object is None:
                 raise ValueError("standard_logging_object not passed in.")
             model_group = standard_logging_object.get("model_group")
+            model = standard_logging_object["hidden_params"].get("litellm_model_name")
             id = standard_logging_object.get("model_id")
-            if model_group is None or id is None:
+            if model_group is None or id is None or model is None:
                 return
             elif isinstance(id, int):
                 id = str(id)
@@ -244,7 +255,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 "%H-%M"
             )  # use the same timezone regardless of system clock
 
-            tpm_key = f"{id}:tpm:{current_minute}"
+            tpm_key = f"{id}:{model}:tpm:{current_minute}"
             # ------------
             # Update usage
             # ------------
@@ -276,6 +287,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             if standard_logging_object is None:
                 raise ValueError("standard_logging_object not passed in.")
             model_group = standard_logging_object.get("model_group")
+            model = standard_logging_object["hidden_params"]["litellm_model_name"]
             id = standard_logging_object.get("model_id")
             if model_group is None or id is None:
                 return
@@ -290,7 +302,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 "%H-%M"
             )  # use the same timezone regardless of system clock
 
-            tpm_key = f"{id}:tpm:{current_minute}"
+            tpm_key = f"{id}:{model}:tpm:{current_minute}"
             # ------------
             # Update usage
             # ------------
@@ -458,8 +470,9 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 id = m.get("model_info", {}).get(
                     "id"
                 )  # a deployment should always have an 'id'. this is set in router.py
-                tpm_key = "{}:tpm:{}".format(id, current_minute)
-                rpm_key = "{}:rpm:{}".format(id, current_minute)
+                deployment_name = m.get("litellm_params", {}).get("model")
+                tpm_key = "{}:{}:tpm:{}".format(id, deployment_name, current_minute)
+                rpm_key = "{}:{}:rpm:{}".format(id, deployment_name, current_minute)
 
                 tpm_keys.append(tpm_key)
                 rpm_keys.append(rpm_key)
@@ -576,8 +589,9 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 id = m.get("model_info", {}).get(
                     "id"
                 )  # a deployment should always have an 'id'. this is set in router.py
-                tpm_key = "{}:tpm:{}".format(id, current_minute)
-                rpm_key = "{}:rpm:{}".format(id, current_minute)
+                deployment_name = m.get("litellm_params", {}).get("model")
+                tpm_key = "{}:{}:tpm:{}".format(id, deployment_name, current_minute)
+                rpm_key = "{}:{}:rpm:{}".format(id, deployment_name, current_minute)
 
                 tpm_keys.append(tpm_key)
                 rpm_keys.append(rpm_key)

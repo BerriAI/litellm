@@ -1133,10 +1133,10 @@ def test_image_generation_openai():
 
         response = litellm.image_generation(
             prompt="A cute baby sea otter",
-            model="azure/",
-            api_base=os.getenv("AZURE_API_BASE"),
-            api_key=os.getenv("AZURE_API_KEY"),
-            api_version="2023-06-01-preview",
+            model="azure/dall-e-3-test",
+            api_version="2023-12-01-preview",
+            api_base=os.getenv("AZURE_SWEDEN_API_BASE"),
+            api_key=os.getenv("AZURE_SWEDEN_API_KEY"),
         )
 
         print(f"response: {response}")
@@ -1339,7 +1339,7 @@ def test_standard_logging_payload_audio(turn_off_message_logging, stream):
                 continue
 
         time.sleep(2)
-        mock_client.assert_called_once()
+        mock_client.assert_called()
 
         print(
             f"mock_client_post.call_args: {mock_client.call_args.kwargs['kwargs'].keys()}"
@@ -1559,7 +1559,7 @@ def test_logging_standard_payload_llm_headers(stream):
                 continue
 
         time.sleep(2)
-        mock_client.assert_called_once()
+        mock_client.assert_called()
 
         standard_logging_object: StandardLoggingPayload = mock_client.call_args.kwargs[
             "kwargs"

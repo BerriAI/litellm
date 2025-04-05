@@ -5,3 +5,4 @@ export const all_admin_roles = [...old_admin_roles, ...v2_admin_role_names];
 
 export const internalUserRoles = ["Internal User", "Internal Viewer"];
 export const rolesAllowedToSeeUsage = ["Admin", "Admin Viewer", "Internal User", "Internal Viewer"]; 
+export const rolesWithWriteAccess = ["Internal User", "Admin"]; 

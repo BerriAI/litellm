@@ -365,7 +365,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 </Tabs>
 
 ## Specifying Safety Settings 
-In certain use-cases you may need to make calls to the models and pass [safety settigns](https://ai.google.dev/docs/safety_setting_gemini) different from the defaults. To do so, simple pass the `safety_settings` argument to `completion` or `acompletion`. For example:
+In certain use-cases you may need to make calls to the models and pass [safety settings](https://ai.google.dev/docs/safety_setting_gemini) different from the defaults. To do so, simple pass the `safety_settings` argument to `completion` or `acompletion`. For example:
 
 ```python
 response = completion(
@@ -589,8 +589,10 @@ response = litellm.completion(
             "content": [
                 {"type": "text", "text": "Please summarize the audio."},
                 {
-                    "type": "image_url",
-                    "image_url": "data:audio/mp3;base64,{}".format(encoded_data), # 👈 SET MIME_TYPE + DATA
+                    "type": "file",
+                    "file": {
+                        "file_data": "data:audio/mp3;base64,{}".format(encoded_data), # 👈 SET MIME_TYPE + DATA
+                    }
                 },
             ],
         }
@@ -640,8 +642,11 @@ response = litellm.completion(
             "content": [
                 {"type": "text", "text": "Please summarize the file."},
                 {
-                    "type": "image_url",
-                    "image_url": "https://storage..." # 👈 SET THE IMG URL
+                    "type": "file",
+                    "file": {
+                        "file_id": "https://storage...", # 👈 SET THE IMG URL
+                        "format": "application/pdf" # OPTIONAL
+                    }
                 },
             ],
         }
@@ -668,8 +673,11 @@ response = litellm.completion(
             "content": [
                 {"type": "text", "text": "Please summarize the file."},
                 {
-                    "type": "image_url",
-                    "image_url": "gs://..." # 👈 SET THE cloud storage bucket url
+                    "type": "file",
+                    "file": {
+                        "file_id": "gs://storage...", # 👈 SET THE IMG URL
+                        "format": "application/pdf" # OPTIONAL
+                    }
                 },
             ],
         }

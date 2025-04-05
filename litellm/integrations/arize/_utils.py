@@ -1,31 +1,37 @@
-import json
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.types.utils import StandardLoggingPayload
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
-    Span = _Span
+
+    Span = Union[_Span, Any]
 else:
     Span = Any
 
 
 def set_attributes(span: Span, kwargs, response_obj):
-    from openinference.semconv.trace import (
+    from litellm.integrations._types.open_inference import (
         MessageAttributes,
         OpenInferenceSpanKindValues,
         SpanAttributes,
     )
 
     try:
-        litellm_params = kwargs.get("litellm_params", {}) or {}
+        standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
+            "standard_logging_object"
+        )
 
         #############################################
         ############ LLM CALL METADATA ##############
         #############################################
-        metadata = litellm_params.get("metadata", {}) or {}
-        span.set_attribute(SpanAttributes.METADATA, str(metadata))
+
+        if standard_logging_payload and (
+            metadata := standard_logging_payload["metadata"]
+        ):
+            span.set_attribute(SpanAttributes.METADATA, safe_dumps(metadata))
 
         #############################################
         ########## LLM Request Attributes ###########
@@ -62,13 +68,12 @@ def set_attributes(span: Span, kwargs, response_obj):
                     msg.get("content", ""),
                 )
 
-        standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
-            "standard_logging_object"
-        )
-        if standard_logging_payload and (model_params := standard_logging_payload["model_parameters"]):
+        if standard_logging_payload and (
+            model_params := standard_logging_payload["model_parameters"]
+        ):
             # The Generative AI Provider: Azure, OpenAI, etc.
             span.set_attribute(
-                SpanAttributes.LLM_INVOCATION_PARAMETERS, json.dumps(model_params)
+                SpanAttributes.LLM_INVOCATION_PARAMETERS, safe_dumps(model_params)
             )
 
             if model_params.get("user"):
@@ -80,7 +85,7 @@ def set_attributes(span: Span, kwargs, response_obj):
         ########## LLM Response Attributes ##########
         # https://docs.arize.com/arize/large-language-models/tracing/semantic-conventions
         #############################################
-        if hasattr(response_obj, 'get'):
+        if hasattr(response_obj, "get"):
             for choice in response_obj.get("choices", []):
                 response_message = choice.get("message", {})
                 span.set_attribute(

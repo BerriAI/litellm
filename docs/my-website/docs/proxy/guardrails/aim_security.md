@@ -23,6 +23,12 @@ In the newly created guard's page, you can find a reference to the prompt policy
 
 You can decide which detections will be enabled, and set the threshold for each detection.
 
+:::info 
+When using LiteLLM with virtual keys, key-specific policies can be set directly in Aim's guards page by specifying the virtual key alias when creating the guard.
+
+Only the aliases of your virtual keys (and not the actual key secrets) will be sent to Aim.
+:::
+
 ### 3. Add Aim Guardrail on your LiteLLM config.yaml 
 
 Define your guardrails under the `guardrails` section
@@ -37,7 +43,7 @@ guardrails:
   - guardrail_name: aim-protected-app
     litellm_params:
       guardrail: aim
-      mode: pre_call # 'during_call' is also available
+      mode: [pre_call, post_call] # "During_call" is also available
       api_key: os.environ/AIM_API_KEY
       api_base: os.environ/AIM_API_BASE # Optional, use only when using a self-hosted Aim Outpost
 ```

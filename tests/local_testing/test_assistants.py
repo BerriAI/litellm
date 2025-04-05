@@ -67,6 +67,7 @@ async def test_get_assistants(provider, sync_mode):
 @pytest.mark.asyncio()
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_create_delete_assistants(provider, sync_mode):
+    litellm.ssl_verify = False
     model = "gpt-4-turbo"
     if provider == "azure":
         os.environ["AZURE_API_VERSION"] = "2024-05-01-preview"

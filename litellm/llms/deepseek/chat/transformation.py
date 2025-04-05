@@ -14,7 +14,6 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class DeepSeekChatConfig(OpenAIGPTConfig):
-
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str
     ) -> List[AllMessageValues]:
@@ -38,8 +37,10 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
     def get_complete_url(
         self,
         api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         """

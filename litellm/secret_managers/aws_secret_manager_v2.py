@@ -50,7 +50,6 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         if use_aws_secret_manager is None or use_aws_secret_manager is False:
             return
         try:
-
             cls.validate_environment()
             litellm.secret_manager_client = cls()
             litellm._key_management_system = KeyManagementSystem.AWS_SECRET_MANAGER
@@ -63,6 +62,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         secret_name: str,
         optional_params: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
+        primary_secret_name: Optional[str] = None,
     ) -> Optional[str]:
         """
         Async function to read a secret from AWS Secrets Manager
@@ -72,6 +72,11 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         Raises:
             ValueError: If the secret is not found or an HTTP error occurs
         """
+        if primary_secret_name:
+            return await self.async_read_secret_from_primary_secret(
+                secret_name=secret_name, primary_secret_name=primary_secret_name
+            )
+
         endpoint_url, headers, body = self._prepare_request(
             action="GetSecretValue",
             secret_name=secret_name,
@@ -93,7 +98,9 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             raise ValueError("Timeout error occurred")
         except Exception as e:
             verbose_logger.exception(
-                "Error reading secret from AWS Secrets Manager: %s", str(e)
+                "Error reading secret='%s' from AWS Secrets Manager: %s",
+                secret_name,
+                str(e),
             )
         return None
 
@@ -102,13 +109,13 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         secret_name: str,
         optional_params: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
+        primary_secret_name: Optional[str] = None,
     ) -> Optional[str]:
         """
         Sync function to read a secret from AWS Secrets Manager
 
         Done for backwards compatibility with existing codebase, since get_secret is a sync function
         """
-
         # self._prepare_request uses these env vars, we cannot read them from AWS Secrets Manager. If we do we'd get stuck in an infinite loop
         if secret_name in [
             "AWS_ACCESS_KEY_ID",
@@ -118,6 +125,11 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             "AWS_BEDROCK_RUNTIME_ENDPOINT",
         ]:
             return os.getenv(secret_name)
+
+        if primary_secret_name:
+            return self.sync_read_secret_from_primary_secret(
+                secret_name=secret_name, primary_secret_name=primary_secret_name
+            )
 
         endpoint_url, headers, body = self._prepare_request(
             action="GetSecretValue",
@@ -138,14 +150,52 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             raise ValueError("Timeout error occurred")
         except httpx.HTTPStatusError as e:
             verbose_logger.exception(
-                "Error reading secret from AWS Secrets Manager: %s",
+                "Error reading secret='%s' from AWS Secrets Manager: %s, %s",
+                secret_name,
                 str(e.response.text),
+                str(e.response.status_code),
             )
         except Exception as e:
             verbose_logger.exception(
-                "Error reading secret from AWS Secrets Manager: %s", str(e)
+                "Error reading secret='%s' from AWS Secrets Manager: %s",
+                secret_name,
+                str(e),
             )
         return None
+
+    def _parse_primary_secret(self, primary_secret_json_str: Optional[str]) -> dict:
+        """
+        Parse the primary secret JSON string into a dictionary
+
+        Args:
+            primary_secret_json_str: JSON string containing key-value pairs
+
+        Returns:
+            Dictionary of key-value pairs from the primary secret
+        """
+        return json.loads(primary_secret_json_str or "{}")
+
+    def sync_read_secret_from_primary_secret(
+        self, secret_name: str, primary_secret_name: str
+    ) -> Optional[str]:
+        """
+        Read a secret from the primary secret
+        """
+        primary_secret_json_str = self.sync_read_secret(secret_name=primary_secret_name)
+        primary_secret_kv_pairs = self._parse_primary_secret(primary_secret_json_str)
+        return primary_secret_kv_pairs.get(secret_name)
+
+    async def async_read_secret_from_primary_secret(
+        self, secret_name: str, primary_secret_name: str
+    ) -> Optional[str]:
+        """
+        Read a secret from the primary secret
+        """
+        primary_secret_json_str = await self.async_read_secret(
+            secret_name=primary_secret_name
+        )
+        primary_secret_kv_pairs = self._parse_primary_secret(primary_secret_json_str)
+        return primary_secret_kv_pairs.get(secret_name)
 
     async def async_write_secret(
         self,
