@@ -464,8 +464,6 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
         self._last_function_name = None  # Track the last seen function name
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
-        import json
-
         try:
             translated_choices = []
             for choice in chunk["choices"]:

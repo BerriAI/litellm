@@ -3,7 +3,6 @@ from abc import abstractmethod
 from typing import Optional, Union
 
 import litellm
-from litellm.types.llms.openai import ChatCompletionToolCallChunk
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
 
