@@ -1,10 +1,14 @@
 import asyncio
 from copy import deepcopy
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import DailyUserSpendTransaction
-from litellm.proxy.db.db_transaction_queue.base_update_queue import BaseUpdateQueue
+from litellm.proxy.db.db_transaction_queue.base_update_queue import (
+    BaseUpdateQueue,
+    service_logger_obj,
+)
+from litellm.types.services import ServiceTypes
 
 
 class DailySpendUpdateQueue(BaseUpdateQueue):
@@ -117,3 +121,19 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
                 else:
                     aggregated_daily_spend_update_transactions[_key] = deepcopy(payload)
         return aggregated_daily_spend_update_transactions
+
+    async def _emit_new_item_added_to_queue_event(
+        self,
+        queue_size: Optional[int] = None,
+    ):
+        asyncio.create_task(
+            service_logger_obj.async_service_success_hook(
+                service=ServiceTypes.IN_MEMORY_DAILY_SPEND_UPDATE_QUEUE,
+                duration=0,
+                call_type="_emit_new_item_added_to_queue_event",
+                event_metadata={
+                    "gauge_labels": ServiceTypes.IN_MEMORY_DAILY_SPEND_UPDATE_QUEUE,
+                    "gauge_value": queue_size,
+                },
+            )
+        )

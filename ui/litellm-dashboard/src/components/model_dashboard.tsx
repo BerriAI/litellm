@@ -1126,13 +1126,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               </div>
               <ModelDataTable
                 columns={columns(
+                  userRole,
+                  userID,
                   premiumUser,
                   setSelectedModelId,
                   setSelectedTeamId,
                   getDisplayModelName,
                   handleEditClick,
                   handleRefreshClick,
-                  setEditModel
+                  setEditModel,
                 )}
                 data={modelData.data.filter(
                   (model: any) =>

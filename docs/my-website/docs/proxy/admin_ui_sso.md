@@ -156,7 +156,7 @@ PROXY_LOGOUT_URL="https://www.google.com"
 
 Set this in your .env (so the proxy can set the correct redirect url)
 ```shell
-PROXY_BASE_URL=https://litellm-api.up.railway.app/
+PROXY_BASE_URL=https://litellm-api.up.railway.app
 ```
 
 #### Step 4. Test flow
