@@ -330,7 +330,7 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"max_tokens_to_sample": 10}
 
-    from litellm.llms.databricks.chat.handler import DatabricksConfig
+    from litellm.llms.databricks.chat.transformation import DatabricksConfig
 
     assert "max_completion_tokens" in DatabricksConfig().get_supported_openai_params()
 

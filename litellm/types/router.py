@@ -179,6 +179,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams):
     max_retries: Optional[int] = None
     organization: Optional[str] = None  # for openai orgs
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
+    litellm_credential_name: Optional[str] = None
 
     ## LOGGING PARAMS ##
     litellm_trace_id: Optional[str] = None

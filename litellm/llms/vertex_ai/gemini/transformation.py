@@ -224,17 +224,12 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
 
                             if not file_id:
                                 continue
-                            mime_type = format or _get_image_mime_type_from_url(file_id)
-
-                            if mime_type is not None:
-                                _part = PartType(
-                                    file_data=FileDataType(
-                                        file_uri=file_id,
-                                        mime_type=mime_type,
-                                    )
+                            try:
+                                _part = _process_gemini_image(
+                                    image_url=file_id, format=format
                                 )
                                 _parts.append(_part)
-                            else:
+                            except Exception:
                                 raise Exception(
                                     "Unable to determine mime type for file_id: {}, set this explicitly using message[{}].content[{}].file.format".format(
                                         file_id, msg_i, element_idx
