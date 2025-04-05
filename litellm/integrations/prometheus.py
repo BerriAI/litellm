@@ -818,7 +818,7 @@ class PrometheusLogger(CustomLogger):
                 requested_model=request_data.get("model", ""),
                 status_code=str(getattr(original_exception, "status_code", None)),
                 exception_status=str(getattr(original_exception, "status_code", None)),
-                exception_class=str(original_exception.__class__.__name__),
+                exception_class=self._get_exception_class_name(original_exception),
                 tags=_tags,
             )
             _labels = prometheus_label_factory(
@@ -917,7 +917,7 @@ class PrometheusLogger(CustomLogger):
                 api_base=api_base,
                 api_provider=llm_provider,
                 exception_status=str(getattr(exception, "status_code", None)),
-                exception_class=exception.__class__.__name__,
+                exception_class=self._get_exception_class_name(exception),
                 requested_model=model_group,
                 hashed_api_key=standard_logging_payload["metadata"][
                     "user_api_key_hash"
@@ -1146,6 +1146,20 @@ class PrometheusLogger(CustomLogger):
             )
             return
 
+    @staticmethod
+    def _get_exception_class_name(exception: Exception) -> str:
+        exception_class_name = getattr(exception, "llm_provider") or ""
+
+        # pretty print the provider name on prometheus
+        # eg. `openai` -> `Openai.`
+        if len(exception_class_name) >= 1:
+            exception_class_name = (
+                exception_class_name[0].upper() + exception_class_name[1:] + "."
+            )
+
+        exception_class_name += exception.__class__.__name__
+        return exception_class_name
+
     async def log_success_fallback_event(
         self, original_model_group: str, kwargs: dict, original_exception: Exception
     ):
@@ -1181,7 +1195,7 @@ class PrometheusLogger(CustomLogger):
             team=standard_metadata["user_api_key_team_id"],
             team_alias=standard_metadata["user_api_key_team_alias"],
             exception_status=str(getattr(original_exception, "status_code", None)),
-            exception_class=str(original_exception.__class__.__name__),
+            exception_class=self._get_exception_class_name(original_exception),
             tags=_tags,
         )
         _labels = prometheus_label_factory(
@@ -1225,7 +1239,7 @@ class PrometheusLogger(CustomLogger):
             team=standard_metadata["user_api_key_team_id"],
             team_alias=standard_metadata["user_api_key_team_alias"],
             exception_status=str(getattr(original_exception, "status_code", None)),
-            exception_class=str(original_exception.__class__.__name__),
+            exception_class=self._get_exception_class_name(original_exception),
             tags=_tags,
         )
 
