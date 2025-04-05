@@ -1148,7 +1148,9 @@ class PrometheusLogger(CustomLogger):
 
     @staticmethod
     def _get_exception_class_name(exception: Exception) -> str:
-        exception_class_name = getattr(exception, "llm_provider") or ""
+        exception_class_name = ""
+        if hasattr(exception, "llm_provider"):
+            exception_class_name = getattr(exception, "llm_provider") or ""
 
         # pretty print the provider name on prometheus
         # eg. `openai` -> `Openai.`
