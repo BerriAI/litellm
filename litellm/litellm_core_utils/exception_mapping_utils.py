@@ -243,6 +243,18 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     model=model,
                     custom_llm_provider=custom_llm_provider,
                 )
+            # Special case for Fireworks AI rate limit error
+            if (custom_llm_provider == "fireworks_ai" and 
+                "server overloaded, please try again later" in error_str):
+                exception_mapping_worked = True
+                raise RateLimitError(
+                    message=f"RateLimitError: Fireworks_aiException - {error_str}",
+                    model=model,
+                    llm_provider=custom_llm_provider,
+                    response=getattr(original_exception, "response", None),
+                    litellm_debug_info=extra_information,
+                )
+                
             if (
                 custom_llm_provider == "openai"
                 or custom_llm_provider == "text-completion-openai"
@@ -343,7 +355,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         llm_provider=custom_llm_provider,
                     )
-                elif "Request too large" in error_str or "server overloaded, please try again later" in error_str:
+                elif "Request too large" in error_str:
                     exception_mapping_worked = True
                     raise RateLimitError(
                         message=f"RateLimitError: {exception_provider} - {message}",

@@ -56,12 +56,12 @@ class TestFireworksAIExceptions(unittest.TestCase):
     "error_message,expected_exception_type",
     [
         ("server overloaded, please try again later", RateLimitError),
-        ("some other error", BadRequestError),
+        ("some other error", litellm.exceptions.APIError),
     ],
 )
-def test_openai_compatible_exception_mapping(error_message, expected_exception_type):
+def test_fireworks_ai_exception_mapping(error_message, expected_exception_type):
     """
-    Test that the OpenAI-compatible exception mapping correctly handles Fireworks AI errors
+    Test that the exception mapping correctly handles Fireworks AI errors
     """
     # Create a mock exception with the error message
     mock_exception = MagicMock()
@@ -70,29 +70,23 @@ def test_openai_compatible_exception_mapping(error_message, expected_exception_t
     # Create a mock for the exception mapping function
     with patch("litellm.litellm_core_utils.exception_mapping_utils.get_error_message", return_value=error_message):
         try:
-            # Call the exception mapping function directly
+            # Import the exception_type function
             from litellm.litellm_core_utils.exception_mapping_utils import exception_type
             
-            # Set up the parameters for the exception mapping function
-            exception_provider = "Fireworks_ai"
-            custom_llm_provider = "fireworks_ai"
-            model = "accounts/fireworks/models/llama4-maverick-instruct-basic"
+            # Create a mock original exception
+            original_exception = MagicMock()
+            original_exception.message = error_message
+            original_exception.__str__ = MagicMock(return_value=error_message)
             
-            # Call the function that would raise the appropriate exception
-            if "server overloaded" in error_message:
-                # Simulate a rate limit error
-                raise RateLimitError(
-                    message=f"RateLimitError: {exception_provider}Exception - {error_message}",
-                    model=model,
-                    llm_provider=custom_llm_provider,
-                )
-            else:
-                # Simulate a bad request error
-                raise BadRequestError(
-                    message=f"{exception_provider}Exception - {error_message}",
-                    model=model,
-                    llm_provider=custom_llm_provider,
-                )
+            # Call the exception mapping function
+            result = exception_type(
+                model="accounts/fireworks/models/llama4-maverick-instruct-basic",
+                original_exception=original_exception,
+                custom_llm_provider="fireworks_ai",
+            )
+            
+            # This should not be reached as the function should raise an exception
+            pytest.fail(f"Expected an exception but got: {result}")
                 
         except Exception as e:
             # Check that the exception is of the expected type
