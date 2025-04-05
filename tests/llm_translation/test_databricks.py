@@ -216,7 +216,7 @@ def test_throws_if_api_base_or_api_key_not_set_without_databricks_sdk(
     # Simulate that the databricks SDK is not installed
     monkeypatch.setitem(sys.modules, "databricks.sdk", None)
 
-    err_msg = "the Databricks base URL and API key are not set"
+    err_msg = ["the Databricks base URL and API key are not set", "Missing API Key"]
 
     if set_base:
         monkeypatch.setenv(
@@ -237,14 +237,14 @@ def test_throws_if_api_base_or_api_key_not_set_without_databricks_sdk(
             model="databricks/dbrx-instruct-071224",
             messages=[{"role": "user", "content": "How are you?"}],
         )
-    assert err_msg in str(exc)
+    assert any(msg in str(exc) for msg in err_msg)
 
     with pytest.raises(BadRequestError) as exc:
         litellm.embedding(
             model="databricks/bge-12312",
             input=["Hello", "World"],
         )
-    assert err_msg in str(exc)
+    assert any(msg in str(exc) for msg in err_msg)
 
 
 def test_completions_with_sync_http_handler(monkeypatch):

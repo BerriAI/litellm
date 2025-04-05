@@ -67,7 +67,7 @@ class DatabricksBase:
         custom_endpoint: Optional[bool],
         headers: Optional[dict],
     ) -> Tuple[str, dict]:
-        if api_key is None and headers is None:
+        if api_key is None and not headers:  # handle empty headers
             if custom_endpoint is not None:
                 raise DatabricksException(
                     status_code=400,
