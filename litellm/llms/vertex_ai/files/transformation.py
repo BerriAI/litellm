@@ -281,7 +281,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             )
             return json.dumps(vertex_jsonl_content)
         else:
-            return extracted_file_data.get("content")
+            return extracted_file_data_content
 
     def transform_create_file_response(
         self,
