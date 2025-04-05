@@ -1721,6 +1721,36 @@ class PrometheusLogger(CustomLogger):
             return (end_time - start_time).total_seconds()
         return None
 
+    @staticmethod
+    def _mount_metrics_endpoint(premium_user: bool):
+        """
+        Mount the Prometheus metrics endpoint with optional authentication.
+
+        Args:
+            premium_user (bool): Whether the user is a premium user
+            require_auth (bool, optional): Whether to require authentication for the metrics endpoint.
+                                        Defaults to False.
+        """
+        from prometheus_client import make_asgi_app
+
+        from litellm._logging import verbose_proxy_logger
+        from litellm.proxy._types import CommonProxyErrors
+        from litellm.proxy.proxy_server import app
+
+        if premium_user is not True:
+            verbose_proxy_logger.warning(
+                f"Prometheus metrics are only available for premium users. {CommonProxyErrors.not_premium_user.value}"
+            )
+
+        # Create metrics ASGI app
+        metrics_app = make_asgi_app()
+
+        # Mount the metrics app to the app
+        app.mount("/metrics", metrics_app)
+        verbose_proxy_logger.debug(
+            "Starting Prometheus Metrics on /metrics (no authentication)"
+        )
+
 
 def prometheus_label_factory(
     supported_enum_labels: List[str],
