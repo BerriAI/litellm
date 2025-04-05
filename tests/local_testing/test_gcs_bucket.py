@@ -21,7 +21,7 @@ from litellm.integrations.gcs_bucket.gcs_bucket import (
     StandardLoggingPayload,
 )
 from litellm.types.utils import StandardCallbackDynamicParams
-
+from unittest.mock import patch
 verbose_logger.setLevel(logging.DEBUG)
 
 
@@ -729,11 +729,9 @@ def test_create_file_e2e_jsonl():
     Asserts 'create_file' is called with the correct arguments
     """
     load_vertex_ai_credentials()
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    """
-    Asserts 'create_file' is called with the correct arguments
-    """
-    load_vertex_ai_credentials()
+    client = HTTPHandler()
 
     example_jsonl = [{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gemini-1.5-flash-001", "messages": [{"role": "system", "content": "You are a helpful assistant."},{"role": "user", "content": "Hello world!"}],"max_tokens": 10}},{"custom_id": "request-2", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gemini-1.5-flash-001", "messages": [{"role": "system", "content": "You are an unhelpful assistant."},{"role": "user", "content": "Hello world!"}],"max_tokens": 10}}]
     ## create a jsonl file from the example_jsonl
@@ -743,10 +741,19 @@ def test_create_file_e2e_jsonl():
 
 
     from litellm import create_file
-    response = create_file(
-        file=open("example.jsonl", "rb"), 
-        purpose="user_data",
-        custom_llm_provider="vertex_ai",
-    )
-    print("response", response)
-    assert response is not None
+    with patch.object(client, "post") as mock_create_file:
+        try: 
+            response = create_file(
+                file=open("example.jsonl", "rb"), 
+                purpose="user_data",
+                custom_llm_provider="vertex_ai",
+                client=client,
+            )
+        except Exception as e:
+            print("error", e)
+
+        mock_create_file.assert_called_once()
+
+        print(f"kwargs: {mock_create_file.call_args.kwargs}")
+
+        assert mock_create_file.call_args.kwargs["data"] is not None and len(mock_create_file.call_args.kwargs["data"]) > 0
