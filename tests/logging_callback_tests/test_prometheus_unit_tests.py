@@ -1500,3 +1500,33 @@ def test_set_team_budget_metrics_with_custom_labels(prometheus_logger, monkeypat
         "metadata_organization": None,
         "metadata_environment": None,
     }
+
+
+def test_get_exception_class_name(prometheus_logger):
+    """
+    Test that _get_exception_class_name correctly formats the exception class name
+    """
+    # Test case 1: Exception with llm_provider
+    rate_limit_error = litellm.RateLimitError(
+        message="Rate limit exceeded",
+        llm_provider="openai",
+        model="gpt-3.5-turbo"
+    )
+    assert prometheus_logger._get_exception_class_name(rate_limit_error) == "Openai.RateLimitError"
+
+    # Test case 2: Exception with empty llm_provider
+    auth_error = litellm.AuthenticationError(
+        message="Invalid API key",
+        llm_provider="",
+        model="gpt-4"
+    )
+    assert prometheus_logger._get_exception_class_name(auth_error) == "AuthenticationError"
+
+    # Test case 3: Exception with None llm_provider
+    context_window_error = litellm.ContextWindowExceededError(
+        message="Context length exceeded",
+        llm_provider=None,
+        model="gpt-4"
+    )
+    assert prometheus_logger._get_exception_class_name(context_window_error) == "ContextWindowExceededError"
+
