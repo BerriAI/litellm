@@ -138,7 +138,6 @@ from .llms.cohere.embed import handler as cohere_embed
 from .llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
 from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
-from .llms.databricks.chat.handler import DatabricksChatCompletion
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha, palm
 from .llms.groq.chat.handler import GroqChatCompletion
@@ -215,7 +214,6 @@ openai_chat_completions = OpenAIChatCompletion()
 openai_text_completions = OpenAITextCompletion()
 openai_audio_transcriptions = OpenAIAudioTranscription()
 openai_image_variations = OpenAIImageVariationsHandler()
-databricks_chat_completions = DatabricksChatCompletion()
 groq_chat_completions = GroqChatCompletion()
 azure_ai_embedding = AzureAIEmbedding()
 anthropic_chat_completions = AnthropicChatCompletion()
@@ -2230,24 +2228,22 @@ def completion(  # type: ignore # noqa: PLR0915
 
             ## COMPLETION CALL
             try:
-                response = databricks_chat_completions.completion(
+                response = base_llm_http_handler.completion(
                     model=model,
+                    stream=stream,
                     messages=messages,
-                    headers=headers,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    api_key=api_key,
-                    api_base=api_base,
                     acompletion=acompletion,
-                    logging_obj=logging,
+                    api_base=api_base,
+                    model_response=model_response,
                     optional_params=optional_params,
                     litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    timeout=timeout,  # type: ignore
-                    custom_prompt_dict=custom_prompt_dict,
-                    client=client,  # pass AsyncOpenAI, OpenAI client
-                    encoding=encoding,
                     custom_llm_provider="databricks",
+                    timeout=timeout,
+                    headers=headers,
+                    encoding=encoding,
+                    api_key=api_key,
+                    logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
+                    client=client,
                 )
             except Exception as e:
                 ## LOGGING - log the original exception returned
