@@ -5,7 +5,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 import httpx
 
 import litellm
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.constants import (
+    DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,
+    RESPONSE_FORMAT_TOOL_NAME,
+)
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
@@ -18,8 +21,10 @@ from litellm.types.llms.anthropic import (
     AnthropicMessagesTool,
     AnthropicMessagesToolChoice,
     AnthropicSystemMessageContent,
+    AnthropicThinkingParam,
 )
 from litellm.types.llms.openai import (
+    REASONING_EFFORT,
     AllMessageValues,
     ChatCompletionCachedContent,
     ChatCompletionSystemMessage,
@@ -28,9 +33,16 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
 )
+from litellm.types.utils import CompletionTokensDetailsWrapper
 from litellm.types.utils import Message as LitellmMessage
 from litellm.types.utils import PromptTokensDetailsWrapper
-from litellm.utils import ModelResponse, Usage, add_dummy_tool, has_tool_call_blocks
+from litellm.utils import (
+    ModelResponse,
+    Usage,
+    add_dummy_tool,
+    has_tool_call_blocks,
+    token_counter,
+)
 
 from ..common_utils import AnthropicError, process_anthropic_headers
 
@@ -51,7 +63,7 @@ class AnthropicConfig(BaseConfig):
 
     max_tokens: Optional[
         int
-    ] = 4096  # anthropic requires a default value (Opus, Sonnet, and Haiku have the same default)
+    ] = DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS  # anthropic requires a default value (Opus, Sonnet, and Haiku have the same default)
     stop_sequences: Optional[list] = None
     temperature: Optional[int] = None
     top_p: Optional[int] = None
@@ -63,7 +75,7 @@ class AnthropicConfig(BaseConfig):
         self,
         max_tokens: Optional[
             int
-        ] = 4096,  # You can pass in a value yourself or use the default value 4096
+        ] = DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,  # You can pass in a value yourself or use the default value 4096
         stop_sequences: Optional[list] = None,
         temperature: Optional[int] = None,
         top_p: Optional[int] = None,
@@ -94,6 +106,7 @@ class AnthropicConfig(BaseConfig):
             "parallel_tool_calls",
             "response_format",
             "user",
+            "reasoning_effort",
         ]
 
         if "claude-3-7-sonnet" in model:
@@ -291,6 +304,21 @@ class AnthropicConfig(BaseConfig):
                 new_stop = new_v
         return new_stop
 
+    @staticmethod
+    def _map_reasoning_effort(
+        reasoning_effort: Optional[Union[REASONING_EFFORT, str]]
+    ) -> Optional[AnthropicThinkingParam]:
+        if reasoning_effort is None:
+            return None
+        elif reasoning_effort == "low":
+            return AnthropicThinkingParam(type="enabled", budget_tokens=1024)
+        elif reasoning_effort == "medium":
+            return AnthropicThinkingParam(type="enabled", budget_tokens=2048)
+        elif reasoning_effort == "high":
+            return AnthropicThinkingParam(type="enabled", budget_tokens=4096)
+        else:
+            raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -302,10 +330,6 @@ class AnthropicConfig(BaseConfig):
             non_default_params=non_default_params
         )
 
-        ## handle thinking tokens
-        self.update_optional_params_with_thinking_tokens(
-            non_default_params=non_default_params, optional_params=optional_params
-        )
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_tokens"] = value
@@ -370,7 +394,15 @@ class AnthropicConfig(BaseConfig):
                 optional_params["metadata"] = {"user_id": value}
             if param == "thinking":
                 optional_params["thinking"] = value
+            elif param == "reasoning_effort" and isinstance(value, str):
+                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+                    value
+                )
 
+        ## handle thinking tokens
+        self.update_optional_params_with_thinking_tokens(
+            non_default_params=non_default_params, optional_params=optional_params
+        )
         return optional_params
 
     def _create_json_tool_call_for_response_format(
@@ -747,6 +779,15 @@ class AnthropicConfig(BaseConfig):
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens
         )
+        completion_token_details = (
+            CompletionTokensDetailsWrapper(
+                reasoning_tokens=token_counter(
+                    text=reasoning_content, count_response_tokens=True
+                )
+            )
+            if reasoning_content
+            else None
+        )
         total_tokens = prompt_tokens + completion_tokens
         usage = Usage(
             prompt_tokens=prompt_tokens,
@@ -755,6 +796,7 @@ class AnthropicConfig(BaseConfig):
             prompt_tokens_details=prompt_tokens_details,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
+            completion_tokens_details=completion_token_details,
         )
 
         setattr(model_response, "usage", usage)  # type: ignore
