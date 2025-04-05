@@ -923,10 +923,9 @@ class BaseLLMChatTest(ABC):
             **self.get_base_completion_call_args(),
             messages=[{"role": "user", "content": "Hello, how are you?"}],
         )
-        print(response._hidden_params)
-        cost = completion_cost(response)
+        print(response._hidden_params["response_cost"])
 
-        assert cost > 0
+        assert response._hidden_params["response_cost"] > 0
 
     @pytest.mark.parametrize("input_type", ["input_audio", "audio_url"])
     def test_supports_audio_input(self, input_type):
