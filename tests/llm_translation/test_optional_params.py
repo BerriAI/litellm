@@ -1405,6 +1405,17 @@ def test_azure_modalities_param():
     assert optional_params["audio"] == {"type": "audio_input", "input": "test.wav"}
 
 
+def test_gemini_modalities_param():
+    optional_params = get_optional_params(
+        model="gemini-1.5-pro",
+        custom_llm_provider="gemini",
+        modalities=["text", "image"],
+    )
+
+    assert optional_params["responseModalities"] == ["TEXT", "IMAGE"]
+    
+
+
 
 def test_azure_response_format_param():
     optional_params = litellm.get_optional_params(
@@ -1430,4 +1441,3 @@ def test_anthropic_unified_reasoning_content(model, provider):
         reasoning_effort="high",
     )
     assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
-
