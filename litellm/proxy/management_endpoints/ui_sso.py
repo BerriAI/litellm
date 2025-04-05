@@ -34,9 +34,9 @@ from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
     admin_ui_disabled,
-    html_form,
     show_missing_vars_in_env,
 )
+from litellm.proxy.common_utils.html_forms.ui_login import html_form
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.sso_helper_utils import (
     check_is_admin_only_access,
