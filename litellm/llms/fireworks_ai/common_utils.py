@@ -20,6 +20,15 @@ class FireworksAIMixin:
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, Headers]
     ) -> BaseLLMException:
+        # Check if it's a rate limit error (status code 429)
+        if status_code == 429:
+            from litellm.exceptions import RateLimitError
+            return RateLimitError(
+                message=f"Fireworks_aiException - {error_message}",
+                llm_provider="fireworks_ai",
+                model="",  # This will be set later in the exception mapping
+                response=None,  # This will be set later in the exception mapping
+            )
         return FireworksAIException(
             status_code=status_code,
             message=error_message,
