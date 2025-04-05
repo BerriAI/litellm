@@ -2,6 +2,7 @@
 Prometheus Auth Middleware
 """
 from fastapi import Request
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import litellm
@@ -24,7 +25,10 @@ class PrometheusAuthMiddleware(BaseHTTPMiddleware):
                         or "",
                     )
                 except Exception as e:
-                    raise e
+                    return JSONResponse(
+                        status_code=401,
+                        content=f"Unauthorized access to metrics endpoint: {getattr(e, 'message', str(e))}",
+                    )
 
         # Process the request and get the response
         response = await call_next(request)
