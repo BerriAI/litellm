@@ -229,6 +229,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
     _add_team_model_to_db,
+    _deduplicate_litellm_router_models,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     router as model_management_router,
@@ -5371,6 +5372,7 @@ async def non_admin_all_models(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
+    # Get all models that are user-added, when model created_by == user_api_key_dict.user_id
     all_models = await _check_if_model_is_user_added(
         models=all_models,
         user_api_key_dict=user_api_key_dict,
@@ -5385,12 +5387,15 @@ async def non_admin_all_models(
         except Exception:
             raise HTTPException(status_code=400, detail={"error": "User not found"})
 
+        # Get all models that are team models, when model team_id == user_row.teams
         all_models += _check_if_model_is_team_model(
             models=llm_router.get_model_list() or [],
             user_row=user_row,
         )
 
-    return all_models
+    # de-duplicate models. Only return unique model ids
+    unique_models = _deduplicate_litellm_router_models(models=all_models)
+    return unique_models
 
 
 @router.get(
