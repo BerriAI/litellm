@@ -687,3 +687,22 @@ async def test_basic_gcs_logger_with_folder_in_bucket_name():
     # clean up
     if old_bucket_name is not None:
         os.environ["GCS_BUCKET_NAME"] = old_bucket_name
+
+
+
+def test_create_file_e2e():
+    """
+    Asserts 'create_file' is called with the correct arguments
+    """
+    load_vertex_ai_credentials()
+    test_file_content = b"test audio content"
+    test_file = ("test.wav", test_file_content, "audio/wav")
+
+    from litellm import create_file
+    response = create_file(
+        file=test_file,
+        purpose="user_data",
+        custom_llm_provider="vertex_ai",
+    )
+    print("response", response)
+    assert response is not None
