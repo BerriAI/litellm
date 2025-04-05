@@ -10,5 +10,6 @@ model_list:
       api_key: fake-key
 
 litellm_settings:
+  require_auth_for_metrics_endpoint: true
   callbacks: ["prometheus"]
   service_callback: ["prometheus_system"]
