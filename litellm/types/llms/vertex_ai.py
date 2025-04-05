@@ -87,12 +87,27 @@ class SystemInstructions(TypedDict):
 
 class Schema(TypedDict, total=False):
     type: Literal["STRING", "INTEGER", "BOOLEAN", "NUMBER", "ARRAY", "OBJECT"]
+    format: str
+    title: str
     description: str
-    enum: List[str]
-    items: List["Schema"]
-    properties: "Schema"
-    required: List[str]
     nullable: bool
+    default: Any
+    items: "Schema"
+    minItems: str
+    maxItems: str
+    enum: List[str]
+    properties: Dict[str, "Schema"]
+    propertyOrdering: List[str]
+    required: List[str]
+    minProperties: str
+    maxProperties: str
+    minimum: float
+    maximum: float
+    minLength: str
+    maxLength: str
+    pattern: str
+    example: Any
+    anyOf: List["Schema"]
 
 
 class FunctionDeclaration(TypedDict, total=False):
