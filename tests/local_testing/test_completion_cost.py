@@ -1267,7 +1267,7 @@ def test_completion_cost_prompt_caching(model, custom_llm_provider):
     "model",
     [
         "databricks/databricks-meta-llama-3.2-3b-instruct",
-        "databricks/databricks-meta-llama-3-70b-instruct",
+        "databricks/databricks-meta-llama-3.3-70b-instruct",
         "databricks/databricks-dbrx-instruct",
         # "databricks/databricks-mixtral-8x7b-instruct",
     ],
