@@ -2,7 +2,7 @@ import json
 import time
 import uuid
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Union
 
 from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
@@ -2170,3 +2170,20 @@ class CreateCredentialItem(CredentialBase):
         if not values.get("credential_values") and not values.get("model_id"):
             raise ValueError("Either credential_values or model_id must be set")
         return values
+
+
+class ExtractedFileData(TypedDict):
+    """
+    TypedDict for storing processed file data
+
+    Attributes:
+        filename: Name of the file if provided
+        content: The file content in bytes
+        content_type: MIME type of the file
+        headers: Any additional headers for the file
+    """
+
+    filename: Optional[str]
+    content: bytes
+    content_type: Optional[str]
+    headers: Mapping[str, str]

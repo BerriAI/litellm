@@ -6487,6 +6487,10 @@ class ProviderConfigManager:
             )
 
             return GoogleAIStudioFilesHandler()
+        elif LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
+
+            return VertexAIFilesConfig()
         return None
 
 

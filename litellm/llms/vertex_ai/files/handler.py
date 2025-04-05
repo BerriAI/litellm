@@ -12,9 +12,9 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.openai import CreateFileRequest, OpenAIFileObject
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 
-from .transformation import VertexAIFilesTransformation
+from .transformation import VertexAIJsonlFilesTransformation
 
-vertex_ai_files_transformation = VertexAIFilesTransformation()
+vertex_ai_files_transformation = VertexAIJsonlFilesTransformation()
 
 
 class VertexAIFilesHandler(GCSBucketBase):
