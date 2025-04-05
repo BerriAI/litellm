@@ -450,10 +450,55 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
 
 class DatabricksChatResponseIterator(BaseModelResponseIterator):
+    def __init__(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ):
+        super().__init__(streaming_response, sync_stream)
+
+        self.json_mode = json_mode
+        self._last_function_name = None  # Track the last seen function name
+
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+        import json
+
         try:
             translated_choices = []
             for choice in chunk["choices"]:
+                tool_calls = choice["delta"].get("tool_calls")
+                if tool_calls and self.json_mode:
+                    # 1. Check if the function name is set and == RESPONSE_FORMAT_TOOL_NAME
+                    # 2. If no function name, just args -> check last function name (saved via state variable)
+                    # 3. Convert args to json
+                    # 4. Convert json to message
+                    # 5. Set content to message.content
+                    # 6. Set tool_calls to None
+                    from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+                    from litellm.llms.base_llm.base_utils import (
+                        _convert_tool_response_to_message,
+                    )
+
+                    # Check if this chunk has a function name
+                    function_name = tool_calls[0].get("function", {}).get("name")
+                    if function_name is not None:
+                        self._last_function_name = function_name
+
+                    # If we have a saved function name that matches RESPONSE_FORMAT_TOOL_NAME
+                    # or this chunk has the matching function name
+                    if (
+                        self._last_function_name == RESPONSE_FORMAT_TOOL_NAME
+                        or function_name == RESPONSE_FORMAT_TOOL_NAME
+                    ):
+                        # Convert tool calls to message format
+                        message = _convert_tool_response_to_message(tool_calls)
+                        if message is not None:
+                            if message.content == "{}":  # empty json
+                                message.content = ""
+                            choice["delta"]["content"] = message.content
+                            choice["delta"]["tool_calls"] = None
+
                 # extract the content str
                 content_str = DatabricksConfig.extract_content_str(
                     choice["delta"].get("content")
