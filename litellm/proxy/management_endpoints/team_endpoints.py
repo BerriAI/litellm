@@ -26,6 +26,7 @@ from litellm.proxy._types import (
     BlockTeamRequest,
     CommonProxyErrors,
     DeleteTeamRequest,
+    GetTeamMemberPermissionsResponse,
     LiteLLM_AuditLogs,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLM_ModelTable,
@@ -50,6 +51,7 @@ from litellm.proxy._types import (
     TeamMemberUpdateResponse,
     TeamModelAddRequest,
     TeamModelDeleteRequest,
+    UpdateTeamMemberPermissionsRequest,
     UpdateTeamRequest,
     UserAPIKeyAuth,
 )
@@ -61,6 +63,9 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _set_object_metadata_field,
+)
+from litellm.proxy.management_endpoints.team_member_permission_checks import (
+    TeamMemberPermissionChecks,
 )
 from litellm.proxy.management_helpers.utils import (
     add_new_member,
@@ -1923,6 +1928,88 @@ async def team_model_delete(
     # Update team
     updated_team = await prisma_client.db.litellm_teamtable.update(
         where={"team_id": data.team_id}, data={"models": updated_models}
+    )
+
+    return updated_team
+
+
+@router.get(
+    "/team/permissions_list",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def team_member_permissions(
+    team_id: str = fastapi.Query(
+        default=None, description="Team ID in the request parameters"
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> GetTeamMemberPermissionsResponse:
+    """
+    Get the team member permissions for a team
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    team_row = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": team_id}
+    )
+
+    if team_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found, passed team_id={team_id}"},
+        )
+
+    team_obj = LiteLLM_TeamTable(**team_row.model_dump())
+
+    return GetTeamMemberPermissionsResponse(
+        team_id=team_id,
+        team_member_permissions=team_obj.team_member_permissions,
+        all_available_permissions=TeamMemberPermissionChecks.get_all_available_team_member_permissions(),
+    )
+
+
+@router.post(
+    "/team/permissions_update",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_team_member_permissions(
+    data: UpdateTeamMemberPermissionsRequest,
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> LiteLLM_TeamTable:
+    """
+    Update the team member permissions for a team
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    team_row = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": data.team_id}
+    )
+
+    if team_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found, passed team_id={data.team_id}"},
+        )
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admin can update team member permissions"},
+        )
+
+    # Update the team member permissions
+    updated_team = await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": data.team_id},
+        data={"member_permissions": data.team_member_permissions},
     )
 
     return updated_team

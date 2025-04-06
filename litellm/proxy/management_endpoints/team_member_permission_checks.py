@@ -5,6 +5,7 @@ from litellm.proxy._types import (
     KeyManagementRoutes,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_VerificationToken,
+    LiteLLMRoutes,
     LitellmUserRoles,
     Member,
     ProxyErrorTypes,
@@ -34,7 +35,11 @@ class TeamMemberPermissionChecks:
         if team_table.team_member_permissions and isinstance(
             team_table.team_member_permissions, list
         ):
-            return team_table.team_member_permissions
+            return [
+                KeyManagementRoutes(permission)
+                for permission in team_table.team_member_permissions
+            ]
+
         return DEFAULT_TEAM_MEMBER_PERMISSIONS
 
     @staticmethod
@@ -160,3 +165,13 @@ class TeamMemberPermissionChecks:
             team_table=team_table, user_id=user_api_key_dict.user_id
         )
         return team_member_object is not None
+
+    @staticmethod
+    def get_all_available_team_member_permissions() -> List[str]:
+        """
+        Returns all available team member permissions
+        """
+        all_available_permissions = []
+        for route in LiteLLMRoutes.key_management_routes.value:
+            all_available_permissions.append(route.value)
+        return all_available_permissions

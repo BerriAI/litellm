@@ -1134,7 +1134,7 @@ class LiteLLM_TeamTable(TeamBase):
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
     model_id: Optional[int] = None
-    team_member_permissions: Optional[List[KeyManagementRoutes]] = None
+    team_member_permissions: Optional[List[str]] = None
     litellm_model_table: Optional[LiteLLM_ModelTable] = None
     created_at: Optional[datetime] = None
 
@@ -2335,6 +2335,38 @@ class TeamModelDeleteRequest(BaseModel):
 
     team_id: str
     models: List[str]
+
+
+class GetTeamMemberPermissionsRequest(BaseModel):
+    """Request to get the team member permissions for a team"""
+
+    team_id: str
+
+
+class GetTeamMemberPermissionsResponse(BaseModel):
+    """Response to get the team member permissions for a team"""
+
+    team_id: str
+    """
+    The team id that the permissions are for
+    """
+
+    team_member_permissions: Optional[List[str]] = []
+    """
+    The team member permissions currently set for the team
+    """
+
+    all_available_permissions: List[str]
+    """
+    All available team member permissions
+    """
+
+
+class UpdateTeamMemberPermissionsRequest(BaseModel):
+    """Request to update the team member permissions for a team"""
+
+    team_id: str
+    team_member_permissions: List[str]
 
 
 # Organization Member Requests
