@@ -102,7 +102,7 @@ pip install litellm==1.65.4.post1
 6. Request Logs Tab
     - Add reasoning_content token tracking across all providers on streaming
 7. API 
-    - return key alias on /user/daily/activity [NEEDS DOCS]
+    - return key alias on /user/daily/activity [Get Started](../../docs/proxy/cost_tracking#daily-spend-breakdown-api)
 8. SSO
     - Allow assigning SSO users to teams on MSFT SSO [PR](https://github.com/BerriAI/litellm/pull/9745)
 
@@ -124,7 +124,7 @@ pip install litellm==1.65.4.post1
     - Use Redis for PodLock Manager instead of PG (ensures no deadlocks occur) [PR](https://github.com/BerriAI/litellm/pull/9715)
     - v2 DB Deadlock Reduction Architecture – Add Max Size for In-Memory Queue + Backpressure Mechanism [PR](https://github.com/BerriAI/litellm/pull/9759)
     
-2. Prisma Migrations [NEEDS DOCS]
+2. Prisma Migrations [Get Started](../../docs/proxy/prod#9-use-prisma-migrate-deploy)
     - connects litellm proxy to litellm's prisma migration files
     - Handle db schema updates from new `litellm-proxy-extras` sdk
 3. Redis - support password for sync sentinel clients [PR](https://github.com/BerriAI/litellm/pull/9622)
