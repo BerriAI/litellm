@@ -4,11 +4,16 @@ import {
   Title,
   Text,
   Button as TremorButton,
-  Divider,
+  Table,
+  TableHead,
+  TableHeaderCell,
+  TableBody,
+  TableRow,
+  TableCell,
 } from "@tremor/react";
-import { Button, message, Checkbox, List, Empty } from "antd";
+import { Button, message, Checkbox, Empty } from "antd";
 import { getTeamPermissionsCall, teamPermissionsUpdateCall } from "@/components/networking";
-import { CheckOutlined, KeyOutlined, UserOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import { getPermissionInfo, PermissionInfo } from "./permission_definitions";
 
 interface MemberPermissionsProps {
   teamId: string;
@@ -37,6 +42,7 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({
       const allPermissions = response.all_available_permissions || [];
       setPermissions(allPermissions);
       
+      // Handle null or empty permissions
       const teamPermissions = response.team_member_permissions || [];
       setSelectedPermissions(teamPermissions);
       
@@ -47,34 +53,6 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({
     } finally {
       setLoading(false);
     }
-  };
-
-  const getGroupedPermissions = (): Record<string, string[]> => {
-    const groups: Record<string, string[]> = {};
-    
-    permissions.forEach(permission => {
-      const parts = permission.split('/');
-      if (parts.length > 1) {
-        const groupName = `/${parts[1]}`;
-        if (!groups[groupName]) {
-          groups[groupName] = [];
-        }
-        groups[groupName].push(permission);
-      } else {
-        if (!groups['Other']) {
-          groups['Other'] = [];
-        }
-        groups['Other'].push(permission);
-      }
-    });
-    
-    return groups;
-  };
-
-  const getGroupIcon = (groupName: string) => {
-    if (groupName === '/key') return <KeyOutlined />;
-    if (groupName === '/user') return <UserOutlined />;
-    return <InfoCircleOutlined />;
   };
 
   useEffect(() => {
@@ -119,7 +97,6 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({
     return <div className="p-4">Loading permissions...</div>;
   }
 
-  const groupedPermissions = getGroupedPermissions();
   const hasPermissions = permissions.length > 0;
 
   return (
@@ -141,50 +118,50 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({
         )}
       </div>
       
-      <Text className="mb-4">
+      <Text className="mb-6">
         Control what team members can do when they are not admins.
       </Text>
       
       {hasPermissions ? (
-        <>
-          <Divider />
-          
-          <div className="mt-6">
-            {Object.entries(groupedPermissions).map(([groupName, groupPermissions]) => (
-              <div key={groupName} className="mb-6">
-                <div className="flex items-center mb-2">
-                  <span className="mr-2">{getGroupIcon(groupName)}</span>
-                  <Text className="font-semibold">{groupName} Permissions</Text>
-                </div>
-                
-                <List
-                  itemLayout="horizontal"
-                  dataSource={groupPermissions}
-                  renderItem={(permission: string) => (
-                    <List.Item className="py-3 hover:bg-gray-50">
-                      <div className="flex items-center w-full">
-                        <div className="mr-3">
-                          {selectedPermissions.includes(permission) && 
-                            <CheckOutlined style={{ color: '#1677ff' }} />
-                          }
-                        </div>
-                        <div className="flex-grow">
-                          <Checkbox
-                            checked={selectedPermissions.includes(permission)}
-                            onChange={(e) => handlePermissionChange(permission, e.target.checked)}
-                            disabled={!canEditTeam}
-                          >
-                            <Text className="font-mono">{permission}</Text>
-                          </Checkbox>
-                        </div>
-                      </div>
-                    </List.Item>
-                  )}
-                />
-              </div>
-            ))}
-          </div>
-        </>
+        <Table className="mt-4">
+          <TableHead>
+            <TableRow>
+              <TableHeaderCell>Method</TableHeaderCell>
+              <TableHeaderCell>Endpoint</TableHeaderCell>
+              <TableHeaderCell>Description</TableHeaderCell>
+              <TableHeaderCell className="text-right">Access</TableHeaderCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {permissions.map((permission) => {
+              const permInfo = getPermissionInfo(permission);
+              return (
+                <TableRow key={permission}>
+                  <TableCell>
+                    <span className={`px-2 py-1 rounded text-xs font-medium ${
+                      permInfo.method === 'GET' 
+                        ? 'bg-blue-100 text-blue-800' 
+                        : 'bg-green-100 text-green-800'
+                    }`}>
+                      {permInfo.method}
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    <span className="font-mono text-sm">{permInfo.endpoint}</span>
+                  </TableCell>
+                  <TableCell>{permInfo.description}</TableCell>
+                  <TableCell className="text-right">
+                    <Checkbox
+                      checked={selectedPermissions.includes(permission)}
+                      onChange={(e) => handlePermissionChange(permission, e.target.checked)}
+                      disabled={!canEditTeam}
+                    />
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
       ) : (
         <div className="py-8">
           <Empty description="No permissions available" />
