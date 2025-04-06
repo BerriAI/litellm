@@ -64,13 +64,13 @@ pip install litellm==1.65.4.post1
 15. Unified file id - [ALPHA] allow calling multiple providers with same file id [PR](https://github.com/BerriAI/litellm/pull/9718)
     - This is experimental, and not recommended for production use.
     - We plan to have a production-ready implementation by next week.
-16. Gemini - return logprobs if enabled [NEEDS DOCS]
-17. Anthropic - Support prompt caching for Anthropic tool calls [NEEDS DOCS]
+16. Google AI Studio (Gemini) - return logprobs [PR](https://github.com/BerriAI/litellm/pull/9713)
+17. Anthropic - Support prompt caching for Anthropic tool calls [Get Started](https://docs.litellm.ai/docs/completion/prompt_caching)
 18. OpenRouter - unwrap extra body on open router calls [PR](https://github.com/BerriAI/litellm/pull/9747)
 19. VertexAI - fix credential caching issue [PR](https://github.com/BerriAI/litellm/pull/9756)
 20. XAI - filter out 'name' param for XAI [PR](https://github.com/BerriAI/litellm/pull/9761)
-21. Gemini - image generation output support [NEEDS DOCS]
-22. Databricks - support claude-3-7-sonnet w/ thinking + response_format [NEEDS DOCS on dbrx page]
+21. Gemini - image generation output support [Get Started](../../docs/providers/gemini#image-generation)
+22. Databricks - support claude-3-7-sonnet w/ thinking + response_format [Get Started](../../docs/providers/databricks#usage---thinking--reasoning_content)
 
 ## Spend Tracking Improvements
 1. Reliability fix  - Check sent and received model for cost calculation [PR](https://github.com/BerriAI/litellm/pull/9669)
