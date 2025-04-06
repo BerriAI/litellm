@@ -22,7 +22,8 @@ Useful to pass in large media files to Gemini's `/generateContent` endpoint.
 ```python
 import base64
 import requests
-from litellm import completion
+from litellm import completion, create_file
+import os
 
 
 ### UPLOAD FILE ### 
@@ -35,10 +36,11 @@ wav_data = response.content
 encoded_string = base64.b64encode(wav_data).decode('utf-8')
 
 
-file = client.files.create(
+file = create_file(
     file=wav_data,
     purpose="user_data",
-    extra_body={"custom_llm_provider": "gemini"}
+    extra_body={"custom_llm_provider": "gemini"},
+    api_key=os.getenv("GEMINI_API_KEY"),
 )
 
 print(f"file: {file}")
@@ -47,7 +49,7 @@ assert file is not None
 
 
 ### GENERATE CONTENT ### 
-completion = client.chat.completions.create(
+completion = completion(
     model="gemini-2.0-flash",
     messages=[
         {
@@ -115,7 +117,7 @@ encoded_string = base64.b64encode(wav_data).decode('utf-8')
 file = client.files.create(
     file=wav_data,
     purpose="user_data",
-    extra_body={"custom_llm_provider": "gemini"}
+    extra_body={"target_model_names": "gemini-2.0-flash"}
 )
 
 print(f"file: {file}")

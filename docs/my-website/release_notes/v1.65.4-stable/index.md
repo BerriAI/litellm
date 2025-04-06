@@ -59,9 +59,11 @@ pip install litellm==1.65.4.post1
 8. Anthropic - new `litellm.messages.create` interface for calling Anthropic `/v1/messages` via passthrough [Get Started](https://docs.litellm.ai/docs/anthropic_unified#usage)
 11. Anthropic - support ‘file’ content type in message param (works across Anthropic API, Bedrock, Vertex) [Get Started](https://docs.litellm.ai/docs/providers/anthropic#usage---pdf)
 12. Anthropic - map openai 'reasoning_effort' to anthropic 'thinking' param (works across Anthropic API, Bedrock, Vertex) [Get Started](https://docs.litellm.ai/docs/providers/anthropic#usage---thinking--reasoning_content)
-13. Google AI Studio (Gemini) - [BETA] `/v1/files` upload support [NEEDS DOCS] 
-14. Azure - fix o-series tool calling [NEEDS DOCS]
-15.  Unified file id - [BETA] allow calling multiple providers with same file id [PR](https://github.com/BerriAI/litellm/pull/9718) [NEEDS DOCS]
+13. Google AI Studio (Gemini) - [BETA] `/v1/files` upload support [Get Started](../../docs/providers/google_ai_studio/files) 
+14. Azure - fix o-series tool calling [Get Started](../../docs/providers/azure#tool-calling--function-calling)
+15. Unified file id - [ALPHA] allow calling multiple providers with same file id [PR](https://github.com/BerriAI/litellm/pull/9718)
+    - This is experimental, and not recommended for production use.
+    - We plan to have a production-ready implementation by next week.
 16. Gemini - return logprobs if enabled [NEEDS DOCS]
 17. Anthropic - Support prompt caching for Anthropic tool calls [NEEDS DOCS]
 18. OpenRouter - unwrap extra body on open router calls [PR](https://github.com/BerriAI/litellm/pull/9747)
