@@ -58,6 +58,15 @@ class _LazyModule(ModuleType):
                     self._aliases[object_name.alias] = object_name.name
                 else:
                     self._object_to_module[object_name] = module_name
+        # Store submodules for lazy loading
+        submodules = []
+        for module_name in self._modules:
+            parts = []
+            for module_part in module_name.split("."):
+                parts.append(module_part)
+                submodules.append(".".join(parts))
+        self._modules = self._modules.union(submodules)
+
         # Needed for autocompletion in an IDE and wildcard imports (although those won't be lazy)
         self.__all__ = [*self._modules]
         self.__file__ = module_file
@@ -65,6 +74,29 @@ class _LazyModule(ModuleType):
         self.__spec__ = module_spec
         self._name = name
         self._import_structure = import_structure
+
+    _cached_modules: dict[str, "_LazyModule"] = {}  # type: ignore[assignment]
+
+    @classmethod
+    def create(
+        cls,
+        name: str,
+        module_file: str,
+        import_structure: _ImportStructure,
+        module_spec: importlib.machinery.ModuleSpec,
+    ) -> "_LazyModule":
+        """
+        Create a new _LazyModule instance.
+        This method is used to create a new _LazyModule instance.
+        """
+        if module_file not in cls._cached_modules:
+            cls._cached_modules[module_file] = cls(
+                name,
+                module_file,
+                import_structure,
+                module_spec,
+            )
+        return cls._cached_modules[module_file]
 
     # Needed for autocompletion in an IDE
     def __dir__(self):
@@ -80,7 +112,14 @@ class _LazyModule(ModuleType):
         elif name in self._modules:
             value = self._get_module(name)
         else:
-            raise AttributeError(f"module '{self.__name__}' has no attribute '{name}'")
+            # Check if the name is an submodule
+            submodule_name = f"litellm.{name}"
+            if submodule_name in self._modules:
+                value = self._get_module(submodule_name)
+            else:
+                raise AttributeError(
+                    f"module '{self.__name__}' has no attribute '{name}'"
+                )
 
         setattr(self, name, value)
         return value
