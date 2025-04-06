@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 from litellm._logging import verbose_router_logger
+from litellm.constants import MAX_EXCEPTION_MESSAGE_LENGTH
 from litellm.router_utils.cooldown_handlers import (
     _async_get_cooldown_deployments_with_debug_info,
 )
@@ -54,7 +55,7 @@ async def send_llm_exception_alert(
     exception_str = str(original_exception)
     if litellm_debug_info is not None:
         exception_str += litellm_debug_info
-    exception_str += f"\n\n{error_traceback_str[:2000]}"
+    exception_str += f"\n\n{error_traceback_str[:MAX_EXCEPTION_MESSAGE_LENGTH]}"
 
     await litellm_router_instance.slack_alerting_logger.send_alert(
         message=f"LLM API call failed: `{exception_str}`",

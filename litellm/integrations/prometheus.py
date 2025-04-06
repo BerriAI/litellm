@@ -818,7 +818,7 @@ class PrometheusLogger(CustomLogger):
                 requested_model=request_data.get("model", ""),
                 status_code=str(getattr(original_exception, "status_code", None)),
                 exception_status=str(getattr(original_exception, "status_code", None)),
-                exception_class=str(original_exception.__class__.__name__),
+                exception_class=self._get_exception_class_name(original_exception),
                 tags=_tags,
             )
             _labels = prometheus_label_factory(
@@ -917,7 +917,7 @@ class PrometheusLogger(CustomLogger):
                 api_base=api_base,
                 api_provider=llm_provider,
                 exception_status=str(getattr(exception, "status_code", None)),
-                exception_class=exception.__class__.__name__,
+                exception_class=self._get_exception_class_name(exception),
                 requested_model=model_group,
                 hashed_api_key=standard_logging_payload["metadata"][
                     "user_api_key_hash"
@@ -1146,6 +1146,22 @@ class PrometheusLogger(CustomLogger):
             )
             return
 
+    @staticmethod
+    def _get_exception_class_name(exception: Exception) -> str:
+        exception_class_name = ""
+        if hasattr(exception, "llm_provider"):
+            exception_class_name = getattr(exception, "llm_provider") or ""
+
+        # pretty print the provider name on prometheus
+        # eg. `openai` -> `Openai.`
+        if len(exception_class_name) >= 1:
+            exception_class_name = (
+                exception_class_name[0].upper() + exception_class_name[1:] + "."
+            )
+
+        exception_class_name += exception.__class__.__name__
+        return exception_class_name
+
     async def log_success_fallback_event(
         self, original_model_group: str, kwargs: dict, original_exception: Exception
     ):
@@ -1181,7 +1197,7 @@ class PrometheusLogger(CustomLogger):
             team=standard_metadata["user_api_key_team_id"],
             team_alias=standard_metadata["user_api_key_team_alias"],
             exception_status=str(getattr(original_exception, "status_code", None)),
-            exception_class=str(original_exception.__class__.__name__),
+            exception_class=self._get_exception_class_name(original_exception),
             tags=_tags,
         )
         _labels = prometheus_label_factory(
@@ -1225,7 +1241,7 @@ class PrometheusLogger(CustomLogger):
             team=standard_metadata["user_api_key_team_id"],
             team_alias=standard_metadata["user_api_key_team_alias"],
             exception_status=str(getattr(original_exception, "status_code", None)),
-            exception_class=str(original_exception.__class__.__name__),
+            exception_class=self._get_exception_class_name(original_exception),
             tags=_tags,
         )
 
@@ -1720,6 +1736,36 @@ class PrometheusLogger(CustomLogger):
         if isinstance(start_time, datetime) and isinstance(end_time, datetime):
             return (end_time - start_time).total_seconds()
         return None
+
+    @staticmethod
+    def _mount_metrics_endpoint(premium_user: bool):
+        """
+        Mount the Prometheus metrics endpoint with optional authentication.
+
+        Args:
+            premium_user (bool): Whether the user is a premium user
+            require_auth (bool, optional): Whether to require authentication for the metrics endpoint.
+                                        Defaults to False.
+        """
+        from prometheus_client import make_asgi_app
+
+        from litellm._logging import verbose_proxy_logger
+        from litellm.proxy._types import CommonProxyErrors
+        from litellm.proxy.proxy_server import app
+
+        if premium_user is not True:
+            verbose_proxy_logger.warning(
+                f"Prometheus metrics are only available for premium users. {CommonProxyErrors.not_premium_user.value}"
+            )
+
+        # Create metrics ASGI app
+        metrics_app = make_asgi_app()
+
+        # Mount the metrics app to the app
+        app.mount("/metrics", metrics_app)
+        verbose_proxy_logger.debug(
+            "Starting Prometheus Metrics on /metrics (no authentication)"
+        )
 
 
 def prometheus_label_factory(

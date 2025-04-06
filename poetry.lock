@@ -233,13 +233,13 @@ tests-mypy = ["mypy (>=1.11.1)", "pytest-mypy-plugins"]
 
 [[package]]
 name = "azure-core"
-version = "1.32.0"
+version = "1.33.0"
 description = "Microsoft Azure Core Library for Python"
 optional = true
 python-versions = ">=3.8"
 files = [
-    {file = "azure_core-1.32.0-py3-none-any.whl", hash = "sha256:eac191a0efb23bfa83fddf321b27b122b4ec847befa3091fa736a5c32c50d7b4"},
-    {file = "azure_core-1.32.0.tar.gz", hash = "sha256:22b3c35d6b2dae14990f6c1be2912bf23ffe50b220e708a28ab1bb92b1c730e5"},
+    {file = "azure_core-1.33.0-py3-none-any.whl", hash = "sha256:9b5b6d0223a1d38c37500e6971118c1e0f13f54951e6893968b38910bc9cda8f"},
+    {file = "azure_core-1.33.0.tar.gz", hash = "sha256:f367aa07b5e3005fec2c1e184b882b0b039910733907d001c20fb08ebb8c0eb9"},
 ]
 
 [package.dependencies]
@@ -249,6 +249,7 @@ typing-extensions = ">=4.6.0"
 
 [package.extras]
 aio = ["aiohttp (>=3.0)"]
+tracing = ["opentelemetry-api (>=1.26,<2.0)"]
 
 [[package]]
 name = "azure-identity"
@@ -1362,13 +1363,13 @@ files = [
 
 [[package]]
 name = "huggingface-hub"
-version = "0.29.3"
+version = "0.30.1"
 description = "Client library to download and publish models, datasets and other repos on the huggingface.co hub"
 optional = false
 python-versions = ">=3.8.0"
 files = [
-    {file = "huggingface_hub-0.29.3-py3-none-any.whl", hash = "sha256:0b25710932ac649c08cdbefa6c6ccb8e88eef82927cacdb048efb726429453aa"},
-    {file = "huggingface_hub-0.29.3.tar.gz", hash = "sha256:64519a25716e0ba382ba2d3fb3ca082e7c7eb4a2fc634d200e8380006e0760e5"},
+    {file = "huggingface_hub-0.30.1-py3-none-any.whl", hash = "sha256:0f6aa5ec5a4e68e5b9e45d556b4e5ea180c58f5a5ffa734e7f38c9d573028959"},
+    {file = "huggingface_hub-0.30.1.tar.gz", hash = "sha256:f379e8b8d0791295602538856638460ae3cf679c7f304201eb80fb98c771950e"},
 ]
 
 [package.dependencies]
@@ -1386,6 +1387,7 @@ cli = ["InquirerPy (==0.3.4)"]
 dev = ["InquirerPy (==0.3.4)", "Jinja2", "Pillow", "aiohttp", "fastapi", "gradio (>=4.0.0)", "jedi", "libcst (==1.4.0)", "mypy (==1.5.1)", "numpy", "pytest (>=8.1.1,<8.2.2)", "pytest-asyncio", "pytest-cov", "pytest-env", "pytest-mock", "pytest-rerunfailures", "pytest-vcr", "pytest-xdist", "ruff (>=0.9.0)", "soundfile", "types-PyYAML", "types-requests", "types-simplejson", "types-toml", "types-tqdm", "types-urllib3", "typing-extensions (>=4.8.0)", "urllib3 (<2.0)"]
 fastai = ["fastai (>=2.4)", "fastcore (>=1.3.27)", "toml"]
 hf-transfer = ["hf-transfer (>=0.1.4)"]
+hf-xet = ["hf-xet (>=0.1.4)"]
 inference = ["aiohttp"]
 quality = ["libcst (==1.4.0)", "mypy (==1.5.1)", "ruff (>=0.9.0)"]
 tensorflow = ["graphviz", "pydot", "tensorflow"]
@@ -1678,13 +1680,13 @@ referencing = ">=0.31.0"
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.1.1"
+version = "0.1.3"
 description = "Additional files for the LiteLLM Proxy. Reduces the size of the main litellm package."
 optional = true
 python-versions = "!=2.7.*,!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,!=3.7.*,>=3.8"
 files = [
-    {file = "litellm_proxy_extras-0.1.1-py3-none-any.whl", hash = "sha256:2b3c4c5474bacbde2424c1cd13b21f85c65e9c4346f6159badd49a210eedef5c"},
-    {file = "litellm_proxy_extras-0.1.1.tar.gz", hash = "sha256:a1eb911ad2e3742238863d314a8bd6d02dd0cc213ba040b2c0593f132fbf3117"},
+    {file = "litellm_proxy_extras-0.1.3-py3-none-any.whl", hash = "sha256:7025e876d866776304a1171612c6676714426ae15ae36840cbf5481df8686283"},
+    {file = "litellm_proxy_extras-0.1.3.tar.gz", hash = "sha256:4df7036592f4d434db841a2b19c64c9bc50b9a80de45afc94c409b81698db8c3"},
 ]
 
 [[package]]
@@ -2178,13 +2180,13 @@ signedtoken = ["cryptography (>=3.0.0)", "pyjwt (>=2.0.0,<3)"]
 
 [[package]]
 name = "openai"
-version = "1.69.0"
+version = "1.70.0"
 description = "The official Python library for the openai API"
 optional = false
 python-versions = ">=3.8"
 files = [
-    {file = "openai-1.69.0-py3-none-any.whl", hash = "sha256:73c4b2ddfd050060f8d93c70367189bd891e70a5adb6d69c04c3571f4fea5627"},
-    {file = "openai-1.69.0.tar.gz", hash = "sha256:7b8a10a8ff77e1ae827e5e4c8480410af2070fb68bc973d6c994cf8218f1f98d"},
+    {file = "openai-1.70.0-py3-none-any.whl", hash = "sha256:f6438d053fd8b2e05fd6bef70871e832d9bbdf55e119d0ac5b92726f1ae6f614"},
+    {file = "openai-1.70.0.tar.gz", hash = "sha256:e52a8d54c3efeb08cf58539b5b21a5abef25368b5432965e4de88cdf4e091b2b"},
 ]
 
 [package.dependencies]
@@ -2389,6 +2391,20 @@ typing-extensions = ">=4.0.1"
 [package.extras]
 all = ["nodejs-bin"]
 node = ["nodejs-bin"]
+
+[[package]]
+name = "prometheus-client"
+version = "0.20.0"
+description = "Python client for the Prometheus monitoring system."
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "prometheus_client-0.20.0-py3-none-any.whl", hash = "sha256:cde524a85bce83ca359cc837f28b8c0db5cac7aa653a588fd7e84ba061c329e7"},
+    {file = "prometheus_client-0.20.0.tar.gz", hash = "sha256:287629d00b147a32dcb2be0b9df905da599b2d82f80377083ec8463309a4bb89"},
+]
+
+[package.extras]
+twisted = ["twisted"]
 
 [[package]]
 name = "propcache"
@@ -3184,17 +3200,17 @@ requests = "2.31.0"
 
 [[package]]
 name = "respx"
-version = "0.20.2"
+version = "0.22.0"
 description = "A utility for mocking out the Python HTTPX and HTTP Core libraries."
 optional = false
-python-versions = ">=3.7"
+python-versions = ">=3.8"
 files = [
-    {file = "respx-0.20.2-py2.py3-none-any.whl", hash = "sha256:ab8e1cf6da28a5b2dd883ea617f8130f77f676736e6e9e4a25817ad116a172c9"},
-    {file = "respx-0.20.2.tar.gz", hash = "sha256:07cf4108b1c88b82010f67d3c831dae33a375c7b436e54d87737c7f9f99be643"},
+    {file = "respx-0.22.0-py2.py3-none-any.whl", hash = "sha256:631128d4c9aba15e56903fb5f66fb1eff412ce28dd387ca3a81339e52dbd3ad0"},
+    {file = "respx-0.22.0.tar.gz", hash = "sha256:3c8924caa2a50bd71aefc07aa812f2466ff489f1848c96e954a5362d17095d91"},
 ]
 
 [package.dependencies]
-httpx = ">=0.21.0"
+httpx = ">=0.25.0"
 
 [[package]]
 name = "rpds-py"
@@ -3310,13 +3326,13 @@ files = [
 
 [[package]]
 name = "rq"
-version = "2.2.0"
+version = "2.3.1"
 description = "RQ is a simple, lightweight, library for creating background jobs, and processing them."
 optional = true
 python-versions = ">=3.8"
 files = [
-    {file = "rq-2.2.0-py3-none-any.whl", hash = "sha256:dacbfe1ccb79a45c8cd95dec7951620679fa0195570b63da3f9347622d33accc"},
-    {file = "rq-2.2.0.tar.gz", hash = "sha256:b636760f1e4c183022031c142faa0483e687885824e9732ba2953f994104e203"},
+    {file = "rq-2.3.1-py3-none-any.whl", hash = "sha256:2bbd48b976fdd840865dcab4bed358eb94b4dd8a02e92add75a346a909c1793d"},
+    {file = "rq-2.3.1.tar.gz", hash = "sha256:9cb33be7a90c6b36c0d6b9a6524aaf85b8855251ace476d74a076e6dfc5684d6"},
 ]
 
 [package.dependencies]
@@ -3470,13 +3486,13 @@ typing_extensions = ">=4.12.2,<5"
 
 [[package]]
 name = "tenacity"
-version = "9.0.0"
+version = "9.1.2"
 description = "Retry code until it succeeds"
 optional = true
-python-versions = ">=3.8"
+python-versions = ">=3.9"
 files = [
-    {file = "tenacity-9.0.0-py3-none-any.whl", hash = "sha256:93de0c98785b27fcf659856aa9f54bfbd399e29969b0621bc7f762bd441b4539"},
-    {file = "tenacity-9.0.0.tar.gz", hash = "sha256:807f37ca97d62aa361264d497b0e31e92b8027044942bfa756160d908320d73b"},
+    {file = "tenacity-9.1.2-py3-none-any.whl", hash = "sha256:f77bf36710d8b73a50b2dd155c97b870017ad21afe6ab300326b0371b3b05138"},
+    {file = "tenacity-9.1.2.tar.gz", hash = "sha256:1169d376c297e7de388d18b4481760d478b0e99a777cad3a9c86e556f4b697cb"},
 ]
 
 [package.extras]
@@ -3747,13 +3763,13 @@ files = [
 
 [[package]]
 name = "typing-extensions"
-version = "4.13.0"
+version = "4.13.1"
 description = "Backported and Experimental Type Hints for Python 3.8+"
 optional = false
 python-versions = ">=3.8"
 files = [
-    {file = "typing_extensions-4.13.0-py3-none-any.whl", hash = "sha256:c8dd92cc0d6425a97c18fbb9d1954e5ff92c1ca881a309c45f06ebc0b79058e5"},
-    {file = "typing_extensions-4.13.0.tar.gz", hash = "sha256:0a4ac55a5820789d87e297727d229866c9650f6521b64206413c4fbada24d95b"},
+    {file = "typing_extensions-4.13.1-py3-none-any.whl", hash = "sha256:4b6cf02909eb5495cfbc3f6e8fd49217e6cc7944e145cdda8caa3734777f9e69"},
+    {file = "typing_extensions-4.13.1.tar.gz", hash = "sha256:98795af00fb9640edec5b8e31fc647597b4691f099ad75f469a2616be1a76dff"},
 ]
 
 [[package]]
@@ -4135,4 +4151,4 @@ proxy = ["PyJWT", "apscheduler", "backoff", "boto3", "cryptography", "fastapi", 
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.8.1,<4.0, !=3.9.7"
-content-hash = "16cbf20784776377805f5e33c6bc97dce76303132aa3d81c7e6fe743f0ee3fc1"
+content-hash = "ee904a214356eedc35187d8efb0ceeec92ce23f552ff4785324aea3e919b0b46"

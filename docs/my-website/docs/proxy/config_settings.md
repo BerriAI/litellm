@@ -406,6 +406,7 @@ router_settings:
 | HELICONE_API_KEY | API key for Helicone service
 | HOSTNAME | Hostname for the server, this will be [emitted to `datadog` logs](https://docs.litellm.ai/docs/proxy/logging#datadog)
 | HUGGINGFACE_API_BASE | Base URL for Hugging Face API
+| HUGGINGFACE_API_KEY | API key for Hugging Face API
 | IAM_TOKEN_DB_AUTH | IAM token for database authentication
 | JSON_LOGS | Enable JSON formatted logging
 | JWT_AUDIENCE | Expected audience for JWT tokens

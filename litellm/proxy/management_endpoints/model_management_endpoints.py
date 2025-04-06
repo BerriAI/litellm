@@ -13,7 +13,7 @@ model/{model_id}/update - PATCH endpoint for model update.
 import asyncio
 import json
 import uuid
-from typing import Literal, Optional, Union, cast
+from typing import Dict, List, Literal, Optional, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -394,7 +394,7 @@ class ModelManagementAuthChecks:
 
     @staticmethod
     async def can_user_make_model_call(
-        model_params: Union[Deployment, updateDeployment],
+        model_params: Deployment,
         user_api_key_dict: UserAPIKeyAuth,
         prisma_client: PrismaClient,
         premium_user: bool,
@@ -723,8 +723,38 @@ async def update_model(
                 },
             )
 
+        _model_id = None
+        _model_info = getattr(model_params, "model_info", None)
+        if _model_info is None:
+            raise Exception("model_info not provided")
+
+        _model_id = _model_info.id
+        if _model_id is None:
+            raise Exception("model_info.id not provided")
+
+        _existing_litellm_params = (
+            await prisma_client.db.litellm_proxymodeltable.find_unique(
+                where={"model_id": _model_id}
+            )
+        )
+
+        if _existing_litellm_params is None:
+            if (
+                llm_router is not None
+                and llm_router.get_deployment(model_id=_model_id) is not None
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Can't edit model. Model in config. Store model in db via `/model/new`. to edit."
+                    },
+                )
+            else:
+                raise Exception("model not found")
+        deployment = Deployment(**_existing_litellm_params.model_dump())
+
         await ModelManagementAuthChecks.can_user_make_model_call(
-            model_params=model_params,
+            model_params=deployment,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
@@ -732,31 +762,6 @@ async def update_model(
 
         # update DB
         if store_model_in_db is True:
-            _model_id = None
-            _model_info = getattr(model_params, "model_info", None)
-            if _model_info is None:
-                raise Exception("model_info not provided")
-
-            _model_id = _model_info.id
-            if _model_id is None:
-                raise Exception("model_info.id not provided")
-            _existing_litellm_params = (
-                await prisma_client.db.litellm_proxymodeltable.find_unique(
-                    where={"model_id": _model_id}
-                )
-            )
-            if _existing_litellm_params is None:
-                if (
-                    llm_router is not None
-                    and llm_router.get_deployment(model_id=_model_id) is not None
-                ):
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": "Can't edit model. Model in config. Store model in db via `/model/new`. to edit."
-                        },
-                    )
-                raise Exception("model not found")
             _existing_litellm_params_dict = dict(
                 _existing_litellm_params.litellm_params
             )
@@ -841,3 +846,24 @@ async def update_model(
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
+
+
+def _deduplicate_litellm_router_models(models: List[Dict]) -> List[Dict]:
+    """
+    Deduplicate models based on their model_info.id field.
+    Returns a list of unique models keeping only the first occurrence of each model ID.
+
+    Args:
+        models: List of model dictionaries containing model_info
+
+    Returns:
+        List of deduplicated model dictionaries
+    """
+    seen_ids = set()
+    unique_models = []
+    for model in models:
+        model_id = model.get("model_info", {}).get("id", None)
+        if model_id is not None and model_id not in seen_ids:
+            unique_models.append(model)
+            seen_ids.add(model_id)
+    return unique_models
