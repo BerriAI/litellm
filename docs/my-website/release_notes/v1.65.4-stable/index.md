@@ -41,6 +41,7 @@ pip install litellm==1.65.4.post1
 </TabItem>
 </Tabs>
 
+v1.65.4-stable is live. Here are the improvements since v1.65.0-stable.
 
 ## Key Highlights
 - **Preventing DB Deadlocks**: Fixes a high-traffic issue when multiple instances were writing to the DB at the same time. 
@@ -55,7 +56,6 @@ Let's dive in.
 This release fixes the DB deadlocking issue that users faced in high traffic (10K+ RPS). This is great because it enables user/key/team spend tracking works at that scale.
 
 Read more about the new architecture [here](https://docs.litellm.ai/docs/proxy/db_deadlocks)
-
 
 
 ### New Usage Tab
@@ -165,3 +165,12 @@ To test this out, just go to Experimental > New Usage > Activity.
 1. Fix - only apply service_account_settings.enforced_params on service accounts [PR](https://github.com/BerriAI/litellm/pull/9683)
 2. Fix - handle metadata null on `/chat/completion` [PR](https://github.com/BerriAI/litellm/issues/9717)
 3. Fix - Move daily user transaction logging outside of 'disable_spend_logs' flag, as they’re unrelated [PR](https://github.com/BerriAI/litellm/pull/9772)
+
+## Demo
+
+Try this on the demo instance [today](https://docs.litellm.ai/docs/proxy/demo)
+
+## Complete Git Diff
+
+See the complete git diff since v1.65.0-stable, [here](https://github.com/BerriAI/litellm/releases/tag/v1.65.4-stable)
+
