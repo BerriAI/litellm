@@ -50,7 +50,6 @@ class TeamMemberPermissionChecks:
     async def can_team_member_execute_key_management_endpoint(
         user_api_key_dict: UserAPIKeyAuth,
         route: KeyManagementRoutes,
-        data: Dict,
         prisma_client: PrismaClient,
         user_api_key_cache: DualCache,
         parent_otel_span: Optional[Span],

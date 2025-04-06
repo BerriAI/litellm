@@ -42,6 +42,9 @@ from litellm.proxy.management_endpoints.common_utils import (
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
 )
+from litellm.proxy.management_endpoints.team_member_permission_checks import (
+    TeamMemberPermissionChecks,
+)
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.spend_tracking.spend_tracking_utils import _is_master_key
 from litellm.proxy.utils import (
@@ -104,12 +107,6 @@ def _is_allowed_to_make_key_request(
             and user_api_key_dict.team_id == UI_TEAM_ID
         ):
             return True  # handle https://github.com/BerriAI/litellm/issues/7482
-        assert (
-            user_api_key_dict.team_id == team_id
-        ), "User can only create keys for their own team. Got={}, Your Team ID={}".format(
-            team_id, user_api_key_dict.team_id
-        )
-
     return True
 
 
@@ -118,6 +115,7 @@ def _team_key_generation_team_member_check(
     team_table: LiteLLM_TeamTableCachedObj,
     user_api_key_dict: UserAPIKeyAuth,
     team_key_generation: TeamUIKeyGenerationConfig,
+    route: KeyManagementRoutes,
 ):
     if assigned_user_id is not None:
         key_assigned_user_in_team = _get_user_in_team(
@@ -155,6 +153,11 @@ def _team_key_generation_team_member_check(
             status_code=400,
             detail=f"Team member role {key_creating_user_in_team.role} not in allowed_team_member_roles={team_key_generation['allowed_team_member_roles']}",
         )
+    TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
+        team_member_object=key_creating_user_in_team,
+        team_table=team_table,
+        route=route,
+    )
     return True
 
 
@@ -178,6 +181,7 @@ def _team_key_generation_check(
     team_table: LiteLLM_TeamTableCachedObj,
     user_api_key_dict: UserAPIKeyAuth,
     data: GenerateKeyRequest,
+    route: KeyManagementRoutes,
 ):
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return True
@@ -196,6 +200,7 @@ def _team_key_generation_check(
         team_table=team_table,
         user_api_key_dict=user_api_key_dict,
         team_key_generation=_team_key_generation,
+        route=route,
     )
     _key_generation_required_param_check(
         data,
@@ -252,6 +257,7 @@ def key_generation_check(
     team_table: Optional[LiteLLM_TeamTableCachedObj],
     user_api_key_dict: UserAPIKeyAuth,
     data: GenerateKeyRequest,
+    route: KeyManagementRoutes,
 ) -> bool:
     """
     Check if admin has restricted key creation to certain roles for teams or individuals
@@ -271,6 +277,7 @@ def key_generation_check(
             team_table=team_table,
             user_api_key_dict=user_api_key_dict,
             data=data,
+            route=route,
         )
     else:
         return _personal_key_generation_check(
@@ -425,6 +432,7 @@ async def generate_key_fn(  # noqa: PLR0915
             team_table=team_table,
             user_api_key_dict=user_api_key_dict,
             data=data,
+            route=KeyManagementRoutes.KEY_GENERATE,
         )
 
         common_key_access_checks(
@@ -762,6 +770,15 @@ async def update_key_fn(
                 detail={"error": f"Team not found, passed team_id={data.team_id}"},
             )
 
+        await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
+            user_api_key_dict=user_api_key_dict,
+            route=KeyManagementRoutes.KEY_UPDATE,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+            existing_key_row=existing_key_row,
+        )
+
         non_default_values = prepare_key_update_data(
             data=data, existing_key_row=existing_key_row
         )
@@ -1049,7 +1066,7 @@ async def info_key_fn(
             )
 
         if (
-            _can_user_query_key_info(
+            await _can_user_query_key_info(
                 user_api_key_dict=user_api_key_dict,
                 key=key,
                 key_info=key_info,
@@ -1353,6 +1370,7 @@ async def _team_key_deletion_check(
     key_info: LiteLLM_VerificationToken,
     prisma_client: PrismaClient,
     user_api_key_cache: DualCache,
+    route: KeyManagementRoutes,
 ):
     is_team_key = _is_team_key(data=key_info)
 
@@ -1381,6 +1399,7 @@ async def _team_key_deletion_check(
                 team_table=team_table,
                 user_api_key_dict=user_api_key_dict,
                 team_key_generation=_team_key_generation,
+                route=route,
             )
         else:
             raise HTTPException(
@@ -1397,6 +1416,7 @@ async def can_delete_verification_token(
     user_api_key_cache: DualCache,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
+    route: KeyManagementRoutes,
 ) -> bool:
     """
     - check if user is proxy admin
@@ -1412,6 +1432,7 @@ async def can_delete_verification_token(
             key_info=key_info,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
+            route=route,
         )
     elif key_info.user_id is not None and key_info.user_id == user_api_key_dict.user_id:
         return True
@@ -1469,6 +1490,7 @@ async def delete_verification_tokens(
                             user_api_key_cache=user_api_key_cache,
                             user_api_key_dict=user_api_key_dict,
                             prisma_client=prisma_client,
+                            route=KeyManagementRoutes.KEY_DELETE,
                         ):
                             await prisma_client.delete_data(tokens=[key.token])
                             deleted_tokens.append(key.token)
@@ -1689,11 +1711,35 @@ async def regenerate_key_fn(
             raise ValueError(
                 f"Regenerating Virtual Keys is an Enterprise feature, {CommonProxyErrors.not_premium_user.value}"
             )
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": "DB not connected. prisma_client is None"},
+            )
 
         # Check if key exists, raise exception if key is not in the DB
         key = data.key if data and data.key else key
         if not key:
             raise HTTPException(status_code=400, detail={"error": "No key passed in."})
+
+        existing_key_row = await prisma_client.get_data(
+            token=key, table_name="key", query_type="find_unique"
+        )
+
+        if existing_key_row is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"Key not found, passed key={key}"},
+            )
+
+        await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
+            user_api_key_dict=user_api_key_dict,
+            route=KeyManagementRoutes.KEY_REGENERATE,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+            existing_key_row=existing_key_row,
+        )
         ### 1. Create New copy that is duplicate of existing key
         ######################################################################
 
@@ -2450,7 +2496,7 @@ async def key_health(
         )
 
 
-def _can_user_query_key_info(
+async def _can_user_query_key_info(
     user_api_key_dict: UserAPIKeyAuth,
     key: Optional[str],
     key_info: LiteLLM_VerificationToken,
@@ -2468,6 +2514,12 @@ def _can_user_query_key_info(
     # user can query their own key info
     elif key_info.user_id == user_api_key_dict.user_id:
         return True
+    elif await TeamMemberPermissionChecks.user_belongs_to_keys_team(
+        user_api_key_dict=user_api_key_dict,
+        existing_key_row=key_info,
+    ):
+        return True
+
     return False
 
 
