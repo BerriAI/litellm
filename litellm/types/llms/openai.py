@@ -234,7 +234,18 @@ class Thread(BaseModel):
     """The object type, which is always `thread`."""
 
 
-OpenAICreateFileRequestOptionalParams = Literal["purpose",]
+OpenAICreateFileRequestOptionalParams = Literal["purpose"]
+
+OpenAIFilesPurpose = Literal[
+    "assistants",
+    "assistants_output",
+    "batch",
+    "batch_output",
+    "fine-tune",
+    "fine-tune-results",
+    "vision",
+    "user_data",
+]
 
 
 class OpenAIFileObject(BaseModel):
@@ -253,16 +264,7 @@ class OpenAIFileObject(BaseModel):
     object: Literal["file"]
     """The object type, which is always `file`."""
 
-    purpose: Literal[
-        "assistants",
-        "assistants_output",
-        "batch",
-        "batch_output",
-        "fine-tune",
-        "fine-tune-results",
-        "vision",
-        "user_data",
-    ]
+    purpose: OpenAIFilesPurpose
     """The intended purpose of the file.
 
     Supported values are `assistants`, `assistants_output`, `batch`, `batch_output`,
@@ -285,6 +287,8 @@ class OpenAIFileObject(BaseModel):
     For details on why a fine-tuning training file failed validation, see the
     `error` field on `fine_tuning.job`.
     """
+
+    _hidden_params: dict = {}
 
 
 # OpenAI Files Types

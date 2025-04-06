@@ -62,6 +62,16 @@ import litellm.llms.gemini
 from litellm.caching._internal_lru_cache import lru_cache_wrapper
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
+from litellm.constants import (
+    DEFAULT_MAX_LRU_CACHE_SIZE,
+    DEFAULT_TRIM_RATIO,
+    FUNCTION_DEFINITION_TOKEN_COUNT,
+    INITIAL_RETRY_DELAY,
+    JITTER,
+    MAX_RETRY_DELAY,
+    MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
+    TOOL_CHOICE_OBJECT_TOKEN_COUNT,
+)
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
@@ -1520,7 +1530,7 @@ def _select_tokenizer(
     return _select_tokenizer_helper(model=model)
 
 
-@lru_cache(maxsize=128)
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
 def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
     if litellm.disable_hf_tokenizer_download is True:
         return _return_openai_tokenizer(model)
@@ -2843,6 +2853,7 @@ def get_optional_params(  # noqa: PLR0915
     api_version=None,
     parallel_tool_calls=None,
     drop_params=None,
+    allowed_openai_params: Optional[List[str]] = None,
     reasoning_effort=None,
     additional_drop_params=None,
     messages: Optional[List[AllMessageValues]] = None,
@@ -2928,6 +2939,7 @@ def get_optional_params(  # noqa: PLR0915
         "api_version": None,
         "parallel_tool_calls": None,
         "drop_params": None,
+        "allowed_openai_params": None,
         "additional_drop_params": None,
         "messages": None,
         "reasoning_effort": None,
@@ -2944,6 +2956,7 @@ def get_optional_params(  # noqa: PLR0915
             and k != "custom_llm_provider"
             and k != "api_version"
             and k != "drop_params"
+            and k != "allowed_openai_params"
             and k != "additional_drop_params"
             and k != "messages"
             and k in default_params
@@ -3053,6 +3066,12 @@ def get_optional_params(  # noqa: PLR0915
                 tool_function["parameters"] = new_parameters
 
     def _check_valid_arg(supported_params: List[str]):
+        """
+        Check if the params passed to completion() are supported by the provider
+
+        Args:
+            supported_params: List[str] - supported params from the litellm config
+        """
         verbose_logger.info(
             f"\nLiteLLM completion() model= {model}; provider = {custom_llm_provider}"
         )
@@ -3086,7 +3105,7 @@ def get_optional_params(  # noqa: PLR0915
             else:
                 raise UnsupportedParamsError(
                     status_code=500,
-                    message=f"{custom_llm_provider} does not support parameters: {unsupported_params}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
+                    message=f"{custom_llm_provider} does not support parameters: {list(unsupported_params.keys())}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n. \n If you want to use these params dynamically send allowed_openai_params={list(unsupported_params.keys())} in your request.",
                 )
 
     supported_params = get_supported_openai_params(
@@ -3096,7 +3115,14 @@ def get_optional_params(  # noqa: PLR0915
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider="openai"
         )
-    _check_valid_arg(supported_params=supported_params or [])
+
+    supported_params = supported_params or []
+    allowed_openai_params = allowed_openai_params or []
+    supported_params.extend(allowed_openai_params)
+
+    _check_valid_arg(
+        supported_params=supported_params or [],
+    )
     ## raise exception if provider doesn't support passed in param
     if custom_llm_provider == "anthropic":
         ## check if unsupported param passed in
@@ -3199,7 +3225,7 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "huggingface":
-        optional_params = litellm.HuggingfaceConfig().map_openai_params(
+        optional_params = litellm.HuggingFaceChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -3735,6 +3761,26 @@ def get_optional_params(  # noqa: PLR0915
             if k not in default_params.keys():
                 optional_params[k] = passed_params[k]
     print_verbose(f"Final returned optional params: {optional_params}")
+    optional_params = _apply_openai_param_overrides(
+        optional_params=optional_params,
+        non_default_params=non_default_params,
+        allowed_openai_params=allowed_openai_params,
+    )
+    return optional_params
+
+
+def _apply_openai_param_overrides(
+    optional_params: dict, non_default_params: dict, allowed_openai_params: list
+):
+    """
+    If user passes in allowed_openai_params, apply them to optional_params
+
+    These params will get passed as is to the LLM API since the user opted in to passing them in the request
+    """
+    if allowed_openai_params:
+        for param in allowed_openai_params:
+            if param not in optional_params:
+                optional_params[param] = non_default_params.pop(param, None)
     return optional_params
 
 
@@ -5300,15 +5346,15 @@ def _calculate_retry_after(
     if retry_after is not None and 0 < retry_after <= 60:
         return retry_after
 
-    initial_retry_delay = 0.5
-    max_retry_delay = 8.0
+    initial_retry_delay = INITIAL_RETRY_DELAY
+    max_retry_delay = MAX_RETRY_DELAY
     nb_retries = max_retries - remaining_retries
 
     # Apply exponential backoff, but not more than the max.
     sleep_seconds = min(initial_retry_delay * pow(2.0, nb_retries), max_retry_delay)
 
     # Apply some jitter, plus-or-minus half a second.
-    jitter = 1 - 0.25 * random.random()
+    jitter = JITTER * random.random()
     timeout = sleep_seconds * jitter
     return timeout if timeout >= min_timeout else min_timeout
 
@@ -5634,7 +5680,7 @@ def shorten_message_to_fit_limit(message, tokens_needed, model: Optional[str]):
 def trim_messages(
     messages,
     model: Optional[str] = None,
-    trim_ratio: float = 0.75,
+    trim_ratio: float = DEFAULT_TRIM_RATIO,
     return_response_tokens: bool = False,
     max_tokens=None,
 ):
@@ -6224,7 +6270,7 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.REPLICATE == provider:
             return litellm.ReplicateConfig()
         elif litellm.LlmProviders.HUGGINGFACE == provider:
-            return litellm.HuggingfaceConfig()
+            return litellm.HuggingFaceChatConfig()
         elif litellm.LlmProviders.TOGETHER_AI == provider:
             return litellm.TogetherAIConfig()
         elif litellm.LlmProviders.OPENROUTER == provider:
@@ -6507,7 +6553,7 @@ def is_prompt_caching_valid_prompt(
             model=model,
             use_default_image_token_count=True,
         )
-        return token_count >= 1024
+        return token_count >= MINIMUM_PROMPT_CACHE_TOKEN_COUNT
     except Exception as e:
         verbose_logger.error(f"Error in is_prompt_caching_valid_prompt: {e}")
         return False

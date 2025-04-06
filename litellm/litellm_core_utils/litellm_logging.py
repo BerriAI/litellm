@@ -28,6 +28,10 @@ from litellm._logging import _is_debugging_on, verbose_logger
 from litellm.batches.batch_utils import _handle_completed_batch
 from litellm.caching.caching import DualCache, InMemoryCache
 from litellm.caching.caching_handler import LLMCachingHandler
+from litellm.constants import (
+    DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
+    DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
+)
 from litellm.cost_calculator import _select_model_name_for_cost_calc
 from litellm.integrations.arize.arize import ArizeLogger
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -453,8 +457,12 @@ class Logging(LiteLLMLoggingBaseClass):
         non_default_params: dict,
         prompt_id: str,
         prompt_variables: Optional[dict],
+        prompt_management_logger: Optional[CustomLogger] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
-        custom_logger = self.get_custom_logger_for_prompt_management(model)
+        custom_logger = (
+            prompt_management_logger
+            or self.get_custom_logger_for_prompt_management(model)
+        )
         if custom_logger:
             (
                 model,
@@ -3745,9 +3753,12 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         response_cost=response_cost,
         response_cost_failure_debug_info=None,
         status=str("success"),
-        total_tokens=int(30),
-        prompt_tokens=int(20),
-        completion_tokens=int(10),
+        total_tokens=int(
+            DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT
+            + DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
+        ),
+        prompt_tokens=int(DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT),
+        completion_tokens=int(DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT),
         startTime=start_time,
         endTime=end_time,
         completionStartTime=completion_start_time,

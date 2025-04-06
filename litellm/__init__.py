@@ -56,6 +56,9 @@ from litellm.constants import (
     bedrock_embedding_models,
     known_tokenizer_config,
     BEDROCK_INVOKE_PROVIDERS_LITERAL,
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_SOFT_BUDGET,
+    DEFAULT_ALLOWED_FAILS,
 )
 from litellm.types.guardrails import GuardrailItem
 from litellm.proxy._types import (
@@ -120,6 +123,7 @@ callbacks: List[
 langfuse_default_tags: Optional[List[str]] = None
 langsmith_batch_size: Optional[int] = None
 prometheus_initialize_budget_metrics: Optional[bool] = False
+require_auth_for_metrics_endpoint: Optional[bool] = False
 argilla_batch_size: Optional[int] = None
 datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged payload
 gcs_pub_sub_use_v1: Optional[
@@ -155,7 +159,7 @@ token: Optional[
     str
 ] = None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 telemetry = True
-max_tokens = 256  # OpenAI Defaults
+max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
 drop_params = bool(os.getenv("LITELLM_DROP_PARAMS", False))
 modify_params = False
 retry = True
@@ -244,7 +248,7 @@ budget_duration: Optional[
     str
 ] = None  # proxy only - resets budget after fixed duration. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
 default_soft_budget: float = (
-    50.0  # by default all litellm proxy keys have a soft budget of 50.0
+    DEFAULT_SOFT_BUDGET  # by default all litellm proxy keys have a soft budget of 50.0
 )
 forward_traceparent_to_llm_provider: bool = False
 
@@ -796,9 +800,8 @@ from .llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig
 from .llms.galadriel.chat.transformation import GaladrielChatConfig
 from .llms.github.chat.transformation import GithubChatConfig
 from .llms.empower.chat.transformation import EmpowerChatConfig
-from .llms.huggingface.chat.transformation import (
-    HuggingfaceChatConfig as HuggingfaceConfig,
-)
+from .llms.huggingface.chat.transformation import HuggingFaceChatConfig
+from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig
 from .llms.oobabooga.chat.transformation import OobaboogaConfig
 from .llms.maritalk import MaritalkConfig
 from .llms.openrouter.chat.transformation import OpenrouterConfig

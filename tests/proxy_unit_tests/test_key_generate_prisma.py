@@ -2289,7 +2289,7 @@ async def test_update_logs_with_spend_logs_url(prisma_client):
     db_spend_update_writer = DBSpendUpdateWriter()
 
     payload = {"startTime": datetime.now(), "endTime": datetime.now()}
-    await db_spend_update_writer._set_spend_logs_payload(payload=payload, prisma_client=prisma_client)
+    await db_spend_update_writer._insert_spend_log_to_db(payload=payload, prisma_client=prisma_client)
 
     assert len(prisma_client.spend_log_transactions) > 0
 
@@ -2297,7 +2297,7 @@ async def test_update_logs_with_spend_logs_url(prisma_client):
 
     spend_logs_url = ""
     payload = {"startTime": datetime.now(), "endTime": datetime.now()}
-    await db_spend_update_writer._set_spend_logs_payload(
+    await db_spend_update_writer._insert_spend_log_to_db(
         payload=payload, spend_logs_url=spend_logs_url, prisma_client=prisma_client
     )
 

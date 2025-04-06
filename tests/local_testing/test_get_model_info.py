@@ -370,7 +370,7 @@ def test_get_model_info_huggingface_models(monkeypatch):
                 "model_name": "meta-llama/Meta-Llama-3-8B-Instruct",
                 "litellm_params": {
                     "model": "huggingface/meta-llama/Meta-Llama-3-8B-Instruct",
-                    "api_base": "https://api-inference.huggingface.co/models/meta-llama/Llama-3.3-70B-Instruct",
+                    "api_base": "https://router.huggingface.co/hf-inference/models/meta-llama/Meta-Llama-3-8B-Instruct",
                     "api_key": os.environ["HUGGINGFACE_API_KEY"],
                 },
             }

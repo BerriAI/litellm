@@ -18,10 +18,10 @@ import {
   Form,
   Input,
   Select as Select2,
-  InputNumber,
   message,
   Tooltip
 } from "antd";
+import NumericalInput from "./shared/numerical_input";
 import { fetchAvailableModelsForTeamOrKey, getModelDisplayName, unfurlWildcardModelsInList } from "./key_team_helpers/fetch_available_models_team_key";
 import { Select, SelectItem } from "@tremor/react";
 import { InfoCircleOutlined } from '@ant-design/icons';
@@ -690,7 +690,7 @@ const Teams: React.FC<TeamProps> = ({
                 </Form.Item>
 
                 <Form.Item label="Max Budget (USD)" name="max_budget">
-                  <InputNumber step={0.01} precision={2} width={200} />
+                  <NumericalInput step={0.01} precision={2} width={200} />
                 </Form.Item>
                 <Form.Item
                   className="mt-8"
@@ -707,13 +707,13 @@ const Teams: React.FC<TeamProps> = ({
                   label="Tokens per minute Limit (TPM)"
                   name="tpm_limit"
                 >
-                  <InputNumber step={1} width={400} />
+                  <NumericalInput step={1} width={400} />
                 </Form.Item>
                 <Form.Item
                   label="Requests per minute Limit (RPM)"
                   name="rpm_limit"
                 >
-                  <InputNumber step={1} width={400} />
+                  <NumericalInput step={1} width={400} />
                 </Form.Item>
 
                 <Accordion className="mt-20 mb-8">

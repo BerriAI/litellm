@@ -4,12 +4,13 @@ model_list:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
-
-general_settings:
-  use_redis_transaction_buffer: true
+  - model_name: openai/gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: fake-key
 
 litellm_settings:
-  cache: True
-  cache_params:
-    type: redis
-    supported_call_types: []
+  require_auth_for_metrics_endpoint: true
+
+  callbacks: ["prometheus"]
+  service_callback: ["prometheus_system"]

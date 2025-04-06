@@ -2342,7 +2342,7 @@ async def test_redis_caching_llm_caching_ttl(sync_mode):
 
             # Verify that the set method was called on the mock Redis instance
             mock_redis_instance.set.assert_called_once_with(
-                name="test", value='"test_value"', ex=120
+                name="test", value='"test_value"', ex=120, nx=False
             )
 
     ## Increment cache

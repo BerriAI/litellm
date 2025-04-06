@@ -31,6 +31,15 @@ Each instance writes updates to redis
 
 A single instance will acquire a lock on the DB and flush all elements in the redis queue to the DB. 
 
+- 1 instance will attempt to acquire the lock for the DB update job 
+- The status of the lock is stored in redis
+- If the instance acquires the lock to write to DB
+    - It will read all updates from redis
+    - Aggregate all updates into 1 transaction
+    - Write updates to DB
+    - Release the lock
+- Note: Only 1 instance can acquire the lock at a time, this limits the number of instances that can write to the DB at once
+
 
 <Image img={require('../../img/deadlock_fix_2.png')}  style={{ width: '900px', height: 'auto' }} />
 <p style={{textAlign: 'left', color: '#666'}}>
@@ -62,4 +71,16 @@ litellm_settings:
     supported_call_types: [] # Optional: Set cache for proxy, but not on the actual llm api call
 ```
 
+## Monitoring
+
+LiteLLM emits the following prometheus metrics to monitor the health/status of the in memory buffer and redis buffer. 
+
+
+| Metric Name                                         | Description                                                                 | Storage Type |
+|-----------------------------------------------------|-----------------------------------------------------------------------------|--------------|
+| `litellm_pod_lock_manager_size`                     | Indicates which pod has the lock to write updates to the database.         | Redis    |
+| `litellm_in_memory_daily_spend_update_queue_size`   | Number of items in the in-memory daily spend update queue. These are the aggregate spend logs for each user.                 | In-Memory    |
+| `litellm_redis_daily_spend_update_queue_size`       | Number of items in the Redis daily spend update queue.  These are the aggregate spend logs for each user.                    | Redis        |
+| `litellm_in_memory_spend_update_queue_size`         | In-memory aggregate spend values for keys, users, teams, team members, etc.| In-Memory    |
+| `litellm_redis_spend_update_queue_size`             | Redis aggregate spend values for keys, users, teams, etc.                  | Redis        |
 

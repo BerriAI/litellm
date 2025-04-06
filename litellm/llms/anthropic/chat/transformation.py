@@ -5,7 +5,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 import httpx
 
 import litellm
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.constants import (
+    DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,
+    RESPONSE_FORMAT_TOOL_NAME,
+)
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
@@ -30,9 +33,16 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
 )
+from litellm.types.utils import CompletionTokensDetailsWrapper
 from litellm.types.utils import Message as LitellmMessage
 from litellm.types.utils import PromptTokensDetailsWrapper
-from litellm.utils import ModelResponse, Usage, add_dummy_tool, has_tool_call_blocks
+from litellm.utils import (
+    ModelResponse,
+    Usage,
+    add_dummy_tool,
+    has_tool_call_blocks,
+    token_counter,
+)
 
 from ..common_utils import AnthropicError, process_anthropic_headers
 
@@ -53,7 +63,7 @@ class AnthropicConfig(BaseConfig):
 
     max_tokens: Optional[
         int
-    ] = 4096  # anthropic requires a default value (Opus, Sonnet, and Haiku have the same default)
+    ] = DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS  # anthropic requires a default value (Opus, Sonnet, and Haiku have the same default)
     stop_sequences: Optional[list] = None
     temperature: Optional[int] = None
     top_p: Optional[int] = None
@@ -65,7 +75,7 @@ class AnthropicConfig(BaseConfig):
         self,
         max_tokens: Optional[
             int
-        ] = 4096,  # You can pass in a value yourself or use the default value 4096
+        ] = DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,  # You can pass in a value yourself or use the default value 4096
         stop_sequences: Optional[list] = None,
         temperature: Optional[int] = None,
         top_p: Optional[int] = None,
@@ -309,6 +319,33 @@ class AnthropicConfig(BaseConfig):
         else:
             raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
 
+    def map_response_format_to_anthropic_tool(
+        self, value: Optional[dict], optional_params: dict, is_thinking_enabled: bool
+    ) -> Optional[AnthropicMessagesTool]:
+        ignore_response_format_types = ["text"]
+        if (
+            value is None or value["type"] in ignore_response_format_types
+        ):  # value is a no-op
+            return None
+
+        json_schema: Optional[dict] = None
+        if "response_schema" in value:
+            json_schema = value["response_schema"]
+        elif "json_schema" in value:
+            json_schema = value["json_schema"]["schema"]
+        """
+        When using tools in this way: - https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
+        - You usually want to provide a single tool
+        - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
+        - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
+        """
+
+        _tool = self._create_json_tool_call_for_response_format(
+            json_schema=json_schema,
+        )
+
+        return _tool
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -352,34 +389,18 @@ class AnthropicConfig(BaseConfig):
             if param == "top_p":
                 optional_params["top_p"] = value
             if param == "response_format" and isinstance(value, dict):
-                ignore_response_format_types = ["text"]
-                if value["type"] in ignore_response_format_types:  # value is a no-op
+                _tool = self.map_response_format_to_anthropic_tool(
+                    value, optional_params, is_thinking_enabled
+                )
+                if _tool is None:
                     continue
-
-                json_schema: Optional[dict] = None
-                if "response_schema" in value:
-                    json_schema = value["response_schema"]
-                elif "json_schema" in value:
-                    json_schema = value["json_schema"]["schema"]
-                """
-                When using tools in this way: - https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
-                - You usually want to provide a single tool
-                - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
-                - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
-                """
-
                 if not is_thinking_enabled:
                     _tool_choice = {"name": RESPONSE_FORMAT_TOOL_NAME, "type": "tool"}
                     optional_params["tool_choice"] = _tool_choice
-
-                _tool = self._create_json_tool_call_for_response_format(
-                    json_schema=json_schema,
-                )
+                optional_params["json_mode"] = True
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=[_tool]
                 )
-
-                optional_params["json_mode"] = True
             if param == "user":
                 optional_params["metadata"] = {"user_id": value}
             if param == "thinking":
@@ -769,6 +790,15 @@ class AnthropicConfig(BaseConfig):
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens
         )
+        completion_token_details = (
+            CompletionTokensDetailsWrapper(
+                reasoning_tokens=token_counter(
+                    text=reasoning_content, count_response_tokens=True
+                )
+            )
+            if reasoning_content
+            else None
+        )
         total_tokens = prompt_tokens + completion_tokens
         usage = Usage(
             prompt_tokens=prompt_tokens,
@@ -777,6 +807,7 @@ class AnthropicConfig(BaseConfig):
             prompt_tokens_details=prompt_tokens_details,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
+            completion_tokens_details=completion_token_details,
         )
 
         setattr(model_response, "usage", usage)  # type: ignore
