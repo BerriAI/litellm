@@ -21,6 +21,7 @@ import {
   Icon
 } from "@tremor/react";
 import TeamMembersComponent from "./team_member_view";
+import MemberPermissions from "./member_permissions";
 import { teamInfoCall, teamMemberDeleteCall, teamMemberAddCall, teamMemberUpdateCall, Member, teamUpdateCall } from "@/components/networking";
 import { Button, Form, Input, Select, message, Tooltip } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
@@ -236,6 +237,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             <Tab key="overview">Overview</Tab>,
             ...(canEditTeam ? [
               <Tab key="members">Members</Tab>,
+              <Tab key="member-permissions">Member Permissions</Tab>,
               <Tab key="settings">Settings</Tab>
             ] : [])
           ]}
@@ -289,6 +291,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               setSelectedEditMember={setSelectedEditMember}
               setIsEditMemberModalVisible={setIsEditMemberModalVisible}
               setIsAddMemberModalVisible={setIsAddMemberModalVisible}
+            />
+          </TabPanel>
+
+          {/* Member Permissions Panel */}
+          <TabPanel>
+            <MemberPermissions 
+              teamId={teamId}
+              accessToken={accessToken}
+              canEditTeam={canEditTeam}
             />
           </TabPanel>
 
