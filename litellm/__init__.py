@@ -9,76 +9,6 @@ import re
 
 ### INIT VARIABLES ###########
 import threading
-<<<<<<< HEAD
-=======
-import os
-from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
-from litellm.caching.llm_caching_handler import LLMClientCache
-from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
-from litellm.types.utils import (
-    ImageObject,
-    BudgetConfig,
-    all_litellm_params,
-    all_litellm_params as _litellm_completion_params,
-    CredentialItem,
-)  # maintain backwards compatibility for root param
-from litellm._logging import (
-    set_verbose,
-    _turn_on_debug,
-    verbose_logger,
-    json_logs,
-    _turn_on_json,
-    log_level,
-)
-import re
-from litellm.constants import (
-    DEFAULT_BATCH_SIZE,
-    DEFAULT_FLUSH_INTERVAL_SECONDS,
-    ROUTER_MAX_FALLBACKS,
-    DEFAULT_MAX_RETRIES,
-    DEFAULT_REPLICATE_POLLING_RETRIES,
-    DEFAULT_REPLICATE_POLLING_DELAY_SECONDS,
-    LITELLM_CHAT_PROVIDERS,
-    HUMANLOOP_PROMPT_CACHE_TTL_SECONDS,
-    OPENAI_CHAT_COMPLETION_PARAMS,
-    OPENAI_CHAT_COMPLETION_PARAMS as _openai_completion_params,  # backwards compatibility
-    OPENAI_FINISH_REASONS,
-    OPENAI_FINISH_REASONS as _openai_finish_reasons,  # backwards compatibility
-    openai_compatible_endpoints,
-    openai_compatible_providers,
-    openai_text_completion_compatible_providers,
-    _openai_like_providers,
-    replicate_models,
-    clarifai_models,
-    huggingface_models,
-    empower_models,
-    together_ai_models,
-    baseten_models,
-    REPEATED_STREAMING_CHUNK_LIMIT,
-    request_timeout,
-    open_ai_embedding_models,
-    cohere_embedding_models,
-    bedrock_embedding_models,
-    known_tokenizer_config,
-    BEDROCK_INVOKE_PROVIDERS_LITERAL,
-    DEFAULT_MAX_TOKENS,
-    DEFAULT_SOFT_BUDGET,
-    DEFAULT_ALLOWED_FAILS,
-)
-from litellm.types.guardrails import GuardrailItem
-from litellm.proxy._types import (
-    KeyManagementSystem,
-    KeyManagementSettings,
-    LiteLLM_UpperboundKeyGenerateParams,
-)
-from litellm.types.utils import StandardKeyGenerationConfig, LlmProviders
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
-import httpx
-import dotenv
->>>>>>> origin/main
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
@@ -774,6 +704,7 @@ if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
         CostPerToken,
         CredentialItem,
         CustomHuggingfaceTokenizer,
+        CustomStreamWrapper,
         Delta,
         Embedding,
         EmbeddingResponse,
@@ -1066,8 +997,12 @@ else:
             "GroqSTTConfig",
         ]
     )
-    _import_structures.setdefault("litellm.llms.huggingface.chat.transformation", []).extend(["HuggingFaceChatConfig"]) 
-    _import_structures.setdefault("litellm.llms.huggingface.embedding.transformation", []).extend(["HuggingFaceEmbeddingConfig"]) 
+    _import_structures.setdefault(
+        "litellm.llms.huggingface.chat.transformation", []
+    ).extend(["HuggingFaceChatConfig"])
+    _import_structures.setdefault(
+        "litellm.llms.huggingface.embedding.transformation", []
+    ).extend(["HuggingFaceEmbeddingConfig"])
     _import_structures.setdefault(
         "litellm.llms.infinity.rerank.transformation", []
     ).extend(
@@ -1189,6 +1124,7 @@ else:
     )
     _import_structures.setdefault("litellm.utils", []).extend(
         [
+            "CustomStreamWrapper",
             "TextChoices",
             "Usage",
             "PromptTokenDetailsWrapper",
@@ -1318,6 +1254,8 @@ if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
     from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
     from .llms.bedrock.chat.invoke_handler import (
         AmazonCohereChatConfig,
+        AWSEventStreamDecoder,
+        BedrockLLM,
         bedrock_tool_name_mappings,
     )
     from .llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import (
@@ -1416,6 +1354,8 @@ else:
         "litellm.llms.bedrock.chat.invoke_handler", []
     ).extend(
         [
+            "BedrockLLM",
+            "AWSEventStreamDecoder",
             "AmazonCohereChatConfig",
             "bedrock_tool_name_mappings",
         ]
@@ -1602,7 +1542,9 @@ else:
     ).extend(
         [
             "OpenAIOSeriesConfig",
-            "OpenAIO1Config",  # maintain backwards compatibility
+            _Alias(
+                "OpenAIOSeriesConfig", "OpenAIO1Config"
+            ),  # maintain backwards compatibility
         ]
     )
     _import_structures.setdefault(
@@ -1727,6 +1669,14 @@ else:
     )
 
 if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
+    from litellm._variables.config import (
+        nvidiaNimConfig,
+        nvidiaNimEmbeddingConfig,
+        openAIGPTAudioConfig,
+        openAIGPTConfig,
+        openaiOSeriesConfig,
+        vertexAITextEmbeddingConfig,
+    )
     from litellm.assistants.main import (
         a_add_message,
         acreate_assistants,
@@ -1788,12 +1738,10 @@ if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
         completion,
         completion_with_retries,
         config_completion,
-        databricks_chat_completions,
         databricks_embedding,
         embedding,
         google_batch_embeddings,
         groq_chat_completions,
-        huggingface,
         image_generation,
         image_variation,
         mock_completion,
@@ -1871,11 +1819,13 @@ if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
     from .files.main import *
     from .fine_tuning.main import *
     from .integrations import *
+    from .litellm_core_utils.get_model_cost_map import get_model_cost_map
     from .llms.ai21.chat.transformation import AI21ChatConfig
     from .llms.azure.azure import AzureOpenAIAssistantsAPIConfig, AzureOpenAIError
     from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
     from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
     from .llms.azure.completion.transformation import AzureOpenAITextConfig
+    from .llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
     from .llms.cerebras.chat import CerebrasConfig
     from .llms.codestral.completion.transformation import CodestralTextCompletionConfig
     from .llms.deepseek.chat.transformation import DeepSeekChatConfig
@@ -1920,6 +1870,16 @@ if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
     from .types.utils import GenericStreamingChunk
 
 else:
+    _import_structures.setdefault("litellm._variables.config", []).extend(
+        [
+            "vertexAITextEmbeddingConfig",
+            "openaiOSeriesConfig",
+            "openAIGPTConfig",
+            "openAIGPTAudioConfig",
+            "nvidiaNimConfig",
+            "nvidiaNimEmbeddingConfig",
+        ]
+    )
     _import_structures.setdefault("litellm.assistants.main", []).extend(
         [
             "openai_assistants_api",
@@ -2263,6 +2223,13 @@ else:
             "XAIModelInfo",
         ]
     )
+    _import_structures.setdefault(
+        "litellm.litellm_core_utils.get_model_cost_map", []
+    ).extend(
+        [
+            "get_model_cost_map",
+        ]
+    )
     _import_structures.setdefault("litellm.secret_managers.main", []).extend(
         ["get_secret_str", "get_secret"]
     )
@@ -2376,6 +2343,9 @@ else:
     _import_structures.setdefault("litellm.types.llms.custom_llm", []).extend(
         ["CustomLLMItem"]
     )
+    _import_structures.setdefault(
+        "litellm.llms.base_llm.chat.transformation", []
+    ).extend(["BaseLLMException", "BaseConfig"])
     _import_structures.setdefault("litellm.types.utils", []).extend(
         ["GenericStreamingChunk"]
     )
@@ -2385,13 +2355,15 @@ else:
             "custom_provider_map",
             "disable_hf_tokenizer_download",
             "global_disable_no_log_param",
+            "_custom_providers",
         ]
     )
+    _import_structures.setdefault("litellm._lazy_module", []).extend(["_LazyModule"])
 
     # Lazy import for litellm module
     import sys
 
-    _module = _LazyModule(
+    _module = _LazyModule.create(
         __name__,
         globals()["__file__"],
         _import_structures,
