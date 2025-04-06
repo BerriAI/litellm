@@ -188,7 +188,15 @@ const sidebars = {
         "providers/azure_ai",
         "providers/aiml",
         "providers/vertex",
-        "providers/gemini",
+        
+        {
+          type: "category",
+          label: "Google AI Studio",
+          items: [
+            "providers/gemini",
+            "providers/google_ai_studio/files",
+          ]
+        },
         "providers/anthropic",
         "providers/aws_sagemaker",
         "providers/bedrock",
