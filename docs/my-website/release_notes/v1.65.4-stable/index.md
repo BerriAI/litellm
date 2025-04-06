@@ -79,58 +79,60 @@ pip install litellm==1.65.4.post1
 <Image img={require('../../img/release_notes/new_activity_tab.png')} />
 
 1. New Usage Tab
-    1. Report 'total_tokens' + report success/failure calls
-    2. Remove double bars on scroll
-    3. Ensure ‘daily spend’ chart ordered from earliest to latest date
-    4. showing spend per model per day
-    5. show key alias on usage tab
-    6. Allow non-admins to view their activity
-    7. Add date picker to new usage tab
+    - Report 'total_tokens' + report success/failure calls
+    - Remove double bars on scroll
+    - Ensure ‘daily spend’ chart ordered from earliest to latest date
+    - showing spend per model per day
+    - show key alias on usage tab
+    - Allow non-admins to view their activity
+    - Add date picker to new usage tab
 2. Virtual Keys Tab
-    1. remove 'default key' on user signup
-    2. fix showing user models available for personal key creation
+    - remove 'default key' on user signup
+    - fix showing user models available for personal key creation
 3. Test Key Tab
-    1. Allow testing image generation models
+    - Allow testing image generation models
 4. Models Tab
-    1. Fix bulk adding models 
-    2. support reusable credentials for passthrough endpoints
-    3. Allow team members to see team models
+    - Fix bulk adding models 
+    - support reusable credentials for passthrough endpoints
+    - Allow team members to see team models
 5. Teams Tab
-    1. Fix json serialization error on update team metadata
+    - Fix json serialization error on update team metadata
 6. Request Logs Tab
-    1. Add reasoning_content token tracking across all providers on streaming
+    - Add reasoning_content token tracking across all providers on streaming
 7. API 
-    1. return key alias on /user/daily/activity
+    - return key alias on /user/daily/activity [NEEDS DOCS]
 8. SSO
-    1. Allow assigning SSO users to teams on MSFT SSO 
+    - Allow assigning SSO users to teams on MSFT SSO [PR](https://github.com/BerriAI/litellm/pull/9745)
 
 ## Logging / Guardrail Integrations
 
 1. Console Logs - Add json formatting for uncaught exceptions [PR](https://github.com/BerriAI/litellm/pull/9619)
-2. Guardrails - AIM Guardrails support for virtual key based policies [Get Started](../../docs/proxy/guardrails/aim_security))
+2. Guardrails - AIM Guardrails support for virtual key based policies [Get Started](../../docs/proxy/guardrails/aim_security)
 3. Logging - fix completion start time tracking [PR](https://github.com/BerriAI/litellm/pull/9688)
-4. Prometheus - Allow adding authentication on Prometheus /metrics endpoints [PR](https://github.com/BerriAI/litellm/pull/9766)
-5. Prometheus - Distinguish LLM Provider Exception vs. LiteLLM Exception in metric naming [PR](https://github.com/BerriAI/litellm/pull/9760)
+4. Prometheus
+    - Allow adding authentication on Prometheus /metrics endpoints [PR](https://github.com/BerriAI/litellm/pull/9766)
+    - Distinguish LLM Provider Exception vs. LiteLLM Exception in metric naming [PR](https://github.com/BerriAI/litellm/pull/9760)
+    - Emit operational metrics for new DB Transaction architecture [PR](https://github.com/BerriAI/litellm/pull/9719)
 
 ## Performance / Loadbalancing / Reliability improvements
 1. Preventing Deadlocks
-    1. Reduce DB Deadlocks by storing spend updates in Redis and then committing to DB
-    2. Ensure no deadlocks occur when updating DailyUserSpendTransaction
-    3. High Traffic fix - ensure new DB + Redis architecture accurately tracks spend
-    4. Use Redis for PodLock Manager instead of PG (ensures no deadlocks occur)
-    5. v2 DB Deadlock Reduction Architecture – Add Max Size for In-Memory Queue + Backpressure Mechanism
-    6. Emit operational metrics for new DB Transaction architecture
-2. Prisma Migrations
-    1. connects litellm proxy to litellm's prisma migration files
-    2. Handle db schema updates from new `litellm-proxy-extras` sdk
-3. Redis - support password for sync sentinel clients 
-4. Fix "Circular reference detected" error when max_parallel_requests = 0 
-5. Code QA - Ban hardcoded numbers
+    - Reduce DB Deadlocks by storing spend updates in Redis and then committing to DB [PR](https://github.com/BerriAI/litellm/pull/9608)
+    - Ensure no deadlocks occur when updating DailyUserSpendTransaction [PR](https://github.com/BerriAI/litellm/pull/9690)
+    - High Traffic fix - ensure new DB + Redis architecture accurately tracks spend [PR](https://github.com/BerriAI/litellm/pull/9673)
+    - Use Redis for PodLock Manager instead of PG (ensures no deadlocks occur) [PR](https://github.com/BerriAI/litellm/pull/9715)
+    - v2 DB Deadlock Reduction Architecture – Add Max Size for In-Memory Queue + Backpressure Mechanism [PR](https://github.com/BerriAI/litellm/pull/9759)
+    
+2. Prisma Migrations [NEEDS DOCS]
+    - connects litellm proxy to litellm's prisma migration files
+    - Handle db schema updates from new `litellm-proxy-extras` sdk
+3. Redis - support password for sync sentinel clients [PR](https://github.com/BerriAI/litellm/pull/9622)
+4. Fix "Circular reference detected" error when max_parallel_requests = 0 [PR](https://github.com/BerriAI/litellm/pull/9671)
+5. Code QA - Ban hardcoded numbers [PR](https://github.com/BerriAI/litellm/pull/9709)
 
 ## Helm
-1. fix: wrong indentation of ttlSecondsAfterFinished in chart
+1. fix: wrong indentation of ttlSecondsAfterFinished in chart [PR](https://github.com/BerriAI/litellm/pull/9611)
 
 ## General Proxy Improvements
-1. Fix - only apply service_account_settings.enforced_params on service accounts
-2. Fix - handle metadata null on `/chat/completion` 
-3. Fix - Move daily user transaction logging outside of 'disable_spend_logs' flag, as they’re unrelated
+1. Fix - only apply service_account_settings.enforced_params on service accounts [PR](https://github.com/BerriAI/litellm/pull/9683)
+2. Fix - handle metadata null on `/chat/completion` [PR](https://github.com/BerriAI/litellm/issues/9717)
+3. Fix - Move daily user transaction logging outside of 'disable_spend_logs' flag, as they’re unrelated [PR](https://github.com/BerriAI/litellm/pull/9772)
