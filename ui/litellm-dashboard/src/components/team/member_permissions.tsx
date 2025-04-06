@@ -12,8 +12,9 @@ import {
   TableCell,
 } from "@tremor/react";
 import { Button, message, Checkbox, Empty } from "antd";
+import { ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import { getTeamPermissionsCall, teamPermissionsUpdateCall } from "@/components/networking";
-import { getPermissionInfo, PermissionInfo } from "./permission_definitions";
+import { getPermissionInfo } from "./permission_definitions";
 
 interface MemberPermissionsProps {
   teamId: string;
@@ -36,16 +37,11 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({
     try {
       setLoading(true);
       if (!accessToken) return;
-      
       const response = await getTeamPermissionsCall(accessToken, teamId);
-      
       const allPermissions = response.all_available_permissions || [];
       setPermissions(allPermissions);
-      
-      // Handle null or empty permissions
       const teamPermissions = response.team_member_permissions || [];
       setSelectedPermissions(teamPermissions);
-      
       setHasChanges(false);
     } catch (error) {
       message.error("Failed to load permissions");
@@ -60,14 +56,9 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({
   }, [teamId, accessToken]);
 
   const handlePermissionChange = (permission: string, checked: boolean) => {
-    let newSelectedPermissions;
-    
-    if (checked) {
-      newSelectedPermissions = [...selectedPermissions, permission];
-    } else {
-      newSelectedPermissions = selectedPermissions.filter(p => p !== permission);
-    }
-    
+    const newSelectedPermissions = checked
+      ? [...selectedPermissions, permission]
+      : selectedPermissions.filter((p) => p !== permission);
     setSelectedPermissions(newSelectedPermissions);
     setHasChanges(true);
   };
@@ -75,10 +66,8 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({
   const handleSave = async () => {
     try {
       if (!accessToken) return;
-      
       setSaving(true);
       await teamPermissionsUpdateCall(accessToken, teamId, selectedPermissions);
-      
       message.success("Permissions updated successfully");
       setHasChanges(false);
     } catch (error) {
@@ -94,34 +83,35 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({
   };
 
   if (loading) {
-    return <div className="p-4">Loading permissions...</div>;
+    return <div className="p-6 text-center">Loading permissions...</div>;
   }
 
   const hasPermissions = permissions.length > 0;
 
   return (
-    <Card>
-      <div className="flex justify-between items-center mb-4">
-        <Title>Member Permissions</Title>
+    <Card className="bg-white shadow-md rounded-md p-6">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b pb-4 mb-6">
+        <Title className="mb-2 sm:mb-0">Member Permissions</Title>
         {canEditTeam && hasChanges && (
-          <div className="flex gap-2">
-            <Button onClick={handleReset}>
+          <div className="flex gap-3">
+            <Button icon={<ReloadOutlined />} onClick={handleReset}>
               Reset
             </Button>
             <TremorButton
               onClick={handleSave}
               loading={saving}
+              className="flex items-center gap-2"
             >
-              Save changes
+              <SaveOutlined /> Save Changes
             </TremorButton>
           </div>
         )}
       </div>
-      
-      <Text className="mb-6">
-        Control what team members can do when they are not admins.
+
+      <Text className="mb-6 text-gray-600">
+        Control what team members can do when they are not team admins.
       </Text>
-      
+
       {hasPermissions ? (
         <Table className="mt-4">
           <TableHead>
@@ -136,24 +126,35 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({
             {permissions.map((permission) => {
               const permInfo = getPermissionInfo(permission);
               return (
-                <TableRow key={permission}>
+                <TableRow
+                  key={permission}
+                  className="hover:bg-gray-50 transition-colors"
+                >
                   <TableCell>
-                    <span className={`px-2 py-1 rounded text-xs font-medium ${
-                      permInfo.method === 'GET' 
-                        ? 'bg-blue-100 text-blue-800' 
-                        : 'bg-green-100 text-green-800'
-                    }`}>
+                    <span
+                      className={`px-2 py-1 rounded text-xs font-medium ${
+                        permInfo.method === "GET"
+                          ? "bg-blue-100 text-blue-800"
+                          : "bg-green-100 text-green-800"
+                      }`}
+                    >
                       {permInfo.method}
                     </span>
                   </TableCell>
                   <TableCell>
-                    <span className="font-mono text-sm">{permInfo.endpoint}</span>
+                    <span className="font-mono text-sm text-gray-800">
+                      {permInfo.endpoint}
+                    </span>
                   </TableCell>
-                  <TableCell>{permInfo.description}</TableCell>
+                  <TableCell className="text-gray-700">
+                    {permInfo.description}
+                  </TableCell>
                   <TableCell className="text-right">
                     <Checkbox
                       checked={selectedPermissions.includes(permission)}
-                      onChange={(e) => handlePermissionChange(permission, e.target.checked)}
+                      onChange={(e) =>
+                        handlePermissionChange(permission, e.target.checked)
+                      }
                       disabled={!canEditTeam}
                     />
                   </TableCell>
@@ -163,19 +164,8 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({
           </TableBody>
         </Table>
       ) : (
-        <div className="py-8">
+        <div className="py-12">
           <Empty description="No permissions available" />
-        </div>
-      )}
-      
-      {canEditTeam && hasChanges && (
-        <div className="flex justify-end mt-6">
-          <TremorButton
-            onClick={handleSave}
-            loading={saving}
-          >
-            Save changes
-          </TremorButton>
         </div>
       )}
     </Card>
