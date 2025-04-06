@@ -824,7 +824,7 @@ class BaseLLMChatTest(ABC):
                 print("Model does not support function calling")
                 pytest.skip("Model does not support function calling")
             
-            response = completion(**base_completion_call_args, messages=[{"role": "user", "content": "Hello, how are you?"}], tools=[], max_tokens=1) # just make sure call doesn't fail
+            response = completion(**base_completion_call_args, messages=[{"role": "user", "content": "Hello, how are you?"}], tools=[]) # just make sure call doesn't fail
             print("response: ", response)
             assert response is not None
         except litellm.InternalServerError:
