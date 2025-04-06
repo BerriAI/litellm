@@ -29,19 +29,21 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParamFunctionChunk,
 )
 from litellm.types.utils import ModelResponse
-from litellm.utils import CustomStreamWrapper
 
 from ..base_utils import (
     map_developer_role_to_system_role,
     type_to_response_format_param,
 )
 
+# Avoid circular imports
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.utils import CustomStreamWrapper
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+    CustomStreamWrapper = Any
 
 
 class BaseLLMException(Exception):
