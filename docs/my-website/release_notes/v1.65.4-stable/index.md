@@ -50,12 +50,11 @@ pip install litellm==1.65.4.post1
 6. Google AI Studio - add gemini/gemini-2.5-pro-preview-03-25 to model cost map [PR](https://github.com/BerriAI/litellm/blob/52b35cd8093b9ad833987b24f494586a1e923209/model_prices_and_context_window.json#L4850)
 
 ## LLM Translation
-1. Vertex AI - Add support to Vertex AI transformation for anyOf union type with null fields
-2. Anthropic- response_format + thinking param support  (works across Anthropic API, Bedrock, Vertex)
-3. Anthropic - if thinking token is specified and max tokens is not - ensure max token to anthropic is higher than thinking tokens (works across Anthropic API, Bedrock, Vertex)
-4. Bedrock - latency optimized inference support
-5. Vertex AI - Multimodal embedding cost
-6. Gemini - audio input support
+1. Vertex AI - Support anyOf param for OpenAI json schema translation [Get Started](https://docs.litellm.ai/docs/providers/vertex#json-schema)
+2. Anthropic- response_format + thinking param support  (works across Anthropic API, Bedrock, Vertex) [Get Started](https://docs.litellm.ai/docs/reasoning_content)
+3. Anthropic - if thinking token is specified and max tokens is not - ensure max token to anthropic is higher than thinking tokens (works across Anthropic API, Bedrock, Vertex) [PR](https://github.com/BerriAI/litellm/pull/9594)
+4. Bedrock - latency optimized inference support [Get Started](https://docs.litellm.ai/docs/providers/bedrock#usage---latency-optimized-inference)
+6. Gemini - audio input support 
 7. Sagemaker - handle special tokens in response, during token counting
 8. MCP - add support for using SSE MCP servers
 9. Sagemaker - Handle multibyte character code in sagemaker response
@@ -75,6 +74,7 @@ pip install litellm==1.65.4.post1
 
 ## Spend Tracking Improvements
 1. Reliability fix  - Check sent and received model for cost calculation
+2. Vertex AI - Multimodal embedding cost tracking [Get Started](https://docs.litellm.ai/docs/providers/vertex#multi-modal-embeddings), [PR](https://github.com/BerriAI/litellm/pull/9623)
 
 ## Management Endpoints / UI
 1. Key Create
