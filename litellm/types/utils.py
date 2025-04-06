@@ -1886,6 +1886,7 @@ all_litellm_params = [
     "logger_fn",
     "verbose",
     "custom_llm_provider",
+    "model_file_id_mapping",
     "litellm_logging_obj",
     "litellm_call_id",
     "use_client",
@@ -1950,6 +1951,7 @@ all_litellm_params = [
     "use_in_pass_through",
     "merge_reasoning_content_in_choices",
     "litellm_credential_name",
+    "allowed_openai_params",
 ] + list(StandardCallbackDynamicParams.__annotations__.keys())
 
 

@@ -643,8 +643,8 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
 @pytest.mark.asyncio
-@patch("litellm.llms.huggingface.chat.handler.async_get_hf_task_embedding_for_model")
-@patch("litellm.llms.huggingface.chat.handler.get_hf_task_embedding_for_model")
+@patch("litellm.llms.huggingface.embedding.handler.async_get_hf_task_embedding_for_model")
+@patch("litellm.llms.huggingface.embedding.handler.get_hf_task_embedding_for_model")
 @pytest.mark.parametrize("sync_mode", [True, False])
 async def test_hf_embedding_sentence_sim(
     mock_async_get_hf_task_embedding_for_model,

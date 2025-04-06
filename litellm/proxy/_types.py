@@ -432,6 +432,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/new",
         "/model/update",
         "/model/delete",
+        "/user/daily/activity",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -2687,6 +2688,10 @@ class PrismaCompatibleUpdateDBModel(TypedDict, total=False):
     updated_by: str
 
 
+class SpecialEnums(enum.Enum):
+    LITELM_MANAGED_FILE_ID_PREFIX = "litellm_proxy/"
+
+
 class SpecialManagementEndpointEnums(enum.Enum):
     DEFAULT_ORGANIZATION = "default_organization"
 
@@ -2736,6 +2741,8 @@ class DailyUserSpendTransaction(TypedDict):
     completion_tokens: int
     spend: float
     api_requests: int
+    successful_requests: int
+    failed_requests: int
 
 
 class DBSpendUpdateTransactions(TypedDict):
@@ -2749,3 +2756,9 @@ class DBSpendUpdateTransactions(TypedDict):
     team_list_transactions: Optional[Dict[str, float]]
     team_member_list_transactions: Optional[Dict[str, float]]
     org_list_transactions: Optional[Dict[str, float]]
+
+
+class SpendUpdateQueueItem(TypedDict, total=False):
+    entity_type: Litellm_EntityType
+    entity_id: str
+    response_cost: Optional[float]

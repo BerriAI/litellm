@@ -110,7 +110,7 @@ export default function Onboarding() {
           color="sky"
         >
           <Grid numItems={2} className="flex justify-between items-center">
-            <Col>SSO is under the Enterprise Tirer.</Col>
+            <Col>SSO is under the Enterprise Tier.</Col>
 
             <Col>
               <Button variant="primary" className="mb-2">

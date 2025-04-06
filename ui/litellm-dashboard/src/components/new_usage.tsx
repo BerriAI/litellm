@@ -13,39 +13,23 @@ import {
   TabPanel, TabPanels, DonutChart,
   Table, TableHead, TableRow, 
   TableHeaderCell, TableBody, TableCell,
-  Subtitle
+  Subtitle, DateRangePicker, DateRangePickerValue
 } from "@tremor/react";
 import { AreaChart } from "@tremor/react";
 
 import { userDailyActivityCall } from "./networking";
 import ViewUserSpend from "./view_user_spend";
 import TopKeyView from "./top_key_view";
-
+import { ActivityMetrics, processActivityData } from './activity_metrics';
+import { SpendMetrics, DailyData, ModelActivityData, MetricWithMetadata, KeyMetricWithMetadata } from './usage/types';
 interface NewUsagePageProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
 }
 
-interface SpendMetrics {
-  spend: number;
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-  api_requests: number;
-}
 
-interface BreakdownMetrics {
-  models: { [key: string]: SpendMetrics };
-  providers: { [key: string]: SpendMetrics };
-  api_keys: { [key: string]: SpendMetrics };
-}
 
-interface DailyData {
-  date: string;
-  metrics: SpendMetrics;
-  breakdown: BreakdownMetrics;
-}
 
 const NewUsagePage: React.FC<NewUsagePageProps> = ({
   accessToken,
@@ -57,37 +41,52 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
     metadata: any;
   }>({ results: [], metadata: {} });
 
+  // Add date range state
+  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
+    from: new Date(Date.now() - 28 * 24 * 60 * 60 * 1000),
+    to: new Date(),
+  });
+
   // Derived states from userSpendData
   const totalSpend = userSpendData.metadata?.total_spend || 0;
-  
+
   // Calculate top models from the breakdown data
   const getTopModels = () => {
-    const modelSpend: { [key: string]: SpendMetrics } = {};
+    const modelSpend: { [key: string]: MetricWithMetadata } = {};
     userSpendData.results.forEach(day => {
       Object.entries(day.breakdown.models || {}).forEach(([model, metrics]) => {
         if (!modelSpend[model]) {
           modelSpend[model] = {
-            spend: 0,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            api_requests: 0
+            metrics: {
+              spend: 0,
+              prompt_tokens: 0,
+              completion_tokens: 0,
+              total_tokens: 0,
+              api_requests: 0,
+              successful_requests: 0,
+              failed_requests: 0
+            },
+            metadata: {}
           };
         }
-        modelSpend[model].spend += metrics.spend;
-        modelSpend[model].prompt_tokens += metrics.prompt_tokens;
-        modelSpend[model].completion_tokens += metrics.completion_tokens;
-        modelSpend[model].total_tokens += metrics.total_tokens;
-        modelSpend[model].api_requests += metrics.api_requests;
+        modelSpend[model].metrics.spend += metrics.metrics.spend;
+        modelSpend[model].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
+        modelSpend[model].metrics.completion_tokens += metrics.metrics.completion_tokens;
+        modelSpend[model].metrics.total_tokens += metrics.metrics.total_tokens;
+        modelSpend[model].metrics.api_requests += metrics.metrics.api_requests;
+        modelSpend[model].metrics.successful_requests += metrics.metrics.successful_requests || 0;
+        modelSpend[model].metrics.failed_requests += metrics.metrics.failed_requests || 0;
       });
     });
     
     return Object.entries(modelSpend)
       .map(([model, metrics]) => ({
         key: model,
-        spend: metrics.spend,
-        requests: metrics.api_requests,
-        tokens: metrics.total_tokens
+        spend: metrics.metrics.spend,
+        requests: metrics.metrics.api_requests,
+        successful_requests: metrics.metrics.successful_requests,
+        failed_requests: metrics.metrics.failed_requests,
+        tokens: metrics.metrics.total_tokens
       }))
       .sort((a, b) => b.spend - a.spend)
       .slice(0, 5);
@@ -95,82 +94,114 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
   // Calculate provider spend from the breakdown data
   const getProviderSpend = () => {
-    const providerSpend: { [key: string]: SpendMetrics } = {};
+    const providerSpend: { [key: string]: MetricWithMetadata } = {};
     userSpendData.results.forEach(day => {
       Object.entries(day.breakdown.providers || {}).forEach(([provider, metrics]) => {
         if (!providerSpend[provider]) {
           providerSpend[provider] = {
-            spend: 0,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            api_requests: 0
+            metrics: {
+              spend: 0,
+              prompt_tokens: 0,
+              completion_tokens: 0,
+              total_tokens: 0,
+              api_requests: 0,
+              successful_requests: 0,
+              failed_requests: 0
+            },
+            metadata: {}
           };
         }
-        providerSpend[provider].spend += metrics.spend;
-        providerSpend[provider].prompt_tokens += metrics.prompt_tokens;
-        providerSpend[provider].completion_tokens += metrics.completion_tokens;
-        providerSpend[provider].total_tokens += metrics.total_tokens;
-        providerSpend[provider].api_requests += metrics.api_requests;
+        providerSpend[provider].metrics.spend += metrics.metrics.spend;
+        providerSpend[provider].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
+        providerSpend[provider].metrics.completion_tokens += metrics.metrics.completion_tokens;
+        providerSpend[provider].metrics.total_tokens += metrics.metrics.total_tokens;
+        providerSpend[provider].metrics.api_requests += metrics.metrics.api_requests;
+        providerSpend[provider].metrics.successful_requests += metrics.metrics.successful_requests || 0;
+        providerSpend[provider].metrics.failed_requests += metrics.metrics.failed_requests || 0;
       });
     });
     
     return Object.entries(providerSpend)
       .map(([provider, metrics]) => ({
         provider,
-        spend: metrics.spend,
-        requests: metrics.api_requests,
-        tokens: metrics.total_tokens
+        spend: metrics.metrics.spend,
+        requests: metrics.metrics.api_requests,
+        successful_requests: metrics.metrics.successful_requests,
+        failed_requests: metrics.metrics.failed_requests,
+        tokens: metrics.metrics.total_tokens
       }));
   };
 
   // Calculate top API keys from the breakdown data
   const getTopKeys = () => {
-    const keySpend: { [key: string]: SpendMetrics } = {};
+    const keySpend: { [key: string]: KeyMetricWithMetadata } = {};
     userSpendData.results.forEach(day => {
       Object.entries(day.breakdown.api_keys || {}).forEach(([key, metrics]) => {
         if (!keySpend[key]) {
           keySpend[key] = {
-            spend: 0,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            api_requests: 0
+            metrics: {
+              spend: 0,
+              prompt_tokens: 0,
+              completion_tokens: 0,
+              total_tokens: 0,
+              api_requests: 0,
+              successful_requests: 0,
+              failed_requests: 0,
+            },
+            metadata: {
+              key_alias: metrics.metadata.key_alias
+            }
           };
         }
-        keySpend[key].spend += metrics.spend;
-        keySpend[key].prompt_tokens += metrics.prompt_tokens;
-        keySpend[key].completion_tokens += metrics.completion_tokens;
-        keySpend[key].total_tokens += metrics.total_tokens;
-        keySpend[key].api_requests += metrics.api_requests;
+        keySpend[key].metrics.spend += metrics.metrics.spend;
+        keySpend[key].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
+        keySpend[key].metrics.completion_tokens += metrics.metrics.completion_tokens;
+        keySpend[key].metrics.total_tokens += metrics.metrics.total_tokens;
+        keySpend[key].metrics.api_requests += metrics.metrics.api_requests;
+        keySpend[key].metrics.successful_requests += metrics.metrics.successful_requests;
+        keySpend[key].metrics.failed_requests += metrics.metrics.failed_requests;
       });
     });
     
     return Object.entries(keySpend)
       .map(([api_key, metrics]) => ({
         api_key,
-        key_alias: api_key.substring(0, 10), // Using truncated key as alias
-        spend: metrics.spend,
+        key_alias: metrics.metadata.key_alias || "-", // Using truncated key as alias
+        spend: metrics.metrics.spend,
       }))
       .sort((a, b) => b.spend - a.spend)
       .slice(0, 5);
   };
 
   const fetchUserSpendData = async () => {
-    if (!accessToken) return;
-    const startTime = new Date(Date.now() - 28 * 24 * 60 * 60 * 1000);
-    const endTime = new Date();
+    if (!accessToken || !dateValue.from || !dateValue.to) return;
+    const startTime = dateValue.from;
+    const endTime = dateValue.to;
     const data = await userDailyActivityCall(accessToken, startTime, endTime);
     setUserSpendData(data);
   };
 
   useEffect(() => {
     fetchUserSpendData();
-  }, [accessToken]);
+  }, [accessToken, dateValue]);
+
+  const modelMetrics = processActivityData(userSpendData);
 
   return (
     <div style={{ width: "100%" }} className="p-8">
       <Text>Experimental Usage page, using new `/user/daily/activity` endpoint.</Text>
+      <Grid numItems={2} className="gap-2 w-full mb-4">
+        <Col>
+          <Text>Select Time Range</Text>
+          <DateRangePicker
+            enableSelect={true}
+            value={dateValue}
+            onValueChange={(value) => {
+              setDateValue(value);
+            }}
+          />
+        </Col>
+      </Grid>
       <TabGroup>
         <TabList variant="solid" className="mt-1">
           <Tab>Cost</Tab>
@@ -179,12 +210,13 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
         <TabPanels>
           {/* Cost Panel */}
           <TabPanel>
-            <Grid numItems={2} className="gap-2 h-[100vh] w-full">
+            <Grid numItems={2} className="gap-2 w-full">
               {/* Total Spend Card */}
               <Col numColSpan={2}>
                 <Text className="text-tremor-default text-tremor-content dark:text-dark-tremor-content mb-2 mt-2 text-lg">
                   Project Spend {new Date().toLocaleString('default', { month: 'long' })} 1 - {new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()}
                 </Text>
+                
                 <ViewUserSpend
                   userID={userID}
                   userRole={userRole}
@@ -195,12 +227,52 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                 />
               </Col>
 
+              <Col numColSpan={2}>
+                <Card>
+                  <Title>Usage Metrics</Title>
+                  <Grid numItems={5} className="gap-4 mt-4">
+                    <Card>
+                      <Title>Total Requests</Title>
+                      <Text className="text-2xl font-bold mt-2">
+                        {userSpendData.metadata?.total_api_requests?.toLocaleString() || 0}
+                      </Text>
+                    </Card>
+                    <Card>
+                      <Title>Successful Requests</Title>
+                      <Text className="text-2xl font-bold mt-2 text-green-600">
+                        {userSpendData.metadata?.total_successful_requests?.toLocaleString() || 0}
+                      </Text>
+                    </Card>
+                    <Card>
+                      <Title>Failed Requests</Title>
+                      <Text className="text-2xl font-bold mt-2 text-red-600">
+                        {userSpendData.metadata?.total_failed_requests?.toLocaleString() || 0}
+                      </Text>
+                    </Card>
+                    <Card>
+                      <Title>Total Tokens</Title>
+                      <Text className="text-2xl font-bold mt-2">
+                        {userSpendData.metadata?.total_tokens?.toLocaleString() || 0}
+                      </Text>
+                    </Card>
+                    <Card>
+                      <Title>Average Cost per Request</Title>
+                      <Text className="text-2xl font-bold mt-2">
+                        ${((totalSpend || 0) / (userSpendData.metadata?.total_api_requests || 1)).toFixed(4)}
+                      </Text>
+                    </Card>
+                  </Grid>
+                </Card>
+              </Col>
+
               {/* Daily Spend Chart */}
               <Col numColSpan={2}>
                 <Card>
                   <Title>Daily Spend</Title>
                   <BarChart
-                    data={userSpendData.results}
+                    data={[...userSpendData.results].sort((a, b) => 
+                      new Date(a.date).getTime() - new Date(b.date).getTime()
+                    )}
                     index="date"
                     categories={["metrics.spend"]}
                     colors={["cyan"]}
@@ -215,6 +287,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                           <p className="font-bold">{data.date}</p>
                           <p className="text-cyan-500">Spend: ${data.metrics.spend.toFixed(2)}</p>
                           <p className="text-gray-600">Requests: {data.metrics.api_requests}</p>
+                          <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
+                          <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
                           <p className="text-gray-600">Tokens: {data.metrics.total_tokens}</p>
                         </div>
                       );
@@ -240,7 +314,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               {/* Top Models */}
               <Col numColSpan={1}>
                 <Card className="h-full">
-                  <Title>Top Models</Title>
+                  <div className="flex justify-between items-center mb-4">
+                    <Title>Top Models</Title>
+                  </div>
                   <BarChart
                     className="mt-4 h-40"
                     data={getTopModels()}
@@ -258,7 +334,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                         <div className="bg-white p-4 shadow-lg rounded-lg border">
                           <p className="font-bold">{data.key}</p>
                           <p className="text-cyan-500">Spend: ${data.spend.toFixed(2)}</p>
-                          <p className="text-gray-600">Requests: {data.requests.toLocaleString()}</p>
+                          <p className="text-gray-600">Total Requests: {data.requests.toLocaleString()}</p>
+                          <p className="text-green-600">Successful: {data.successful_requests.toLocaleString()}</p>
+                          <p className="text-red-600">Failed: {data.failed_requests.toLocaleString()}</p>
                           <p className="text-gray-600">Tokens: {data.tokens.toLocaleString()}</p>
                         </div>
                       );
@@ -270,7 +348,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               {/* Spend by Provider */}
               <Col numColSpan={2}>
                 <Card className="h-full">
-                  <Title>Spend by Provider</Title>
+                  <div className="flex justify-between items-center mb-4">
+                    <Title>Spend by Provider</Title>
+                  </div>
                   <Grid numItems={2}>
                     <Col numColSpan={1}>
                       <DonutChart
@@ -288,20 +368,28 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                           <TableRow>
                             <TableHeaderCell>Provider</TableHeaderCell>
                             <TableHeaderCell>Spend</TableHeaderCell>
-                            <TableHeaderCell>Requests</TableHeaderCell>
+                            <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
+                            <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
                             <TableHeaderCell>Tokens</TableHeaderCell>
                           </TableRow>
                         </TableHead>
                         <TableBody>
-                          {getProviderSpend().map((provider) => (
-                            <TableRow key={provider.provider}>
-                              <TableCell>{provider.provider}</TableCell>
-                              <TableCell>
-                                ${provider.spend < 0.00001 
-                                  ? "less than 0.00" 
-                                  : provider.spend.toFixed(2)}
+                          {getProviderSpend()
+                            .filter(provider => provider.spend > 0)
+                            .map((provider) => (
+                              <TableRow key={provider.provider}>
+                                <TableCell>{provider.provider}</TableCell>
+                                <TableCell>
+                                  ${provider.spend < 0.00001
+                                      ? "less than 0.00001" 
+                                      : provider.spend.toFixed(2)}
                               </TableCell>
-                              <TableCell>{provider.requests.toLocaleString()}</TableCell>
+                              <TableCell className="text-green-600">
+                                {provider.successful_requests.toLocaleString()}
+                              </TableCell>
+                              <TableCell className="text-red-600">
+                                {provider.failed_requests.toLocaleString()}
+                              </TableCell>
                               <TableCell>{provider.tokens.toLocaleString()}</TableCell>
                             </TableRow>
                           ))}
@@ -313,107 +401,17 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               </Col>
 
               {/* Usage Metrics */}
-              <Col numColSpan={2}>
-                <Card>
-                  <Title>Usage Metrics</Title>
-                  <Grid numItems={3} className="gap-4 mt-4">
-                    <Card>
-                      <Title>Total Requests</Title>
-                      <Text className="text-2xl font-bold mt-2">
-                        {userSpendData.metadata?.total_api_requests?.toLocaleString() || 0}
-                      </Text>
-                    </Card>
-                    <Card>
-                      <Title>Total Tokens</Title>
-                      <Text className="text-2xl font-bold mt-2">
-                        {userSpendData.metadata?.total_tokens?.toLocaleString() || 0}
-                      </Text>
-                    </Card>
-                    <Card>
-                      <Title>Average Cost per Request</Title>
-                      <Text className="text-2xl font-bold mt-2">
-                        ${((totalSpend || 0) / (userSpendData.metadata?.total_api_requests || 1)).toFixed(4)}
-                      </Text>
-                    </Card>
-                  </Grid>
-                </Card>
-              </Col>
+              
             </Grid>
           </TabPanel>
 
           {/* Activity Panel */}
           <TabPanel>
-            <Grid numItems={1} className="gap-2 h-[75vh] w-full">
-              <Card>
-                <Title>All Up</Title>
-                <Grid numItems={2}>
-                  <Col>
-                    <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>
-                      API Requests {valueFormatterNumbers(userSpendData.metadata?.total_api_requests || 0)}
-                    </Subtitle>
-                    <AreaChart
-                      className="h-40"
-                      data={[...userSpendData.results].reverse()}
-                      valueFormatter={valueFormatterNumbers}
-                      index="date"
-                      colors={['cyan']}
-                      categories={['metrics.api_requests']}
-                    />
-                  </Col>
-                  <Col>
-                    <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>
-                      Tokens {valueFormatterNumbers(userSpendData.metadata?.total_tokens || 0)}
-                    </Subtitle>
-                    <BarChart
-                      className="h-40"
-                      data={[...userSpendData.results].reverse()}
-                      valueFormatter={valueFormatterNumbers}
-                      index="date"
-                      colors={['cyan']}
-                      categories={['metrics.total_tokens']}
-                    />
-                  </Col>
-                </Grid>
-              </Card>
-
-              {/* Per Model Activity */}
-              {Object.entries(getModelActivityData(userSpendData)).map(([model, data], index) => (
-                <Card key={index}>
-                  <Title>{model}</Title>
-                  <Grid numItems={2}>
-                    <Col>
-                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>
-                        API Requests {valueFormatterNumbers(data.total_requests)}
-                      </Subtitle>
-                      <AreaChart
-                        className="h-40"
-                        data={[...data.daily_data].reverse()}
-                        index="date"
-                        colors={['cyan']}
-                        categories={['api_requests']}
-                        valueFormatter={valueFormatterNumbers}
-                      />
-                    </Col>
-                    <Col>
-                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>
-                        Tokens {valueFormatterNumbers(data.total_tokens)}
-                      </Subtitle>
-                      <BarChart
-                        className="h-40"
-                        data={data.daily_data}  
-                        index="date"
-                        colors={['cyan']}
-                        categories={['total_tokens']}
-                        valueFormatter={valueFormatterNumbers}
-                      />
-                    </Col>
-                  </Grid>
-                </Card>
-              ))}
-            </Grid>
+            <ActivityMetrics modelMetrics={modelMetrics} />
           </TabPanel>
         </TabPanels>
       </TabGroup>
+      
     </div>
   );
 };
@@ -445,12 +443,12 @@ const getModelActivityData = (userSpendData: {
         };
       }
       
-      modelData[model].total_requests += metrics.api_requests;
-      modelData[model].total_tokens += metrics.total_tokens;
+      modelData[model].total_requests += metrics.metrics.api_requests;
+      modelData[model].total_tokens += metrics.metrics.total_tokens;
       modelData[model].daily_data.push({
         date: day.date,
-        api_requests: metrics.api_requests,
-        total_tokens: metrics.total_tokens
+        api_requests: metrics.metrics.api_requests,
+        total_tokens: metrics.metrics.total_tokens
       });
     });
   });

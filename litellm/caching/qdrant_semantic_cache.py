@@ -11,10 +11,12 @@ Has 4 methods:
 import ast
 import asyncio
 import json
-from typing import Any
+from typing import Any, cast
 
 import litellm
 from litellm._logging import print_verbose
+from litellm.constants import QDRANT_SCALAR_QUANTILE, QDRANT_VECTOR_SIZE
+from litellm.types.utils import EmbeddingResponse
 
 from .base_cache import BaseCache
 
@@ -118,7 +120,11 @@ class QdrantSemanticCache(BaseCache):
                 }
             elif quantization_config == "scalar":
                 quantization_params = {
-                    "scalar": {"type": "int8", "quantile": 0.99, "always_ram": False}
+                    "scalar": {
+                        "type": "int8",
+                        "quantile": QDRANT_SCALAR_QUANTILE,
+                        "always_ram": False,
+                    }
                 }
             elif quantization_config == "product":
                 quantization_params = {
@@ -132,7 +138,7 @@ class QdrantSemanticCache(BaseCache):
             new_collection_status = self.sync_client.put(
                 url=f"{self.qdrant_api_base}/collections/{self.collection_name}",
                 json={
-                    "vectors": {"size": 1536, "distance": "Cosine"},
+                    "vectors": {"size": QDRANT_VECTOR_SIZE, "distance": "Cosine"},
                     "quantization_config": quantization_params,
                 },
                 headers=self.headers,
@@ -171,10 +177,13 @@ class QdrantSemanticCache(BaseCache):
             prompt += message["content"]
 
         # create an embedding for prompt
-        embedding_response = litellm.embedding(
-            model=self.embedding_model,
-            input=prompt,
-            cache={"no-store": True, "no-cache": True},
+        embedding_response = cast(
+            EmbeddingResponse,
+            litellm.embedding(
+                model=self.embedding_model,
+                input=prompt,
+                cache={"no-store": True, "no-cache": True},
+            ),
         )
 
         # get the embedding
@@ -212,10 +221,13 @@ class QdrantSemanticCache(BaseCache):
             prompt += message["content"]
 
         # convert to embedding
-        embedding_response = litellm.embedding(
-            model=self.embedding_model,
-            input=prompt,
-            cache={"no-store": True, "no-cache": True},
+        embedding_response = cast(
+            EmbeddingResponse,
+            litellm.embedding(
+                model=self.embedding_model,
+                input=prompt,
+                cache={"no-store": True, "no-cache": True},
+            ),
         )
 
         # get the embedding

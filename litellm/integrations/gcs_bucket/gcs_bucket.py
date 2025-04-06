@@ -20,10 +20,6 @@ else:
     VertexBase = Any
 
 
-GCS_DEFAULT_BATCH_SIZE = 2048
-GCS_DEFAULT_FLUSH_INTERVAL_SECONDS = 20
-
-
 class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
     def __init__(self, bucket_name: Optional[str] = None) -> None:
         from litellm.proxy.proxy_server import premium_user
@@ -125,6 +121,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
                 kwargs
             )
+
             headers = await self.construct_request_headers(
                 vertex_instance=gcs_logging_config["vertex_instance"],
                 service_account_json=gcs_logging_config["path_service_account"],

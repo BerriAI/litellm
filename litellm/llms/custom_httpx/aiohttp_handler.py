@@ -230,6 +230,7 @@ class BaseLLMAIOHTTPHandler:
 
         api_base = provider_config.get_complete_url(
             api_base=api_base,
+            api_key=api_key,
             model=model,
             optional_params=optional_params,
             litellm_params=litellm_params,
@@ -480,6 +481,7 @@ class BaseLLMAIOHTTPHandler:
 
         api_base = provider_config.get_complete_url(
             api_base=api_base,
+            api_key=api_key,
             model=model,
             optional_params=optional_params,
             litellm_params=litellm_params,
@@ -519,7 +521,6 @@ class BaseLLMAIOHTTPHandler:
                 data=data,
                 headers=headers,
                 model_response=model_response,
-                api_key=api_key,
                 logging_obj=logging_obj,
                 model=model,
                 timeout=timeout,

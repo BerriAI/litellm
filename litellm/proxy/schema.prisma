@@ -327,6 +327,8 @@ model LiteLLM_DailyUserSpend {
   completion_tokens   Int      @default(0)
   spend               Float    @default(0.0)
   api_requests        Int      @default(0)
+  successful_requests Int      @default(0)
+  failed_requests     Int      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
@@ -351,5 +353,4 @@ enum JobStatus {
   ACTIVE
   INACTIVE
 }
-
 
