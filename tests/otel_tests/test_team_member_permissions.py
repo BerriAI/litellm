@@ -59,7 +59,7 @@ async def create_team(session, key, member_permissions=None):
     }
     data = {}
     if member_permissions:
-        data["member_permissions"] = member_permissions
+        data["team_member_permissions"] = member_permissions
 
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status

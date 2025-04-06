@@ -2009,7 +2009,7 @@ async def update_team_member_permissions(
     # Update the team member permissions
     updated_team = await prisma_client.db.litellm_teamtable.update(
         where={"team_id": data.team_id},
-        data={"member_permissions": data.team_member_permissions},
+        data={"team_member_permissions": data.team_member_permissions},
     )
 
     return updated_team
