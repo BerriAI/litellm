@@ -9,15 +9,15 @@ export interface PermissionInfo {
  * Map of permission endpoint patterns to their descriptions
  */
 export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
-  '/key/generate': 'Generate Key Fn',
-  '/key/update': 'Update Key Fn',
-  '/key/delete': 'Delete Key Fn',
-  '/key/info': 'Info Key Fn',
-  '/key/regenerate': 'Regenerate Key Fn',
-  '/key/{key_id}/regenerate': 'Regenerate Key Fn',
-  '/key/list': 'List Keys',
-  '/key/block': 'Block Key',
-  '/key/unblock': 'Unblock Key'
+  '/key/generate': 'Member can generate a virtual key for this team',
+  '/key/update': 'Member can update a virtual key belonging to this team',
+  '/key/delete': 'Member can delete a virtual key belonging to this team',
+  '/key/info': 'Member can get info about a virtual key belonging to this team',
+  '/key/regenerate': 'Member can regenerate a virtual key belonging to this team',
+  '/key/{key_id}/regenerate': 'Member can regenerate a virtual key belonging to this team',
+  '/key/list': 'Member can list virtual keys belonging to this team',
+  '/key/block': 'Member can block a virtual key belonging to this team',
+  '/key/unblock': 'Member can unblock a virtual key belonging to this team'
 };
 
 /**
