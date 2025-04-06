@@ -54,26 +54,24 @@ pip install litellm==1.65.4.post1
 2. Anthropic- response_format + thinking param support  (works across Anthropic API, Bedrock, Vertex) [Get Started](https://docs.litellm.ai/docs/reasoning_content)
 3. Anthropic - if thinking token is specified and max tokens is not - ensure max token to anthropic is higher than thinking tokens (works across Anthropic API, Bedrock, Vertex) [PR](https://github.com/BerriAI/litellm/pull/9594)
 4. Bedrock - latency optimized inference support [Get Started](https://docs.litellm.ai/docs/providers/bedrock#usage---latency-optimized-inference)
-6. Gemini - audio input support 
-7. Sagemaker - handle special tokens in response, during token counting
-8. MCP - add support for using SSE MCP servers
-9. Sagemaker - Handle multibyte character code in sagemaker response
-10. Anthropic - new `litellm.messages.create` interface for calling Anthropic `/v1/messages` via passthrough
-11. Anthropic - support ‘file’ content type in message param (works across Anthropic API, Bedrock, Vertex)
-12. Anthropic - map openai 'reasoning_effort' to anthropic 'thinking' param (works across Anthropic API, Bedrock, 
-13. Google AI Studio (Gemini) - [BETA] `/v1/files` upload support
-14. Azure - fix o-series tool calling
-15.  Unified file id - [BETA] allow calling multiple providers with same file id
-16. Gemini - return logprobs if enabled
-17. Anthropic - Fix prompt caching for Anthropic tool calls
-18. OpenRouter - unwrap extra body on open router calls
-19. VertexAI - fix credential caching issue
-20. XAI - filter out 'name' param for xai
-21. Gemini - image generation output support
-22. Databricks - support claude-3-7-sonnet w/ thinking + response_format
+5. Sagemaker - handle special tokens + multibyte character code in response [Get Started](https://docs.litellm.ai/docs/providers/aws_sagemaker)
+6. MCP - add support for using SSE MCP servers [Get Started](https://docs.litellm.ai/docs/mcp#usage)
+8. Anthropic - new `litellm.messages.create` interface for calling Anthropic `/v1/messages` via passthrough [Get Started](https://docs.litellm.ai/docs/anthropic_unified#usage)
+11. Anthropic - support ‘file’ content type in message param (works across Anthropic API, Bedrock, Vertex) [Get Started](https://docs.litellm.ai/docs/providers/anthropic#usage---pdf)
+12. Anthropic - map openai 'reasoning_effort' to anthropic 'thinking' param (works across Anthropic API, Bedrock, Vertex) [Get Started](https://docs.litellm.ai/docs/providers/anthropic#usage---thinking--reasoning_content)
+13. Google AI Studio (Gemini) - [BETA] `/v1/files` upload support [NEEDS DOCS] 
+14. Azure - fix o-series tool calling [NEEDS DOCS]
+15.  Unified file id - [BETA] allow calling multiple providers with same file id [PR](https://github.com/BerriAI/litellm/pull/9718) [NEEDS DOCS]
+16. Gemini - return logprobs if enabled [NEEDS DOCS]
+17. Anthropic - Support prompt caching for Anthropic tool calls [NEEDS DOCS]
+18. OpenRouter - unwrap extra body on open router calls [PR](https://github.com/BerriAI/litellm/pull/9747)
+19. VertexAI - fix credential caching issue [PR](https://github.com/BerriAI/litellm/pull/9756)
+20. XAI - filter out 'name' param for XAI [PR](https://github.com/BerriAI/litellm/pull/9761)
+21. Gemini - image generation output support [NEEDS DOCS]
+22. Databricks - support claude-3-7-sonnet w/ thinking + response_format [NEEDS DOCS on dbrx page]
 
 ## Spend Tracking Improvements
-1. Reliability fix  - Check sent and received model for cost calculation
+1. Reliability fix  - Check sent and received model for cost calculation [PR](https://github.com/BerriAI/litellm/pull/9669)
 2. Vertex AI - Multimodal embedding cost tracking [Get Started](https://docs.litellm.ai/docs/providers/vertex#multi-modal-embeddings), [PR](https://github.com/BerriAI/litellm/pull/9623)
 
 ## Management Endpoints / UI
