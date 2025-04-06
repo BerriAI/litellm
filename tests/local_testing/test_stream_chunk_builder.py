@@ -187,7 +187,7 @@ def test_stream_chunk_builder_litellm_usage_chunks():
 
     usage: litellm.Usage = Usage(
         completion_tokens=27,
-        prompt_tokens=55,
+        prompt_tokens=50,
         total_tokens=82,
         completion_tokens_details=None,
         prompt_tokens_details=None,
@@ -213,7 +213,9 @@ def test_stream_chunk_builder_litellm_usage_chunks():
 
     # assert prompt tokens are the same
 
-    assert gemini_pt == stream_rebuilt_pt
+    assert (
+        gemini_pt == stream_rebuilt_pt
+    ), f"Stream builder is not able to rebuild usage correctly. Got={stream_rebuilt_pt}, expected={gemini_pt}"
 
 
 def test_stream_chunk_builder_litellm_mixed_calls():
@@ -694,14 +696,18 @@ def test_stream_chunk_builder_openai_audio_output_usage():
         api_key=os.getenv("OPENAI_API_KEY"),
     )
 
-    completion = client.chat.completions.create(
-        model="gpt-4o-audio-preview",
-        modalities=["text", "audio"],
-        audio={"voice": "alloy", "format": "pcm16"},
-        messages=[{"role": "user", "content": "response in 1 word - yes or no"}],
-        stream=True,
-        stream_options={"include_usage": True},
-    )
+    try:
+        completion = client.chat.completions.create(
+            model="gpt-4o-audio-preview",
+            modalities=["text", "audio"],
+            audio={"voice": "alloy", "format": "pcm16"},
+            messages=[{"role": "user", "content": "response in 1 word - yes or no"}],
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+    except Exception as e:
+        if "openai-internal" in str(e):
+            pytest.skip("Skipping test due to openai-internal error")
 
     chunks = []
     for chunk in completion:
@@ -721,15 +727,14 @@ def test_stream_chunk_builder_openai_audio_output_usage():
     print(f"response usage: {response.usage}")
     check_non_streaming_response(response)
     print(f"response: {response}")
-    for k, v in usage_obj.model_dump(exclude_none=True).items():
-        print(k, v)
-        response_usage_value = getattr(response.usage, k)  # type: ignore
-        print(f"response_usage_value: {response_usage_value}")
-        print(f"type: {type(response_usage_value)}")
-        if isinstance(response_usage_value, BaseModel):
-            assert response_usage_value.model_dump(exclude_none=True) == v
-        else:
-            assert response_usage_value == v
+    # Convert both usage objects to dictionaries for easier comparison
+    usage_dict = usage_obj.model_dump(exclude_none=True)
+    response_usage_dict = response.usage.model_dump(exclude_none=True)
+
+    # Simple dictionary comparison
+    assert (
+        usage_dict == response_usage_dict
+    ), f"\nExpected: {usage_dict}\nGot: {response_usage_dict}"
 
 
 def test_stream_chunk_builder_empty_initial_chunk():

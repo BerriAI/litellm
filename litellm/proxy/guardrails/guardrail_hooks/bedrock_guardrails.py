@@ -13,7 +13,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import json
 import sys
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, List, Literal, Optional, Union
 
 from fastapi import HTTPException
 
@@ -22,6 +22,9 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
+)
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    convert_content_list_to_str,
 )
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
@@ -36,6 +39,7 @@ from litellm.types.guardrails import (
     BedrockTextContent,
     GuardrailEventHooks,
 )
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
 GUARDRAIL_NAME = "bedrock"
@@ -58,10 +62,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.optional_params = kwargs
 
         super().__init__(**kwargs)
+        BaseAWSLLM.__init__(self)
 
     def convert_to_bedrock_format(
         self,
-        messages: Optional[List[Dict[str, str]]] = None,
+        messages: Optional[List[AllMessageValues]] = None,
         response: Optional[Union[Any, ModelResponse]] = None,
     ) -> BedrockRequest:
         bedrock_request: BedrockRequest = BedrockRequest(source="INPUT")
@@ -69,12 +74,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         if messages:
             for message in messages:
-                content = message.get("content")
-                if isinstance(content, str):
-                    bedrock_content_item = BedrockContentItem(
-                        text=BedrockTextContent(text=content)
+                bedrock_content_item = BedrockContentItem(
+                    text=BedrockTextContent(
+                        text=convert_content_list_to_str(message=message)
                     )
-                    bedrock_request_content.append(bedrock_content_item)
+                )
+                bedrock_request_content.append(bedrock_content_item)
 
             bedrock_request["content"] = bedrock_request_content
         if response:
@@ -187,7 +192,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     async def make_bedrock_api_request(
         self, kwargs: dict, response: Optional[Union[Any, litellm.ModelResponse]] = None
     ):
-
         credentials, aws_region_name = self._load_credentials()
         bedrock_request_data: dict = dict(
             self.convert_to_bedrock_format(
@@ -235,7 +239,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
 
     @log_guardrail_information
-    async def async_moderation_hook(  ### 👈 KEY CHANGE ###
+    async def async_moderation_hook(
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
@@ -245,6 +249,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             "image_generation",
             "moderation",
             "audio_transcription",
+            "responses",
         ],
     ):
         from litellm.proxy.common_utils.callback_utils import (

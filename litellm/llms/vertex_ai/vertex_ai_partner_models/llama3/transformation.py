@@ -1,10 +1,10 @@
 import types
 from typing import Optional
 
-import litellm
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
-class VertexAILlama3Config:
+class VertexAILlama3Config(OpenAIGPTConfig):
     """
     Reference:https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/llama#streaming
 
@@ -21,7 +21,7 @@ class VertexAILlama3Config:
         self,
         max_tokens: Optional[int] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key == "max_tokens" and value is None:
                 value = self.max_tokens
@@ -46,8 +46,13 @@ class VertexAILlama3Config:
             and v is not None
         }
 
-    def get_supported_openai_params(self):
-        return litellm.OpenAIConfig().get_supported_openai_params(model="gpt-3.5-turbo")
+    def get_supported_openai_params(self, model: str):
+        supported_params = super().get_supported_openai_params(model=model)
+        try:
+            supported_params.remove("max_retries")
+        except KeyError:
+            pass
+        return supported_params
 
     def map_openai_params(
         self,
@@ -60,7 +65,7 @@ class VertexAILlama3Config:
             non_default_params["max_tokens"] = non_default_params.pop(
                 "max_completion_tokens"
             )
-        return litellm.OpenAIConfig().map_openai_params(
+        return super().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,

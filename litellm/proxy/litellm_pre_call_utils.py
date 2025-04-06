@@ -1,7 +1,7 @@
 import asyncio
 import copy
 import time
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from fastapi import Request
 from starlette.datastructures import Headers
@@ -17,8 +17,12 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.router import Router
+from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
+    ProviderSpecificHeader,
     StandardLoggingUserAPIKeyMetadata,
     SupportedCacheControls,
 )
@@ -56,12 +60,20 @@ def _get_metadata_variable_name(request: Request) -> str:
 
     For ALL other endpoints we call this "metadata
     """
-    if "thread" in request.url.path or "assistant" in request.url.path:
+    if RouteChecks._is_assistants_api_request(request):
         return "litellm_metadata"
-    if "batches" in request.url.path:
-        return "litellm_metadata"
-    if "/v1/messages" in request.url.path:
-        # anthropic API has a field called metadata
+
+    LITELLM_METADATA_ROUTES = [
+        "batches",
+        "/v1/messages",
+        "responses",
+    ]
+    if any(
+        [
+            litellm_metadata_route in request.url.path
+            for litellm_metadata_route in LITELLM_METADATA_ROUTES
+        ]
+    ):
         return "litellm_metadata"
     else:
         return "metadata"
@@ -98,17 +110,24 @@ def convert_key_logging_metadata_to_callback(
 
         if data.callback_name not in team_callback_settings_obj.failure_callback:
             team_callback_settings_obj.failure_callback.append(data.callback_name)
-    elif data.callback_type == "success_and_failure":
+    elif (
+        not data.callback_type or data.callback_type == "success_and_failure"
+    ):  # assume 'success_and_failure' = litellm.callbacks
         if team_callback_settings_obj.success_callback is None:
             team_callback_settings_obj.success_callback = []
         if team_callback_settings_obj.failure_callback is None:
             team_callback_settings_obj.failure_callback = []
+        if team_callback_settings_obj.callbacks is None:
+            team_callback_settings_obj.callbacks = []
 
         if data.callback_name not in team_callback_settings_obj.success_callback:
             team_callback_settings_obj.success_callback.append(data.callback_name)
 
         if data.callback_name not in team_callback_settings_obj.failure_callback:
             team_callback_settings_obj.failure_callback.append(data.callback_name)
+
+        if data.callback_name not in team_callback_settings_obj.callbacks:
+            team_callback_settings_obj.callbacks.append(data.callback_name)
 
     for var, value in data.callback_vars.items():
         if team_callback_settings_obj.callback_vars is None:
@@ -180,6 +199,31 @@ def clean_headers(
 
 class LiteLLMProxyRequestSetup:
     @staticmethod
+    def _get_timeout_from_request(headers: dict) -> Optional[float]:
+        """
+        Workaround for client request from Vercel's AI SDK.
+
+        Allow's user to set a timeout in the request headers.
+
+        Example:
+
+        ```js
+        const openaiProvider = createOpenAI({
+            baseURL: liteLLM.baseURL,
+            apiKey: liteLLM.apiKey,
+            compatibility: "compatible",
+            headers: {
+                "x-litellm-timeout": "90"
+            },
+        });
+        ```
+        """
+        timeout_header = headers.get("x-litellm-timeout", None)
+        if timeout_header is not None:
+            return float(timeout_header)
+        return None
+
+    @staticmethod
     def _get_forwardable_headers(
         headers: Union[Headers, dict],
     ):
@@ -211,6 +255,7 @@ class LiteLLMProxyRequestSetup:
             return None
         for header, value in headers.items():
             if header.lower() == "openai-organization":
+                verbose_logger.info(f"found openai org id: {value}, sending to llm")
                 return value
         return None
 
@@ -265,6 +310,11 @@ class LiteLLMProxyRequestSetup:
         )
         if _organization is not None:
             data["organization"] = _organization
+
+        timeout = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
+        if timeout is not None:
+            data["timeout"] = timeout
+
         return data
 
     @staticmethod
@@ -279,6 +329,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_org_id=user_api_key_dict.org_id,
             user_api_key_team_alias=user_api_key_dict.team_alias,
             user_api_key_end_user_id=user_api_key_dict.end_user_id,
+            user_api_key_user_email=user_api_key_dict.user_email,
         )
         return user_api_key_logged_metadata
 
@@ -295,11 +346,11 @@ class LiteLLMProxyRequestSetup:
 
         ## KEY-LEVEL SPEND LOGS / TAGS
         if "tags" in key_metadata and key_metadata["tags"] is not None:
-            data[_metadata_variable_name]["tags"] = (
-                LiteLLMProxyRequestSetup._merge_tags(
-                    request_tags=data[_metadata_variable_name].get("tags"),
-                    tags_to_add=key_metadata["tags"],
-                )
+            data[_metadata_variable_name][
+                "tags"
+            ] = LiteLLMProxyRequestSetup._merge_tags(
+                request_tags=data[_metadata_variable_name].get("tags"),
+                tags_to_add=key_metadata["tags"],
             )
         if "spend_logs_metadata" in key_metadata and isinstance(
             key_metadata["spend_logs_metadata"], dict
@@ -373,6 +424,28 @@ class LiteLLMProxyRequestSetup:
             callback_vars=callback_vars_dict,
         )
 
+    @staticmethod
+    def add_request_tag_to_metadata(
+        llm_router: Optional[Router],
+        headers: dict,
+        data: dict,
+    ) -> Optional[List[str]]:
+        tags = None
+
+        if llm_router and llm_router.enable_tag_filtering is True:
+            # Check request headers for tags
+            if "x-litellm-tags" in headers:
+                if isinstance(headers["x-litellm-tags"], str):
+                    _tags = headers["x-litellm-tags"].split(",")
+                    tags = [tag.strip() for tag in _tags]
+                elif isinstance(headers["x-litellm-tags"], list):
+                    tags = headers["x-litellm-tags"]
+        # Check request body for tags
+        if "tags" in data and isinstance(data["tags"], list):
+            tags = data["tags"]
+
+        return tags
+
 
 async def add_litellm_data_to_request(  # noqa: PLR0915
     data: dict,
@@ -396,6 +469,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         dict: The modified data dictionary.
 
     """
+
     from litellm.proxy.proxy_server import llm_router, premium_user
 
     safe_add_api_version_from_query_params(data, request)
@@ -454,7 +528,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     _metadata_variable_name = _get_metadata_variable_name(request)
 
-    if _metadata_variable_name not in data:
+    if data.get(_metadata_variable_name, None) is None:
         data[_metadata_variable_name] = {}
 
     # We want to log the "metadata" from the client side request. Avoid circular reference by not directly assigning metadata to itself.
@@ -482,9 +556,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name]["litellm_api_version"] = version
 
     if general_settings is not None:
-        data[_metadata_variable_name]["global_max_parallel_requests"] = (
-            general_settings.get("global_max_parallel_requests", None)
-        )
+        data[_metadata_variable_name][
+            "global_max_parallel_requests"
+        ] = general_settings.get("global_max_parallel_requests", None)
 
     ### KEY-LEVEL Controls
     key_metadata = user_api_key_dict.metadata
@@ -576,10 +650,15 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             requester_ip_address = request.client.host
     data[_metadata_variable_name]["requester_ip_address"] = requester_ip_address
 
-    # Enterprise Only - Check if using tag based routing
-    if llm_router and llm_router.enable_tag_filtering is True:
-        if "tags" in data:
-            data[_metadata_variable_name]["tags"] = data["tags"]
+    # Check if using tag based routing
+    tags = LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
+        llm_router=llm_router,
+        headers=dict(request.headers),
+        data=data,
+    )
+
+    if tags is not None:
+        data[_metadata_variable_name]["tags"] = tags
 
     # Team Callbacks controls
     callback_settings_obj = _get_dynamic_logging_metadata(
@@ -598,6 +677,12 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     move_guardrails_to_metadata(
         data=data,
         _metadata_variable_name=_metadata_variable_name,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    # Team Model Aliases
+    _update_model_if_team_alias_exists(
+        data=data,
         user_api_key_dict=user_api_key_dict,
     )
 
@@ -626,7 +711,34 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             parent_otel_span=user_api_key_dict.parent_otel_span,
         )
     )
+
     return data
+
+
+def _update_model_if_team_alias_exists(
+    data: dict,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    Update the model if the team alias exists
+
+    If a alias map has been set on a team, then we want to make the request with the model the team alias is pointing to
+
+    eg.
+        - user calls `gpt-4o`
+        - team.model_alias_map = {
+            "gpt-4o": "gpt-4o-team-1"
+        }
+        - requested_model = "gpt-4o-team-1"
+    """
+    _model = data.get("model")
+    if (
+        _model
+        and user_api_key_dict.team_model_aliases
+        and _model in user_api_key_dict.team_model_aliases
+    ):
+        data["model"] = user_api_key_dict.team_model_aliases[_model]
+    return
 
 
 def _get_enforced_params(
@@ -635,7 +747,10 @@ def _get_enforced_params(
     enforced_params: Optional[list] = None
     if general_settings is not None:
         enforced_params = general_settings.get("enforced_params")
-        if "service_account_settings" in general_settings:
+        if (
+            "service_account_settings" in general_settings
+            and check_if_token_is_service_account(user_api_key_dict) is True
+        ):
             service_account_settings = general_settings["service_account_settings"]
             if "enforced_params" in service_account_settings:
                 if enforced_params is None:
@@ -646,6 +761,20 @@ def _get_enforced_params(
             enforced_params = []
         enforced_params.extend(user_api_key_dict.metadata["enforced_params"])
     return enforced_params
+
+
+def check_if_token_is_service_account(valid_token: UserAPIKeyAuth) -> bool:
+    """
+    Checks if the token is a service account
+
+    Returns:
+        bool: True if token is a service account
+
+    """
+    if valid_token.metadata:
+        if "service_account_id" in valid_token.metadata:
+            return True
+    return False
 
 
 def _enforced_params_check(
@@ -687,32 +816,54 @@ def _enforced_params_check(
     return True
 
 
+def _add_guardrails_from_key_or_team_metadata(
+    key_metadata: Optional[dict],
+    team_metadata: Optional[dict],
+    data: dict,
+    metadata_variable_name: str,
+) -> None:
+    """
+    Helper add guardrails from key or team metadata to request data
+
+    Args:
+        key_metadata: The key metadata dictionary to check for guardrails
+        team_metadata: The team metadata dictionary to check for guardrails
+        data: The request data to update
+        metadata_variable_name: The name of the metadata field in data
+
+    """
+    from litellm.proxy.utils import _premium_user_check
+
+    for _management_object_metadata in [key_metadata, team_metadata]:
+        if _management_object_metadata and "guardrails" in _management_object_metadata:
+            if len(_management_object_metadata["guardrails"]) > 0:
+                _premium_user_check()
+
+            data[metadata_variable_name]["guardrails"] = _management_object_metadata[
+                "guardrails"
+            ]
+
+
 def move_guardrails_to_metadata(
     data: dict,
     _metadata_variable_name: str,
     user_api_key_dict: UserAPIKeyAuth,
 ):
     """
-    Heper to add guardrails from request to metadata
+    Helper to add guardrails from request to metadata
 
     - If guardrails set on API Key metadata then sets guardrails on request metadata
     - If guardrails not set on API key, then checks request metadata
-
     """
-    if user_api_key_dict.metadata:
-        if "guardrails" in user_api_key_dict.metadata:
-            from litellm.proxy.proxy_server import premium_user
+    # Check key-level guardrails
+    _add_guardrails_from_key_or_team_metadata(
+        key_metadata=user_api_key_dict.metadata,
+        team_metadata=user_api_key_dict.team_metadata,
+        data=data,
+        metadata_variable_name=_metadata_variable_name,
+    )
 
-            if premium_user is not True:
-                raise ValueError(
-                    f"Using Guardrails on API Key {CommonProxyErrors.not_premium_user}"
-                )
-
-            data[_metadata_variable_name]["guardrails"] = user_api_key_dict.metadata[
-                "guardrails"
-            ]
-            return
-
+    # Check request-level guardrails
     if "guardrails" in data:
         data[_metadata_variable_name]["guardrails"] = data["guardrails"]
         del data["guardrails"]
@@ -726,23 +877,20 @@ def add_provider_specific_headers_to_request(
     data: dict,
     headers: dict,
 ):
-    ANTHROPIC_API_HEADERS = [
-        "anthropic-version",
-        "anthropic-beta",
-    ]
-
-    extra_headers = data.get("extra_headers", {}) or {}
-
+    anthropic_headers = {}
     # boolean to indicate if a header was added
     added_header = False
     for header in ANTHROPIC_API_HEADERS:
         if header in headers:
             header_value = headers[header]
-            extra_headers.update({header: header_value})
+            anthropic_headers[header] = header_value
             added_header = True
 
     if added_header is True:
-        data["extra_headers"] = extra_headers
+        data["provider_specific_header"] = ProviderSpecificHeader(
+            custom_llm_provider="anthropic",
+            extra_headers=anthropic_headers,
+        )
 
     return
 

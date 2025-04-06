@@ -53,9 +53,9 @@ class RouterBudgetLimiting(CustomLogger):
         self.dual_cache = dual_cache
         self.redis_increment_operation_queue: List[RedisPipelineIncrementOperation] = []
         asyncio.create_task(self.periodic_sync_in_memory_spend_with_redis())
-        self.provider_budget_config: Optional[GenericBudgetConfigType] = (
-            provider_budget_config
-        )
+        self.provider_budget_config: Optional[
+            GenericBudgetConfigType
+        ] = provider_budget_config
         self.deployment_budget_config: Optional[GenericBudgetConfigType] = None
         self.tag_budget_config: Optional[GenericBudgetConfigType] = None
         self._init_provider_budgets()
@@ -64,7 +64,7 @@ class RouterBudgetLimiting(CustomLogger):
 
         # Add self to litellm callbacks if it's a list
         if isinstance(litellm.callbacks, list):
-            litellm.callbacks.append(self)  # type: ignore
+            litellm.logging_callback_manager.add_litellm_callback(self)  # type: ignore
 
     async def async_filter_deployments(
         self,
@@ -94,11 +94,13 @@ class RouterBudgetLimiting(CustomLogger):
 
         potential_deployments: List[Dict] = []
 
-        cache_keys, provider_configs, deployment_configs = (
-            await self._async_get_cache_keys_for_router_budget_limiting(
-                healthy_deployments=healthy_deployments,
-                request_kwargs=request_kwargs,
-            )
+        (
+            cache_keys,
+            provider_configs,
+            deployment_configs,
+        ) = await self._async_get_cache_keys_for_router_budget_limiting(
+            healthy_deployments=healthy_deployments,
+            request_kwargs=request_kwargs,
         )
 
         # Single cache read for all spend values
@@ -114,17 +116,18 @@ class RouterBudgetLimiting(CustomLogger):
             for idx, key in enumerate(cache_keys):
                 spend_map[key] = float(current_spends[idx] or 0.0)
 
-            potential_deployments, deployment_above_budget_info = (
-                self._filter_out_deployments_above_budget(
-                    healthy_deployments=healthy_deployments,
-                    provider_configs=provider_configs,
-                    deployment_configs=deployment_configs,
-                    spend_map=spend_map,
-                    potential_deployments=potential_deployments,
-                    request_tags=_get_tags_from_request_kwargs(
-                        request_kwargs=request_kwargs
-                    ),
-                )
+            (
+                potential_deployments,
+                deployment_above_budget_info,
+            ) = self._filter_out_deployments_above_budget(
+                healthy_deployments=healthy_deployments,
+                provider_configs=provider_configs,
+                deployment_configs=deployment_configs,
+                spend_map=spend_map,
+                potential_deployments=potential_deployments,
+                request_tags=_get_tags_from_request_kwargs(
+                    request_kwargs=request_kwargs
+                ),
             )
 
             if len(potential_deployments) == 0:
@@ -766,7 +769,7 @@ class RouterBudgetLimiting(CustomLogger):
             return
         for _model in model_list:
             _litellm_params = _model.get("litellm_params", {})
-            _model_info = _model.get("model_info", {})
+            _model_info: Dict = _model.get("model_info") or {}
             _model_id = _model_info.get("id")
             _max_budget = _litellm_params.get("max_budget")
             _budget_duration = _litellm_params.get("budget_duration")

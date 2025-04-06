@@ -819,6 +819,160 @@ resp = litellm.completion(
 print(f"\nResponse: {resp}")
 ```
 
+## Usage - Thinking / `reasoning_content`
+
+LiteLLM translates OpenAI's `reasoning_effort` to Anthropic's `thinking` parameter. [Code](https://github.com/BerriAI/litellm/blob/23051d89dd3611a81617d84277059cd88b2df511/litellm/llms/anthropic/chat/transformation.py#L298)
+
+| reasoning_effort | thinking |
+| ---------------- | -------- |
+| "low"            | "budget_tokens": 1024 |
+| "medium"         | "budget_tokens": 2048 |
+| "high"           | "budget_tokens": 4096 |
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+resp = completion(
+    model="anthropic/claude-3-7-sonnet-20250219",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    reasoning_effort="low",
+)
+
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+- model_name: claude-3-7-sonnet-20250219
+  litellm_params:
+    model: anthropic/claude-3-7-sonnet-20250219
+    api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "claude-3-7-sonnet-20250219",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "reasoning_effort": "low"
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+
+**Expected Response**
+
+```python
+ModelResponse(
+    id='chatcmpl-c542d76d-f675-4e87-8e5f-05855f5d0f5e',
+    created=1740470510,
+    model='claude-3-7-sonnet-20250219',
+    object='chat.completion',
+    system_fingerprint=None,
+    choices=[
+        Choices(
+            finish_reason='stop',
+            index=0,
+            message=Message(
+                content="The capital of France is Paris.",
+                role='assistant',
+                tool_calls=None,
+                function_call=None,
+                provider_specific_fields={
+                    'citations': None,
+                    'thinking_blocks': [
+                        {
+                            'type': 'thinking',
+                            'thinking': 'The capital of France is Paris. This is a very straightforward factual question.',
+                            'signature': 'EuYBCkQYAiJAy6...'
+                        }
+                    ]
+                }
+            ),
+            thinking_blocks=[
+                {
+                    'type': 'thinking',
+                    'thinking': 'The capital of France is Paris. This is a very straightforward factual question.',
+                    'signature': 'EuYBCkQYAiJAy6AGB...'
+                }
+            ],
+            reasoning_content='The capital of France is Paris. This is a very straightforward factual question.'
+        )
+    ],
+    usage=Usage(
+        completion_tokens=68,
+        prompt_tokens=42,
+        total_tokens=110,
+        completion_tokens_details=None,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=None,
+            cached_tokens=0,
+            text_tokens=None,
+            image_tokens=None
+        ),
+        cache_creation_input_tokens=0,
+        cache_read_input_tokens=0
+    )
+)
+```
+
+### Pass `thinking` to Anthropic models
+
+You can also pass the `thinking` parameter to Anthropic models.
+
+
+You can also pass the `thinking` parameter to Anthropic models.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+response = litellm.completion(
+  model="anthropic/claude-3-7-sonnet-20250219",
+  messages=[{"role": "user", "content": "What is the capital of France?"}],
+  thinking={"type": "enabled", "budget_tokens": 1024},
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "anthropic/claude-3-7-sonnet-20250219",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "thinking": {"type": "enabled", "budget_tokens": 1024}
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+
+
+
 ## **Passing Extra Headers to Anthropic API**
 
 Pass `extra_headers: dict` to `litellm.completion`
@@ -927,8 +1081,10 @@ response = completion(
             "content": [
                 {"type": "text", "text": "You are a very professional document summarization specialist. Please summarize the given document."},
                 {
-                    "type": "image_url",
-                    "image_url": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+                    "type": "file",
+                    "file": {
+                       "file_data": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+                    }
                 },
             ],
         }
@@ -973,8 +1129,10 @@ curl http://0.0.0.0:4000/v1/chat/completions \
             "text": "You are a very professional document summarization specialist. Please summarize the given document"
           },
           {
-                "type": "image_url",
-                "image_url": "data:application/pdf;base64,{encoded_file}" # 👈 PDF
+                "type": "file",
+                "file": {
+                    "file_data": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+                }
             }
           }
         ]
@@ -984,6 +1142,106 @@ curl http://0.0.0.0:4000/v1/chat/completions \
   }'
 
 ```
+</TabItem>
+</Tabs>
+
+## [BETA] Citations API 
+
+Pass `citations: {"enabled": true}` to Anthropic, to get citations on your document responses. 
+
+Note: This interface is in BETA. If you have feedback on how citations should be returned, please [tell us here](https://github.com/BerriAI/litellm/issues/7970#issuecomment-2644437943)
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+resp = completion(
+    model="claude-3-5-sonnet-20241022",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "text",
+                        "media_type": "text/plain",
+                        "data": "The grass is green. The sky is blue.",
+                    },
+                    "title": "My Document",
+                    "context": "This is a trustworthy document.",
+                    "citations": {"enabled": True},
+                },
+                {
+                    "type": "text",
+                    "text": "What color is the grass and sky?",
+                },
+            ],
+        }
+    ],
+)
+
+citations = resp.choices[0].message.provider_specific_fields["citations"]
+
+assert citations is not None
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: anthropic-claude
+      litellm_params:
+        model: anthropic/claude-3-5-sonnet-20241022
+        api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Test it! 
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+  "model": "anthropic-claude",
+  "messages": [
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "document",
+                "source": {
+                    "type": "text",
+                    "media_type": "text/plain",
+                    "data": "The grass is green. The sky is blue.",
+                },
+                "title": "My Document",
+                "context": "This is a trustworthy document.",
+                "citations": {"enabled": True},
+            },
+            {
+                "type": "text",
+                "text": "What color is the grass and sky?",
+            },
+        ],
+    }
+  ]
+}'
+```
+
 </TabItem>
 </Tabs>
 
@@ -1035,3 +1293,4 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 </TabItem>
 </Tabs>
+

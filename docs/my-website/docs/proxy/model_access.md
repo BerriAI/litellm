@@ -344,3 +344,6 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 </TabItem>
 </Tabs>
+
+
+## [Role Based Access Control (RBAC)](./jwt_auth_arch)

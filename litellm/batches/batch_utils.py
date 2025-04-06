@@ -1,76 +1,16 @@
-import asyncio
-import datetime
 import json
-import threading
-from typing import Any, List, Literal, Optional
+from typing import Any, List, Literal, Tuple
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import (
-    BATCH_STATUS_POLL_INTERVAL_SECONDS,
-    BATCH_STATUS_POLL_MAX_ATTEMPTS,
-)
-from litellm.files.main import afile_content
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.llms.openai import Batch
-from litellm.types.utils import StandardLoggingPayload, Usage
-
-
-async def batches_async_logging(
-    batch_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
-    logging_obj: Optional[LiteLLMLoggingObj] = None,
-    **kwargs,
-):
-    """
-    Async Job waits for the batch to complete and then logs the completed batch usage - cost, total tokens, prompt tokens, completion tokens
-
-
-    Polls retrieve_batch until it returns a batch with status "completed" or "failed"
-    """
-    from .main import aretrieve_batch
-
-    verbose_logger.debug(
-        ".....in _batches_async_logging... polling retrieve to get batch status"
-    )
-    if logging_obj is None:
-        raise ValueError(
-            "logging_obj is None cannot calculate cost / log batch creation event"
-        )
-    for _ in range(BATCH_STATUS_POLL_MAX_ATTEMPTS):
-        try:
-            start_time = datetime.datetime.now()
-            batch: Batch = await aretrieve_batch(batch_id, custom_llm_provider)
-            verbose_logger.debug(
-                "in _batches_async_logging... batch status= %s", batch.status
-            )
-
-            if batch.status == "completed":
-                end_time = datetime.datetime.now()
-                await _handle_completed_batch(
-                    batch=batch,
-                    custom_llm_provider=custom_llm_provider,
-                    logging_obj=logging_obj,
-                    start_time=start_time,
-                    end_time=end_time,
-                    **kwargs,
-                )
-                break
-            elif batch.status == "failed":
-                pass
-        except Exception as e:
-            verbose_logger.error("error in batches_async_logging", e)
-        await asyncio.sleep(BATCH_STATUS_POLL_INTERVAL_SECONDS)
+from litellm.types.utils import CallTypes, Usage
 
 
 async def _handle_completed_batch(
     batch: Batch,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"],
-    logging_obj: LiteLLMLoggingObj,
-    start_time: datetime.datetime,
-    end_time: datetime.datetime,
-    **kwargs,
-) -> None:
+) -> Tuple[float, Usage, List[str]]:
     """Helper function to process a completed batch and handle logging"""
     # Get batch results
     file_content_dictionary = await _get_batch_output_file_content_as_dictionary(
@@ -87,52 +27,25 @@ async def _handle_completed_batch(
         custom_llm_provider=custom_llm_provider,
     )
 
-    # Handle logging
-    await _log_completed_batch(
-        logging_obj=logging_obj,
-        batch_usage=batch_usage,
-        batch_cost=batch_cost,
-        start_time=start_time,
-        end_time=end_time,
-        **kwargs,
-    )
+    batch_models = _get_batch_models_from_file_content(file_content_dictionary)
+
+    return batch_cost, batch_usage, batch_models
 
 
-async def _log_completed_batch(
-    logging_obj: LiteLLMLoggingObj,
-    batch_usage: Usage,
-    batch_cost: float,
-    start_time: datetime.datetime,
-    end_time: datetime.datetime,
-    **kwargs,
-) -> None:
-    """Helper function to handle all logging operations for a completed batch"""
-    logging_obj.call_type = "batch_success"
-
-    standard_logging_object = _create_standard_logging_object_for_completed_batch(
-        kwargs=kwargs,
-        start_time=start_time,
-        end_time=end_time,
-        logging_obj=logging_obj,
-        batch_usage_object=batch_usage,
-        response_cost=batch_cost,
-    )
-
-    logging_obj.model_call_details["standard_logging_object"] = standard_logging_object
-
-    # Launch async and sync logging handlers
-    asyncio.create_task(
-        logging_obj.async_success_handler(
-            result=None,
-            start_time=start_time,
-            end_time=end_time,
-            cache_hit=None,
-        )
-    )
-    threading.Thread(
-        target=logging_obj.success_handler,
-        args=(None, start_time, end_time),
-    ).start()
+def _get_batch_models_from_file_content(
+    file_content_dictionary: List[dict],
+) -> List[str]:
+    """
+    Get the models from the file content
+    """
+    batch_models = []
+    for _item in file_content_dictionary:
+        if _batch_response_was_successful(_item):
+            _response_body = _get_response_from_batch_job_output_file(_item)
+            _model = _response_body.get("model")
+            if _model:
+                batch_models.append(_model)
+    return batch_models
 
 
 async def _batch_cost_calculator(
@@ -159,6 +72,8 @@ async def _get_batch_output_file_content_as_dictionary(
     """
     Get the batch output file content as a list of dictionaries
     """
+    from litellm.files.main import afile_content
+
     if custom_llm_provider == "vertex_ai":
         raise ValueError("Vertex AI does not support file content retrieval")
 
@@ -208,6 +123,7 @@ def _get_batch_job_cost_from_file_content(
                 total_cost += litellm.completion_cost(
                     completion_response=_response_body,
                     custom_llm_provider=custom_llm_provider,
+                    call_type=CallTypes.aretrieve_batch.value,
                 )
                 verbose_logger.debug("total_cost=%s", total_cost)
         return total_cost
@@ -264,30 +180,3 @@ def _batch_response_was_successful(batch_job_output_file: dict) -> bool:
     """
     _response: dict = batch_job_output_file.get("response", None) or {}
     return _response.get("status_code", None) == 200
-
-
-def _create_standard_logging_object_for_completed_batch(
-    kwargs: dict,
-    start_time: datetime.datetime,
-    end_time: datetime.datetime,
-    logging_obj: LiteLLMLoggingObj,
-    batch_usage_object: Usage,
-    response_cost: float,
-) -> StandardLoggingPayload:
-    """
-    Create a standard logging object for a completed batch
-    """
-    standard_logging_object = logging_obj.model_call_details.get(
-        "standard_logging_object", None
-    )
-
-    if standard_logging_object is None:
-        raise ValueError("unable to create standard logging object for completed batch")
-
-    # Add Completed Batch Job Usage and Response Cost
-    standard_logging_object["call_type"] = "batch_success"
-    standard_logging_object["response_cost"] = response_cost
-    standard_logging_object["total_tokens"] = batch_usage_object.total_tokens
-    standard_logging_object["prompt_tokens"] = batch_usage_object.prompt_tokens
-    standard_logging_object["completion_tokens"] = batch_usage_object.completion_tokens
-    return standard_logging_object

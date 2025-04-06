@@ -89,6 +89,7 @@ response_format: { "type": "json_schema", "json_schema": … , "strict": true }
 Works for:
 - OpenAI models 
 - Azure OpenAI models
+- xAI models (Grok-2 or later)
 - Google AI Studio - Gemini models
 - Vertex AI models (Gemini + Anthropic)
 - Bedrock Models

@@ -80,7 +80,7 @@ def test_map_response_format():
 class TestFireworksAIChatCompletion(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         return {
-            "model": "fireworks_ai/accounts/fireworks/models/llama-v3p2-11b-vision-instruct"
+            "model": "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct"
         }
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
@@ -92,6 +92,57 @@ class TestFireworksAIChatCompletion(BaseLLMChatTest):
         Fireworks AI raises a 500 BadRequest error when the request contains invalid utf-8 sequences.
         """
         pass
+
+    @pytest.mark.parametrize(
+        "response_format",
+        [
+            {"type": "json_object"},
+            {"type": "text"},
+        ],
+    )
+    @pytest.mark.flaky(retries=6, delay=1)
+    def test_json_response_format(self, response_format):
+        """
+        Test that the JSON response format is supported by the LLM API
+        """
+        from litellm.utils import supports_response_schema
+        from openai import OpenAI
+        from unittest.mock import patch
+
+        client = OpenAI()
+
+        base_completion_call_args = self.get_base_completion_call_args()
+        litellm.set_verbose = True
+
+        messages = [
+            {
+                "role": "system",
+                "content": "Your output should be a JSON object with no additional properties.  ",
+            },
+            {
+                "role": "user",
+                "content": "Respond with this in json. city=San Francisco, state=CA, weather=sunny, temp=60",
+            },
+        ]
+
+        with patch.object(
+            client.chat.completions.with_raw_response, "create"
+        ) as mock_post:
+            response = self.completion_function(
+                **base_completion_call_args,
+                messages=messages,
+                response_format=response_format,
+                client=client,
+            )
+
+            mock_post.assert_called_once()
+            if response_format["type"] == "json_object":
+                assert (
+                    mock_post.call_args.kwargs["response_format"]["type"]
+                    == "json_object"
+                )
+            else:
+                assert mock_post.call_args.kwargs["response_format"]["type"] == "text"
 
 
 class TestFireworksAIAudioTranscription(BaseLLMAudioTranscriptionTest):
@@ -196,3 +247,48 @@ def test_global_disable_flag(model, is_disabled, expected_url):
     )
     assert result["image_url"] == expected_url
     litellm.disable_add_transform_inline_image_block = False  # Reset for other tests
+
+
+def test_global_disable_flag_with_transform_messages_helper(monkeypatch):
+    from openai import OpenAI
+    from unittest.mock import patch
+    from litellm import completion
+
+    monkeypatch.setattr(litellm, "disable_add_transform_inline_image_block", True)
+
+    client = OpenAI()
+
+    with patch.object(
+        client.chat.completions.with_raw_response,
+        "create",
+    ) as mock_post:
+        try:
+            completion(
+                model="fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "What's in this image?"},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                                },
+                            },
+                        ],
+                    }
+                ],
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        mock_post.assert_called_once()
+        print(mock_post.call_args.kwargs)
+        assert (
+            "#transform=inline"
+            not in mock_post.call_args.kwargs["messages"][0]["content"][1]["image_url"][
+                "url"
+            ]
+        )

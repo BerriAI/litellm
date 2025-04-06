@@ -29,7 +29,8 @@ def test_acompletion_params():
     # Assert that the parameters are the same
     if keys_acompletion != keys_completion:
         pytest.fail(
-            "The parameters of the litellm.acompletion function and litellm.completion are not the same."
+            "The parameters of the litellm.acompletion function and litellm.completion are not the same. "
+            f"Completion has extra keys: {keys_completion - keys_acompletion}"
         )
 
 

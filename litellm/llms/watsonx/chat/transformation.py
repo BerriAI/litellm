@@ -7,15 +7,14 @@ Docs: https://cloud.ibm.com/apidocs/watsonx-ai#text-chat
 from typing import List, Optional, Tuple, Union
 
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.watsonx import WatsonXAIEndpoint, WatsonXAPIParams
+from litellm.types.llms.watsonx import WatsonXAIEndpoint
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
-from ..common_utils import IBMWatsonXMixin, WatsonXAIError
+from ..common_utils import IBMWatsonXMixin
 
 
 class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
-
     def get_supported_openai_params(self, model: str) -> List:
         return [
             "temperature",  # equivalent to temperature
@@ -80,19 +79,15 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
 
     def get_complete_url(
         self,
-        api_base: str,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         url = self._get_base_url(api_base=api_base)
         if model.startswith("deployment/"):
-            # deployment models are passed in as 'deployment/<deployment_id>'
-            if optional_params.get("space_id") is None:
-                raise WatsonXAIError(
-                    status_code=401,
-                    message="Error: space_id is required for models called using the 'deployment/' endpoint. Pass in the space_id as a parameter or set it in the WX_SPACE_ID environment variable.",
-                )
             deployment_id = "/".join(model.split("/")[1:])
             endpoint = (
                 WatsonXAIEndpoint.DEPLOYMENT_CHAT_STREAM.value
@@ -113,11 +108,3 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
             url=url, api_version=optional_params.pop("api_version", None)
         )
         return url
-
-    def _prepare_payload(self, model: str, api_params: WatsonXAPIParams) -> dict:
-        payload: dict = {}
-        if model.startswith("deployment/"):
-            return payload
-        payload["model_id"] = model
-        payload["project_id"] = api_params["project_id"]
-        return payload

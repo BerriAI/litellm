@@ -3,7 +3,7 @@ from typing import Any, Dict, Iterable, List, Optional, Union
 from pydantic import BaseModel, validator
 from typing_extensions import Literal, Required, TypedDict
 
-from .openai import ChatCompletionCachedContent
+from .openai import ChatCompletionCachedContent, ChatCompletionThinkingBlock
 
 
 class AnthropicMessagesToolChoice(TypedDict, total=False):
@@ -52,16 +52,18 @@ class AnthropicMessagesTextParam(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
-class AnthropicMessagesToolUseParam(TypedDict):
+class AnthropicMessagesToolUseParam(TypedDict, total=False):
     type: Required[Literal["tool_use"]]
     id: str
     name: str
     input: dict
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
 AnthropicMessagesAssistantMessageValues = Union[
     AnthropicMessagesTextParam,
     AnthropicMessagesToolUseParam,
+    ChatCompletionThinkingBlock,
 ]
 
 
@@ -92,10 +94,17 @@ class AnthropicMessagesImageParam(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
+class CitationsObject(TypedDict):
+    enabled: bool
+
+
 class AnthropicMessagesDocumentParam(TypedDict, total=False):
     type: Required[Literal["document"]]
     source: Required[AnthropicContentParamSource]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+    title: str
+    context: str
+    citations: Optional[CitationsObject]
 
 
 class AnthropicMessagesToolResultContent(TypedDict):
@@ -173,6 +182,11 @@ class ContentTextBlockDelta(TypedDict):
     text: str
 
 
+class ContentCitationsBlockDelta(TypedDict):
+    type: Literal["citations"]
+    citation: dict
+
+
 class ContentJsonBlockDelta(TypedDict):
     """
     "delta": {"type": "input_json_delta","partial_json": "{\"location\": \"San Fra"}}
@@ -185,7 +199,9 @@ class ContentJsonBlockDelta(TypedDict):
 class ContentBlockDelta(TypedDict):
     type: Literal["content_block_delta"]
     index: int
-    delta: Union[ContentTextBlockDelta, ContentJsonBlockDelta]
+    delta: Union[
+        ContentTextBlockDelta, ContentJsonBlockDelta, ContentCitationsBlockDelta
+    ]
 
 
 class ContentBlockStop(TypedDict):
@@ -334,3 +350,18 @@ from .openai import ChatCompletionUsageBlock
 class AnthropicChatCompletionUsageBlock(ChatCompletionUsageBlock, total=False):
     cache_creation_input_tokens: int
     cache_read_input_tokens: int
+
+
+ANTHROPIC_API_HEADERS = {
+    "anthropic-version",
+    "anthropic-beta",
+}
+
+ANTHROPIC_API_ONLY_HEADERS = {  # fails if calling anthropic on vertex ai / bedrock
+    "anthropic-beta",
+}
+
+
+class AnthropicThinkingParam(TypedDict, total=False):
+    type: Literal["enabled"]
+    budget_tokens: int

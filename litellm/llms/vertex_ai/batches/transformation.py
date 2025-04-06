@@ -4,8 +4,9 @@ from typing import Dict
 from litellm.llms.vertex_ai.common_utils import (
     _convert_vertex_datetime_to_openai_datetime,
 )
-from litellm.types.llms.openai import Batch, BatchJobStatus, CreateBatchRequest
+from litellm.types.llms.openai import BatchJobStatus, CreateBatchRequest
 from litellm.types.llms.vertex_ai import *
+from litellm.types.utils import LiteLLMBatch
 
 
 class VertexAIBatchTransformation:
@@ -47,9 +48,9 @@ class VertexAIBatchTransformation:
     @classmethod
     def transform_vertex_ai_batch_response_to_openai_batch_response(
         cls, response: VertexBatchPredictionResponse
-    ) -> Batch:
-        return Batch(
-            id=response.get("name", ""),
+    ) -> LiteLLMBatch:
+        return LiteLLMBatch(
+            id=cls._get_batch_id_from_vertex_ai_batch_response(response),
             completion_window="24hrs",
             created_at=_convert_vertex_datetime_to_openai_datetime(
                 vertex_datetime=response.get("createTime", "")
@@ -65,6 +66,24 @@ class VertexAIBatchTransformation:
                 response
             ),
         )
+
+    @classmethod
+    def _get_batch_id_from_vertex_ai_batch_response(
+        cls, response: VertexBatchPredictionResponse
+    ) -> str:
+        """
+        Gets the batch id from the Vertex AI Batch response safely
+
+        vertex response: `projects/510528649030/locations/us-central1/batchPredictionJobs/3814889423749775360`
+        returns: `3814889423749775360`
+        """
+        _name = response.get("name", "")
+        if not _name:
+            return ""
+
+        # Split by '/' and get the last part if it exists
+        parts = _name.split("/")
+        return parts[-1] if parts else _name
 
     @classmethod
     def _get_input_file_id_from_vertex_ai_batch_response(

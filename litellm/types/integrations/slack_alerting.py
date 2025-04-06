@@ -7,6 +7,9 @@ from pydantic import BaseModel, Field
 
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
+SLACK_ALERTING_THRESHOLD_5_PERCENT = 0.05
+SLACK_ALERTING_THRESHOLD_15_PERCENT = 0.15
+
 
 class BaseOutageModel(TypedDict):
     alerts: List[int]

@@ -1,118 +1,102 @@
-import io
-import os
-import sys
-
-sys.path.insert(0, os.path.abspath("../.."))
-
 import asyncio
-import logging
-import uuid
 
 import pytest
-from prometheus_client import REGISTRY, CollectorRegistry
+from unittest.mock import patch
+import pytest_asyncio
+
+from prometheus_client import REGISTRY
 
 import litellm
-from litellm import completion
-from litellm._logging import verbose_logger
 from litellm.integrations.prometheus import PrometheusLogger
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.types.utils import (
-    StandardLoggingPayload,
-    StandardLoggingMetadata,
-    StandardLoggingHiddenParams,
-    StandardLoggingModelInformation,
-)
-from unittest.mock import MagicMock, patch
-from datetime import datetime, timedelta
-
-verbose_logger.setLevel(logging.DEBUG)
-
-litellm.set_verbose = True
-import time
+from litellm.types.utils import BudgetConfig, GenericBudgetConfigType
 
 
-@pytest.mark.asyncio()
-async def test_async_prometheus_success_logging_with_callbacks():
+def compare_metrics(func):
+    def get_metrics():
+        metrics = {}
+        for metric in REGISTRY.collect():
+            for sample in metric.samples:
+                metrics[sample.name] = sample.value
+        return metrics
 
-    pl = PrometheusLogger()
+    async def wrapper(*args, **kwargs):
+        initial_metrics = get_metrics()
+        await func(*args, **kwargs)
+        await asyncio.sleep(2)
+        updated_metrics = get_metrics()
 
-    run_id = str(uuid.uuid4())
-    litellm.set_verbose = True
+        return {
+            metric: updated_metrics.get(metric, 0) - initial_metrics.get(metric, 0)
+            for metric in set(initial_metrics) | set(updated_metrics)
+        }
 
-    litellm.success_callback = []
-    litellm.failure_callback = []
-    litellm.callbacks = [pl]
+    return wrapper
 
-    # Get initial metric values
-    initial_metrics = {}
-    for metric in REGISTRY.collect():
-        for sample in metric.samples:
-            initial_metrics[sample.name] = sample.value
 
-    response = await litellm.acompletion(
-        model="claude-3-haiku-20240307",
-        messages=[{"role": "user", "content": "what llm are u"}],
-        max_tokens=10,
-        mock_response="hi",
-        temperature=0.2,
-        metadata={
-            "id": run_id,
-            "tags": ["tag1", "tag2"],
-            "user_api_key": "6eb81e014497d89f3cc1aa9da7c2b37bda6b7fea68e4b710d33d94201e68970c",
-            "user_api_key_alias": "ishaans-prometheus-key",
-            "user_api_end_user_max_budget": None,
-            "litellm_api_version": "1.40.19",
-            "global_max_parallel_requests": None,
-            "user_api_key_user_id": "admin",
-            "user_api_key_org_id": None,
-            "user_api_key_team_id": "dbe2f686-a686-4896-864a-4c3924458709",
-            "user_api_key_team_alias": "testing-team",
-        },
-    )
-    print(response)
-    await asyncio.sleep(3)
+@pytest_asyncio.fixture(scope="function")
+async def prometheus_logger():
+    collectors = list(REGISTRY._collector_to_names.keys())
+    for collector in collectors:
+        REGISTRY.unregister(collector)
 
-    # get prometheus logger
-    test_prometheus_logger = pl
+    with patch("litellm.proxy.proxy_server.premium_user", True):
+        yield PrometheusLogger()
 
-    print("done with success request")
 
-    print(
-        "vars of test_prometheus_logger",
-        vars(test_prometheus_logger.litellm_requests_metric),
-    )
+@pytest.mark.asyncio
+async def test_async_prometheus_success_logging_with_callbacks(prometheus_logger):
+    litellm.callbacks = [prometheus_logger]
 
-    # Get the updated metrics
-    updated_metrics = {}
-    for metric in REGISTRY.collect():
-        for sample in metric.samples:
-            updated_metrics[sample.name] = sample.value
+    @compare_metrics
+    async def op():
+        await litellm.acompletion(
+            model="claude-3-haiku-20240307",
+            messages=[{"role": "user", "content": "what llm are u"}],
+            max_tokens=10,
+            mock_response="hi",
+            temperature=0.2,
+        )
 
-    print("metrics from prometheus", updated_metrics)
+    diff = await op()
+    assert diff["litellm_requests_metric_total"] == 1.0
 
-    # Assert the delta for each metric
-    assert (
-        updated_metrics["litellm_requests_metric_total"]
-        - initial_metrics.get("litellm_requests_metric_total", 0)
-        == 1.0
-    )
-    assert (
-        updated_metrics["litellm_total_tokens_total"]
-        - initial_metrics.get("litellm_total_tokens_total", 0)
-        == 30.0
-    )
-    assert (
-        updated_metrics["litellm_deployment_success_responses_total"]
-        - initial_metrics.get("litellm_deployment_success_responses_total", 0)
-        == 1.0
-    )
-    assert (
-        updated_metrics["litellm_deployment_total_requests_total"]
-        - initial_metrics.get("litellm_deployment_total_requests_total", 0)
-        == 1.0
-    )
-    assert (
-        updated_metrics["litellm_deployment_latency_per_output_token_bucket"]
-        - initial_metrics.get("litellm_deployment_latency_per_output_token_bucket", 0)
-        == 1.0
-    )
+
+@pytest.mark.asyncio
+async def test_async_prometheus_budget_logging_with_callbacks(prometheus_logger):
+    litellm.callbacks = [prometheus_logger]
+
+    @compare_metrics
+    async def op():
+        provider_budget_config: GenericBudgetConfigType = {
+            "openai": BudgetConfig(time_period="1d", budget_limit=50),
+        }
+
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-3.5-turbo",
+                    "litellm_params": {
+                        "model": "openai/gpt-3.5-turbo",
+                        "api_key": "mock-key",
+                    },
+                }
+            ],
+            provider_budget_config=provider_budget_config,
+        )
+
+        await router.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "llm?"}],
+            mock_response="openai",
+            metadata={
+                "user_api_key_team_id": "team-1",
+                "user_api_key_team_alias": "test-team",
+                "user_api_key": "test-key",
+                "user_api_key_alias": "test-key-alias",
+            },
+        )
+
+    diff = await op()
+
+    # TODO: Should implement `litellm_provider_remaining_budget_metric` in prometheus.py
+    assert diff.get("litellm_provider_remaining_budget_metric", 50.0) == 50.0

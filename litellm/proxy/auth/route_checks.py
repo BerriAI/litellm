@@ -16,7 +16,6 @@ from .auth_checks_organization import _user_is_org_admin
 
 
 class RouteChecks:
-
     @staticmethod
     def non_proxy_admin_allowed_routes_check(
         user_obj: Optional[LiteLLM_UserTable],
@@ -24,7 +23,6 @@ class RouteChecks:
         route: str,
         request: Request,
         valid_token: UserAPIKeyAuth,
-        api_key: str,
         request_data: dict,
     ):
         """
@@ -68,7 +66,6 @@ class RouteChecks:
             and getattr(valid_token, "permissions", None) is not None
             and "get_spend_routes" in getattr(valid_token, "permissions", [])
         ):
-
             pass
         elif _user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value:
             if RouteChecks.is_llm_api_route(route=route):
@@ -81,7 +78,6 @@ class RouteChecks:
             ):
                 # the Admin Viewer is only allowed to call /user/update for their own user_id and can only update
                 if route == "/user/update":
-
                     # Check the Request params are valid for PROXY_ADMIN_VIEW_ONLY
                     if request_data is not None and isinstance(request_data, dict):
                         _params_updated = request_data.keys()
@@ -180,23 +176,10 @@ class RouteChecks:
         if RouteChecks._is_azure_openai_route(route=route):
             return True
 
-        # Pass through Bedrock, VertexAI, and Cohere Routes
-        if "/bedrock/" in route:
-            return True
-        if "/vertex-ai/" in route:
-            return True
-        if "/gemini/" in route:
-            return True
-        if "/cohere/" in route:
-            return True
-        if "/langfuse/" in route:
-            return True
-        if "/anthropic/" in route:
-            return True
-        if "/azure/" in route:
-            return True
-        if "/openai/" in route:
-            return True
+        for _llm_passthrough_route in LiteLLMRoutes.mapped_pass_through_routes.value:
+            if _llm_passthrough_route in route:
+                return True
+
         return False
 
     @staticmethod
@@ -253,3 +236,18 @@ class RouteChecks:
             RouteChecks._route_matches_pattern(route=route, pattern=allowed_route)
             for allowed_route in allowed_routes
         )  # Check pattern match
+
+    @staticmethod
+    def _is_assistants_api_request(request: Request) -> bool:
+        """
+        Returns True if `thread` or `assistant` is in the request path
+
+        Args:
+            request (Request): The request object
+
+        Returns:
+            bool: True if `thread` or `assistant` is in the request path, False otherwise
+        """
+        if "thread" in request.url.path or "assistant" in request.url.path:
+            return True
+        return False

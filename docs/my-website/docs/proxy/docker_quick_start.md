@@ -382,6 +382,56 @@ litellm_settings:
     ssl_verify: false # 👈 KEY CHANGE
 ```
 
+
+### (DB) All connection attempts failed 
+
+
+If you see:
+
+```
+httpx.ConnectError: All connection attempts failed                                                                        
+                                                                                                                         
+ERROR:    Application startup failed. Exiting.                                                                            
+3:21:43 - LiteLLM Proxy:ERROR: utils.py:2207 - Error getting LiteLLM_SpendLogs row count: All connection attempts failed 
+```
+
+This might be a DB permission issue. 
+
+1. Validate db user permission issue 
+
+Try creating a new database. 
+
+```bash
+STATEMENT: CREATE DATABASE "litellm"
+```
+
+If you get:
+
+```
+ERROR: permission denied to create 
+```
+
+This indicates you have a permission issue. 
+
+2. Grant permissions to your DB user
+
+It should look something like this:
+
+```
+psql -U postgres
+```
+
+```
+CREATE DATABASE litellm;
+```
+
+On CloudSQL, this is:
+
+```
+GRANT ALL PRIVILEGES ON DATABASE litellm TO your_username;
+```
+
+
 **What is `litellm_settings`?**
 
 LiteLLM Proxy uses the [LiteLLM Python SDK](https://docs.litellm.ai/docs/routing) for handling LLM API calls. 
@@ -397,4 +447,6 @@ LiteLLM Proxy uses the [LiteLLM Python SDK](https://docs.litellm.ai/docs/routing
 - Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
 
 [![Chat on WhatsApp](https://img.shields.io/static/v1?label=Chat%20on&message=WhatsApp&color=success&logo=WhatsApp&style=flat-square)](https://wa.link/huol9n) [![Chat on Discord](https://img.shields.io/static/v1?label=Chat%20on&message=Discord&color=blue&logo=Discord&style=flat-square)](https://discord.gg/wuPM9dRgDw) 
+
+
 

@@ -1163,10 +1163,11 @@ async def test_create_team_member_add_team_admin(
     user = f"ishaan {uuid.uuid4().hex}"
     _team_id = "litellm-test-client-id-new"
     user_key = "sk-12345678"
+    team_admin = f"krrish {uuid.uuid4().hex}"
 
     valid_token = UserAPIKeyAuth(
         team_id=_team_id,
-        user_id=user,
+        user_id=team_admin,
         token=hash_token(user_key),
         last_refreshed_at=time.time(),
     )
@@ -1176,7 +1177,7 @@ async def test_create_team_member_add_team_admin(
         team_id=_team_id,
         blocked=False,
         last_refreshed_at=time.time(),
-        members_with_roles=[Member(role=user_role, user_id=user)],
+        members_with_roles=[Member(role=user_role, user_id=team_admin)],
         metadata={"guardrails": {"modify_guardrails": False}},
     )
 
@@ -1231,6 +1232,7 @@ async def test_create_team_member_add_team_admin(
         except HTTPException as e:
             if user_role == "user":
                 assert e.status_code == 403
+                return
             else:
                 raise e
 
@@ -2190,3 +2192,19 @@ async def test_get_ui_settings_spend_logs_threshold():
 
     # Clean up
     proxy_state.set_proxy_state_variable("spend_logs_row_count", 0)
+
+
+def test_get_timeout_from_request():
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    headers = {
+        "x-litellm-timeout": "90",
+    }
+    timeout = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
+    assert timeout == 90
+
+    headers = {
+        "x-litellm-timeout": "90.5",
+    }
+    timeout = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
+    assert timeout == 90.5

@@ -338,18 +338,6 @@ def test_update_kwargs_with_default_litellm_params(model_list):
     assert kwargs["metadata"]["key2"] == "value2"
 
 
-def test_get_async_openai_model_client(model_list):
-    """Test if the '_get_async_openai_model_client' function is working correctly"""
-    router = Router(model_list=model_list)
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-3.5-turbo"
-    )
-    model_client = router._get_async_openai_model_client(
-        deployment=deployment, kwargs={}
-    )
-    assert model_client is not None
-
-
 def test_get_timeout(model_list):
     """Test if the '_get_timeout' function is working correctly"""
     router = Router(model_list=model_list)
@@ -918,6 +906,31 @@ def test_flush_cache(model_list):
     assert router.cache.get_cache("test") is None
 
 
+def test_discard(model_list):
+    """
+    Test that discard properly removes a Router from the callback lists
+    """
+    litellm.callbacks = []
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+    litellm.failure_callback = []
+    litellm._async_failure_callback = []
+    litellm.input_callback = []
+    litellm.service_callback = []
+
+    router = Router(model_list=model_list)
+    router.discard()
+
+    # Verify all callback lists are empty
+    assert len(litellm.callbacks) == 0
+    assert len(litellm.success_callback) == 0
+    assert len(litellm.failure_callback) == 0
+    assert len(litellm._async_success_callback) == 0
+    assert len(litellm._async_failure_callback) == 0
+    assert len(litellm.input_callback) == 0
+    assert len(litellm.service_callback) == 0
+
+
 def test_initialize_assistants_endpoint(model_list):
     """Test if the 'initialize_assistants_endpoint' function is working correctly"""
     router = Router(model_list=model_list)
@@ -1126,3 +1139,21 @@ async def test_async_callback_filter_deployments(model_list):
     )
 
     assert len(new_healthy_deployments) == len(healthy_deployments)
+
+
+def test_cached_get_model_group_info(model_list):
+    """Test if the '_cached_get_model_group_info' function is working correctly with LRU cache"""
+    router = Router(model_list=model_list)
+
+    # First call - should hit the actual function
+    result1 = router._cached_get_model_group_info("gpt-3.5-turbo")
+
+    # Second call with same argument - should hit the cache
+    result2 = router._cached_get_model_group_info("gpt-3.5-turbo")
+
+    # Verify results are the same
+    assert result1 == result2
+
+    # Verify the cache info shows hits
+    cache_info = router._cached_get_model_group_info.cache_info()
+    assert cache_info.hits > 0  # Should have at least one cache hit

@@ -95,9 +95,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         presidio_analyzer_api_base: Optional[str] = None,
         presidio_anonymizer_api_base: Optional[str] = None,
     ):
-        self.presidio_analyzer_api_base: Optional[str] = (
-            presidio_analyzer_api_base or get_secret("PRESIDIO_ANALYZER_API_BASE", None)  # type: ignore
-        )
+        self.presidio_analyzer_api_base: Optional[
+            str
+        ] = presidio_analyzer_api_base or get_secret(
+            "PRESIDIO_ANALYZER_API_BASE", None
+        )  # type: ignore
         self.presidio_anonymizer_api_base: Optional[
             str
         ] = presidio_anonymizer_api_base or litellm.get_secret(
@@ -168,7 +170,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     async with session.post(
                         analyze_url, json=analyze_payload
                     ) as response:
-
                         analyze_results = await response.json()
 
                     # Make the second request to /anonymize
@@ -228,7 +229,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
 
         try:
-
             content_safety = data.get("content_safety", None)
             verbose_proxy_logger.debug("content_safety: %s", content_safety)
             presidio_config = self.get_presidio_settings_from_request_data(data)

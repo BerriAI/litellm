@@ -49,16 +49,26 @@ def test_split_embedding_by_shape_fails_with_shape_value_error():
         )
 
 
-def test_completion_triton_generate_api():
+@pytest.mark.parametrize("stream", [True, False])
+def test_completion_triton_generate_api(stream):
     try:
         mock_response = MagicMock()
+        if stream:
+            def mock_iter_lines():
+                mock_output = ''.join([
+                    'data: {"model_name":"ensemble","model_version":"1","sequence_end":false,"sequence_id":0,"sequence_start":false,"text_output":"' + t + '"}\n\n'
+                    for t in ["I", " am", " an", " AI", " assistant"]
+                ])
+                for out in mock_output.split('\n'):
+                    yield out
+            mock_response.iter_lines = mock_iter_lines
+        else:
+            def return_val():
+                return {
+                    "text_output": "I am an AI assistant",
+                }
 
-        def return_val():
-            return {
-                "text_output": "I am an AI assistant",
-            }
-
-        mock_response.json = return_val
+            mock_response.json = return_val
         mock_response.status_code = 200
 
         with patch(
@@ -71,6 +81,7 @@ def test_completion_triton_generate_api():
                 max_tokens=10,
                 timeout=5,
                 api_base="http://localhost:8000/generate",
+                stream=stream,
             )
 
             # Verify the call was made
@@ -81,7 +92,10 @@ def test_completion_triton_generate_api():
             call_kwargs = mock_post.call_args.kwargs  # Access kwargs directly
 
             # Verify URL
-            assert call_kwargs["url"] == "http://localhost:8000/generate"
+            if stream:
+                assert call_kwargs["url"] == "http://localhost:8000/generate_stream"
+            else:
+                assert call_kwargs["url"] == "http://localhost:8000/generate"
 
             # Parse the request data from the JSON string
             request_data = json.loads(call_kwargs["data"])
@@ -91,7 +105,15 @@ def test_completion_triton_generate_api():
             assert request_data["parameters"]["max_tokens"] == 10
 
             # Verify response
-            assert response.choices[0].message.content == "I am an AI assistant"
+            if stream:
+                tokens = ["I", " am", " an", " AI", " assistant", None]
+                idx = 0
+                for chunk in response:
+                    assert chunk.choices[0].delta.content == tokens[idx]
+                    idx += 1
+                assert idx == len(tokens)
+            else:
+                assert response.choices[0].message.content == "I am an AI assistant"
 
     except Exception as e:
         print("exception", e)

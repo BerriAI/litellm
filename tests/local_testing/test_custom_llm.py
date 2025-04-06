@@ -397,3 +397,58 @@ async def test_image_generation_async_additional_params():
         mock_client.call_args.kwargs["optional_params"] == {
             "my_custom_param": "my-custom-param"
         }
+
+
+def test_get_supported_openai_params():
+
+    class MyCustomLLM(CustomLLM):
+
+        # This is what `get_supported_openai_params` should be returning:
+        def get_supported_openai_params(self, model: str) -> list[str]:
+            return [
+                "tools",
+                "tool_choice",
+                "temperature",
+                "top_p",
+                "top_k",
+                "min_p",
+                "typical_p",
+                "stop",
+                "seed",
+                "response_format",
+                "max_tokens",
+                "presence_penalty",
+                "frequency_penalty",
+                "repeat_penalty",
+                "tfs_z",
+                "mirostat_mode",
+                "mirostat_tau",
+                "mirostat_eta",
+                "logit_bias",
+            ]
+
+        def completion(self, *args, **kwargs) -> litellm.ModelResponse:
+            return litellm.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello world"}],
+                mock_response="Hi!",
+            )  # type: ignore
+
+    my_custom_llm = MyCustomLLM()
+
+    litellm.custom_provider_map = [  # 👈 KEY STEP - REGISTER HANDLER
+        {"provider": "my-custom-llm", "custom_handler": my_custom_llm}
+    ]
+
+    resp = completion(
+        model="my-custom-llm/my-fake-model",
+        messages=[{"role": "user", "content": "Hello world!"}],
+    )
+
+    assert resp.choices[0].message.content == "Hi!"
+
+    # Get supported openai params
+    from litellm import get_supported_openai_params
+
+    response = get_supported_openai_params(model="my-custom-llm/my-fake-model")
+    assert response is not None

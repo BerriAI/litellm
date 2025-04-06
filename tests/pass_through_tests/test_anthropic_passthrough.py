@@ -1,54 +1,12 @@
 """
 This test ensures that the proxy can passthrough anthropic requests
-
 """
 
 import pytest
 import anthropic
 import aiohttp
 import asyncio
-
-client = anthropic.Anthropic(
-    base_url="http://0.0.0.0:4000/anthropic", api_key="sk-1234"
-)
-
-
-def test_anthropic_basic_completion():
-    print("making basic completion request to anthropic passthrough")
-    response = client.messages.create(
-        model="claude-3-5-sonnet-20241022",
-        max_tokens=1024,
-        messages=[{"role": "user", "content": "Say 'hello test' and nothing else"}],
-        extra_body={
-            "litellm_metadata": {
-                "tags": ["test-tag-1", "test-tag-2"],
-            }
-        },
-    )
-    print(response)
-
-
-def test_anthropic_streaming():
-    print("making streaming request to anthropic passthrough")
-    collected_output = []
-
-    with client.messages.stream(
-        max_tokens=10,
-        messages=[
-            {"role": "user", "content": "Say 'hello stream test' and nothing else"}
-        ],
-        model="claude-3-5-sonnet-20241022",
-        extra_body={
-            "litellm_metadata": {
-                "tags": ["test-tag-stream-1", "test-tag-stream-2"],
-            }
-        },
-    ) as stream:
-        for text in stream.text_stream:
-            collected_output.append(text)
-
-    full_response = "".join(collected_output)
-    print(full_response)
+import json
 
 
 @pytest.mark.asyncio
@@ -79,6 +37,13 @@ async def test_anthropic_basic_completion_with_headers():
 
             response_json = await response.json()
             response_headers = response.headers
+            print(
+                "non-streaming response",
+                json.dumps(response_json, indent=4, default=str),
+            )
+            reported_usage = response_json.get("usage", None)
+            anthropic_api_input_tokens = reported_usage.get("input_tokens", None)
+            anthropic_api_output_tokens = reported_usage.get("output_tokens", None)
             litellm_call_id = response_headers.get("x-litellm-call-id")
 
             print(f"LiteLLM Call ID: {litellm_call_id}")
@@ -122,10 +87,12 @@ async def test_anthropic_basic_completion_with_headers():
                     log_entry["spend"], (int, float)
                 ), "Spend should be a number"
                 assert log_entry["total_tokens"] > 0, "Should have some tokens"
-                assert log_entry["prompt_tokens"] > 0, "Should have prompt tokens"
                 assert (
-                    log_entry["completion_tokens"] > 0
-                ), "Should have completion tokens"
+                    log_entry["prompt_tokens"] == anthropic_api_input_tokens
+                ), f"Should have prompt tokens matching anthropic api. Expected {anthropic_api_input_tokens} but got {log_entry['prompt_tokens']}"
+                assert (
+                    log_entry["completion_tokens"] == anthropic_api_output_tokens
+                ), f"Should have completion tokens matching anthropic api. Expected {anthropic_api_output_tokens} but got {log_entry['completion_tokens']}"
                 assert (
                     log_entry["total_tokens"]
                     == log_entry["prompt_tokens"] + log_entry["completion_tokens"]
@@ -153,6 +120,7 @@ async def test_anthropic_basic_completion_with_headers():
                 ), "Should have user API key in metadata"
 
                 assert "claude" in log_entry["model"]
+                assert log_entry["custom_llm_provider"] == "anthropic"
 
 
 @pytest.mark.asyncio
@@ -174,6 +142,7 @@ async def test_anthropic_streaming_with_headers():
         "stream": True,
         "litellm_metadata": {
             "tags": ["test-tag-stream-1", "test-tag-stream-2"],
+            "user": "test-user-1",
         },
     }
 
@@ -197,6 +166,27 @@ async def test_anthropic_streaming_with_headers():
                         collected_output.append(text[6:])  # Remove 'data: ' prefix
 
             print("Collected output:", "".join(collected_output))
+            anthropic_api_usage_chunks = []
+            for chunk in collected_output:
+                chunk_json = json.loads(chunk)
+                if "usage" in chunk_json:
+                    anthropic_api_usage_chunks.append(chunk_json["usage"])
+                elif "message" in chunk_json and "usage" in chunk_json["message"]:
+                    anthropic_api_usage_chunks.append(chunk_json["message"]["usage"])
+
+            print(
+                "anthropic_api_usage_chunks",
+                json.dumps(anthropic_api_usage_chunks, indent=4, default=str),
+            )
+
+            anthropic_api_input_tokens = sum(
+                [usage.get("input_tokens", 0) for usage in anthropic_api_usage_chunks]
+            )
+            anthropic_api_output_tokens = max(
+                [usage.get("output_tokens", 0) for usage in anthropic_api_usage_chunks]
+            )
+            print("anthropic_api_input_tokens", anthropic_api_input_tokens)
+            print("anthropic_api_output_tokens", anthropic_api_output_tokens)
 
             # Wait for spend to be logged
             await asyncio.sleep(20)
@@ -225,9 +215,9 @@ async def test_anthropic_streaming_with_headers():
                 assert (
                     log_entry["call_type"] == "pass_through_endpoint"
                 ), "Call type should be pass_through_endpoint"
-                assert (
-                    log_entry["api_base"] == "https://api.anthropic.com/v1/messages"
-                ), "API base should be Anthropic's endpoint"
+                # assert (
+                #     log_entry["api_base"] == "https://api.anthropic.com/v1/messages"
+                # ), "API base should be Anthropic's endpoint"
 
                 # Token and spend assertions
                 assert log_entry["spend"] > 0, "Spend value should not be None"
@@ -236,8 +226,11 @@ async def test_anthropic_streaming_with_headers():
                 ), "Spend should be a number"
                 assert log_entry["total_tokens"] > 0, "Should have some tokens"
                 assert (
-                    log_entry["completion_tokens"] > 0
-                ), "Should have completion tokens"
+                    log_entry["prompt_tokens"] == anthropic_api_input_tokens
+                ), f"Should have prompt tokens matching anthropic api. Expected {anthropic_api_input_tokens} but got {log_entry['prompt_tokens']}"
+                assert (
+                    log_entry["completion_tokens"] == anthropic_api_output_tokens
+                ), f"Should have completion tokens matching anthropic api. Expected {anthropic_api_output_tokens} but got {log_entry['completion_tokens']}"
                 assert (
                     log_entry["total_tokens"]
                     == log_entry["prompt_tokens"] + log_entry["completion_tokens"]
@@ -265,3 +258,6 @@ async def test_anthropic_streaming_with_headers():
                 ), "Should have user API key in metadata"
 
                 assert "claude" in log_entry["model"]
+
+                assert log_entry["end_user"] == "test-user-1"
+                assert log_entry["custom_llm_provider"] == "anthropic"

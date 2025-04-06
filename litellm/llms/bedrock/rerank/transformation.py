@@ -29,7 +29,6 @@ from litellm.types.rerank import (
 
 
 class BedrockRerankConfig:
-
     def _transform_sources(
         self, documents: List[Union[str, dict]]
     ) -> List[BedrockRerankSource]:
@@ -91,7 +90,9 @@ class BedrockRerankConfig:
         example input:
         {"results":[{"index":0,"relevanceScore":0.6847912669181824},{"index":1,"relevanceScore":0.5980774760246277}]}
         """
-        _billed_units = RerankBilledUnits(**response.get("usage", {}))
+        _billed_units = RerankBilledUnits(
+            **response.get("usage", {"search_units": 1})
+        )  # by default 1 search unit
         _tokens = RerankTokens(**response.get("usage", {}))
         rerank_meta = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 

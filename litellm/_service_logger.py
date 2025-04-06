@@ -8,15 +8,14 @@ from litellm.proxy._types import UserAPIKeyAuth
 
 from .integrations.custom_logger import CustomLogger
 from .integrations.datadog.datadog import DataDogLogger
+from .integrations.opentelemetry import OpenTelemetry
 from .integrations.prometheus_services import PrometheusServicesLogger
 from .types.services import ServiceLoggerPayload, ServiceTypes
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    from litellm.integrations.opentelemetry import OpenTelemetry
-
-    Span = _Span
+    Span = Union[_Span, Any]
     OTELClass = OpenTelemetry
 else:
     Span = Any
@@ -116,8 +115,6 @@ class ServiceLogging(CustomLogger):
         """
         - For counting if the redis, postgres call is successful
         """
-        from litellm.integrations.opentelemetry import OpenTelemetry
-
         if self.mock_testing:
             self.mock_testing_async_success_hook += 1
 
@@ -127,6 +124,7 @@ class ServiceLogging(CustomLogger):
             service=service,
             duration=duration,
             call_type=call_type,
+            event_metadata=event_metadata,
         )
 
         for callback in litellm.service_callback:
@@ -190,7 +188,6 @@ class ServiceLogging(CustomLogger):
         initializes otel_logger if it is None or no attribute exists on ServiceLogging Object
 
         """
-        from litellm.integrations.opentelemetry import OpenTelemetry
         from litellm.proxy.proxy_server import open_telemetry_logger
 
         if not hasattr(self, "otel_logger"):
@@ -218,8 +215,6 @@ class ServiceLogging(CustomLogger):
         """
         - For counting if the redis, postgres call is unsuccessful
         """
-        from litellm.integrations.opentelemetry import OpenTelemetry
-
         if self.mock_testing:
             self.mock_testing_async_failure_hook += 1
 
@@ -235,6 +230,7 @@ class ServiceLogging(CustomLogger):
             service=service,
             duration=duration,
             call_type=call_type,
+            event_metadata=event_metadata,
         )
 
         for callback in litellm.service_callback:

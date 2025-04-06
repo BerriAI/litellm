@@ -103,7 +103,7 @@ async def test_basic_vertex_ai_pass_through_with_spendlog():
         api_transport="rest",
     )
 
-    model = GenerativeModel(model_name="gemini-1.0-pro")
+    model = GenerativeModel(model_name="gemini-1.5-pro")
     response = model.generate_content("hi")
 
     print("response", response)
@@ -135,7 +135,7 @@ async def test_basic_vertex_ai_pass_through_streaming_with_spendlog():
         api_transport="rest",
     )
 
-    model = GenerativeModel(model_name="gemini-1.0-pro")
+    model = GenerativeModel(model_name="gemini-1.5-pro")
     response = model.generate_content("hi", stream=True)
 
     for chunk in response:

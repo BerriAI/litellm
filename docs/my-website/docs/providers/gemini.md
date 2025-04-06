@@ -365,7 +365,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 </Tabs>
 
 ## Specifying Safety Settings 
-In certain use-cases you may need to make calls to the models and pass [safety settigns](https://ai.google.dev/docs/safety_setting_gemini) different from the defaults. To do so, simple pass the `safety_settings` argument to `completion` or `acompletion`. For example:
+In certain use-cases you may need to make calls to the models and pass [safety settings](https://ai.google.dev/docs/safety_setting_gemini) different from the defaults. To do so, simple pass the `safety_settings` argument to `completion` or `acompletion`. For example:
 
 ```python
 response = completion(
@@ -589,8 +589,10 @@ response = litellm.completion(
             "content": [
                 {"type": "text", "text": "Please summarize the audio."},
                 {
-                    "type": "image_url",
-                    "image_url": "data:audio/mp3;base64,{}".format(encoded_data), # 👈 SET MIME_TYPE + DATA
+                    "type": "file",
+                    "file": {
+                        "file_data": "data:audio/mp3;base64,{}".format(encoded_data), # 👈 SET MIME_TYPE + DATA
+                    }
                 },
             ],
         }
@@ -640,8 +642,11 @@ response = litellm.completion(
             "content": [
                 {"type": "text", "text": "Please summarize the file."},
                 {
-                    "type": "image_url",
-                    "image_url": "https://storage..." # 👈 SET THE IMG URL
+                    "type": "file",
+                    "file": {
+                        "file_id": "https://storage...", # 👈 SET THE IMG URL
+                        "format": "application/pdf" # OPTIONAL
+                    }
                 },
             ],
         }
@@ -668,8 +673,11 @@ response = litellm.completion(
             "content": [
                 {"type": "text", "text": "Please summarize the file."},
                 {
-                    "type": "image_url",
-                    "image_url": "gs://..." # 👈 SET THE cloud storage bucket url
+                    "type": "file",
+                    "file": {
+                        "file_id": "gs://storage...", # 👈 SET THE IMG URL
+                        "format": "application/pdf" # OPTIONAL
+                    }
                 },
             ],
         }
@@ -688,7 +696,9 @@ response = litellm.completion(
 |-----------------------|--------------------------------------------------------|--------------------------------|
 | gemini-pro            | `completion(model='gemini/gemini-pro', messages)`            | `os.environ['GEMINI_API_KEY']` |
 | gemini-1.5-pro-latest | `completion(model='gemini/gemini-1.5-pro-latest', messages)` | `os.environ['GEMINI_API_KEY']` |
-| gemini-pro-vision     | `completion(model='gemini/gemini-pro-vision', messages)`     | `os.environ['GEMINI_API_KEY']` |
+| gemini-2.0-flash     | `completion(model='gemini/gemini-2.0-flash', messages)`     | `os.environ['GEMINI_API_KEY']` |
+| gemini-2.0-flash-exp     | `completion(model='gemini/gemini-2.0-flash-exp', messages)`     | `os.environ['GEMINI_API_KEY']` |
+| gemini-2.0-flash-lite-preview-02-05	     | `completion(model='gemini/gemini-2.0-flash-lite-preview-02-05', messages)`     | `os.environ['GEMINI_API_KEY']` |
 
 
 
@@ -877,3 +887,54 @@ response = await client.chat.completions.create(
 
 </TabItem>
 </Tabs>
+
+## Image Generation
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion 
+
+response = completion(
+    model="gemini/gemini-2.0-flash-exp-image-generation",
+    messages=[{"role": "user", "content": "Generate an image of a cat"}],
+    modalities=["image", "text"],
+)
+assert response.choices[0].message.content is not None # "data:image/png;base64,e4rr.."
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: gemini-2.0-flash-exp-image-generation
+    litellm_params:
+      model: gemini/gemini-2.0-flash-exp-image-generation
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+
+```bash
+curl -L -X POST 'http://localhost:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "gemini-2.0-flash-exp-image-generation",
+    "messages": [{"role": "user", "content": "Generate an image of a cat"}],
+    "modalities": ["image", "text"]
+}'
+```
+
+</TabItem>
+</Tabs>
+

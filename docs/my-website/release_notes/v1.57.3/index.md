@@ -1,6 +1,23 @@
+---
+title: v1.57.3 - New Base Docker Image
+slug: v1.57.3
+date: 2025-01-08T10:00:00
+authors:
+  - name: Krrish Dholakia
+    title: CEO, LiteLLM
+    url: https://www.linkedin.com/in/krish-d/
+    image_url: https://media.licdn.com/dms/image/v2/D4D03AQGrlsJ3aqpHmQ/profile-displayphoto-shrink_400_400/B4DZSAzgP7HYAg-/0/1737327772964?e=1749686400&v=beta&t=Hkl3U8Ps0VtvNxX0BNNq24b4dtX5wQaPFp6oiKCIHD8
+  - name: Ishaan Jaffer
+    title: CTO, LiteLLM
+    url: https://www.linkedin.com/in/reffajnaahsi/
+    image_url: https://media.licdn.com/dms/image/v2/D4D03AQGiM7ZrUwqu_Q/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1675971026692?e=1741824000&v=beta&t=eQnRdXPJo4eiINWTZARoYTfqh064pgZ-E21pQTSy8jc
+tags: [docker image, security, vulnerability]
+hide_table_of_contents: false
+---
+
 import Image from '@theme/IdealImage';
 
-# v1.57.3 - New Base Docker Image
+`docker image`, `security`, `vulnerability`
 
 # 0 Critical/High Vulnerabilities
 

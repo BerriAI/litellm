@@ -31,7 +31,7 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
         logging_obj,
         optional_params: dict,
         acompletion=None,
-        litellm_params=None,
+        litellm_params: dict = {},
         headers: Optional[dict] = None,
         logger_fn=None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
@@ -51,20 +51,22 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
             api_key=api_key,
         )
 
-        ## GET API URL
-        api_base = watsonx_chat_transformation.get_complete_url(
-            api_base=api_base,
-            model=model,
-            optional_params=optional_params,
-            stream=optional_params.get("stream", False),
-        )
-
         ## UPDATE PAYLOAD (optional params)
         watsonx_auth_payload = watsonx_chat_transformation._prepare_payload(
             model=model,
             api_params=api_params,
         )
         optional_params.update(watsonx_auth_payload)
+
+        ## GET API URL
+        api_base = watsonx_chat_transformation.get_complete_url(
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            stream=optional_params.get("stream", False),
+        )
 
         return super().completion(
             model=model,

@@ -66,14 +66,14 @@ def test_spend_logs_payload(model_id: Optional[str]):
                 "metadata": {
                     "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"],
                     "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
-                    "user_api_key_alias": None,
+                    "user_api_key_alias": "custom-key-alias",
                     "user_api_end_user_max_budget": None,
                     "litellm_api_version": "0.0.0",
                     "global_max_parallel_requests": None,
                     "user_api_key_user_id": "116544810872468347480",
-                    "user_api_key_org_id": None,
-                    "user_api_key_team_id": None,
-                    "user_api_key_team_alias": None,
+                    "user_api_key_org_id": "custom-org-id",
+                    "user_api_key_team_id": "custom-team-id",
+                    "user_api_key_team_alias": "custom-team-alias",
                     "user_api_key_metadata": {},
                     "requester_ip_address": "127.0.0.1",
                     "spend_logs_metadata": {"hello": "world"},
@@ -96,6 +96,9 @@ def test_spend_logs_payload(model_id: Optional[str]):
                     },
                     "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
                     "caching_groups": None,
+                    "error_information": None,
+                    "status": "success",
+                    "proxy_server_request": "{}",
                     "raw_request": "\n\nPOST Request Sent from LiteLLM:\ncurl -X POST \\\nhttps://openai-gpt-4-test-v-1.openai.azure.com//openai/ \\\n-H 'Authorization: *****' \\\n-d '{'model': 'chatgpt-v-2', 'messages': [{'role': 'system', 'content': 'you are a helpful assistant.\\n'}, {'role': 'user', 'content': 'bom dia'}], 'stream': False, 'max_tokens': 10, 'user': '116544810872468347480', 'extra_body': {}}'\n",
                 },
                 "model_info": {
@@ -170,6 +173,12 @@ def test_spend_logs_payload(model_id: Optional[str]):
             "end_time": datetime.datetime(2024, 6, 7, 12, 43, 30, 954146),
             "cache_hit": None,
             "response_cost": 2.4999999999999998e-05,
+            "standard_logging_object": {
+                "request_tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"],
+                "metadata": {
+                    "user_api_key_end_user_id": "test-user",
+                },
+            },
         },
         "response_obj": litellm.ModelResponse(
             id=model_id,
@@ -192,7 +201,6 @@ def test_spend_logs_payload(model_id: Optional[str]):
         ),
         "start_time": datetime.datetime(2024, 6, 7, 12, 43, 30, 308604),
         "end_time": datetime.datetime(2024, 6, 7, 12, 43, 30, 954146),
-        "end_user_id": None,
     }
 
     payload: SpendLogsPayload = get_logging_payload(**input_args)
@@ -211,6 +219,10 @@ def test_spend_logs_payload(model_id: Optional[str]):
     assert (
         payload["request_tags"] == '["model-anthropic-claude-v2.1", "app-ishaan-prod"]'
     )
+    assert payload["metadata"]["user_api_key_org_id"] == "custom-org-id"
+    assert payload["metadata"]["user_api_key_team_id"] == "custom-team-id"
+    assert payload["metadata"]["user_api_key_team_alias"] == "custom-team-alias"
+    assert payload["metadata"]["user_api_key_alias"] == "custom-key-alias"
 
     assert payload["custom_llm_provider"] == "azure"
 
@@ -229,6 +241,7 @@ def test_spend_logs_payload_whisper():
             "metadata": {
                 "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
                 "user_api_key_alias": None,
+                "user_api_key_end_user_id": "test-user",
                 "user_api_end_user_max_budget": None,
                 "litellm_api_version": "1.40.19",
                 "global_max_parallel_requests": None,
@@ -293,10 +306,86 @@ def test_spend_logs_payload_whisper():
         response_obj=response,
         start_time=datetime.datetime.now(),
         end_time=datetime.datetime.now(),
-        end_user_id="test-user",
     )
 
     print("payload: ", payload)
 
     assert payload["call_type"] == "atranscription"
     assert payload["spend"] == 0.00023398580000000003
+
+
+def test_spend_logs_payload_with_prompts_enabled(monkeypatch):
+    """
+    Test that messages and responses are logged in spend logs when store_prompts_in_spend_logs is enabled
+    """
+    # Mock general_settings
+    from litellm.proxy.proxy_server import general_settings
+
+    general_settings["store_prompts_in_spend_logs"] = True
+
+    input_args: dict = {
+        "kwargs": {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "Hello!"}],
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": "fake_key",
+                }
+            },
+        },
+        "response_obj": litellm.ModelResponse(
+            id="chatcmpl-123",
+            choices=[
+                litellm.Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=litellm.Message(content="Hi there!", role="assistant"),
+                )
+            ],
+            model="gpt-3.5-turbo",
+            usage=litellm.Usage(completion_tokens=2, prompt_tokens=1, total_tokens=3),
+        ),
+        "start_time": datetime.datetime.now(),
+        "end_time": datetime.datetime.now(),
+    }
+
+    # Create a standard logging payload
+    standard_logging_payload = {
+        "messages": [{"role": "user", "content": "Hello!"}],
+        "response": {"role": "assistant", "content": "Hi there!"},
+        "metadata": {
+            "user_api_key_end_user_id": "test-user",
+        },
+        "request_tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"],
+    }
+    litellm_params = {
+        "proxy_server_request": {
+            "body": {
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "Hello!"}],
+            }
+        }
+    }
+    input_args["kwargs"]["standard_logging_object"] = standard_logging_payload
+    input_args["kwargs"]["litellm_params"] = litellm_params
+
+    payload: SpendLogsPayload = get_logging_payload(**input_args)
+
+    print("json payload: ", json.dumps(payload, indent=4, default=str))
+
+    # Verify messages and response are included in payload
+    assert payload["response"] == json.dumps(
+        {"role": "assistant", "content": "Hi there!"}
+    )
+    parsed_metadata = json.loads(payload["metadata"])
+    assert parsed_metadata["proxy_server_request"] == json.dumps(
+        {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello!"}]}
+    )
+
+    # Clean up - reset general_settings
+    general_settings["store_prompts_in_spend_logs"] = False
+
+    # Verify messages and response are not included when disabled
+    payload_disabled: SpendLogsPayload = get_logging_payload(**input_args)
+    assert payload_disabled["messages"] == "{}"
+    assert payload_disabled["response"] == "{}"

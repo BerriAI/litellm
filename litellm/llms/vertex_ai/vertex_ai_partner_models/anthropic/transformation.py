@@ -1,11 +1,13 @@
 # What is this?
 ## Handler file for calling claude-3 on vertex ai
-from typing import List
+from typing import Any, List, Optional
 
 import httpx
 
 import litellm
+from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponse
 
 from ....anthropic.chat.transformation import AnthropicConfig
 
@@ -63,6 +65,37 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
         data.pop("model", None)  # vertex anthropic doesn't accept 'model' parameter
         return data
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
+        response = super().transform_response(
+            model,
+            raw_response,
+            model_response,
+            logging_obj,
+            request_data,
+            messages,
+            optional_params,
+            litellm_params,
+            encoding,
+            api_key,
+            json_mode,
+        )
+        response.model = model
+
+        return response
 
     @classmethod
     def is_supported_model(cls, model: str, custom_llm_provider: str) -> bool:

@@ -8,7 +8,7 @@ Has all /sso/* routes
 import asyncio
 import os
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
@@ -17,6 +17,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAX_SPENDLOG_ROWS_TO_QUERY
 from litellm.proxy._types import (
+    LiteLLM_UserTable,
     LitellmUserRoles,
     Member,
     NewUserRequest,
@@ -27,14 +28,15 @@ from litellm.proxy._types import (
     TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_checks import get_user_object
 from litellm.proxy.auth.auth_utils import _has_user_setup_sso
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
     admin_ui_disabled,
-    html_form,
     show_missing_vars_in_env,
 )
+from litellm.proxy.common_utils.html_forms.ui_login import html_form
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.sso_helper_utils import (
     check_is_admin_only_access,
@@ -211,9 +213,9 @@ async def google_login(request: Request):  # noqa: PLR0915
             if state:
                 redirect_params["state"] = state
             elif "okta" in generic_authorization_endpoint:
-                redirect_params["state"] = (
-                    uuid.uuid4().hex
-                )  # set state param for okta - required
+                redirect_params[
+                    "state"
+                ] = uuid.uuid4().hex  # set state param for okta - required
             return await generic_sso.get_login_redirect(**redirect_params)  # type: ignore
     elif ui_username is not None:
         # No Google, Microsoft SSO
@@ -368,7 +370,9 @@ async def create_team_member_add_task(team_id, user_info):
         )
 
 
-async def add_missing_team_member(user_info: NewUserResponse, sso_teams: List[str]):
+async def add_missing_team_member(
+    user_info: Union[NewUserResponse, LiteLLM_UserTable], sso_teams: List[str]
+):
     """
     - Get missing teams (diff b/w user_info.team_ids and sso_teams)
     - Add missing user to missing teams
@@ -391,6 +395,17 @@ async def add_missing_team_member(user_info: NewUserResponse, sso_teams: List[st
         )
 
 
+def get_disabled_non_admin_personal_key_creation():
+    key_generation_settings = litellm.key_generation_settings
+    if key_generation_settings is None:
+        return False
+    personal_key_generation = (
+        key_generation_settings.get("personal_key_generation") or {}
+    )
+    allowed_user_roles = personal_key_generation.get("allowed_user_roles") or []
+    return bool("proxy_admin" in allowed_user_roles)
+
+
 @router.get("/sso/callback", tags=["experimental"], include_in_schema=False)
 async def auth_callback(request: Request):  # noqa: PLR0915
     """Verify login"""
@@ -403,7 +418,9 @@ async def auth_callback(request: Request):  # noqa: PLR0915
         master_key,
         premium_user,
         prisma_client,
+        proxy_logging_obj,
         ui_access_mode,
+        user_api_key_cache,
         user_custom_sso,
     )
 
@@ -468,7 +485,14 @@ async def auth_callback(request: Request):  # noqa: PLR0915
             redirect_uri=redirect_url,
             allow_insecure_http=True,
         )
-        result = await microsoft_sso.verify_and_process(request)
+        original_msft_result = await microsoft_sso.verify_and_process(
+            request=request,
+            convert_response=False,
+        )
+        result = MicrosoftSSOHandler.openid_from_response(
+            response=original_msft_result,
+            jwt_handler=jwt_handler,
+        )
     elif generic_client_id is not None:
         result = await get_generic_sso_response(
             request=request,
@@ -477,6 +501,7 @@ async def auth_callback(request: Request):  # noqa: PLR0915
             redirect_url=redirect_url,
         )
     # User is Authe'd in - generate key for the UI to access Proxy
+    verbose_proxy_logger.debug(f"SSO callback result: {result}")
     user_email: Optional[str] = getattr(result, "email", None)
     user_id: Optional[str] = getattr(result, "id", None) if result is not None else None
 
@@ -546,20 +571,30 @@ async def auth_callback(request: Request):  # noqa: PLR0915
     user_role = None
     try:
         if prisma_client is not None:
-            user_info = await prisma_client.get_data(user_id=user_id, table_name="user")
+            try:
+                user_info = await get_user_object(
+                    user_id=user_id,
+                    user_email=user_email,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    user_id_upsert=False,
+                    parent_otel_span=None,
+                    proxy_logging_obj=proxy_logging_obj,
+                    sso_user_id=user_id,
+                )
+            except Exception as e:
+                verbose_proxy_logger.debug(f"Error getting user object: {e}")
+                user_info = None
+
             verbose_proxy_logger.debug(
                 f"user_info: {user_info}; litellm.default_internal_user_params: {litellm.default_internal_user_params}"
             )
-            if user_info is None:
-                ## check if user-email in db ##
-                user_info = await prisma_client.db.litellm_usertable.find_first(
-                    where={"user_email": user_email}
-                )
 
-            if user_info is not None and user_id is not None:
+            if user_info is not None:
+                user_id = user_info.user_id
                 user_defined_values = SSOUserDefinedValues(
                     models=getattr(user_info, "models", user_id_models),
-                    user_id=user_id,
+                    user_id=user_info.user_id,
                     user_email=getattr(user_info, "user_email", user_email),
                     user_role=getattr(user_info, "user_role", None),
                     max_budget=getattr(
@@ -577,6 +612,9 @@ async def auth_callback(request: Request):  # noqa: PLR0915
                     where={"user_email": user_email}, data={"user_id": user_id}  # type: ignore
                 )
             else:
+                verbose_proxy_logger.info(
+                    "user not in DB, inserting user into LiteLLM DB"
+                )
                 # user not in DB, insert User into LiteLLM DB
                 user_info = await insert_sso_user(
                     result_openid=result,
@@ -613,9 +651,6 @@ async def auth_callback(request: Request):  # noqa: PLR0915
     key = response["token"]  # type: ignore
     user_id = response["user_id"]  # type: ignore
 
-    # This should always be true
-    # User_id on SSO == user_id in the LiteLLM_VerificationToken Table
-    assert user_id == _user_id_from_sso
     litellm_dashboard_ui = "/ui/"
     user_role = user_role or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
     if (
@@ -640,6 +675,10 @@ async def auth_callback(request: Request):  # noqa: PLR0915
                 },
             )
 
+    disabled_non_admin_personal_key_creation = (
+        get_disabled_non_admin_personal_key_creation()
+    )
+
     import jwt
 
     jwt_token = jwt.encode(  # type: ignore
@@ -653,6 +692,7 @@ async def auth_callback(request: Request):  # noqa: PLR0915
             "auth_header_name": general_settings.get(
                 "litellm_key_header_name", "Authorization"
             ),
+            "disabled_non_admin_personal_key_creation": disabled_non_admin_personal_key_creation,
         },
         master_key,
         algorithm="HS256",
@@ -693,9 +733,9 @@ async def insert_sso_user(
         if user_defined_values.get("max_budget") is None:
             user_defined_values["max_budget"] = litellm.max_internal_user_budget
         if user_defined_values.get("budget_duration") is None:
-            user_defined_values["budget_duration"] = (
-                litellm.internal_user_budget_duration
-            )
+            user_defined_values[
+                "budget_duration"
+            ] = litellm.internal_user_budget_duration
 
     if user_defined_values["user_role"] is None:
         user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
@@ -747,3 +787,27 @@ async def get_ui_settings(request: Request):
         ),
         "DISABLE_EXPENSIVE_DB_QUERIES": disable_expensive_db_queries,
     }
+
+
+class MicrosoftSSOHandler:
+    """
+    Handles Microsoft SSO callback response and returns a CustomOpenID object
+    """
+
+    @staticmethod
+    def openid_from_response(
+        response: Optional[dict], jwt_handler: JWTHandler
+    ) -> CustomOpenID:
+        response = response or {}
+        verbose_proxy_logger.debug(f"Microsoft SSO Callback Response: {response}")
+        openid_response = CustomOpenID(
+            email=response.get("mail"),
+            display_name=response.get("displayName"),
+            provider="microsoft",
+            id=response.get("id"),
+            first_name=response.get("givenName"),
+            last_name=response.get("surname"),
+            team_ids=jwt_handler.get_team_ids_from_jwt(cast(dict, response)),
+        )
+        verbose_proxy_logger.debug(f"Microsoft SSO OpenID Response: {openid_response}")
+        return openid_response

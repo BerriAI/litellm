@@ -1,3 +1,4 @@
+.python-version
 .venv
 .env
 .newenv
@@ -48,7 +49,7 @@ deploy/charts/litellm/charts/*
 deploy/charts/*.tgz
 litellm/proxy/vertex_key.json
 **/.vim/
-/node_modules
+**/node_modules
 kub.yaml
 loadtest_kub.yaml
 litellm/proxy/_new_secret_config.yaml
@@ -70,3 +71,17 @@ venv/
 tests/local_testing/log.txt
 
 .codegpt
+litellm/proxy/_new_new_secret_config.yaml
+litellm/proxy/custom_guardrail.py
+litellm/proxy/_experimental/out/404.html
+litellm/proxy/_experimental/out/404.html
+litellm/proxy/_experimental/out/model_hub.html
+.mypy_cache/*
+litellm/proxy/application.log
+tests/llm_translation/vertex_test_account.json
+tests/llm_translation/test_vertex_key.json
+litellm/proxy/migrations/0_init/migration.sql
+litellm/proxy/db/migrations/0_init/migration.sql
+litellm/proxy/db/migrations/*
+litellm/proxy/migrations/*config.yaml
+litellm/proxy/migrations/*

@@ -1,7 +1,7 @@
 import asyncio
 import os
 import sys
-from typing import Any, Dict
+from typing import Any, Dict, Optional, List
 from unittest.mock import Mock
 from litellm.proxy.utils import _get_redoc_url, _get_docs_url
 import json
@@ -770,42 +770,6 @@ async def test_add_litellm_data_to_request_duplicate_tags(
 
 
 @pytest.mark.parametrize(
-    "general_settings, user_api_key_dict, expected_enforced_params",
-    [
-        (
-            {"enforced_params": ["param1", "param2"]},
-            UserAPIKeyAuth(
-                api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
-            ),
-            ["param1", "param2"],
-        ),
-        (
-            {"service_account_settings": {"enforced_params": ["param1", "param2"]}},
-            UserAPIKeyAuth(
-                api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
-            ),
-            ["param1", "param2"],
-        ),
-        (
-            {"service_account_settings": {"enforced_params": ["param1", "param2"]}},
-            UserAPIKeyAuth(
-                api_key="test_api_key",
-                metadata={"enforced_params": ["param3", "param4"]},
-            ),
-            ["param1", "param2", "param3", "param4"],
-        ),
-    ],
-)
-def test_get_enforced_params(
-    general_settings, user_api_key_dict, expected_enforced_params
-):
-    from litellm.proxy.litellm_pre_call_utils import _get_enforced_params
-
-    enforced_params = _get_enforced_params(general_settings, user_api_key_dict)
-    assert enforced_params == expected_enforced_params
-
-
-@pytest.mark.parametrize(
     "general_settings, user_api_key_dict, request_body, expected_error",
     [
         (
@@ -820,6 +784,17 @@ def test_get_enforced_params(
             {"service_account_settings": {"enforced_params": ["user"]}},
             UserAPIKeyAuth(
                 api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
+            ),
+            {},
+            False,
+        ),
+        (
+            {"service_account_settings": {"enforced_params": ["user"]}},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+                user_id="test_user_id", 
+                org_id="test_org_id",
+                metadata={"service_account_id": "test_service_account_id"}
             ),
             {},
             True,
@@ -854,6 +829,7 @@ def test_get_enforced_params(
             {"service_account_settings": {"enforced_params": ["user"]}},
             UserAPIKeyAuth(
                 api_key="test_api_key",
+                metadata={"service_account_id": "test_service_account_id"}
             ),
             {"user": "test_user"},
             False,
@@ -939,8 +915,9 @@ def test_get_team_models():
     model_access_groups["default"].extend(["gpt-4o-mini"])
     model_access_groups["team2"].extend(["gpt-3.5-turbo"])
 
+    team_models = user_api_key_dict.team_models
     result = get_team_models(
-        user_api_key_dict=user_api_key_dict,
+        team_models=team_models,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
     )
@@ -1107,6 +1084,29 @@ def test_proxy_config_state_post_init_callback_call():
     assert config["litellm_settings"]["default_team_settings"][0]["team_id"] == "test"
 
 
+def test_proxy_config_state_get_config_state_error():
+    """
+    Ensures that get_config_state does not raise an error when the config is not a valid dictionary
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+    import threading
+
+    test_config = {
+        "callback_list": [
+            {
+                "lock": threading.RLock(),  # This will cause the deep copy to fail
+                "name": "test_callback",
+            }
+        ],
+        "model_list": ["gpt-4", "claude-3"],
+    }
+
+    pc = ProxyConfig()
+    pc.config = test_config
+    config = pc.get_config_state()
+    assert config == {}
+
+
 @pytest.mark.parametrize(
     "associated_budget_table, expected_user_api_key_auth_key, expected_user_api_key_auth_value",
     [
@@ -1193,14 +1193,14 @@ def test_litellm_verification_token_view_response_with_budget_table(
         )
 
 
-def test_is_allowed_to_create_key():
+def test_is_allowed_to_make_key_request():
     from litellm.proxy._types import LitellmUserRoles
     from litellm.proxy.management_endpoints.key_management_endpoints import (
-        _is_allowed_to_create_key,
+        _is_allowed_to_make_key_request,
     )
 
     assert (
-        _is_allowed_to_create_key(
+        _is_allowed_to_make_key_request(
             user_api_key_dict=UserAPIKeyAuth(
                 user_id="test_user_id", user_role=LitellmUserRoles.PROXY_ADMIN
             ),
@@ -1211,7 +1211,7 @@ def test_is_allowed_to_create_key():
     )
 
     assert (
-        _is_allowed_to_create_key(
+        _is_allowed_to_make_key_request(
             user_api_key_dict=UserAPIKeyAuth(
                 user_id="test_user_id",
                 user_role=LitellmUserRoles.INTERNAL_USER,
@@ -1359,3 +1359,437 @@ def test_custom_openid_response():
         jwt_handler=jwt_handler,
     )
     assert resp.team_ids == ["/test-group"]
+
+
+def test_update_key_request_validation():
+    """
+    Ensures that the UpdateKeyRequest model validates the temp_budget_increase and temp_budget_expiry fields together
+    """
+    from litellm.proxy._types import UpdateKeyRequest
+
+    with pytest.raises(Exception):
+        UpdateKeyRequest(
+            key="test_key",
+            temp_budget_increase=100,
+        )
+
+    with pytest.raises(Exception):
+        UpdateKeyRequest(
+            key="test_key",
+            temp_budget_expiry="2024-01-20T00:00:00Z",
+        )
+
+    UpdateKeyRequest(
+        key="test_key",
+        temp_budget_increase=100,
+        temp_budget_expiry="2024-01-20T00:00:00Z",
+    )
+
+
+def test_get_temp_budget_increase():
+    from litellm.proxy.auth.user_api_key_auth import _get_temp_budget_increase
+    from litellm.proxy._types import UserAPIKeyAuth
+    from datetime import datetime, timedelta
+
+    expiry = datetime.now() + timedelta(days=1)
+    expiry_in_isoformat = expiry.isoformat()
+
+    valid_token = UserAPIKeyAuth(
+        max_budget=100,
+        spend=0,
+        metadata={
+            "temp_budget_increase": 100,
+            "temp_budget_expiry": expiry_in_isoformat,
+        },
+    )
+    assert _get_temp_budget_increase(valid_token) == 100
+
+
+def test_update_key_budget_with_temp_budget_increase():
+    from litellm.proxy.auth.user_api_key_auth import (
+        _update_key_budget_with_temp_budget_increase,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+    from datetime import datetime, timedelta
+
+    expiry = datetime.now() + timedelta(days=1)
+    expiry_in_isoformat = expiry.isoformat()
+
+    valid_token = UserAPIKeyAuth(
+        max_budget=100,
+        spend=0,
+        metadata={
+            "temp_budget_increase": 100,
+            "temp_budget_expiry": expiry_in_isoformat,
+        },
+    )
+    assert _update_key_budget_with_temp_budget_increase(valid_token).max_budget == 200
+
+
+from unittest.mock import MagicMock, AsyncMock
+
+
+@pytest.mark.asyncio
+async def test_health_check_not_called_when_disabled(monkeypatch):
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    # Mock environment variable
+    monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "true")
+
+    # Create mock prisma client
+    mock_prisma = MagicMock()
+    mock_prisma.connect = AsyncMock()
+    mock_prisma.health_check = AsyncMock()
+    mock_prisma.check_view_exists = AsyncMock()
+    mock_prisma._set_spend_logs_row_count_in_proxy_state = AsyncMock()
+    # Mock PrismaClient constructor
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.PrismaClient", lambda **kwargs: mock_prisma
+    )
+
+    # Call the setup function
+    await ProxyStartupEvent._setup_prisma_client(
+        database_url="mock_url",
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=MagicMock(),
+    )
+
+    # Verify health check wasn't called
+    mock_prisma.health_check.assert_not_called()
+
+
+@patch(
+    "litellm.proxy.proxy_server.get_openapi_schema",
+    return_value={
+        "paths": {
+            "/new/route": {"get": {"summary": "New"}},
+        }
+    },
+)
+def test_custom_openapi(mock_get_openapi_schema):
+    from litellm.proxy.proxy_server import custom_openapi
+    from litellm.proxy.proxy_server import app
+
+    openapi_schema = custom_openapi()
+    assert openapi_schema is not None
+
+
+import pytest
+from unittest.mock import MagicMock, AsyncMock
+import asyncio
+from datetime import timedelta
+from litellm.proxy.utils import ProxyUpdateSpend
+
+
+@pytest.mark.asyncio
+async def test_end_user_transactions_reset():
+    # Setup
+    mock_client = MagicMock()
+    end_user_list_transactions = {"1": 10.0}  # Bad log
+    mock_client.db.tx = AsyncMock(side_effect=Exception("DB Error"))
+
+    # Call function - should raise error
+    with pytest.raises(Exception):
+        await ProxyUpdateSpend.update_end_user_spend(
+            n_retry_times=0,
+            prisma_client=mock_client,
+            proxy_logging_obj=MagicMock(),
+            end_user_list_transactions=end_user_list_transactions,
+        )
+
+@pytest.mark.asyncio
+async def test_spend_logs_cleanup_after_error():
+    # Setup test data
+    mock_client = MagicMock()
+    mock_client.spend_log_transactions = [
+        {"id": 1, "amount": 10.0},
+        {"id": 2, "amount": 20.0},
+        {"id": 3, "amount": 30.0},
+    ]
+    # Make the DB operation fail
+    mock_client.db.litellm_spendlogs.create_many = AsyncMock(
+        side_effect=Exception("DB Error")
+    )
+
+    original_logs = mock_client.spend_log_transactions.copy()
+
+    # Call function - should raise error
+    with pytest.raises(Exception):
+        await ProxyUpdateSpend.update_spend_logs(
+            n_retry_times=0,
+            prisma_client=mock_client,
+            db_writer_client=None,  # Test DB write path
+            proxy_logging_obj=MagicMock(),
+        )
+
+    # Verify the first batch was removed from spend_log_transactions
+    assert (
+        mock_client.spend_log_transactions == original_logs[100:]
+    ), "Should remove processed logs even after error"
+
+
+def test_provider_specific_header():
+    from litellm.proxy.litellm_pre_call_utils import (
+        add_provider_specific_headers_to_request,
+    )
+
+    data = {
+        "model": "gemini-1.5-flash",
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Tell me a joke"}],
+            }
+        ],
+        "stream": True,
+        "proxy_server_request": {
+            "url": "http://0.0.0.0:4000/v1/chat/completions",
+            "method": "POST",
+            "headers": {
+                "content-type": "application/json",
+                "anthropic-beta": "prompt-caching-2024-07-31",
+                "user-agent": "PostmanRuntime/7.32.3",
+                "accept": "*/*",
+                "postman-token": "81cccd87-c91d-4b2f-b252-c0fe0ca82529",
+                "host": "0.0.0.0:4000",
+                "accept-encoding": "gzip, deflate, br",
+                "connection": "keep-alive",
+                "content-length": "240",
+            },
+            "body": {
+                "model": "gemini-1.5-flash",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "Tell me a joke"}],
+                    }
+                ],
+                "stream": True,
+            },
+        },
+    }
+
+    headers = {
+        "content-type": "application/json",
+        "anthropic-beta": "prompt-caching-2024-07-31",
+        "user-agent": "PostmanRuntime/7.32.3",
+        "accept": "*/*",
+        "postman-token": "81cccd87-c91d-4b2f-b252-c0fe0ca82529",
+        "host": "0.0.0.0:4000",
+        "accept-encoding": "gzip, deflate, br",
+        "connection": "keep-alive",
+        "content-length": "240",
+    }
+
+    add_provider_specific_headers_to_request(
+        data=data,
+        headers=headers,
+    )
+    assert data["provider_specific_header"] == {
+        "custom_llm_provider": "anthropic",
+        "extra_headers": {
+            "anthropic-beta": "prompt-caching-2024-07-31",
+        },
+    }
+
+
+from litellm.proxy._types import LiteLLM_UserTable
+
+
+@pytest.mark.parametrize(
+    "wildcard_model, expected_models",
+    [
+        (
+            "anthropic/*",
+            ["anthropic/claude-3-5-haiku-20241022", "anthropic/claude-3-opus-20240229"],
+        ),
+        (
+            "vertex_ai/gemini-*",
+            ["vertex_ai/gemini-1.5-flash", "vertex_ai/gemini-1.5-pro"],
+        ),
+    ],
+)
+def test_get_known_models_from_wildcard(wildcard_model, expected_models):
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    wildcard_models = get_known_models_from_wildcard(wildcard_model=wildcard_model)
+    # Check if all expected models are in the returned list
+    print(f"wildcard_models: {wildcard_models}\n")
+    for model in expected_models:
+        if model not in wildcard_models:
+            print(f"Missing expected model: {model}")
+
+    assert all(model in wildcard_models for model in expected_models)
+
+
+@pytest.mark.parametrize(
+    "data, user_api_key_dict, expected_model",
+    [
+        # Test case 1: Model exists in team aliases
+        (
+            {"model": "gpt-4o"},
+            UserAPIKeyAuth(
+                api_key="test_key", team_model_aliases={"gpt-4o": "gpt-4o-team-1"}
+            ),
+            "gpt-4o-team-1",
+        ),
+        # Test case 2: Model doesn't exist in team aliases
+        (
+            {"model": "gpt-4o"},
+            UserAPIKeyAuth(
+                api_key="test_key", team_model_aliases={"claude-3": "claude-3-team-1"}
+            ),
+            "gpt-4o",
+        ),
+        # Test case 3: No team aliases defined
+        (
+            {"model": "gpt-4o"},
+            UserAPIKeyAuth(api_key="test_key", team_model_aliases=None),
+            "gpt-4o",
+        ),
+        # Test case 4: No model in request data
+        (
+            {"messages": []},
+            UserAPIKeyAuth(
+                api_key="test_key", team_model_aliases={"gpt-4o": "gpt-4o-team-1"}
+            ),
+            None,
+        ),
+    ],
+)
+def test_update_model_if_team_alias_exists(data, user_api_key_dict, expected_model):
+    from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
+
+    # Make a copy of the input data to avoid modifying the test parameters
+    test_data = data.copy()
+
+    # Call the function
+    _update_model_if_team_alias_exists(
+        data=test_data, user_api_key_dict=user_api_key_dict
+    )
+
+    # Check if model was updated correctly
+    assert test_data.get("model") == expected_model
+
+
+@pytest.fixture
+def mock_prisma_client():
+    client = MagicMock()
+    client.db = MagicMock()
+    client.db.litellm_teamtable = AsyncMock()
+    return client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "test_id, user_info, user_role, mock_teams, expected_teams, should_query_db",
+    [
+        ("no_user_info", None, "proxy_admin", None, [], False),
+        (
+            "no_teams_found",
+            LiteLLM_UserTable(
+                teams=["team1", "team2"],
+                user_id="user1",
+                max_budget=100,
+                spend=0,
+                user_email="user1@example.com",
+                user_role="proxy_admin",
+            ),
+            "proxy_admin",
+            None,
+            [],
+            True,
+        ),
+        (
+            "admin_user_with_teams",
+            LiteLLM_UserTable(
+                teams=["team1", "team2"],
+                user_id="user1",
+                max_budget=100,
+                spend=0,
+                user_email="user1@example.com",
+                user_role="proxy_admin",
+            ),
+            "proxy_admin",
+            [
+                MagicMock(
+                    model_dump=lambda: {
+                        "team_id": "team1",
+                        "members_with_roles": [{"role": "admin", "user_id": "user1"}],
+                    }
+                ),
+                MagicMock(
+                    model_dump=lambda: {
+                        "team_id": "team2",
+                        "members_with_roles": [
+                            {"role": "admin", "user_id": "user1"},
+                            {"role": "user", "user_id": "user2"},
+                        ],
+                    }
+                ),
+            ],
+            ["team1", "team2"],
+            True,
+        ),
+        (
+            "non_admin_user",
+            LiteLLM_UserTable(
+                teams=["team1", "team2"],
+                user_id="user1",
+                max_budget=100,
+                spend=0,
+                user_email="user1@example.com",
+                user_role="internal_user",
+            ),
+            "internal_user",
+            [
+                MagicMock(
+                    model_dump=lambda: {"team_id": "team1", "members": ["user1"]}
+                ),
+                MagicMock(
+                    model_dump=lambda: {
+                        "team_id": "team2",
+                        "members": ["user1", "user2"],
+                    }
+                ),
+            ],
+            [],
+            True,
+        ),
+    ],
+)
+async def test_get_admin_team_ids(
+    test_id: str,
+    user_info: Optional[LiteLLM_UserTable],
+    user_role: str,
+    mock_teams: Optional[List[MagicMock]],
+    expected_teams: List[str],
+    should_query_db: bool,
+    mock_prisma_client,
+):
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        get_admin_team_ids,
+    )
+
+    # Setup
+    mock_prisma_client.db.litellm_teamtable.find_many.return_value = mock_teams
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=user_role, user_id=user_info.user_id if user_info else None
+    )
+
+    # Execute
+    result = await get_admin_team_ids(
+        complete_user_info=user_info,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    # Assert
+    assert result == expected_teams, f"Expected {expected_teams}, but got {result}"
+
+    if should_query_db:
+        mock_prisma_client.db.litellm_teamtable.find_many.assert_called_once_with(
+            where={"team_id": {"in": user_info.teams}}
+        )
+    else:
+        mock_prisma_client.db.litellm_teamtable.find_many.assert_not_called()

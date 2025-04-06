@@ -14,6 +14,7 @@ from ..exceptions import (
     BadRequestError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
+    InternalServerError,
     NotFoundError,
     PermissionDeniedError,
     RateLimitError,
@@ -126,7 +127,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
     completion_kwargs={},
     extra_kwargs={},
 ):
-
+    """Maps an LLM Provider Exception to OpenAI Exception Format"""
     if any(
         isinstance(original_exception, exc_type)
         for exc_type in litellm.LITELLM_EXCEPTION_TYPES
@@ -140,7 +141,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
             "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"  # noqa
         )  # noqa
         print(  # noqa
-            "LiteLLM.Info: If you need to debug this error, use `litellm.set_verbose=True'."  # noqa
+            "LiteLLM.Info: If you need to debug this error, use `litellm._turn_on_debug()'."  # noqa
         )  # noqa
         print()  # noqa
 
@@ -222,10 +223,12 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 "Request Timeout Error" in error_str
                 or "Request timed out" in error_str
                 or "Timed out generating response" in error_str
+                or "The read operation timed out" in error_str
             ):
                 exception_mapping_worked = True
+
                 raise Timeout(
-                    message=f"APITimeoutError - Request timed out. \nerror_str: {error_str}",
+                    message=f"APITimeoutError - Request timed out. Error_str: {error_str}",
                     model=model,
                     llm_provider=custom_llm_provider,
                     litellm_debug_info=extra_information,
@@ -275,6 +278,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     "This model's maximum context length is" in error_str
                     or "string too long. Expected a string with maximum length"
                     in error_str
+                    or "model's maximum context limit" in error_str
                 ):
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
@@ -327,6 +331,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         response=getattr(original_exception, "response", None),
                         litellm_debug_info=extra_information,
+                        body=getattr(original_exception, "body", None),
                     )
                 elif (
                     "Web server is returning an unknown error" in error_str
@@ -417,6 +422,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             llm_provider=custom_llm_provider,
                             response=getattr(original_exception, "response", None),
                             litellm_debug_info=extra_information,
+                            body=getattr(original_exception, "body", None),
                         )
                     elif original_exception.status_code == 429:
                         exception_mapping_worked = True
@@ -466,10 +472,20 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             method="POST", url="https://api.openai.com/v1/"
                         ),
                     )
-            elif custom_llm_provider == "anthropic":  # one of the anthropics
+            elif (
+                custom_llm_provider == "anthropic"
+                or custom_llm_provider == "anthropic_text"
+            ):  # one of the anthropics
                 if "prompt is too long" in error_str or "prompt: length" in error_str:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
+                        message="AnthropicError - {}".format(error_str),
+                        model=model,
+                        llm_provider="anthropic",
+                    )
+                elif "overloaded_error" in error_str:
+                    exception_mapping_worked = True
+                    raise InternalServerError(
                         message="AnthropicError - {}".format(error_str),
                         model=model,
                         llm_provider="anthropic",
@@ -678,6 +694,13 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         response=getattr(original_exception, "response", None),
                         litellm_debug_info=extra_information,
+                    )
+                elif "model's maximum context limit" in error_str:
+                    exception_mapping_worked = True
+                    raise ContextWindowExceededError(
+                        message=f"{custom_llm_provider}Exception: Context Window Error - {error_str}",
+                        model=model,
+                        llm_provider=custom_llm_provider,
                     )
                 elif "token_quota_reached" in error_str:
                     exception_mapping_worked = True
@@ -1939,6 +1962,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         litellm_debug_info=extra_information,
                         response=getattr(original_exception, "response", None),
+                        body=getattr(original_exception, "body", None),
                     )
                 elif (
                     "The api_key client option must be set either by passing api_key to the client or by setting"
@@ -1970,6 +1994,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             litellm_debug_info=extra_information,
                             response=getattr(original_exception, "response", None),
+                            body=getattr(original_exception, "body", None),
                         )
                     elif original_exception.status_code == 401:
                         exception_mapping_worked = True

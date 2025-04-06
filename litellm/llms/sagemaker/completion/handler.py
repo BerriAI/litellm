@@ -1,6 +1,6 @@
 import json
 from copy import deepcopy
-from typing import Any, Callable, List, Optional, Union
+from typing import Any, Callable, List, Optional, Union, cast
 
 import httpx
 
@@ -35,7 +35,6 @@ os.environ['AWS_SECRET_ACCESS_KEY'] = ""
 
 # set os.environ['AWS_REGION_NAME'] = <your-region_name>
 class SagemakerLLM(BaseAWSLLM):
-
     def _load_credentials(
         self,
         optional_params: dict,
@@ -154,7 +153,6 @@ class SagemakerLLM(BaseAWSLLM):
         acompletion: bool = False,
         headers: dict = {},
     ):
-
         # pop streaming if it's in the optional params as 'stream' raises an error with sagemaker
         credentials, aws_region_name = self._load_credentials(optional_params)
         inference_params = deepcopy(optional_params)
@@ -213,7 +211,7 @@ class SagemakerLLM(BaseAWSLLM):
                 sync_response = sync_handler.post(
                     url=prepared_request.url,
                     headers=prepared_request.headers,  # type: ignore
-                    json=data,
+                    data=prepared_request.body,
                     stream=stream,
                 )
 
@@ -308,7 +306,7 @@ class SagemakerLLM(BaseAWSLLM):
                 sync_response = sync_handler.post(
                     url=prepared_request.url,
                     headers=prepared_request.headers,  # type: ignore
-                    json=_data,
+                    data=prepared_request.body,
                     timeout=timeout,
                 )
 
@@ -356,7 +354,7 @@ class SagemakerLLM(BaseAWSLLM):
         self,
         api_base: str,
         headers: dict,
-        data: dict,
+        data: str,
         logging_obj,
         client=None,
     ):
@@ -368,7 +366,7 @@ class SagemakerLLM(BaseAWSLLM):
             response = await client.post(
                 api_base,
                 headers=headers,
-                json=data,
+                data=data,
                 stream=True,
             )
 
@@ -433,10 +431,18 @@ class SagemakerLLM(BaseAWSLLM):
             "messages": messages,
         }
         prepared_request = await asyncified_prepare_request(**prepared_request_args)
+        if model_id is not None:  # Fixes https://github.com/BerriAI/litellm/issues/8889
+            prepared_request.headers.update(
+                {"X-Amzn-SageMaker-Inference-Component": model_id}
+            )
+
+        if not prepared_request.body:
+            raise ValueError("Prepared request body is empty")
+
         completion_stream = await self.make_async_call(
             api_base=prepared_request.url,
             headers=prepared_request.headers,  # type: ignore
-            data=data,
+            data=cast(str, prepared_request.body),
             logging_obj=logging_obj,
         )
         streaming_response = CustomStreamWrapper(
@@ -511,14 +517,14 @@ class SagemakerLLM(BaseAWSLLM):
                 # Add model_id as InferenceComponentName header
                 # boto3 doc: https://docs.aws.amazon.com/sagemaker/latest/APIReference/API_runtime_InvokeEndpoint.html
                 prepared_request.headers.update(
-                    {"X-Amzn-SageMaker-Inference-Componen": model_id}
+                    {"X-Amzn-SageMaker-Inference-Component": model_id}
                 )
             # make async httpx post request here
             try:
                 response = await async_handler.post(
                     url=prepared_request.url,
                     headers=prepared_request.headers,  # type: ignore
-                    json=data,
+                    data=prepared_request.body,
                     timeout=timeout,
                 )
 
@@ -621,7 +627,7 @@ class SagemakerLLM(BaseAWSLLM):
         response = client.invoke_endpoint(
             EndpointName={model},
             ContentType="application/json",
-            Body={data}, # type: ignore
+            Body=f"{data!r}",  # Use !r for safe representation
             CustomAttributes="accept_eula=true",
         )"""  # type: ignore
         logging_obj.pre_call(

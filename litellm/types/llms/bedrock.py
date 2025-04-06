@@ -28,13 +28,21 @@ class SourceBlock(TypedDict):
     bytes: Optional[str]  # base 64 encoded string
 
 
+BedrockImageTypes = Literal["png", "jpeg", "gif", "webp"]
+
+
 class ImageBlock(TypedDict):
-    format: Literal["png", "jpeg", "gif", "webp"]
+    format: Union[BedrockImageTypes, str]
     source: SourceBlock
 
 
+BedrockDocumentTypes = Literal[
+    "pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"
+]
+
+
 class DocumentBlock(TypedDict):
-    format: Literal["pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"]
+    format: Union[BedrockDocumentTypes, str]
     source: SourceBlock
     name: str
 
@@ -58,6 +66,22 @@ class ToolUseBlock(TypedDict):
     toolUseId: str
 
 
+class BedrockConverseReasoningTextBlock(TypedDict, total=False):
+    text: Required[str]
+    signature: str
+
+
+class BedrockConverseReasoningContentBlock(TypedDict, total=False):
+    reasoningText: BedrockConverseReasoningTextBlock
+    redactedContent: str
+
+
+class BedrockConverseReasoningContentBlockDelta(TypedDict, total=False):
+    signature: str
+    redactedContent: str
+    text: str
+
+
 class ContentBlock(TypedDict, total=False):
     text: str
     image: ImageBlock
@@ -65,6 +89,7 @@ class ContentBlock(TypedDict, total=False):
     toolResult: ToolResultBlock
     toolUse: ToolUseBlock
     cachePoint: CachePointBlock
+    reasoningContent: BedrockConverseReasoningContentBlock
 
 
 class MessageBlock(TypedDict):
@@ -84,6 +109,10 @@ class ConverseTokenUsageBlock(TypedDict):
     inputTokens: int
     outputTokens: int
     totalTokens: int
+    cacheReadInputTokenCount: int
+    cacheReadInputTokens: int
+    cacheWriteInputTokenCount: int
+    cacheWriteInputTokens: int
 
 
 class ConverseResponseBlock(TypedDict):
@@ -159,13 +188,36 @@ class ContentBlockDeltaEvent(TypedDict, total=False):
 
     text: str
     toolUse: ToolBlockDeltaEvent
+    reasoningContent: BedrockConverseReasoningContentBlockDelta
 
 
-class RequestObject(TypedDict, total=False):
+class PerformanceConfigBlock(TypedDict):
+    latency: Literal["optimized", "throughput"]
+
+
+class CommonRequestObject(
+    TypedDict, total=False
+):  # common request object across sync + async flows
     additionalModelRequestFields: dict
     additionalModelResponseFieldPaths: List[str]
     inferenceConfig: InferenceConfig
+    system: List[SystemContentBlock]
+    toolConfig: ToolConfigBlock
+    guardrailConfig: Optional[GuardrailConfigBlock]
+    performanceConfig: Optional[PerformanceConfigBlock]
+
+
+class RequestObject(CommonRequestObject, total=False):
     messages: Required[List[MessageBlock]]
+
+
+class BedrockInvokeNovaRequest(TypedDict, total=False):
+    """
+    Request object for sending `nova` requests to `/bedrock/invoke/`
+    """
+
+    messages: List[MessageBlock]
+    inferenceConfig: InferenceConfig
     system: List[SystemContentBlock]
     toolConfig: ToolConfigBlock
     guardrailConfig: Optional[GuardrailConfigBlock]
@@ -322,6 +374,90 @@ class AmazonStability3TextToImageResponse(TypedDict, total=False):
     finish_reasons: List[str]
 
 
+class AmazonNovaCanvasRequestBase(TypedDict, total=False):
+    """
+    Base class for Amazon Nova Canvas API requests
+    """
+
+    pass
+
+
+class AmazonNovaCanvasImageGenerationConfig(TypedDict, total=False):
+    """
+    Config for Amazon Nova Canvas Text to Image API
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+    """
+
+    cfgScale: int
+    seed: int
+    quality: Literal["standard", "premium"]
+    width: int
+    height: int
+    numberOfImages: int
+
+
+class AmazonNovaCanvasTextToImageParams(TypedDict, total=False):
+    """
+    Params for Amazon Nova Canvas Text to Image API
+    """
+
+    text: str
+    negativeText: str
+    controlStrength: float
+    controlMode: Literal["CANNY_EDIT", "SEGMENTATION"]
+    conditionImage: str
+
+
+class AmazonNovaCanvasTextToImageRequest(
+    AmazonNovaCanvasRequestBase, TypedDict, total=False
+):
+    """
+    Request for Amazon Nova Canvas Text to Image API
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+    """
+
+    textToImageParams: AmazonNovaCanvasTextToImageParams
+    taskType: Literal["TEXT_IMAGE"]
+    imageGenerationConfig: AmazonNovaCanvasImageGenerationConfig
+
+
+class AmazonNovaCanvasColorGuidedGenerationParams(TypedDict, total=False):
+    """
+    Params for Amazon Nova Canvas Color Guided Generation API
+    """
+
+    colors: List[str]
+    referenceImage: str
+    text: str
+    negativeText: str
+
+
+class AmazonNovaCanvasColorGuidedRequest(
+    AmazonNovaCanvasRequestBase, TypedDict, total=False
+):
+    """
+    Request for Amazon Nova Canvas Color Guided Generation API
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+    """
+
+    taskType: Literal["COLOR_GUIDED_GENERATION"]
+    colorGuidedGenerationParams: AmazonNovaCanvasColorGuidedGenerationParams
+    imageGenerationConfig: AmazonNovaCanvasImageGenerationConfig
+
+
+class AmazonNovaCanvasTextToImageResponse(TypedDict, total=False):
+    """
+    Response for Amazon Nova Canvas Text to Image API
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+    """
+
+    images: List[str]
+
+
 if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
 else:
@@ -388,3 +524,10 @@ class BedrockRerankRequest(TypedDict):
     queries: List[BedrockRerankQuery]
     rerankingConfiguration: BedrockRerankConfiguration
     sources: List[BedrockRerankSource]
+
+
+class AmazonDeepSeekR1StreamingResponse(TypedDict):
+    generation: str
+    generation_token_count: int
+    stop_reason: Optional[str]
+    prompt_token_count: int

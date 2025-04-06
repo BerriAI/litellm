@@ -75,7 +75,6 @@ class LangsmithLogger(CustomBatchLogger):
         langsmith_project: Optional[str] = None,
         langsmith_base_url: Optional[str] = None,
     ) -> LangsmithCredentialsObject:
-
         _credentials_api_key = langsmith_api_key or os.getenv("LANGSMITH_API_KEY")
         if _credentials_api_key is None:
             raise Exception(
@@ -351,6 +350,16 @@ class LangsmithLogger(CustomBatchLogger):
                 queue_objects=batch_group.queue_objects,
             )
 
+    def _add_endpoint_to_url(
+        self, url: str, endpoint: str, api_version: str = "/api/v1"
+    ) -> str:
+        if api_version not in url:
+            url = f"{url.rstrip('/')}{api_version}"
+
+        if url.endswith("/"):
+            return f"{url}{endpoint}"
+        return f"{url}/{endpoint}"
+
     async def _log_batch_on_langsmith(
         self,
         credentials: LangsmithCredentialsObject,
@@ -370,7 +379,7 @@ class LangsmithLogger(CustomBatchLogger):
         """
         langsmith_api_base = credentials["LANGSMITH_BASE_URL"]
         langsmith_api_key = credentials["LANGSMITH_API_KEY"]
-        url = f"{langsmith_api_base}/runs/batch"
+        url = self._add_endpoint_to_url(langsmith_api_base, "runs/batch")
         headers = {"x-api-key": langsmith_api_key}
         elements_to_log = [queue_object["data"] for queue_object in queue_objects]
 
@@ -433,9 +442,9 @@ class LangsmithLogger(CustomBatchLogger):
 
         Otherwise, use the default credentials.
         """
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-            kwargs.get("standard_callback_dynamic_params", None)
-        )
+        standard_callback_dynamic_params: Optional[
+            StandardCallbackDynamicParams
+        ] = kwargs.get("standard_callback_dynamic_params", None)
         if standard_callback_dynamic_params is not None:
             credentials = self.get_credentials_from_env(
                 langsmith_api_key=standard_callback_dynamic_params.get(
@@ -471,7 +480,6 @@ class LangsmithLogger(CustomBatchLogger):
             asyncio.run(self.async_send_batch())
 
     def get_run_by_id(self, run_id):
-
         langsmith_api_key = self.default_credentials["LANGSMITH_API_KEY"]
 
         langsmith_api_base = self.default_credentials["LANGSMITH_BASE_URL"]

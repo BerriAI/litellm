@@ -12,9 +12,7 @@ from ...vertex_ai.gemini.transformation import _gemini_convert_messages_with_his
 from ...vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
 
-class GoogleAIStudioGeminiConfig(
-    VertexGeminiConfig
-):  # key diff from VertexAI - 'frequency_penalty' and 'presence_penalty' not supported
+class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
     """
     Reference: https://ai.google.dev/api/rest/v1beta/GenerationConfig
 
@@ -59,7 +57,7 @@ class GoogleAIStudioGeminiConfig(
         candidate_count: Optional[int] = None,
         stop_sequences: Optional[list] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -82,6 +80,8 @@ class GoogleAIStudioGeminiConfig(
             "n",
             "stop",
             "logprobs",
+            "frequency_penalty",
+            "modalities",
         ]
 
     def map_openai_params(
@@ -91,12 +91,6 @@ class GoogleAIStudioGeminiConfig(
         model: str,
         drop_params: bool,
     ) -> Dict:
-
-        # drop frequency_penalty and presence_penalty
-        if "frequency_penalty" in non_default_params:
-            del non_default_params["frequency_penalty"]
-        if "presence_penalty" in non_default_params:
-            del non_default_params["presence_penalty"]
         if litellm.vertex_ai_safety_settings is not None:
             optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
         return super().map_openai_params(
@@ -120,12 +114,16 @@ class GoogleAIStudioGeminiConfig(
                     if element.get("type") == "image_url":
                         img_element = element
                         _image_url: Optional[str] = None
+                        format: Optional[str] = None
                         if isinstance(img_element.get("image_url"), dict):
                             _image_url = img_element["image_url"].get("url")  # type: ignore
+                            format = img_element["image_url"].get("format")  # type: ignore
                         else:
                             _image_url = img_element.get("image_url")  # type: ignore
                         if _image_url and "https://" in _image_url:
-                            image_obj = convert_to_anthropic_image_obj(_image_url)
+                            image_obj = convert_to_anthropic_image_obj(
+                                _image_url, format=format
+                            )
                             img_element["image_url"] = (  # type: ignore
                                 convert_generic_image_chunk_to_openai_image_obj(
                                     image_obj

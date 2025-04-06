@@ -1387,7 +1387,7 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
     [
         # ["bedrock/ai21.jamba-instruct-v1:0", "us-east-1"],
         # ["bedrock/cohere.command-r-plus-v1:0", None],
-        # ["anthropic.claude-3-sonnet-20240229-v1:0", None],
+        ["anthropic.claude-3-sonnet-20240229-v1:0", None],
         # ["anthropic.claude-instant-v1", None],
         # ["mistral.mistral-7b-instruct-v0:2", None],
         ["bedrock/amazon.titan-tg1-large", None],
@@ -1621,7 +1621,7 @@ def test_completion_replicate_stream_bad_key():
 
 def test_completion_bedrock_claude_stream():
     try:
-        litellm.set_verbose = False
+        litellm.set_verbose = True
         response = completion(
             model="bedrock/anthropic.claude-instant-v1",
             messages=[
@@ -4063,3 +4063,61 @@ def test_mock_response_iterator_tool_use():
     response_chunk = completion_stream._chunk_parser(chunk_data=response)
 
     assert response_chunk["tool_use"] is not None
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        # "deepseek/deepseek-reasoner",
+        # "anthropic/claude-3-7-sonnet-20250219",
+        "openrouter/anthropic/claude-3.7-sonnet",
+    ],
+)
+def test_reasoning_content_completion(model):
+    # litellm.set_verbose = True
+    try:
+        # litellm._turn_on_debug()
+        resp = litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "Tell me a joke."}],
+            stream=True,
+            # thinking={"type": "enabled", "budget_tokens": 1024},
+            reasoning={"effort": "high"},
+            drop_params=True,
+        )
+
+        reasoning_content_exists = False
+        for chunk in resp:
+            print(f"chunk 2: {chunk}")
+            if (
+                hasattr(chunk.choices[0].delta, "reasoning_content")
+                and chunk.choices[0].delta.reasoning_content is not None
+            ):
+                reasoning_content_exists = True
+                break
+        assert reasoning_content_exists
+    except litellm.Timeout:
+        pytest.skip("Model is timing out")
+
+
+def test_is_delta_empty():
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.types.utils import Delta
+
+    custom_stream_wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model=None,
+        logging_obj=MagicMock(),
+        custom_llm_provider=None,
+        stream_options=None,
+    )
+
+    assert custom_stream_wrapper.is_delta_empty(
+        delta=Delta(
+            content="",
+            role="assistant",
+            function_call=None,
+            tool_calls=None,
+            audio=None,
+        )
+    )
