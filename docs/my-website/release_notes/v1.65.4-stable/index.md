@@ -75,12 +75,10 @@ pip install litellm==1.65.4.post1
 2. Vertex AI - Multimodal embedding cost tracking [Get Started](https://docs.litellm.ai/docs/providers/vertex#multi-modal-embeddings), [PR](https://github.com/BerriAI/litellm/pull/9623)
 
 ## Management Endpoints / UI
-1. Key Create
-    1. remove 'default key' on user signup
-    2. fix showing user models available for personal key creation
-2. Test Key
-    1. Allow testing image generation models
-3. New Usage 
+
+<Image img={require('../../img/release_notes/new_activity_tab.png')} />
+
+1. New Usage Tab
     1. Report 'total_tokens' + report success/failure calls
     2. Remove double bars on scroll
     3. Ensure ‘daily spend’ chart ordered from earliest to latest date
@@ -88,13 +86,18 @@ pip install litellm==1.65.4.post1
     5. show key alias on usage tab
     6. Allow non-admins to view their activity
     7. Add date picker to new usage tab
-4. Models
+2. Virtual Keys Tab
+    1. remove 'default key' on user signup
+    2. fix showing user models available for personal key creation
+3. Test Key Tab
+    1. Allow testing image generation models
+4. Models Tab
     1. Fix bulk adding models 
     2. support reusable credentials for passthrough endpoints
     3. Allow team members to see team models
-5. Teams
+5. Teams Tab
     1. Fix json serialization error on update team metadata
-6. Request Logs
+6. Request Logs Tab
     1. Add reasoning_content token tracking across all providers on streaming
 7. API 
     1. return key alias on /user/daily/activity
@@ -102,11 +105,12 @@ pip install litellm==1.65.4.post1
     1. Allow assigning SSO users to teams on MSFT SSO 
 
 ## Logging / Guardrail Integrations
-1. add json formatting for uncaught exceptions
-2. AIM Guardrails - Support virtual key based policies
-3. Logging - fix completion start time tracking
-4. Prometheus - Allow adding authentication on Prometheus /metrics endpoints
-5. Prometheus - Distinguish LLM Provider Exception vs. LiteLLM Exception in metric naming
+
+1. Console Logs - Add json formatting for uncaught exceptions [PR](https://github.com/BerriAI/litellm/pull/9619)
+2. Guardrails - AIM Guardrails support for virtual key based policies [Get Started](../../docs/proxy/guardrails/aim_security))
+3. Logging - fix completion start time tracking [PR](https://github.com/BerriAI/litellm/pull/9688)
+4. Prometheus - Allow adding authentication on Prometheus /metrics endpoints [PR](https://github.com/BerriAI/litellm/pull/9766)
+5. Prometheus - Distinguish LLM Provider Exception vs. LiteLLM Exception in metric naming [PR](https://github.com/BerriAI/litellm/pull/9760)
 
 ## Performance / Loadbalancing / Reliability improvements
 1. Preventing Deadlocks
