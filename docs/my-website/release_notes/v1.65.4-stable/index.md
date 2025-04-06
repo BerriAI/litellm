@@ -41,7 +41,34 @@ pip install litellm==1.65.4.post1
 </TabItem>
 </Tabs>
 
+
+## Key Highlights
+- **Preventing DB Deadlocks**: Fixes a high-traffic issue when multiple instances were writing to the DB at the same time. 
+- **New Usage Tab**: Enables viewing spend by model and customizing date range
+
+Let's dive in. 
+
+### Preventing DB Deadlocks
+
+<Image img={require('../../img/prevent_deadlocks.jpg')} />
+
+This release fixes the DB deadlocking issue that users faced in high traffic (10K+ RPS). This is great because it enables user/key/team spend tracking works at that scale.
+
+Read more about the new architecture [here](https://docs.litellm.ai/docs/proxy/db_deadlocks)
+
+
+
+### New Usage Tab
+
+<Image img={require('../../img/release_notes/spend_by_model.jpg')} />
+
+The new Usage tab now brings the ability to track daily spend by model. This makes it easier to catch any spend tracking or token counting errors, when combined with the ability to view successful requests, and token usage.
+
+To test this out, just go to Experimental > New Usage > Activity.
+
+
 ## New Models / Updated Models
+
 1. Databricks - claude-3-7-sonnet cost tracking [PR](https://github.com/BerriAI/litellm/blob/52b35cd8093b9ad833987b24f494586a1e923209/model_prices_and_context_window.json#L10350)
 2. VertexAI - `gemini-2.5-pro-exp-03-25` cost tracking [PR](https://github.com/BerriAI/litellm/blob/52b35cd8093b9ad833987b24f494586a1e923209/model_prices_and_context_window.json#L4492)
 3. VertexAI - `gemini-2.0-flash` cost tracking [PR](https://github.com/BerriAI/litellm/blob/52b35cd8093b9ad833987b24f494586a1e923209/model_prices_and_context_window.json#L4689)
