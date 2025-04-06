@@ -9,6 +9,76 @@ import re
 
 ### INIT VARIABLES ###########
 import threading
+<<<<<<< HEAD
+=======
+import os
+from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
+from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
+from litellm.types.utils import (
+    ImageObject,
+    BudgetConfig,
+    all_litellm_params,
+    all_litellm_params as _litellm_completion_params,
+    CredentialItem,
+)  # maintain backwards compatibility for root param
+from litellm._logging import (
+    set_verbose,
+    _turn_on_debug,
+    verbose_logger,
+    json_logs,
+    _turn_on_json,
+    log_level,
+)
+import re
+from litellm.constants import (
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_FLUSH_INTERVAL_SECONDS,
+    ROUTER_MAX_FALLBACKS,
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_REPLICATE_POLLING_RETRIES,
+    DEFAULT_REPLICATE_POLLING_DELAY_SECONDS,
+    LITELLM_CHAT_PROVIDERS,
+    HUMANLOOP_PROMPT_CACHE_TTL_SECONDS,
+    OPENAI_CHAT_COMPLETION_PARAMS,
+    OPENAI_CHAT_COMPLETION_PARAMS as _openai_completion_params,  # backwards compatibility
+    OPENAI_FINISH_REASONS,
+    OPENAI_FINISH_REASONS as _openai_finish_reasons,  # backwards compatibility
+    openai_compatible_endpoints,
+    openai_compatible_providers,
+    openai_text_completion_compatible_providers,
+    _openai_like_providers,
+    replicate_models,
+    clarifai_models,
+    huggingface_models,
+    empower_models,
+    together_ai_models,
+    baseten_models,
+    REPEATED_STREAMING_CHUNK_LIMIT,
+    request_timeout,
+    open_ai_embedding_models,
+    cohere_embedding_models,
+    bedrock_embedding_models,
+    known_tokenizer_config,
+    BEDROCK_INVOKE_PROVIDERS_LITERAL,
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_SOFT_BUDGET,
+    DEFAULT_ALLOWED_FAILS,
+)
+from litellm.types.guardrails import GuardrailItem
+from litellm.proxy._types import (
+    KeyManagementSystem,
+    KeyManagementSettings,
+    LiteLLM_UpperboundKeyGenerateParams,
+)
+from litellm.types.utils import StandardKeyGenerationConfig, LlmProviders
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
+import httpx
+import dotenv
+>>>>>>> origin/main
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
@@ -794,9 +864,8 @@ if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
     from .llms.gemini.common_utils import GeminiModelInfo
     from .llms.github.chat.transformation import GithubChatConfig
     from .llms.groq.stt.transformation import GroqSTTConfig
-    from .llms.huggingface.chat.transformation import (
-        HuggingfaceChatConfig as HuggingfaceConfig,
-    )
+    from .llms.huggingface.chat.transformation import HuggingFaceChatConfig
+    from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig
     from .llms.infinity.rerank.transformation import InfinityRerankConfig
     from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig
     from .llms.maritalk import MaritalkConfig
@@ -997,14 +1066,8 @@ else:
             "GroqSTTConfig",
         ]
     )
-    _import_structures.setdefault(
-        "litellm.llms.huggingface.chat.transformation", []
-    ).extend(
-        [
-            "HuggingfaceChatConfig",
-            "HuggingfaceConfig",
-        ]
-    )
+    _import_structures.setdefault("litellm.llms.huggingface.chat.transformation", []).extend(["HuggingFaceChatConfig"]) 
+    _import_structures.setdefault("litellm.llms.huggingface.embedding.transformation", []).extend(["HuggingFaceEmbeddingConfig"]) 
     _import_structures.setdefault(
         "litellm.llms.infinity.rerank.transformation", []
     ).extend(

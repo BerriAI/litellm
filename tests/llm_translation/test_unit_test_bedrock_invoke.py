@@ -25,6 +25,7 @@ def test_get_complete_url_basic(bedrock_transformer):
     """Test basic URL construction for non-streaming request"""
     url = bedrock_transformer.get_complete_url(
         api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
+        api_key=None,
         model="anthropic.claude-v2",
         optional_params={},
         stream=False,
@@ -41,6 +42,7 @@ def test_get_complete_url_streaming(bedrock_transformer):
     """Test URL construction for streaming request"""
     url = bedrock_transformer.get_complete_url(
         api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
+        api_key=None,
         model="anthropic.claude-v2",
         optional_params={},
         stream=True,

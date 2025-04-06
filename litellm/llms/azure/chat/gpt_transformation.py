@@ -7,6 +7,10 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_azure_openai_messages,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.llms.azure import (
+    API_VERSION_MONTH_SUPPORTED_RESPONSE_FORMAT,
+    API_VERSION_YEAR_SUPPORTED_RESPONSE_FORMAT,
+)
 from litellm.types.utils import ModelResponse
 from litellm.utils import supports_response_schema
 
@@ -123,7 +127,10 @@ class AzureOpenAIConfig(BaseConfig):
         - check if api_version is supported for response_format
         """
 
-        is_supported = int(api_version_year) <= 2024 and int(api_version_month) >= 8
+        is_supported = (
+            int(api_version_year) <= API_VERSION_YEAR_SUPPORTED_RESPONSE_FORMAT
+            and int(api_version_month) >= API_VERSION_MONTH_SUPPORTED_RESPONSE_FORMAT
+        )
 
         return is_supported
 

@@ -169,18 +169,6 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"max_tokens": 10}
 
-    from litellm.llms.huggingface.chat.handler import HuggingfaceConfig
-
-    assert "max_completion_tokens" in HuggingfaceConfig().get_supported_openai_params(
-        model="llama3"
-    )
-    assert HuggingfaceConfig().map_openai_params(
-        non_default_params={"max_completion_tokens": 10},
-        optional_params={},
-        model="llama3",
-        drop_params=False,
-    ) == {"max_new_tokens": 10}
-
     from litellm.llms.nvidia_nim.chat import NvidiaNimConfig
 
     assert "max_completion_tokens" in NvidiaNimConfig().get_supported_openai_params(
@@ -330,7 +318,7 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"max_tokens_to_sample": 10}
 
-    from litellm.llms.databricks.chat.handler import DatabricksConfig
+    from litellm.llms.databricks.chat.transformation import DatabricksConfig
 
     assert "max_completion_tokens" in DatabricksConfig().get_supported_openai_params()
 

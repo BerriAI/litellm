@@ -30,21 +30,23 @@ class ProxyExtrasDBManager:
         use_migrate = str_to_bool(os.getenv("USE_PRISMA_MIGRATE")) or use_migrate
         for attempt in range(4):
             original_dir = os.getcwd()
-            schema_dir = os.path.dirname(schema_path)
-            os.chdir(schema_dir)
+            migrations_dir = os.path.dirname(__file__)
+            os.chdir(migrations_dir)
 
             try:
                 if use_migrate:
                     logger.info("Running prisma migrate deploy")
                     try:
                         # Set migrations directory for Prisma
-                        subprocess.run(
+                        result = subprocess.run(
                             ["prisma", "migrate", "deploy"],
                             timeout=60,
                             check=True,
                             capture_output=True,
                             text=True,
                         )
+                        logger.info(f"prisma migrate deploy stdout: {result.stdout}")
+
                         logger.info("prisma migrate deploy completed")
                         return True
                     except subprocess.CalledProcessError as e:
@@ -77,4 +79,5 @@ class ProxyExtrasDBManager:
                 time.sleep(random.randrange(5, 15))
             finally:
                 os.chdir(original_dir)
+                pass
         return False

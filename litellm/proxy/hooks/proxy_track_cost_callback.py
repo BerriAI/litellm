@@ -13,7 +13,6 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import log_db_metrics
-from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.types.utils import (
     StandardLoggingPayload,
@@ -36,6 +35,8 @@ class _ProxyDBLogger(CustomLogger):
     ):
         if _ProxyDBLogger._should_track_errors_in_db() is False:
             return
+
+        from litellm.proxy.proxy_server import proxy_logging_obj
 
         _metadata = dict(
             StandardLoggingUserAPIKeyMetadata(
@@ -66,7 +67,7 @@ class _ProxyDBLogger(CustomLogger):
             request_data.get("proxy_server_request") or {}
         )
         request_data["litellm_params"]["metadata"] = existing_metadata
-        await DBSpendUpdateWriter.update_database(
+        await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key_dict.api_key,
             response_cost=0.0,
             user_id=user_api_key_dict.user_id,
@@ -136,7 +137,7 @@ class _ProxyDBLogger(CustomLogger):
                     end_user_id=end_user_id,
                 ):
                     ## UPDATE DATABASE
-                    await DBSpendUpdateWriter.update_database(
+                    await proxy_logging_obj.db_spend_update_writer.update_database(
                         token=user_api_key,
                         response_cost=response_cost,
                         user_id=user_id,

@@ -528,7 +528,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     _metadata_variable_name = _get_metadata_variable_name(request)
 
-    if _metadata_variable_name not in data:
+    if data.get(_metadata_variable_name, None) is None:
         data[_metadata_variable_name] = {}
 
     # We want to log the "metadata" from the client side request. Avoid circular reference by not directly assigning metadata to itself.
@@ -747,7 +747,10 @@ def _get_enforced_params(
     enforced_params: Optional[list] = None
     if general_settings is not None:
         enforced_params = general_settings.get("enforced_params")
-        if "service_account_settings" in general_settings:
+        if (
+            "service_account_settings" in general_settings
+            and check_if_token_is_service_account(user_api_key_dict) is True
+        ):
             service_account_settings = general_settings["service_account_settings"]
             if "enforced_params" in service_account_settings:
                 if enforced_params is None:
@@ -758,6 +761,20 @@ def _get_enforced_params(
             enforced_params = []
         enforced_params.extend(user_api_key_dict.metadata["enforced_params"])
     return enforced_params
+
+
+def check_if_token_is_service_account(valid_token: UserAPIKeyAuth) -> bool:
+    """
+    Checks if the token is a service account
+
+    Returns:
+        bool: True if token is a service account
+
+    """
+    if valid_token.metadata:
+        if "service_account_id" in valid_token.metadata:
+            return True
+    return False
 
 
 def _enforced_params_check(

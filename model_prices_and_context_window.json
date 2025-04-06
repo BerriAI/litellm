@@ -88,6 +88,24 @@
             "search_context_size_high": 0.050
         }
     },
+    "watsonx/ibm/granite-3-8b-instruct": {
+        "max_tokens": 8192,  
+        "max_input_tokens": 8192,  
+        "max_output_tokens": 1024,  
+        "input_cost_per_token": 0.0002,  
+        "output_cost_per_token": 0.0002,  
+        "litellm_provider": "watsonx",  
+        "mode": "chat",  
+        "supports_function_calling": true,  
+        "supports_tool_choice": true,
+        "supports_parallel_function_calling": false,  
+        "supports_vision": false,  
+        "supports_audio_input": false,  
+        "supports_audio_output": false,  
+        "supports_prompt_caching": true,  
+        "supports_response_schema": true,  
+        "supports_system_messages": true
+    },
     "gpt-4o-search-preview-2025-03-11": {
         "max_tokens": 16384,
         "max_input_tokens": 128000,
@@ -3303,6 +3321,24 @@
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
+    "groq/whisper-large-v3": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00003083,
+        "output_cost_per_second": 0,
+        "litellm_provider": "groq"
+    },
+    "groq/whisper-large-v3-turbo": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00001111,
+        "output_cost_per_second": 0,
+        "litellm_provider": "groq"
+    },
+    "groq/distil-whisper-large-v3-en": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00000556,
+        "output_cost_per_second": 0,
+        "litellm_provider": "groq"
+    },
     "cerebras/llama3.1-8b": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
@@ -4650,6 +4686,31 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash",
         "supports_tool_choice": true
     },
+    "gemini-2.0-flash": {
+        "max_tokens": 8192,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 8192,
+        "max_images_per_prompt": 3000,
+        "max_videos_per_prompt": 10,
+        "max_video_length": 1,
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_pdf_size_mb": 30,
+        "input_cost_per_audio_token": 0.0000007,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0000004,
+        "litellm_provider": "vertex_ai-language-models",
+        "mode": "chat",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_response_schema": true,
+        "supports_audio_output": true,
+        "supports_audio_input": true,
+        "supported_modalities": ["text", "image", "audio", "video"],
+        "supports_tool_choice": true,
+        "source": "https://ai.google.dev/pricing#2_0flash"
+    },
     "gemini-2.0-flash-lite": {
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
@@ -4785,6 +4846,33 @@
         "supports_audio_output": false,
         "supports_tool_choice": true,
         "source": "https://ai.google.dev/pricing#2_0flash"
+    },
+    "gemini/gemini-2.5-pro-preview-03-25": {
+        "max_tokens": 65536,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "max_images_per_prompt": 3000,
+        "max_videos_per_prompt": 10,
+        "max_video_length": 1,
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_pdf_size_mb": 30,
+        "input_cost_per_audio_token": 0.0000007,
+        "input_cost_per_token": 0.00000125,
+        "input_cost_per_token_above_128k_tokens": 0.0000025, 
+        "output_cost_per_token": 0.0000010,
+        "output_cost_per_token_above_128k_tokens": 0.000015, 
+        "litellm_provider": "gemini",
+        "mode": "chat",
+        "rpm": 10000,
+        "tpm": 10000000,
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_response_schema": true,
+        "supports_audio_output": false,
+        "supports_tool_choice": true,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-2.5-pro-preview"
     },
     "gemini/gemini-2.0-flash-exp": {
         "max_tokens": 8192,
@@ -6604,6 +6692,14 @@
         "mode": "chat",
         "supports_tool_choice": true
     },
+    "mistralai/mistral-small-3.1-24b-instruct": {
+        "max_tokens": 32000,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0000003,
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
     "openrouter/cognitivecomputations/dolphin-mixtral-8x7b": {
         "max_tokens": 32769,
         "input_cost_per_token": 0.0000005,
@@ -6732,12 +6828,38 @@
         "supports_vision": false,
         "supports_tool_choice": true
     },
+    "openrouter/openai/o3-mini": {
+        "max_tokens": 65536,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 65536,
+        "input_cost_per_token": 0.0000011,
+        "output_cost_per_token": 0.0000044,
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": false,
+        "supports_tool_choice": true
+    },
+    "openrouter/openai/o3-mini-high": {
+        "max_tokens": 65536,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 65536,
+        "input_cost_per_token": 0.0000011,
+        "output_cost_per_token": 0.0000044,
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": false,
+        "supports_tool_choice": true
+    },
     "openrouter/openai/gpt-4o": {
         "max_tokens": 4096,
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000005,
-        "output_cost_per_token": 0.000015,
+        "input_cost_per_token": 0.0000025,
+        "output_cost_per_token": 0.000010,
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_function_calling": true,
