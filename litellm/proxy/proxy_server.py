@@ -4261,8 +4261,47 @@ async def websocket_endpoint(
         "websocket": websocket,
     }
 
+    headers = dict(websocket.headers.items())  # Convert headers to dict first
+
+    request = Request(
+        scope={
+            "type": "http",
+            "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()],
+            "method": "POST",
+            "path": "/v1/realtime",
+        }
+    )
+
+    request._url = websocket.url
+
+    async def return_body():
+        return_string = f'{{"model": "{model}"}}'
+        # return string as bytes
+        return return_string.encode()
+
+    request.body = return_body  # type: ignore
+
     ### ROUTE THE REQUEST ###
+    base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
+        (
+            data,
+            litellm_logging_obj,
+        ) = await base_llm_response_processor.common_processing_pre_call_logic(
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_logging_obj=proxy_logging_obj,
+            proxy_config=proxy_config,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            model=model,
+            route_type="_arealtime",
+        )
         llm_call = await route_request(
             data=data,
             route_type="_arealtime",
