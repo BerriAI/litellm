@@ -37,6 +37,8 @@ import {
 import { InfoCircleOutlined } from '@ant-design/icons';
 import NumericalInput from "../shared/numerical_input";
 import TagInfoView from "./tag_info";
+import { fetchUserModels } from "../create_key_button";
+import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 
 interface TagProps {
   accessToken: string | null;
@@ -46,10 +48,8 @@ interface TagProps {
 
 interface Tag {
   name: string;
-  description: string;
-  severity: "Low" | "Medium" | "High";
+  description?: string;
   allowed_llms: string[];
-  spend: number;
   created_at: string;
 }
 
@@ -66,6 +66,7 @@ const TagManagement: React.FC<TagProps> = ({
   const [tagToDelete, setTagToDelete] = useState<string | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState("");
   const [form] = Form.useForm();
+  const [userModels, setUserModels] = useState<string[]>([]);
 
   const handleRefreshClick = () => {
     const currentDate = new Date();
@@ -101,22 +102,24 @@ const TagManagement: React.FC<TagProps> = ({
     setTagToDelete(null);
   };
 
+  useEffect(() => {
+    if (userID && userRole && accessToken) {
+      fetchUserModels(userID, userRole, accessToken, setUserModels);
+    }
+  }, [accessToken, userID, userRole]);
+
   // Mock data for demonstration
   const mockTags: Tag[] = [
     {
       name: "PII",
       description: "Personally Identifiable Information",
-      severity: "High",
       allowed_llms: ["Claude 3 Opus", "GPT-4"],
-      spend: 120.50,
       created_at: "2024-03-15",
     },
     {
       name: "Financial",
       description: "Financial data and transactions",
-      severity: "High",
       allowed_llms: ["Claude 3 Opus"],
-      spend: 85.75,
       created_at: "2024-03-14",
     }
   ];
@@ -168,9 +171,7 @@ const TagManagement: React.FC<TagProps> = ({
                         <TableRow>
                           <TableHeaderCell>Tag Name</TableHeaderCell>
                           <TableHeaderCell>Description</TableHeaderCell>
-                          <TableHeaderCell>Severity</TableHeaderCell>
                           <TableHeaderCell>Allowed LLMs</TableHeaderCell>
-                          <TableHeaderCell>Spend (USD)</TableHeaderCell>
                           <TableHeaderCell>Created</TableHeaderCell>
                           <TableHeaderCell>Actions</TableHeaderCell>
                         </TableRow>
@@ -188,20 +189,7 @@ const TagManagement: React.FC<TagProps> = ({
                                 {tag.name}
                               </Button>
                             </TableCell>
-                            <TableCell>{tag.description}</TableCell>
-                            <TableCell>
-                              <Badge
-                                color={
-                                  tag.severity === "High"
-                                    ? "red"
-                                    : tag.severity === "Medium"
-                                    ? "yellow"
-                                    : "green"
-                                }
-                              >
-                                {tag.severity}
-                              </Badge>
-                            </TableCell>
+                            <TableCell>{tag.description || "-"}</TableCell>
                             <TableCell>
                               <div className="flex flex-wrap gap-1">
                                 {tag.allowed_llms.map((llm) => (
@@ -216,7 +204,6 @@ const TagManagement: React.FC<TagProps> = ({
                                 ))}
                               </div>
                             </TableCell>
-                            <TableCell>${tag.spend.toFixed(2)}</TableCell>
                             <TableCell>{new Date(tag.created_at).toLocaleDateString()}</TableCell>
                             <TableCell>
                               <div className="flex space-x-2">
@@ -282,21 +269,8 @@ const TagManagement: React.FC<TagProps> = ({
                   <Form.Item
                     label="Description"
                     name="description"
-                    rules={[{ required: true, message: "Please provide a description" }]}
                   >
                     <Input.TextArea rows={4} />
-                  </Form.Item>
-
-                  <Form.Item
-                    label="Severity"
-                    name="severity"
-                    rules={[{ required: true, message: "Please select severity" }]}
-                  >
-                    <Select2>
-                      <Select2.Option value="Low">Low</Select2.Option>
-                      <Select2.Option value="Medium">Medium</Select2.Option>
-                      <Select2.Option value="High">High</Select2.Option>
-                    </Select2>
                   </Form.Item>
 
                   <Form.Item
@@ -314,10 +288,11 @@ const TagManagement: React.FC<TagProps> = ({
                       mode="multiple"
                       placeholder="Select LLMs"
                     >
-                      <Select2.Option value="gpt-4">GPT-4</Select2.Option>
-                      <Select2.Option value="claude-3-opus">Claude 3 Opus</Select2.Option>
-                      <Select2.Option value="claude-3-sonnet">Claude 3 Sonnet</Select2.Option>
-                      <Select2.Option value="claude-3-haiku">Claude 3 Haiku</Select2.Option>
+                      {userModels.map((model) => (
+                        <Select2.Option key={model} value={model}>
+                          {getModelDisplayName(model)}
+                        </Select2.Option>
+                      ))}
                     </Select2>
                   </Form.Item>
 

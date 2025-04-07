@@ -19,6 +19,8 @@ import {
   Tooltip,
 } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
+import { fetchUserModels } from "../create_key_button";
+import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 
 interface TagInfoViewProps {
   tagId: string;
@@ -30,10 +32,8 @@ interface TagInfoViewProps {
 
 interface TagDetails {
   name: string;
-  description: string;
-  severity: "Low" | "Medium" | "High";
+  description?: string;  // Made optional
   allowed_llms: string[];
-  spend: number;
   created_at: string;
   updated_at: string;
 }
@@ -48,14 +48,13 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({
   const [form] = Form.useForm();
   const [tagDetails, setTagDetails] = useState<TagDetails | null>(null);
   const [isEditing, setIsEditing] = useState<boolean>(editTag);
+  const [userModels, setUserModels] = useState<string[]>([]);
 
   // Mock data for demonstration
   const mockTagDetails: TagDetails = {
     name: "PII",
     description: "Personally Identifiable Information",
-    severity: "High",
     allowed_llms: ["Claude 3 Opus", "GPT-4"],
-    spend: 120.50,
     created_at: "2024-03-15",
     updated_at: "2024-03-15",
   };
@@ -67,6 +66,14 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({
       form.setFieldsValue(mockTagDetails);
     }
   }, [tagId]);
+
+  useEffect(() => {
+    if (accessToken) {
+      // Using dummy values for userID and userRole since they're required by the function
+      // TODO: Pass these as props if needed for the actual API implementation
+      fetchUserModels("dummy-user", "Admin", accessToken, setUserModels);
+    }
+  }, [accessToken]);
 
   const handleSave = async (values: any) => {
     try {
@@ -119,21 +126,8 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({
                   <Form.Item
                     label="Description"
                     name="description"
-                    rules={[{ required: true, message: "Please provide a description" }]}
                   >
                     <Input.TextArea rows={4} />
-                  </Form.Item>
-
-                  <Form.Item
-                    label="Severity"
-                    name="severity"
-                    rules={[{ required: true, message: "Please select severity" }]}
-                  >
-                    <Select2>
-                      <Select2.Option value="Low">Low</Select2.Option>
-                      <Select2.Option value="Medium">Medium</Select2.Option>
-                      <Select2.Option value="High">High</Select2.Option>
-                    </Select2>
                   </Form.Item>
 
                   <Form.Item
@@ -151,10 +145,11 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({
                       mode="multiple"
                       placeholder="Select LLMs"
                     >
-                      <Select2.Option value="gpt-4">GPT-4</Select2.Option>
-                      <Select2.Option value="claude-3-opus">Claude 3 Opus</Select2.Option>
-                      <Select2.Option value="claude-3-sonnet">Claude 3 Sonnet</Select2.Option>
-                      <Select2.Option value="claude-3-haiku">Claude 3 Haiku</Select2.Option>
+                      {userModels.map((model) => (
+                        <Select2.Option key={model} value={model}>
+                          {getModelDisplayName(model)}
+                        </Select2.Option>
+                      ))}
                     </Select2>
                   </Form.Item>
 
@@ -175,21 +170,7 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({
                     </div>
                     <div>
                       <Text className="font-medium">Description</Text>
-                      <Text>{tagDetails.description}</Text>
-                    </div>
-                    <div>
-                      <Text className="font-medium">Severity</Text>
-                      <Badge
-                        color={
-                          tagDetails.severity === "High"
-                            ? "red"
-                            : tagDetails.severity === "Medium"
-                            ? "yellow"
-                            : "green"
-                        }
-                      >
-                        {tagDetails.severity}
-                      </Badge>
+                      <Text>{tagDetails.description || "-"}</Text>
                     </div>
                     <div>
                       <Text className="font-medium">Allowed LLMs</Text>
@@ -219,11 +200,7 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({
             <Card>
               <Title>Usage Statistics</Title>
               <div className="space-y-4 mt-4">
-                <div>
-                  <Text className="font-medium">Total Spend</Text>
-                  <Text>${tagDetails.spend.toFixed(2)} USD</Text>
-                </div>
-                {/* Add more analytics components here */}
+                <Text>Coming soon...</Text>
               </div>
             </Card>
           </TabPanel>
