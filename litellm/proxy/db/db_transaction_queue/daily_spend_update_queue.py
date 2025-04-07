@@ -1,9 +1,14 @@
 import asyncio
-from typing import Dict, List
+from copy import deepcopy
+from typing import Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import DailyUserSpendTransaction
-from litellm.proxy.db.db_transaction_queue.base_update_queue import BaseUpdateQueue
+from litellm.proxy.db.db_transaction_queue.base_update_queue import (
+    BaseUpdateQueue,
+    service_logger_obj,
+)
+from litellm.types.services import ServiceTypes
 
 
 class DailySpendUpdateQueue(BaseUpdateQueue):
@@ -52,6 +57,29 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
             Dict[str, DailyUserSpendTransaction]
         ] = asyncio.Queue()
 
+    async def add_update(self, update: Dict[str, DailyUserSpendTransaction]):
+        """Enqueue an update."""
+        verbose_proxy_logger.debug("Adding update to queue: %s", update)
+        await self.update_queue.put(update)
+        if self.update_queue.qsize() >= self.MAX_SIZE_IN_MEMORY_QUEUE:
+            verbose_proxy_logger.warning(
+                "Spend update queue is full. Aggregating all entries in queue to concatenate entries."
+            )
+            await self.aggregate_queue_updates()
+
+    async def aggregate_queue_updates(self):
+        """
+        Combine all updates in the queue into a single update.
+        This is used to reduce the size of the in-memory queue.
+        """
+        updates: List[
+            Dict[str, DailyUserSpendTransaction]
+        ] = await self.flush_all_updates_from_in_memory_queue()
+        aggregated_updates = self.get_aggregated_daily_spend_update_transactions(
+            updates
+        )
+        await self.update_queue.put(aggregated_updates)
+
     async def flush_and_get_aggregated_daily_spend_update_transactions(
         self,
     ) -> Dict[str, DailyUserSpendTransaction]:
@@ -91,5 +119,21 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
                     ]
                     daily_transaction["failed_requests"] += payload["failed_requests"]
                 else:
-                    aggregated_daily_spend_update_transactions[_key] = payload
+                    aggregated_daily_spend_update_transactions[_key] = deepcopy(payload)
         return aggregated_daily_spend_update_transactions
+
+    async def _emit_new_item_added_to_queue_event(
+        self,
+        queue_size: Optional[int] = None,
+    ):
+        asyncio.create_task(
+            service_logger_obj.async_service_success_hook(
+                service=ServiceTypes.IN_MEMORY_DAILY_SPEND_UPDATE_QUEUE,
+                duration=0,
+                call_type="_emit_new_item_added_to_queue_event",
+                event_metadata={
+                    "gauge_labels": ServiceTypes.IN_MEMORY_DAILY_SPEND_UPDATE_QUEUE,
+                    "gauge_value": queue_size,
+                },
+            )
+        )

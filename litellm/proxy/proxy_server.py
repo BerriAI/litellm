@@ -25,7 +25,10 @@ from typing import (
     get_type_hints,
 )
 
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.constants import (
+    DEFAULT_MAX_RECURSE_DEPTH,
+    DEFAULT_SLACK_ALERTING_THRESHOLD,
+)
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -118,7 +121,16 @@ import litellm
 from litellm import Router
 from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
-from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.constants import (
+    DAYS_IN_A_MONTH,
+    DEFAULT_HEALTH_CHECK_INTERVAL,
+    DEFAULT_MODEL_CREATED_AT_TIME,
+    LITELLM_PROXY_ADMIN_NAME,
+    PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
+    PROXY_BATCH_WRITE_AT,
+    PROXY_BUDGET_RESCHEDULER_MAX_TIME,
+    PROXY_BUDGET_RESCHEDULER_MIN_TIME,
+)
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.core_helpers import (
@@ -155,7 +167,6 @@ from litellm.proxy.batches_endpoints.endpoints import router as batches_router
 ## Import All Misc routes here ##
 from litellm.proxy.caching_routes import router as caching_router
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.proxy.common_utils.admin_ui_utils import html_form
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
@@ -163,6 +174,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.common_utils.html_forms.ui_login import html_form
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     check_file_size_under_limit,
@@ -217,6 +229,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
     _add_team_model_to_db,
+    _deduplicate_litellm_router_models,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     router as model_management_router,
@@ -237,6 +250,7 @@ from litellm.proxy.management_endpoints.ui_sso import (
 )
 from litellm.proxy.management_endpoints.ui_sso import router as ui_sso_router
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
+from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
@@ -287,7 +301,7 @@ from litellm.router import (
     LiteLLM_Params,
     ModelGroupInfo,
 )
-from litellm.scheduler import DefaultPriorities, FlowItem, Scheduler
+from litellm.scheduler import FlowItem, Scheduler
 from litellm.secret_managers.aws_secret_manager import load_aws_kms
 from litellm.secret_managers.google_kms import load_google_kms
 from litellm.secret_managers.main import (
@@ -307,6 +321,7 @@ from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import DeploymentTypedDict
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import RouterGeneralSettings, updateDeployment
+from litellm.types.scheduler import DefaultPriorities
 from litellm.types.utils import CredentialItem, CustomHuggingfaceTokenizer
 from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.types.utils import RawRequestTypedDict, StandardLoggingPayload
@@ -333,10 +348,12 @@ from fastapi import (
     Response,
     UploadFile,
     status,
+    applications
 )
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
+from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import (
     FileResponse,
     JSONResponse,
@@ -732,6 +749,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.add_middleware(PrometheusAuthMiddleware)
+
+swagger_path = os.path.join(current_dir, "swagger")
+app.mount("/swagger", StaticFiles(directory=swagger_path), name="swagger")
+def swagger_monkey_patch(*args, **kwargs):
+    return get_swagger_ui_html(
+        *args,
+        **kwargs,
+        swagger_js_url="/swagger/swagger-ui-bundle.js",
+        swagger_css_url="/swagger/swagger-ui.css",
+        swagger_favicon_url="/swagger/favicon.png"
+    )
+applications.get_swagger_ui_html = swagger_monkey_patch
 
 from typing import Dict
 
@@ -779,9 +809,9 @@ queue: List = []
 litellm_proxy_budget_name = "litellm-proxy-budget"
 litellm_proxy_admin_name = LITELLM_PROXY_ADMIN_NAME
 ui_access_mode: Literal["admin", "all"] = "all"
-proxy_budget_rescheduler_min_time = 597
-proxy_budget_rescheduler_max_time = 605
-proxy_batch_write_at = 10  # in seconds
+proxy_budget_rescheduler_min_time = PROXY_BUDGET_RESCHEDULER_MIN_TIME
+proxy_budget_rescheduler_max_time = PROXY_BUDGET_RESCHEDULER_MAX_TIME
+proxy_batch_write_at = PROXY_BATCH_WRITE_AT
 litellm_master_key_hash = None
 disable_spend_logs = False
 jwt_handler = JWTHandler()
@@ -1663,14 +1693,11 @@ class ProxyConfig:
                                 callback
                             )
                             if "prometheus" in callback:
-                                verbose_proxy_logger.debug(
-                                    "Starting Prometheus Metrics on /metrics"
+                                from litellm.integrations.prometheus import (
+                                    PrometheusLogger,
                                 )
-                                from prometheus_client import make_asgi_app
 
-                                # Add prometheus asgi middleware to route /metrics requests
-                                metrics_app = make_asgi_app()
-                                app.mount("/metrics", metrics_app)
+                                PrometheusLogger._mount_metrics_endpoint(premium_user)
                     print(  # noqa
                         f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}"
                     )  # noqa
@@ -1846,7 +1873,9 @@ class ProxyConfig:
             use_background_health_checks = general_settings.get(
                 "background_health_checks", False
             )
-            health_check_interval = general_settings.get("health_check_interval", 300)
+            health_check_interval = general_settings.get(
+                "health_check_interval", DEFAULT_HEALTH_CHECK_INTERVAL
+            )
             health_check_details = general_settings.get("health_check_details", True)
 
             ### RBAC ###
@@ -3145,7 +3174,7 @@ class ProxyStartupEvent:
                 scheduler.add_job(
                     proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus,
                     "cron",
-                    hour=9,
+                    hour=PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
                     minute=0,
                     timezone=ZoneInfo("America/Los_Angeles"),  # Pacific Time
                 )
@@ -3278,7 +3307,7 @@ async def model_list(
             {
                 "id": model,
                 "object": "model",
-                "created": 1677610602,
+                "created": DEFAULT_MODEL_CREATED_AT_TIME,
                 "owned_by": "openai",
             }
             for model in all_models
@@ -5318,6 +5347,71 @@ async def _check_if_model_is_user_added(
     return filtered_models
 
 
+def _check_if_model_is_team_model(
+    models: List[DeploymentTypedDict], user_row: LiteLLM_UserTable
+) -> List[Dict]:
+    """
+    Check if model is a team model
+
+    Check if user is a member of the team that the model belongs to
+    """
+
+    user_team_models: List[Dict] = []
+    for model in models:
+        model_team_id = model.get("model_info", {}).get("team_id", None)
+
+        if model_team_id is not None:
+            if model_team_id in user_row.teams:
+                user_team_models.append(cast(Dict, model))
+
+    return user_team_models
+
+
+async def non_admin_all_models(
+    all_models: List[Dict],
+    llm_router: Router,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: Optional[PrismaClient],
+):
+    """
+    Check if model is in db
+
+    Check if db model is 'created_by' == user_api_key_dict.user_id
+
+    Only return models that match
+    """
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    # Get all models that are user-added, when model created_by == user_api_key_dict.user_id
+    all_models = await _check_if_model_is_user_added(
+        models=all_models,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
+
+    if user_api_key_dict.user_id:
+        try:
+            user_row = await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": user_api_key_dict.user_id}
+            )
+        except Exception:
+            raise HTTPException(status_code=400, detail={"error": "User not found"})
+
+        # Get all models that are team models, when model team_id == user_row.teams
+        all_models += _check_if_model_is_team_model(
+            models=llm_router.get_model_list() or [],
+            user_row=user_row,
+        )
+
+    # de-duplicate models. Only return unique model ids
+    unique_models = _deduplicate_litellm_router_models(models=all_models)
+    return unique_models
+
+
 @router.get(
     "/v2/model/info",
     description="v2 - returns models available to the user based on their API key permissions. Shows model info from config.yaml (except api key and api base). Filter to just user-added models with ?user_models_only=true",
@@ -5363,16 +5457,10 @@ async def model_info_v2(
     if model is not None:
         all_models = [m for m in all_models if m["model_name"] == model]
 
-    if user_models_only is True:
-        """
-        Check if model is in db
-
-        Check if db model is 'created_by' == user_api_key_dict.user_id
-
-        Only return models that match
-        """
-        all_models = await _check_if_model_is_user_added(
-            models=all_models,
+    if user_models_only:
+        all_models = await non_admin_all_models(
+            all_models=all_models,
+            llm_router=llm_router,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
         )
@@ -5592,7 +5680,7 @@ async def model_metrics(
             param="None",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-    startTime = startTime or datetime.now() - timedelta(days=30)
+    startTime = startTime or datetime.now() - timedelta(days=DAYS_IN_A_MONTH)
     endTime = endTime or datetime.now()
 
     if api_key is None or api_key == "undefined":
@@ -5713,11 +5801,12 @@ async def model_metrics_slow_responses(
     if customer is None or customer == "undefined":
         customer = "null"
 
-    startTime = startTime or datetime.now() - timedelta(days=30)
+    startTime = startTime or datetime.now() - timedelta(days=DAYS_IN_A_MONTH)
     endTime = endTime or datetime.now()
 
     alerting_threshold = (
-        proxy_logging_obj.slack_alerting_instance.alerting_threshold or 300
+        proxy_logging_obj.slack_alerting_instance.alerting_threshold
+        or DEFAULT_SLACK_ALERTING_THRESHOLD
     )
     alerting_threshold = int(alerting_threshold)
 
@@ -5797,7 +5886,7 @@ async def model_metrics_exceptions(
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
-    startTime = startTime or datetime.now() - timedelta(days=30)
+    startTime = startTime or datetime.now() - timedelta(days=DAYS_IN_A_MONTH)
     endTime = endTime or datetime.now()
 
     if api_key is None or api_key == "undefined":

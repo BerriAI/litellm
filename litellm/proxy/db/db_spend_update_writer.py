@@ -91,6 +91,23 @@ class DBSpendUpdateWriter:
             else:
                 hashed_token = token
 
+            ## CREATE SPEND LOG PAYLOAD ##
+            from litellm.proxy.spend_tracking.spend_tracking_utils import (
+                get_logging_payload,
+            )
+
+            payload = get_logging_payload(
+                kwargs=kwargs,
+                response_obj=completion_response,
+                start_time=start_time,
+                end_time=end_time,
+            )
+            payload["spend"] = response_cost or 0.0
+            if isinstance(payload["startTime"], datetime):
+                payload["startTime"] = payload["startTime"].isoformat()
+            if isinstance(payload["endTime"], datetime):
+                payload["endTime"] = payload["endTime"].isoformat()
+
             asyncio.create_task(
                 self._update_user_db(
                     response_cost=response_cost,
@@ -125,17 +142,20 @@ class DBSpendUpdateWriter:
             )
             if disable_spend_logs is False:
                 await self._insert_spend_log_to_db(
-                    kwargs=kwargs,
-                    completion_response=completion_response,
-                    start_time=start_time,
-                    end_time=end_time,
-                    response_cost=response_cost,
+                    payload=payload,
                     prisma_client=prisma_client,
                 )
             else:
                 verbose_proxy_logger.info(
                     "disable_spend_logs=True. Skipping writing spend logs to db. Other spend updates - Key/User/Team table will still occur."
                 )
+
+            asyncio.create_task(
+                self.add_spend_log_transaction_to_daily_user_transaction(
+                    payload=payload,
+                    prisma_client=prisma_client,
+                )
+            )
 
             verbose_proxy_logger.debug("Runs spend update on all tables")
         except Exception:
@@ -285,61 +305,24 @@ class DBSpendUpdateWriter:
 
     async def _insert_spend_log_to_db(
         self,
-        kwargs: Optional[dict],
-        completion_response: Optional[Union[litellm.ModelResponse, Any, Exception]],
-        start_time: Optional[datetime],
-        end_time: Optional[datetime],
-        response_cost: Optional[float],
-        prisma_client: Optional[PrismaClient],
-    ):
-        from litellm.proxy.spend_tracking.spend_tracking_utils import (
-            get_logging_payload,
-        )
-
-        try:
-            if prisma_client:
-                payload = get_logging_payload(
-                    kwargs=kwargs,
-                    response_obj=completion_response,
-                    start_time=start_time,
-                    end_time=end_time,
-                )
-                payload["spend"] = response_cost or 0.0
-                await self._set_spend_logs_payload(
-                    payload=payload,
-                    spend_logs_url=os.getenv("SPEND_LOGS_URL"),
-                    prisma_client=prisma_client,
-                )
-        except Exception as e:
-            verbose_proxy_logger.debug(
-                f"Update Spend Logs DB failed to execute - {str(e)}\n{traceback.format_exc()}"
-            )
-            raise e
-
-    async def _set_spend_logs_payload(
-        self,
         payload: Union[dict, SpendLogsPayload],
-        prisma_client: PrismaClient,
-        spend_logs_url: Optional[str] = None,
-    ) -> PrismaClient:
+        prisma_client: Optional[PrismaClient] = None,
+        spend_logs_url: Optional[str] = os.getenv("SPEND_LOGS_URL"),
+    ) -> Optional[PrismaClient]:
         verbose_proxy_logger.info(
             "Writing spend log to db - request_id: {}, spend: {}".format(
                 payload.get("request_id"), payload.get("spend")
             )
         )
         if prisma_client is not None and spend_logs_url is not None:
-            if isinstance(payload["startTime"], datetime):
-                payload["startTime"] = payload["startTime"].isoformat()
-            if isinstance(payload["endTime"], datetime):
-                payload["endTime"] = payload["endTime"].isoformat()
             prisma_client.spend_log_transactions.append(payload)
         elif prisma_client is not None:
             prisma_client.spend_log_transactions.append(payload)
+        else:
+            verbose_proxy_logger.debug(
+                "prisma_client is None. Skipping writing spend logs to db."
+            )
 
-        await self.add_spend_log_transaction_to_daily_user_transaction(
-            payload=payload.copy(),
-            prisma_client=prisma_client,
-        )
         return prisma_client
 
     async def db_update_spend_transaction_handler(
@@ -850,7 +833,7 @@ class DBSpendUpdateWriter:
     async def add_spend_log_transaction_to_daily_user_transaction(
         self,
         payload: Union[dict, SpendLogsPayload],
-        prisma_client: PrismaClient,
+        prisma_client: Optional[PrismaClient] = None,
     ):
         """
         Add a spend log transaction to the `daily_spend_update_queue`
@@ -859,6 +842,11 @@ class DBSpendUpdateWriter:
 
         If key exists, update the transaction with the new spend and usage
         """
+        if prisma_client is None:
+            verbose_proxy_logger.debug(
+                "prisma_client is None. Skipping writing spend logs to db."
+            )
+            return
         expected_keys = ["user", "startTime", "api_key", "model", "custom_llm_provider"]
 
         if not all(key in payload for key in expected_keys):

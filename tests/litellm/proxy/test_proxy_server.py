@@ -39,7 +39,6 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
     with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config), patch(
         "litellm.proxy.proxy_server.store_model_in_db", False
     ):  # set store_model_in_db to False
-
         # Test when store_model_in_db is False
         await ProxyStartupEvent.initialize_scheduled_background_jobs(
             general_settings={},
@@ -57,7 +56,6 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
     with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config), patch(
         "litellm.proxy.proxy_server.store_model_in_db", True
     ), patch("litellm.proxy.proxy_server.get_secret_bool", return_value=True):
-
         await ProxyStartupEvent.initialize_scheduled_background_jobs(
             general_settings={},
             prisma_client=mock_prisma_client,

@@ -20,6 +20,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
+from litellm.constants import DEFAULT_IN_MEMORY_TTL
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.proxy._types import (
     RBAC_ROLES,
@@ -55,7 +56,7 @@ else:
 
 
 last_db_access_time = LimitedSizeOrderedDict(max_size=100)
-db_cache_expiry = 5  # refresh every 5s
+db_cache_expiry = DEFAULT_IN_MEMORY_TTL  # refresh every 5s
 
 all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
 

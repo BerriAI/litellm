@@ -7,7 +7,7 @@
 
 import asyncio
 import traceback
-from typing import Optional
+from typing import Optional, cast, get_args
 
 import httpx
 from fastapi import (
@@ -31,7 +31,10 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
 )
+from litellm.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm.types.llms.openai import OpenAIFileObject, OpenAIFilesPurpose
 
 router = APIRouter()
 
@@ -104,6 +107,53 @@ def is_known_model(model: Optional[str], llm_router: Optional[Router]) -> bool:
     return is_in_list
 
 
+async def _deprecated_loadbalanced_create_file(
+    llm_router: Optional[Router],
+    router_model: str,
+    _create_file_request: CreateFileRequest,
+) -> OpenAIFileObject:
+    if llm_router is None:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "LLM Router not initialized. Ensure models added to proxy."
+            },
+        )
+
+    response = await llm_router.acreate_file(model=router_model, **_create_file_request)
+    return response
+
+
+async def create_file_for_each_model(
+    llm_router: Optional[Router],
+    _create_file_request: CreateFileRequest,
+    target_model_names_list: List[str],
+    purpose: OpenAIFilesPurpose,
+    proxy_logging_obj: ProxyLogging,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> OpenAIFileObject:
+    if llm_router is None:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "LLM Router not initialized. Ensure models added to proxy."
+            },
+        )
+    responses = []
+    for model in target_model_names_list:
+        individual_response = await llm_router.acreate_file(
+            model=model, **_create_file_request
+        )
+        responses.append(individual_response)
+    response = await _PROXY_LiteLLMManagedFiles.return_unified_file_id(
+        file_objects=responses,
+        purpose=purpose,
+        internal_usage_cache=proxy_logging_obj.internal_usage_cache,
+        litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+    )
+    return response
+
+
 @router.post(
     "/{provider}/v1/files",
     dependencies=[Depends(user_api_key_auth)],
@@ -123,6 +173,7 @@ async def create_file(
     request: Request,
     fastapi_response: Response,
     purpose: str = Form(...),
+    target_model_names: str = Form(default=""),
     provider: Optional[str] = None,
     custom_llm_provider: str = Form(default="openai"),
     file: UploadFile = File(...),
@@ -162,7 +213,24 @@ async def create_file(
             or await get_custom_llm_provider_from_request_body(request=request)
             or "openai"
         )
+
+        target_model_names_list = (
+            target_model_names.split(",") if target_model_names else []
+        )
+        target_model_names_list = [model.strip() for model in target_model_names_list]
         # Prepare the data for forwarding
+
+        # Replace with:
+        valid_purposes = get_args(OpenAIFilesPurpose)
+        if purpose not in valid_purposes:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Invalid purpose: {purpose}. Must be one of: {valid_purposes}",
+                },
+            )
+        # Cast purpose to OpenAIFilesPurpose type
+        purpose = cast(OpenAIFilesPurpose, purpose)
 
         data = {"purpose": purpose}
 
@@ -192,21 +260,25 @@ async def create_file(
 
         _create_file_request = CreateFileRequest(file=file_data, **data)
 
+        response: Optional[OpenAIFileObject] = None
         if (
             litellm.enable_loadbalancing_on_batch_endpoints is True
             and is_router_model
             and router_model is not None
         ):
-            if llm_router is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail={
-                        "error": "LLM Router not initialized. Ensure models added to proxy."
-                    },
-                )
-
-            response = await llm_router.acreate_file(
-                model=router_model, **_create_file_request
+            response = await _deprecated_loadbalanced_create_file(
+                llm_router=llm_router,
+                router_model=router_model,
+                _create_file_request=_create_file_request,
+            )
+        elif target_model_names_list:
+            response = await create_file_for_each_model(
+                llm_router=llm_router,
+                _create_file_request=_create_file_request,
+                target_model_names_list=target_model_names_list,
+                purpose=purpose,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=user_api_key_dict,
             )
         else:
             # get configs for custom_llm_provider
@@ -220,6 +292,11 @@ async def create_file(
             # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
             response = await litellm.acreate_file(**_create_file_request, custom_llm_provider=custom_llm_provider)  # type: ignore
 
+        if response is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "Failed to create file. Please try again."},
+            )
         ### ALERTING ###
         asyncio.create_task(
             proxy_logging_obj.update_request_status(
@@ -248,12 +325,11 @@ async def create_file(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.create_file(): Exception occured - {}".format(
                 str(e)
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),

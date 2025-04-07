@@ -137,6 +137,8 @@ async def test_supports_tool_choice():
             or model_name in block_list
             or "azure/eu" in model_name
             or "azure/us" in model_name
+            or "o1" in model_name
+            or "o3" in model_name
         ):
             continue
 

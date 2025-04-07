@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
-from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+from litellm.constants import LENGTH_OF_LITELLM_GENERATED_KEY, UI_SESSION_TOKEN_TEAM_ID
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
@@ -1164,7 +1164,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
         if key is not None:
             token = key
         else:
-            token = f"sk-{secrets.token_urlsafe(16)}"
+            token = f"sk-{secrets.token_urlsafe(LENGTH_OF_LITELLM_GENERATED_KEY)}"
 
     if duration is None:  # allow tokens that never expire
         expires = None
@@ -1745,7 +1745,7 @@ async def regenerate_key_fn(
 
         verbose_proxy_logger.debug("key_in_db: %s", _key_in_db)
 
-        new_token = f"sk-{secrets.token_urlsafe(16)}"
+        new_token = f"sk-{secrets.token_urlsafe(LENGTH_OF_LITELLM_GENERATED_KEY)}"
         new_token_hash = hash_token(new_token)
         new_token_key_name = f"sk-...{new_token[-4:]}"
 

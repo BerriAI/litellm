@@ -9,6 +9,7 @@ from typing import Optional
 import httpx
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import NON_LLM_CONNECTION_TIMEOUT
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
@@ -23,7 +24,7 @@ class LicenseCheck:
     def __init__(self) -> None:
         self.license_str = os.getenv("LITELLM_LICENSE", None)
         verbose_proxy_logger.debug("License Str value - {}".format(self.license_str))
-        self.http_handler = HTTPHandler(timeout=15)
+        self.http_handler = HTTPHandler(timeout=NON_LLM_CONNECTION_TIMEOUT)
         self.public_key = None
         self.read_public_key()
 

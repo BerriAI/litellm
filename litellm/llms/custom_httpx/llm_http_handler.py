@@ -368,6 +368,7 @@ class BaseLLMHTTPHandler:
                     else None
                 ),
                 litellm_params=litellm_params,
+                json_mode=json_mode,
             )
             return CustomStreamWrapper(
                 completion_stream=completion_stream,
@@ -420,6 +421,7 @@ class BaseLLMHTTPHandler:
         timeout: Union[float, httpx.Timeout],
         fake_stream: bool = False,
         client: Optional[HTTPHandler] = None,
+        json_mode: bool = False,
     ) -> Tuple[Any, dict]:
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = _get_httpx_client(
@@ -447,11 +449,15 @@ class BaseLLMHTTPHandler:
 
         if fake_stream is True:
             completion_stream = provider_config.get_model_response_iterator(
-                streaming_response=response.json(), sync_stream=True
+                streaming_response=response.json(),
+                sync_stream=True,
+                json_mode=json_mode,
             )
         else:
             completion_stream = provider_config.get_model_response_iterator(
-                streaming_response=response.iter_lines(), sync_stream=True
+                streaming_response=response.iter_lines(),
+                sync_stream=True,
+                json_mode=json_mode,
             )
 
         # LOGGING

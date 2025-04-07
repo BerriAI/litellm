@@ -528,6 +528,8 @@ export const userCreateCall = async (
       delete formValues.description;
       formValues.metadata = JSON.stringify(formValues.metadata);
     }
+
+    formValues.auto_create_key = false;
     // if formValues.metadata is not undefined, make it a valid dict
     if (formValues.metadata) {
       console.log("formValues.metadata:", formValues.metadata);

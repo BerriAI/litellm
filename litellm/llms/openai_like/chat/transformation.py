@@ -34,7 +34,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         return api_base, dynamic_api_key
 
     @staticmethod
-    def _convert_tool_response_to_message(
+    def _json_mode_convert_tool_response_to_message(
         message: ChatCompletionAssistantMessage, json_mode: bool
     ) -> ChatCompletionAssistantMessage:
         """
@@ -88,8 +88,10 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
 
         if json_mode:
             for choice in response_json["choices"]:
-                message = OpenAILikeChatConfig._convert_tool_response_to_message(
-                    choice.get("message"), json_mode
+                message = (
+                    OpenAILikeChatConfig._json_mode_convert_tool_response_to_message(
+                        choice.get("message"), json_mode
+                    )
                 )
                 choice["message"] = message
 

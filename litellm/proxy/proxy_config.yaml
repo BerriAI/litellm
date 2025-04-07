@@ -4,3 +4,13 @@ model_list:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
+  - model_name: openai/gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: fake-key
+
+litellm_settings:
+  require_auth_for_metrics_endpoint: true
+
+  callbacks: ["prometheus"]
+  service_callback: ["prometheus_system"]
