@@ -119,7 +119,7 @@ async def run_async_fallback(
 
     error_from_fallbacks = original_exception
 
-        # Handle mid-stream fallbacks by preserving already generated content
+    # Handle mid-stream fallbacks by preserving already generated content
     is_mid_stream = kwargs.pop("is_mid_stream_fallback", False)
     previous_content = kwargs.pop("previous_content", "")
 
