@@ -1964,6 +1964,10 @@ async def team_member_permissions(
         )
 
     team_obj = LiteLLM_TeamTable(**team_row.model_dump())
+    if team_obj.team_member_permissions is None:
+        team_obj.team_member_permissions = (
+            TeamMemberPermissionChecks.default_team_member_permissions()
+        )
 
     return GetTeamMemberPermissionsResponse(
         team_id=team_id,
