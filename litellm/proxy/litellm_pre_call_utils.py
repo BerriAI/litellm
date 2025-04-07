@@ -242,6 +242,37 @@ class LiteLLMProxyRequestSetup:
         return forwarded_headers
 
     @staticmethod
+    def _get_case_insensitive_header(headers: dict, key: str) -> Optional[str]:
+        """
+        Get a case-insensitive header from the headers dictionary.
+        """
+        for header, value in headers.items():
+            if header.lower() == key.lower():
+                return value
+        return None
+
+    @staticmethod
+    def get_user_from_headers(headers: dict, general_settings: Optional[Dict] = None) -> Optional[str]:
+        """
+        Get the user from the specified header if `general_settings.user_header_name` is set.
+        """
+        if general_settings is None:
+            return None
+        
+        header_name = general_settings.get("user_header_name")
+        if header_name is None or header_name == "":
+            return None
+        
+        if not isinstance(header_name, str):
+            raise TypeError(f"Expected user_header_name to be a str but got {type(header_name)}")
+
+        user = LiteLLMProxyRequestSetup._get_case_insensitive_header(headers, header_name)
+        if user is not None:
+            verbose_logger.info(f"found user \"{user}\" in header \"{header_name}\"")
+
+        return user
+
+    @staticmethod
     def get_openai_org_id_from_headers(
         headers: dict, general_settings: Optional[Dict] = None
     ) -> Optional[str]:
@@ -292,10 +323,16 @@ class LiteLLMProxyRequestSetup:
         general_settings: Optional[Dict[str, Any]] = None,
     ) -> LitellmDataForBackendLLMCall:
         """
+        - Adds user from headers
         - Adds forwardable headers
         - Adds org id
         """
         data = LitellmDataForBackendLLMCall()
+
+        user = LiteLLMProxyRequestSetup.get_user_from_headers(headers, general_settings)
+        if user is not None:
+            data["user"] = user
+
         if (
             general_settings
             and general_settings.get("forward_client_headers_to_llm_api") is True
