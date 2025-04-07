@@ -2348,6 +2348,7 @@ def test_completion_datarobot():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
 # test_completion_datarobot()
 
 
