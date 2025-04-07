@@ -183,6 +183,13 @@ async def run_async_fallback(
                 response=response,
                 attempted_fallbacks=fallback_depth,
             )
+
+            # If this was a mid-stream fallback, also add that to response headers
+            if is_mid_stream and hasattr(response, "_hidden_params"):
+                response._hidden_params.setdefault("additional_headers", {})
+                response._hidden_params["additional_headers"]["x-litellm-mid-stream-fallback"] = True
+                response._hidden_params["additional_headers"]["x-litellm-previous-content-length"] = len(previous_content)
+
             # callback for successfull_fallback_event():
             await log_success_fallback_event(
                 original_model_group=original_model_group,

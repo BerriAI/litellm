@@ -782,6 +782,8 @@ class CustomStreamWrapper:
 
             # Check if this is a response from a mid-stream fallback
             is_mid_stream_fallback = (
+                hasattr(model_response, "_hidden_params") and
+                isinstance(model_response._hidden_params, dict) and
                 model_response._hidden_params.get("metadata", {}).get("mid_stream_fallback", False) or
                 model_response._hidden_params.get("additional_headers", {}).get("x-litellm-mid-stream-fallback", False)
             )
@@ -1835,6 +1837,24 @@ class CustomStreamWrapper:
             raise e
         except Exception as e:
             traceback_exception = traceback.format_exc()
+            if (
+                (isinstance(e, litellm.InternalServerError) and "overloaded" in str(e).lower()) or
+                (isinstance(e, Exception) and "overloaded" in str(e).lower() and self.custom_llm_provider == "anthropic")
+            ):
+                e = litellm.MidStreamFallbackError(
+                    message=str(e),
+                    model=self.model,
+                    llm_provider=self.custom_llm_provider or "anthropic",
+                    original_exception=e,
+                    generated_content=self.response_uptil_now,
+                    is_pre_first_chunk=not self.sent_first_chunk,
+                )
+                setattr(e, "streaming_obj", self)
+
+                # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
+                threading.Thread(
+                    target=self.logging_obj.failure_handler, args=(e, traceback_exception),
+                ).start()
             if self.logging_obj is not None:
                 ## LOGGING
                 threading.Thread(
