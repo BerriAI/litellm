@@ -1076,7 +1076,6 @@ class BaseLLMChatTest(ABC):
                 tools=TOOLS,
                 tool_choice="auto",
                 stream=True,
-                temperature=0,
             )
 
             final_tool_calls = {}
