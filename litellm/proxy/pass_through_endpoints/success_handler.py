@@ -16,6 +16,9 @@ from .llm_provider_handlers.anthropic_passthrough_logging_handler import (
 from .llm_provider_handlers.assembly_passthrough_logging_handler import (
     AssemblyAIPassthroughLoggingHandler,
 )
+from .llm_provider_handlers.azure_passthrough_logging_handler import (
+    AzurePassthroughLoggingHandler,
+)
 from .llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
@@ -27,6 +30,12 @@ class PassThroughEndpointLogging:
             "generateContent",
             "streamGenerateContent",
             "predict",
+        ]
+
+        #Azure
+        self.TRACKED_AZURE_ROUTES = [
+            "threads",
+            "assistants",
         ]
 
         # Anthropic
@@ -84,6 +93,7 @@ class PassThroughEndpointLogging:
         start_time: datetime,
         end_time: datetime,
         cache_hit: bool,
+        query_params: Optional[str],
         **kwargs,
     ):
         standard_logging_response_object: Optional[
@@ -106,6 +116,24 @@ class PassThroughEndpointLogging:
                 vertex_passthrough_logging_handler_result["result"]
             )
             kwargs = vertex_passthrough_logging_handler_result["kwargs"]
+        elif self.is_azure_route(url_route):
+            azure_passthrough_logging_handler_result = await (
+                AzurePassthroughLoggingHandler.azure_passthrough_handler(
+                    httpx_response=httpx_response,
+                    logging_obj=logging_obj,
+                    url_route=url_route,
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    cache_hit=cache_hit,
+                    extra_query_params=query_params,
+                    **kwargs,
+                )
+            )
+            standard_logging_response_object = (
+                azure_passthrough_logging_handler_result["result"]
+            )
+            kwargs = azure_passthrough_logging_handler_result["kwargs"]
         elif self.is_anthropic_route(url_route):
             anthropic_passthrough_logging_handler_result = (
                 AnthropicPassthroughLoggingHandler.anthropic_passthrough_handler(
@@ -179,4 +207,10 @@ class PassThroughEndpointLogging:
             return True
         elif "/transcript" in parsed_url.path:
             return True
+        return False
+
+    def is_azure_route(self, url_route: str):
+        for route in self.TRACKED_AZURE_ROUTES:
+            if route in url_route:
+                return True
         return False

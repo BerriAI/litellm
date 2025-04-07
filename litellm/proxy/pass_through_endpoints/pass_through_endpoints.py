@@ -472,7 +472,7 @@ async def pass_through_request(  # noqa: PLR0915
                 logging_url = str(url) + "&" + requested_query_params_str
             else:
                 logging_url = str(url) + "?" + requested_query_params_str
-
+        verbose_proxy_logger.info("Params before sending request: %s", requested_query_params_str)
         logging_obj.pre_call(
             input=[{"role": "user", "content": json.dumps(_parsed_body)}],
             api_key="",
@@ -594,6 +594,7 @@ async def pass_through_request(  # noqa: PLR0915
                 end_time=end_time,
                 logging_obj=logging_obj,
                 cache_hit=False,
+                query_params=requested_query_params_str,
                 **kwargs,
             )
         )
@@ -733,6 +734,7 @@ def create_pass_through_route(
                 user_api_key_dict=user_api_key_dict,
             )
 
+    # Exception triggered when target is a URL, and not a CustomLogger.
     except Exception:
         verbose_proxy_logger.debug("Defaulting to target being a url.")
 
