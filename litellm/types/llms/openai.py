@@ -892,17 +892,17 @@ class BaseLiteLLMOpenAIResponseObject(BaseModel):
 
 
 class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
-    reasoning_tokens: int
+    reasoning_tokens: Optional[int] = None
 
-    text_tokens: int
+    text_tokens: Optional[int] = None
 
     model_config = {"extra": "allow"}
 
 
 class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
-    audio_tokens: int
-    cached_tokens: int
-    text_tokens: int
+    audio_tokens: Optional[int] = None
+    cached_tokens: Optional[int] = None
+    text_tokens: Optional[int] = None
 
     model_config = {"extra": "allow"}
 
