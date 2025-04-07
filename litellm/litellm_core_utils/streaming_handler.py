@@ -779,6 +779,20 @@ class CustomStreamWrapper:
             is_chunk_non_empty
         ):  # cannot set content of an OpenAI Object to be an empty string
             self.safety_checker()
+
+            # Check if this is a response from a mid-stream fallback
+            is_mid_stream_fallback = (
+                model_response._hidden_params.get("metadata", {}).get("mid_stream_fallback", False) or
+                model_response._hidden_params.get("additional_headers", {}).get("x-litellm-mid-stream-fallback", False)
+            )
+            if is_mid_stream_fallback and self.sent_first_chunk is False:
+                # Skip sending the role in the first chunk since it was sent by the original call
+                if hasattr(model_response.choices[0].delta, "role"):
+                    del model_response.choices[0].delta.role
+
+                self.sent_first_chunk = True
+
+
             hold, model_response_str = self.check_special_tokens(
                 chunk=completion_obj["content"],
                 finish_reason=model_response.choices[0].finish_reason,
@@ -1614,6 +1628,24 @@ class CustomStreamWrapper:
             threading.Thread(
                 target=self.logging_obj.failure_handler, args=(e, traceback_exception)
             ).start()
+            if (
+                (isinstance(e, litellm.InternalServerError) and "overloaded" in str(e).lower()) or
+                (isinstance(e, Exception) and "overloaded" in str(e).lower() and self.custom_llm_provider == "anthropic")
+            ):
+                e = litellm.MidStreamFallbackError(
+                    message=str(e),
+                    model=self.model,
+                    llm_provider=self.custom_llm_provider or "anthropic",
+                    original_exception=e,
+                    generated_content=self.response_uptil_now,
+                    is_pre_first_chunk=not self.sent_first_chunk,
+                )
+                setattr(e, "streaming_obj", self)
+
+                # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
+                threading.Thread(
+                    target=self.logging_obj.failure_handler, args=(e, traceback_exception),
+                ).start()
             if isinstance(e, OpenAIError):
                 raise e
             else:
