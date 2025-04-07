@@ -1076,32 +1076,24 @@ print(response)
 ```
 
 
-### Parallel Function calling
+### Tool Calling / Function Calling
+
 See a detailed walthrough of parallel function calling with litellm [here](https://docs.litellm.ai/docs/completion/function_call)
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 ```python
 # set Azure env variables
 import os
+import litellm
+import json
+
 os.environ['AZURE_API_KEY'] = "" # litellm reads AZURE_API_KEY from .env and sends the request
 os.environ['AZURE_API_BASE'] = "https://openai-gpt-4-test-v-1.openai.azure.com/"
 os.environ['AZURE_API_VERSION'] = "2023-07-01-preview"
 
-import litellm
-import json
-# Example dummy function hard coded to return the same weather
-# In production, this could be your backend API or an external API
-def get_current_weather(location, unit="fahrenheit"):
-    """Get the current weather in a given location"""
-    if "tokyo" in location.lower():
-        return json.dumps({"location": "Tokyo", "temperature": "10", "unit": "celsius"})
-    elif "san francisco" in location.lower():
-        return json.dumps({"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"})
-    elif "paris" in location.lower():
-        return json.dumps({"location": "Paris", "temperature": "22", "unit": "celsius"})
-    else:
-        return json.dumps({"location": location, "temperature": "unknown"})
-
-## Step 1: send the conversation and available functions to the model
-messages = [{"role": "user", "content": "What's the weather like in San Francisco, Tokyo, and Paris?"}]
 tools = [
     {
         "type": "function",
@@ -1125,7 +1117,7 @@ tools = [
 
 response = litellm.completion(
     model="azure/chatgpt-functioncalling", # model = azure/<your-azure-deployment-name>
-    messages=messages,
+    messages=[{"role": "user", "content": "What's the weather like in San Francisco, Tokyo, and Paris?"}],
     tools=tools,
     tool_choice="auto",  # auto is default, but we'll be explicit
 )
@@ -1134,8 +1126,49 @@ response_message = response.choices[0].message
 tool_calls = response.choices[0].message.tool_calls
 print("\nTool Choice:\n", tool_calls)
 ```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: azure-gpt-3.5
+    litellm_params:
+      model: azure/chatgpt-functioncalling
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2023-07-01-preview"
+```
+
+2. Start proxy
+
+```bash
+litellm --config config.yaml
+```
+
+3. Test it
+
+```bash
+curl -L -X POST 'http://localhost:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "azure-gpt-3.5",
+    "messages": [
+        {
+            "role": "user",
+            "content": "Hey, how'\''s it going? Thinking long and hard before replying - what is the meaning of the world and life itself"
+        }
+    ]
+}'
+```
 
 
+
+
+</TabItem>
+</Tabs>
 ### Spend Tracking for Azure OpenAI Models (PROXY)
 
 Set base model for cost tracking azure image-gen call
