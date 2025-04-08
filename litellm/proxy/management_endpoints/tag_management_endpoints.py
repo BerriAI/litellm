@@ -20,11 +20,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.model_management_endpoints import (
-    update_model,
-    updateDeployment,
-)
-from litellm.types.router import GenericLiteLLMParams
 from litellm.types.tag_management import (
     TagConfig,
     TagDeleteRequest,
