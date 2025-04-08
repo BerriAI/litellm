@@ -1,17 +1,14 @@
 import json
 import os
 import sys
-from datetime import datetime
-from unittest.mock import AsyncMock
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
 from litellm import completion, embedding
-from litellm.llms.watsonx.common_utils import IBMWatsonXMixin
-from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
-from unittest.mock import patch, MagicMock, AsyncMock, Mock
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from unittest.mock import patch, Mock
 import pytest
 from typing import Optional
 
@@ -227,7 +224,27 @@ def test_watsonx_deployment_space_id(monkeypatch, watsonx_chat_completion_call, 
 
     assert mock_post.call_count == 1
     json_data = json.loads(mock_post.call_args.kwargs["data"])
-    assert my_fake_space_id == json_data["space_id"]
+    assert "space_id" not in json_data
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "watsonx/deployment/<xxxx.xxx.xxx.xxxx>",
+        "watsonx_text/deployment/<xxxx.xxx.xxx.xxxx>",
+    ],
+)
+def test_watsonx_deployment(watsonx_chat_completion_call, model):
+
+    messages = [{"content": "Hello, how are you?", "role": "user"}]
+    mock_post, _ = watsonx_chat_completion_call(
+        model=model,
+        messages=messages,
+    )
+
+    assert mock_post.call_count == 1
+    json_data = json.loads(mock_post.call_args.kwargs["data"])
+    assert "project_id" not in json_data and "space_id" not in json_data
 
 
 def test_watsonx_deployment_space_id_embedding(monkeypatch, watsonx_embedding_call):
@@ -238,4 +255,4 @@ def test_watsonx_deployment_space_id_embedding(monkeypatch, watsonx_embedding_ca
 
     assert mock_post.call_count == 1
     json_data = json.loads(mock_post.call_args.kwargs["data"])
-    assert my_fake_space_id == json_data["space_id"]
+    assert "space_id" not in json_data
