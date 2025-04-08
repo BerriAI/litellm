@@ -2,7 +2,7 @@ import json
 import os
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from httpx import Headers, Response
 
@@ -323,7 +323,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         )
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: Dict | Headers
+        self, error_message: str, status_code: int, headers: Union[Dict, Headers]
     ) -> BaseLLMException:
         return VertexAIError(
             status_code=status_code, message=error_message, headers=headers
