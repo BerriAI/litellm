@@ -205,6 +205,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             (chunk, model) => updateTextUI("assistant", chunk, model),
             selectedModel,
             effectiveApiKey,
+            selectedTags,
             signal
           );
         } else if (endpointType === EndpointType.IMAGE) {
@@ -214,6 +215,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             (imageUrl, model) => updateImageUI(imageUrl, model),
             selectedModel,
             effectiveApiKey,
+            selectedTags,
             signal
           );
         }

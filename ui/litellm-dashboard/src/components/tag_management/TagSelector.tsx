@@ -16,18 +16,13 @@ const TagSelector: React.FC<TagSelectorProps> = ({ onChange, value, className, a
 
   useEffect(() => {
     const fetchTags = async () => {
-      setLoading(true);
+      if (!accessToken) return;
       try {
         const response = await tagListCall(accessToken);
-        if (!response.ok) {
-          throw new Error('Failed to fetch tags');
-        }
-        const data = await response.json();
-        setTags(data);
+        console.log("List tags response:", response);
+        setTags(Object.values(response));
       } catch (error) {
-        console.error('Error fetching tags:', error);
-      } finally {
-        setLoading(false);
+        console.error("Error fetching tags:", error);
       }
     };
 

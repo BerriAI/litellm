@@ -11,6 +11,10 @@ model_list:
 
 litellm_settings:
   require_auth_for_metrics_endpoint: true
+  
 
   callbacks: ["prometheus"]
   service_callback: ["prometheus_system"]
+
+router_settings:
+  enable_tag_filtering: True # 👈 Key Change
