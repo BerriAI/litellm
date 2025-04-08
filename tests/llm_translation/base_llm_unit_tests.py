@@ -474,6 +474,7 @@ class BaseLLMChatTest(ABC):
         """
         PROD Test: ensure nested json schema sent to proxy works as expected.
         """
+        litellm._turn_on_debug()
         from pydantic import BaseModel
         from litellm.utils import supports_response_schema
         from litellm.llms.base_llm.base_utils import type_to_response_format_param

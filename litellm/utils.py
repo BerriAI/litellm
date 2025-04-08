@@ -3376,7 +3376,6 @@ def get_optional_params(  # noqa: PLR0915
                     if drop_params is not None and isinstance(drop_params, bool)
                     else False
                 ),
-                messages=messages,
             )
 
         elif "anthropic" in bedrock_base_model and bedrock_route == "invoke":
@@ -3719,6 +3718,17 @@ def get_optional_params(  # noqa: PLR0915
                     else False
                 ),
             )
+    elif provider_config is not None:
+        optional_params = provider_config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
     else:  # assume passing in params for openai-like api
         optional_params = litellm.OpenAILikeChatConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -6202,7 +6212,7 @@ class ProviderConfigManager:
     @staticmethod
     def get_provider_chat_config(  # noqa: PLR0915
         model: str, provider: LlmProviders
-    ) -> BaseConfig:
+    ) -> Optional[BaseConfig]:
         """
         Returns the provider config for a given provider.
         """
@@ -6233,9 +6243,22 @@ class ProviderConfigManager:
             return litellm.AnthropicConfig()
         elif litellm.LlmProviders.ANTHROPIC_TEXT == provider:
             return litellm.AnthropicTextConfig()
+        elif litellm.LlmProviders.VERTEX_AI_BETA == provider:
+            return litellm.VertexGeminiConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
-            if "claude" in model:
+            if "gemini" in model:
+                return litellm.VertexGeminiConfig()
+            elif "claude" in model:
                 return litellm.VertexAIAnthropicConfig()
+            elif model in litellm.vertex_mistral_models:
+                if "codestral" in model:
+                    return litellm.CodestralTextCompletionConfig()
+                else:
+                    return litellm.MistralConfig()
+            elif model in litellm.vertex_ai_ai21_models:
+                return litellm.VertexAIAi21Config()
+            else:  # use generic openai-like param mapping
+                return litellm.VertexAILlama3Config()
         elif litellm.LlmProviders.CLOUDFLARE == provider:
             return litellm.CloudflareChatConfig()
         elif litellm.LlmProviders.SAGEMAKER_CHAT == provider:
@@ -6258,7 +6281,6 @@ class ProviderConfigManager:
             litellm.LlmProviders.CUSTOM == provider
             or litellm.LlmProviders.CUSTOM_OPENAI == provider
             or litellm.LlmProviders.OPENAI_LIKE == provider
-            or litellm.LlmProviders.LITELLM_PROXY == provider
         ):
             return litellm.OpenAILikeChatConfig()
         elif litellm.LlmProviders.AIOHTTP_OPENAI == provider:
@@ -6363,9 +6385,15 @@ class ProviderConfigManager:
                 return litellm.AmazonMistralConfig()
             elif bedrock_invoke_provider == "deepseek_r1":  # deepseek models on bedrock
                 return litellm.AmazonDeepSeekR1Config()
+            elif bedrock_invoke_provider == "nova":
+                return litellm.AmazonInvokeNovaConfig()
             else:
                 return litellm.AmazonInvokeConfig()
-        return litellm.OpenAIGPTConfig()
+        elif litellm.LlmProviders.LITELLM_PROXY == provider:
+            return litellm.LiteLLMProxyChatConfig()
+        elif litellm.LlmProviders.OPENAI == provider:
+            return litellm.OpenAIGPTConfig()
+        return None
 
     @staticmethod
     def get_provider_embedding_config(

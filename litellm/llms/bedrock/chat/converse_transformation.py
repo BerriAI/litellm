@@ -235,7 +235,6 @@ class AmazonConverseConfig(BaseConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
-        messages: Optional[List[AllMessageValues]] = None,
     ) -> dict:
         is_thinking_enabled = self.is_thinking_enabled(non_default_params)
 
