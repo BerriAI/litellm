@@ -1074,7 +1074,6 @@ class BaseLLMChatTest(ABC):
                 **base_completion_call_args,
                 messages=messages,
                 tools=TOOLS,
-                tool_choice="auto",
                 stream=True,
             )
 

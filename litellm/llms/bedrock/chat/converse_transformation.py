@@ -289,6 +289,12 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=value
                 )
+
+                if (
+                    "meta.llama3-3-70b-instruct-v1:0" in model
+                    and non_default_params.get("stream", False) is True
+                ):
+                    optional_params["fake_stream"] = True
             if param == "tool_choice":
                 _tool_choice_value = self.map_tool_choice_values(
                     model=model, tool_choice=value, drop_params=drop_params  # type: ignore
