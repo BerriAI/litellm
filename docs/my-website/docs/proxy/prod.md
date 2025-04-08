@@ -177,6 +177,50 @@ export LITELLM_SALT_KEY="sk-1234"
 
 [**See Code**](https://github.com/BerriAI/litellm/blob/036a6821d588bd36d170713dcf5a72791a694178/litellm/proxy/common_utils/encrypt_decrypt_utils.py#L15)
 
+
+## 9. Use `prisma migrate deploy`
+
+Use this to handle db migrations across LiteLLM versions in production
+
+<Tabs>
+<TabItem value="env" label="ENV">
+
+```bash
+USE_PRISMA_MIGRATE="True"
+```
+
+</TabItem>
+
+<TabItem value="cli" label="CLI">
+
+```bash
+litellm --use_prisma_migrate
+```
+
+</TabItem>
+</Tabs>
+
+Benefits:
+
+The migrate deploy command:
+
+- **Does not** issue a warning if an already applied migration is missing from migration history
+- **Does not** detect drift (production database schema differs from migration history end state - for example, due to a hotfix)
+- **Does not** reset the database or generate artifacts (such as Prisma Client)
+- **Does not** rely on a shadow database
+
+
+### How does LiteLLM handle DB migrations in production?
+
+1. A new migration file is written to our `litellm-proxy-extras` package. [See all](https://github.com/BerriAI/litellm/tree/main/litellm-proxy-extras/litellm_proxy_extras/migrations)
+
+2. The core litellm pip package is bumped to point to the new `litellm-proxy-extras` package. This ensures, older versions of LiteLLM will continue to use the old migrations. [See code](https://github.com/BerriAI/litellm/blob/52b35cd8093b9ad833987b24f494586a1e923209/pyproject.toml#L58)
+
+3. When you upgrade to a new version of LiteLLM, the migration file is applied to the database. [See code](https://github.com/BerriAI/litellm/blob/52b35cd8093b9ad833987b24f494586a1e923209/litellm-proxy-extras/litellm_proxy_extras/utils.py#L42)
+
+
+
+
 ## Extras
 ### Expected Performance in Production
 

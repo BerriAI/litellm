@@ -695,6 +695,7 @@ class ChatCompletionToolParamFunctionChunk(TypedDict, total=False):
     name: Required[str]
     description: str
     parameters: dict
+    strict: bool
 
 
 class OpenAIChatCompletionToolParam(TypedDict):
@@ -892,7 +893,17 @@ class BaseLiteLLMOpenAIResponseObject(BaseModel):
 
 
 class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
-    reasoning_tokens: int
+    reasoning_tokens: Optional[int] = None
+
+    text_tokens: Optional[int] = None
+
+    model_config = {"extra": "allow"}
+
+
+class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
+    audio_tokens: Optional[int] = None
+    cached_tokens: Optional[int] = None
+    text_tokens: Optional[int] = None
 
     model_config = {"extra": "allow"}
 
@@ -901,10 +912,13 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
     input_tokens: int
     """The number of input tokens."""
 
+    input_tokens_details: Optional[InputTokensDetails] = None
+    """A detailed breakdown of the input tokens."""
+
     output_tokens: int
     """The number of output tokens."""
 
-    output_tokens_details: Optional[OutputTokensDetails]
+    output_tokens_details: Optional[OutputTokensDetails] = None
     """A detailed breakdown of the output tokens."""
 
     total_tokens: int
@@ -1173,3 +1187,20 @@ ResponsesAPIStreamingResponse = Annotated[
 
 
 REASONING_EFFORT = Literal["low", "medium", "high"]
+
+
+class OpenAIRealtimeStreamSessionEvents(TypedDict):
+    event_id: str
+    session: dict
+    type: Union[Literal["session.created"], Literal["session.updated"]]
+
+
+class OpenAIRealtimeStreamResponseBaseObject(TypedDict):
+    event_id: str
+    response: dict
+    type: str
+
+
+OpenAIRealtimeStreamList = List[
+    Union[OpenAIRealtimeStreamResponseBaseObject, OpenAIRealtimeStreamSessionEvents]
+]
