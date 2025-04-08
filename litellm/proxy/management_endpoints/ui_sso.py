@@ -115,7 +115,7 @@ async def google_login(request: Request):  # noqa: PLR0915
         )
         is True
     ):
-        return SSOAuthenticationHandler.get_sso_login_redirect(
+        return await SSOAuthenticationHandler.get_sso_login_redirect(
             redirect_url=redirect_url,
             microsoft_client_id=microsoft_client_id,
             google_client_id=google_client_id,
