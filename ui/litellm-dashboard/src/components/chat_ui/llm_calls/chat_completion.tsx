@@ -7,6 +7,7 @@ export async function makeOpenAIChatCompletionRequest(
     updateUI: (chunk: string, model: string) => void,
     selectedModel: string,
     accessToken: string,
+    tags?: string[],
     signal?: AbortSignal
   ) {
     // base url should be the current base_url
@@ -22,6 +23,7 @@ export async function makeOpenAIChatCompletionRequest(
       apiKey: accessToken, // Replace with your OpenAI API key
       baseURL: proxyBaseUrl, // Replace with your OpenAI API base URL
       dangerouslyAllowBrowser: true, // using a temporary litellm proxy key
+      defaultHeaders: tags && tags.length > 0 ? { 'x-litellm-tags': tags.join(',') } : undefined,
     });
   
     try {
