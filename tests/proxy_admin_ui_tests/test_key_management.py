@@ -660,6 +660,7 @@ def test_team_key_generation_team_member_check():
             api_key="sk-1234",
             team_member=Member(role="admin", user_id="test_user_id"),
         ),
+        route=KeyManagementRoutes.KEY_GENERATE,
         data=GenerateKeyRequest(),
     )
 
@@ -678,6 +679,7 @@ def test_team_key_generation_team_member_check():
                 user_id="test_user_id",
                 team_member=Member(role="user", user_id="test_user_id"),
             ),
+            route=KeyManagementRoutes.KEY_GENERATE,
             data=GenerateKeyRequest(),
         )
 
