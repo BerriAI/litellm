@@ -240,6 +240,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
                 non_default_params.get("reasoning_effort")
             )
+            optional_params.pop("reasoning_effort", None)
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
             non_default_params=non_default_params, optional_params=mapped_params
