@@ -3,11 +3,6 @@ import {
   Card,
   Text,
   Title,
-  TabGroup,
-  TabList,
-  Tab,
-  TabPanels,
-  TabPanel,
   Button,
   Badge,
 } from "@tremor/react";
@@ -99,127 +94,111 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({
   }
 
   return (
-    <div className="w-full">
-      <div className="flex justify-between items-center mb-4">
-        <Button onClick={onClose}>← Back to Tags</Button>
+    <div className="p-4">
+      <div className="flex justify-between items-center mb-6">
+        <div>
+          <Button onClick={onClose} className="mb-4">← Back to Tags</Button>
+          <Title>Tag Name: {tagDetails.name}</Title>
+          <Text className="text-gray-500">{tagDetails.description || "No description"}</Text>
+        </div>
         {is_admin && !isEditing && (
           <Button onClick={() => setIsEditing(true)}>Edit Tag</Button>
         )}
       </div>
 
-      <TabGroup>
-        <TabList>
-          <Tab>Overview</Tab>
-          <Tab>Usage & Analytics</Tab>
-        </TabList>
+      {isEditing ? (
+        <Card>
+          <Form
+            form={form}
+            onFinish={handleSave}
+            layout="vertical"
+            initialValues={tagDetails}
+          >
+            <Form.Item
+              label="Tag Name"
+              name="name"
+              rules={[{ required: true, message: "Please input a tag name" }]}
+            >
+              <Input />
+            </Form.Item>
 
-        <TabPanels>
-          <TabPanel>
-            {isEditing ? (
-              <Card>
-                <Form
-                  form={form}
-                  onFinish={handleSave}
-                  layout="vertical"
-                  initialValues={tagDetails}
-                >
-                  <Form.Item
-                    label="Tag Name"
-                    name="name"
-                    rules={[{ required: true, message: "Please input a tag name" }]}
-                  >
-                    <Input />
-                  </Form.Item>
+            <Form.Item
+              label="Description"
+              name="description"
+            >
+              <Input.TextArea rows={4} />
+            </Form.Item>
 
-                  <Form.Item
-                    label="Description"
-                    name="description"
-                  >
-                    <Input.TextArea rows={4} />
-                  </Form.Item>
+            <Form.Item
+              label={
+                <span>
+                  Allowed LLMs{' '}
+                  <Tooltip title="Select which LLMs are allowed to process this type of data">
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              }
+              name="models"
+            >
+              <Select2
+                mode="multiple"
+                placeholder="Select LLMs"
+              >
+                {userModels.map((modelId) => (
+                  <Select2.Option key={modelId} value={modelId}>
+                    {getModelDisplayName(modelId)}
+                  </Select2.Option>
+                ))}
+              </Select2>
+            </Form.Item>
 
-                  <Form.Item
-                    label={
-                      <span>
-                        Allowed LLMs{' '}
-                        <Tooltip title="Select which LLMs are allowed to process this type of data">
-                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+            <div className="flex justify-end space-x-2">
+              <Button onClick={() => setIsEditing(false)}>Cancel</Button>
+              <Button type="submit">Save Changes</Button>
+            </div>
+          </Form>
+        </Card>
+      ) : (
+        <div className="space-y-6">
+          <Card>
+            <Title>Tag Details</Title>
+            <div className="space-y-4 mt-4">
+              <div>
+                <Text className="font-medium">Name</Text>
+                <Text>{tagDetails.name}</Text>
+              </div>
+              <div>
+                <Text className="font-medium">Description</Text>
+                <Text>{tagDetails.description || "-"}</Text>
+              </div>
+              <div>
+                <Text className="font-medium">Allowed LLMs</Text>
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {tagDetails.models.length === 0 ? (
+                    <Badge color="red">All Models</Badge>
+                  ) : (
+                    tagDetails.models.map((modelId) => (
+                      <Badge key={modelId} color="blue">
+                        <Tooltip title={`ID: ${modelId}`}>
+                          {tagDetails.model_info?.[modelId] || modelId}
                         </Tooltip>
-                      </span>
-                    }
-                    name="models"
-                  >
-                    <Select2
-                      mode="multiple"
-                      placeholder="Select LLMs"
-                    >
-                      {userModels.map((modelId) => (
-                        <Select2.Option key={modelId} value={modelId}>
-                          {getModelDisplayName(modelId)}
-                        </Select2.Option>
-                      ))}
-                    </Select2>
-                  </Form.Item>
-
-                  <div className="flex justify-end space-x-2">
-                    <Button onClick={() => setIsEditing(false)}>Cancel</Button>
-                    <Button type="submit" color="blue">Save Changes</Button>
-                  </div>
-                </Form>
-              </Card>
-            ) : (
-              <div className="space-y-6">
-                <Card>
-                  <Title>Tag Details</Title>
-                  <div className="space-y-4 mt-4">
-                    <div>
-                      <Text className="font-medium">Name</Text>
-                      <Text>{tagDetails.name}</Text>
-                    </div>
-                    <div>
-                      <Text className="font-medium">Description</Text>
-                      <Text>{tagDetails.description || "-"}</Text>
-                    </div>
-                    <div>
-                      <Text className="font-medium">Allowed LLMs</Text>
-                      <div className="flex flex-wrap gap-2 mt-2">
-                        {tagDetails.models.length === 0 ? (
-                          <Badge color="red">All Models</Badge>
-                        ) : (
-                          tagDetails.models.map((modelId) => (
-                            <Badge key={modelId} color="blue">
-                              <Tooltip title={`ID: ${modelId}`}>
-                                {tagDetails.model_info?.[modelId] || modelId}
-                              </Tooltip>
-                            </Badge>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                    <div>
-                      <Text className="font-medium">Created</Text>
-                      <Text>{tagDetails.created_at ? new Date(tagDetails.created_at).toLocaleString() : "-"}</Text>
-                    </div>
-                    <div>
-                      <Text className="font-medium">Last Updated</Text>
-                      <Text>{tagDetails.updated_at ? new Date(tagDetails.updated_at).toLocaleString() : "-"}</Text>
-                    </div>
-                  </div>
-                </Card>
+                      </Badge>
+                    ))
+                  )}
+                </div>
               </div>
-            )}
-          </TabPanel>
-
-          <TabPanel>
-            <Card>
-              <Title>Usage Statistics</Title>
-              <div className="space-y-4 mt-4">
-                <Text>Coming soon...</Text>
+              <div>
+                <Text className="font-medium">Created</Text>
+                <Text>{tagDetails.created_at ? new Date(tagDetails.created_at).toLocaleString() : "-"}</Text>
               </div>
-            </Card>
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+              <div>
+                <Text className="font-medium">Last Updated</Text>
+                <Text>{tagDetails.updated_at ? new Date(tagDetails.updated_at).toLocaleString() : "-"}</Text>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
     </div>
   );
 };
