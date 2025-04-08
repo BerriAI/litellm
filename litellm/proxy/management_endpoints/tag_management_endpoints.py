@@ -12,7 +12,7 @@ All /tag management endpoints
 
 import datetime
 import json
-from typing import Any, Dict
+from typing import Dict
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -50,7 +50,14 @@ async def _save_tags_config(prisma_client, tags_config: Dict[str, TagConfig]):
     """Helper function to save tags config to db"""
     try:
         verbose_proxy_logger.debug(f"Saving tags config: {tags_config}")
-        json_tags_config = json.dumps(tags_config, default=str)
+        # Convert TagConfig objects to dictionaries
+        tags_config_dict = {}
+        for name, tag in tags_config.items():
+            if isinstance(tag, TagConfig):
+                tags_config_dict[name] = tag.model_dump()
+            else:
+                tags_config_dict[name] = tag
+        json_tags_config = json.dumps(tags_config_dict, default=str)
         verbose_proxy_logger.debug(f"JSON tags config: {json_tags_config}")
         await prisma_client.db.litellm_config.upsert(
             where={"param_name": "tags_config"},
