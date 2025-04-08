@@ -1,29 +1,14 @@
 import React, { useState, useEffect } from "react";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
   Card,
   Icon,
   Button,
-  Badge,
   Col,
   Text,
   Grid,
-  TabGroup,
-  TabList,
-  TabPanel,
-  TabPanels,
-  Tab,
-  TextInput,
 } from "@tremor/react";
 import {
   InformationCircleIcon,
-  PencilAltIcon,
-  TrashIcon,
   RefreshIcon,
 } from "@heroicons/react/outline";
 import {
@@ -41,6 +26,7 @@ import { fetchUserModels } from "../create_key_button";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { tagCreateCall, tagListCall, tagDeleteCall } from "../networking";
 import { Tag } from "./types";
+import TagTable from "./TagTable";
 
 interface TagProps {
   accessToken: string | null;
@@ -142,212 +128,155 @@ const TagManagement: React.FC<TagProps> = ({
           editTag={editTag}
         />
       ) : (
-        <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
-          <TabList className="flex justify-between mt-2 w-full items-center">
-            <div className="flex">
-              <Tab>Data Sensitivity Tags</Tab>
-            </div>
+        <div className="gap-2 p-8 h-[75vh] w-full mt-2">
+          <div className="flex justify-between mt-2 w-full items-center mb-4">
+            <Text>Data Sensitivity Tags</Text>
             <div className="flex items-center space-x-2">
               {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
               <Icon
                 icon={RefreshIcon}
                 variant="shadow"
                 size="xs"
-                className="self-center"
+                className="self-center cursor-pointer"
                 onClick={handleRefreshClick}
               />
             </div>
-          </TabList>
-          <TabPanels>
-            <TabPanel>
-              <Text>
-                Click on a tag name to view and edit its details.
-              </Text>
-              <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
-                <Col numColSpan={1}>
-                  <Card className="w-full mx-auto flex-auto overflow-hidden overflow-y-auto max-h-[50vh]">
-                    <Table>
-                      <TableHead>
-                        <TableRow>
-                          <TableHeaderCell>Tag Name</TableHeaderCell>
-                          <TableHeaderCell>Description</TableHeaderCell>
-                          <TableHeaderCell>Allowed LLMs</TableHeaderCell>
-                          <TableHeaderCell>Created</TableHeaderCell>
-                          <TableHeaderCell>Actions</TableHeaderCell>
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {Object.values(tags).map((tag) => (
-                          <TableRow key={tag.name}>
-                            <TableCell>
-                              <Button
-                                size="xs"
-                                variant="light"
-                                className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5"
-                                onClick={() => setSelectedTagId(tag.name)}
-                              >
-                                {tag.name}
-                              </Button>
-                            </TableCell>
-                            <TableCell>{tag.description || "-"}</TableCell>
-                            <TableCell>
-                              <div className="flex flex-wrap gap-1">
-                                {tag?.models?.map((llm) => (
-                                  <Badge
-                                    key={llm}
-                                    size="xs"
-                                    className="mb-1"
-                                    color="blue"
-                                  >
-                                    {llm}
-                                  </Badge>
-                                ))}
-                              </div>
-                            </TableCell>
-                            <TableCell>{new Date(tag.created_at).toLocaleDateString()}</TableCell>
-                            <TableCell>
-                              <div className="flex space-x-2">
-                                <Icon
-                                  icon={PencilAltIcon}
-                                  size="sm"
-                                  onClick={() => {
-                                    setSelectedTagId(tag.name);
-                                    setEditTag(true);
-                                  }}
-                                />
-                                <Icon
-                                  onClick={() => handleDelete(tag.name)}
-                                  icon={TrashIcon}
-                                  size="sm"
-                                />
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </Card>
-                </Col>
-                {userRole === "Admin" && (
-                  <Col numColSpan={1}>
-                    <Button
-                      className="mx-auto"
-                      onClick={() => setIsCreateModalVisible(true)}
-                    >
-                      + Create New Tag
-                    </Button>
-                  </Col>
-                )}
-              </Grid>
+          </div>
+          
+          <Text className="mb-4">
+            Click on a tag name to view and edit its details.
+          </Text>
 
-              {/* Create Tag Modal */}
-              <Modal
-                title="Create New Tag"
-                visible={isCreateModalVisible}
-                width={800}
-                footer={null}
-                onCancel={() => {
-                  setIsCreateModalVisible(false);
-                  form.resetFields();
+          <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
+            <Col numColSpan={1}>
+              <TagTable
+                data={tags}
+                onEdit={(tag) => {
+                  setSelectedTagId(tag.name);
+                  setEditTag(true);
                 }}
-              >
-                <Form
-                  form={form}
-                  onFinish={handleCreate}
-                  labelCol={{ span: 8 }}
-                  wrapperCol={{ span: 16 }}
-                  labelAlign="left"
+                onDelete={handleDelete}
+                onSelectTag={setSelectedTagId}
+              />
+            </Col>
+            {userRole === "Admin" && (
+              <Col numColSpan={1}>
+                <Button
+                  className="mx-auto"
+                  onClick={() => setIsCreateModalVisible(true)}
                 >
-                  <Form.Item
-                    label="Tag Name"
-                    name="tag_name"
-                    rules={[{ required: true, message: "Please input a tag name" }]}
-                  >
-                    <TextInput placeholder="e.g., PII, Financial, Medical" />
-                  </Form.Item>
+                  + Create New Tag
+                </Button>
+              </Col>
+            )}
+          </Grid>
 
-                  <Form.Item
-                    label="Description"
-                    name="description"
-                  >
-                    <Input.TextArea rows={4} />
-                  </Form.Item>
+          {/* Create Tag Modal */}
+          <Modal
+            title="Create New Tag"
+            visible={isCreateModalVisible}
+            width={800}
+            footer={null}
+            onCancel={() => {
+              setIsCreateModalVisible(false);
+              form.resetFields();
+            }}
+          >
+            <Form
+              form={form}
+              onFinish={handleCreate}
+              labelCol={{ span: 8 }}
+              wrapperCol={{ span: 16 }}
+              labelAlign="left"
+            >
+              <Form.Item
+                label="Tag Name"
+                name="tag_name"
+                rules={[{ required: true, message: "Please input a tag name" }]}
+              >
+                <Input />
+              </Form.Item>
 
-                  <Form.Item
-                    label={
-                      <span>
-                        Allowed LLMs{' '}
-                        <Tooltip title="Select which LLMs are allowed to process this type of data">
-                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                        </Tooltip>
-                      </span>
-                    }
-                    name="allowed_llms"
-                  >
-                    <Select2
-                      mode="multiple"
-                      placeholder="Select LLMs"
-                    >
-                      {userModels.map((model) => (
-                        <Select2.Option key={model} value={model}>
-                          {getModelDisplayName(model)}
-                        </Select2.Option>
-                      ))}
-                    </Select2>
-                  </Form.Item>
+              <Form.Item
+                label="Description"
+                name="description"
+              >
+                <Input.TextArea rows={4} />
+              </Form.Item>
 
-                  <div style={{ textAlign: "right", marginTop: "10px" }}>
-                    <Button type="submit">
-                      Create Tag
-                    </Button>
-                  </div>
-                </Form>
-              </Modal>
+              <Form.Item
+                label={
+                  <span>
+                    Allowed Models{' '}
+                    <Tooltip title="Select which LLMs are allowed to process requests from this tag">
+                      <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                    </Tooltip>
+                  </span>
+                }
+                name="allowed_llms"
+              >
+                <Select2
+                  mode="multiple"
+                  placeholder="Select LLMs"
+                >
+                  {userModels.map((model) => (
+                    <Select2.Option key={model} value={model}>
+                      {getModelDisplayName(model)}
+                    </Select2.Option>
+                  ))}
+                </Select2>
+              </Form.Item>
 
-              {/* Delete Confirmation Modal */}
-              {isDeleteModalOpen && (
-                <div className="fixed z-10 inset-0 overflow-y-auto">
-                  <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-                    <div className="fixed inset-0 transition-opacity" aria-hidden="true">
-                      <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
-                    </div>
-                    <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-                      <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                        <div className="sm:flex sm:items-start">
-                          <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                            <h3 className="text-lg leading-6 font-medium text-gray-900">
-                              Delete Tag
-                            </h3>
-                            <div className="mt-2">
-                              <p className="text-sm text-gray-500">
-                                Are you sure you want to delete this tag?
-                              </p>
-                            </div>
-                          </div>
+              <div style={{ textAlign: "right", marginTop: "10px" }}>
+                <Button type="submit">
+                  Create Tag
+                </Button>
+              </div>
+            </Form>
+          </Modal>
+
+          {/* Delete Confirmation Modal */}
+          {isDeleteModalOpen && (
+            <div className="fixed z-10 inset-0 overflow-y-auto">
+              <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+                <div className="fixed inset-0 transition-opacity" aria-hidden="true">
+                  <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
+                </div>
+                <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+                  <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                    <div className="sm:flex sm:items-start">
+                      <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
+                        <h3 className="text-lg leading-6 font-medium text-gray-900">
+                          Delete Tag
+                        </h3>
+                        <div className="mt-2">
+                          <p className="text-sm text-gray-500">
+                            Are you sure you want to delete this tag?
+                          </p>
                         </div>
                       </div>
-                      <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                        <Button
-                          onClick={confirmDelete}
-                          color="red"
-                          className="ml-2"
-                        >
-                          Delete
-                        </Button>
-                        <Button onClick={() => {
-                          setIsDeleteModalOpen(false);
-                          setTagToDelete(null);
-                        }}>
-                          Cancel
-                        </Button>
-                      </div>
                     </div>
                   </div>
+                  <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                    <Button
+                      onClick={confirmDelete}
+                      color="red"
+                      className="ml-2"
+                    >
+                      Delete
+                    </Button>
+                    <Button onClick={() => {
+                      setIsDeleteModalOpen(false);
+                      setTagToDelete(null);
+                    }}>
+                      Cancel
+                    </Button>
+                  </div>
                 </div>
-              )}
-            </TabPanel>
-          </TabPanels>
-        </TabGroup>
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
