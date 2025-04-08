@@ -6,6 +6,7 @@ from litellm._lazy_module import _Alias, _ImportStructure, _LazyModule
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
 import os
 import re
+import sys
 
 ### INIT VARIABLES ###########
 import threading
@@ -25,11 +26,14 @@ from typing import (
 import dotenv
 import httpx
 
-_LITELLM_LAZY_IMPORTS = os.getenv("LITELLM_LAZY_IMPORT", "true").lower() == "true"
+litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
+if litellm_mode == "DEV":
+    dotenv.load_dotenv()
+_LITELLM_LAZY_IMPORT = os.getenv("LITELLM_LAZY_IMPORT", "true").lower() == "true"
 
 
 _import_structures: _ImportStructure = {}
-if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
+if TYPE_CHECKING or not _LITELLM_LAZY_IMPORT:
     from litellm._logging import (
         _turn_on_debug,
         _turn_on_json,
@@ -213,7 +217,7 @@ else:
 
 ################################################
 ### Callbacks /Logging / Success / Failure Handlers #####
-if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
+if TYPE_CHECKING or not _LITELLM_LAZY_IMPORT:
     from litellm._variables.handlers import (
         CALLBACK_TYPES,
         _async_failure_callback,
@@ -281,7 +285,7 @@ else:
     )
 ### end of callbacks #############
 
-if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
+if TYPE_CHECKING or not _LITELLM_LAZY_IMPORT:
     from litellm._variables.auth import (
         ai21_key,
         aleph_alpha_key,
@@ -374,7 +378,7 @@ else:
         ]
     )
 
-if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
+if TYPE_CHECKING or not _LITELLM_LAZY_IMPORT:
     from litellm._variables.model_lists import (
         AZURE_DEFAULT_API_VERSION,
         BEDROCK_CONVERSE_MODELS,
@@ -689,7 +693,7 @@ else:
         ]
     )
 
-if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
+if TYPE_CHECKING or not _LITELLM_LAZY_IMPORT:
     from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
     from litellm.litellm_core_utils.litellm_logging import Logging, modify_integration
@@ -697,7 +701,6 @@ if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
     from litellm.utils import (
         ALL_LITELLM_RESPONSE_TYPES,
         OPENAI_RESPONSE_HEADERS,
-        BudgetConfig,
         CallTypes,
         ChatCompletionDeltaToolCall,
         ChatCompletionMessageToolCall,
@@ -709,12 +712,9 @@ if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
         Embedding,
         EmbeddingResponse,
         Function,
-        ImageObject,
         ImageResponse,
         LlmProviders,
         LlmProvidersSet,
-        ModelInfo,
-        ModelInfoBase,
         ModelResponse,
         ModelResponseListIterator,
         ModelResponseStream,
@@ -722,10 +722,10 @@ if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
         ProviderSpecificModelInfo,
         RawRequestTypedDict,
         SelectTokenizerResponse,
-        StandardKeyGenerationConfig,
         StreamingChoices,
         TextChoices,
         TextCompletionResponse,
+        TextCompletionStreamWrapper,
         TranscriptionResponse,
         Usage,
         _calculate_retry_after,
@@ -1124,6 +1124,7 @@ else:
     )
     _import_structures.setdefault("litellm.utils", []).extend(
         [
+            "TextCompletionStreamWrapper",
             "CustomStreamWrapper",
             "TextChoices",
             "Usage",
@@ -1156,8 +1157,6 @@ else:
             "CallTypes",
             "SearchContextCostPerQuery",
             "GenericStreamingChunk",
-            "ModelInfoBase",
-            "ModelInfo",
             "ImageResponse",
             "TranscriptionResponse",
             "GenericImageParsingChunk",
@@ -1248,7 +1247,7 @@ else:
     )
 
 
-if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
+if TYPE_CHECKING or not _LITELLM_LAZY_IMPORT:
     from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 
     from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
@@ -1629,46 +1628,46 @@ else:
         ]
     )
 
-    if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
-        from .llms.nvidia_nim.chat import NvidiaNimConfig
-        from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
-        from .llms.openai.chat.gpt_audio_transformation import OpenAIGPTAudioConfig
-        from .llms.openai.chat.gpt_transformation import OpenAIGPTConfig
-        from .llms.openai.transcriptions.gpt_transformation import (
-            OpenAIGPTAudioTranscriptionConfig,
-        )
-        from .llms.openai.transcriptions.whisper_transformation import (
-            OpenAIWhisperAudioTranscriptionConfig,
-        )
-    else:
-        _import_structures.setdefault(
-            "litellm.llms.openai.chat.gpt_audio_transformation", []
-        ).extend(["OpenAIGPTAudioConfig"])
-        _import_structures.setdefault(
-            "litellm.llms.openai.chat.gpt_transformation", []
-        ).extend(["OpenAIGPTConfig"])
-        _import_structures.setdefault(
-            "litellm.llms.openai.transcriptions.gpt_transformation", []
-        ).extend(["OpenAIGPTAudioTranscriptionConfig"])
-        _import_structures.setdefault(
-            "litellm.llms.openai.transcriptions.whisper_transformation", []
-        ).extend(["OpenAIWhisperAudioTranscriptionConfig"])
-        _import_structures.setdefault("litellm.llms.nvidia_nim.chat", []).extend(
-            ["NvidiaNimConfig"]
-        )
-        _import_structures.setdefault("litellm.llms.nvidia_nim.embed", []).extend(
-            ["NvidiaNimEmbeddingConfig"]
-        )
+if TYPE_CHECKING or not _LITELLM_LAZY_IMPORT:
+    from .llms.nvidia_nim.chat import NvidiaNimConfig
+    from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
+    from .llms.openai.chat.gpt_audio_transformation import OpenAIGPTAudioConfig
+    from .llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+    from .llms.openai.transcriptions.gpt_transformation import (
+        OpenAIGPTAudioTranscriptionConfig,
+    )
+    from .llms.openai.transcriptions.whisper_transformation import (
+        OpenAIWhisperAudioTranscriptionConfig,
+    )
+else:
+    _import_structures.setdefault(
+        "litellm.llms.openai.chat.gpt_audio_transformation", []
+    ).extend(["OpenAIGPTAudioConfig"])
+    _import_structures.setdefault(
+        "litellm.llms.openai.chat.gpt_transformation", []
+    ).extend(["OpenAIGPTConfig"])
+    _import_structures.setdefault(
+        "litellm.llms.openai.transcriptions.gpt_transformation", []
+    ).extend(["OpenAIGPTAudioTranscriptionConfig"])
+    _import_structures.setdefault(
+        "litellm.llms.openai.transcriptions.whisper_transformation", []
+    ).extend(["OpenAIWhisperAudioTranscriptionConfig"])
+    _import_structures.setdefault("litellm.llms.nvidia_nim.chat", []).extend(
+        ["NvidiaNimConfig"]
+    )
+    _import_structures.setdefault("litellm.llms.nvidia_nim.embed", []).extend(
+        ["NvidiaNimEmbeddingConfig"]
+    )
 
 
-if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
+if TYPE_CHECKING or not _LITELLM_LAZY_IMPORT:
     import litellm.anthropic_interface as anthropic
 else:
     _import_structures.setdefault("litellm.anthropic_interface", []).extend(
         ["anthropic"]
     )
 
-if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
+if TYPE_CHECKING or not _LITELLM_LAZY_IMPORT:
     from litellm._variables.config import (
         nvidiaNimConfig,
         nvidiaNimEmbeddingConfig,
@@ -1676,6 +1675,13 @@ if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
         openAIGPTConfig,
         openaiOSeriesConfig,
         vertexAITextEmbeddingConfig,
+    )
+    from litellm._variables.misc import (
+        _custom_providers,
+        adapters,
+        custom_provider_map,
+        disable_hf_tokenizer_download,
+        global_disable_no_log_param,
     )
     from litellm.assistants.main import (
         a_add_message,
@@ -1740,6 +1746,7 @@ if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
         config_completion,
         databricks_embedding,
         embedding,
+        encoding,
         google_batch_embeddings,
         groq_chat_completions,
         image_generation,
@@ -1821,7 +1828,23 @@ if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
     from .integrations import *
     from .litellm_core_utils.get_model_cost_map import get_model_cost_map
     from .llms.ai21.chat.transformation import AI21ChatConfig
-    from .llms.azure.azure import AzureOpenAIAssistantsAPIConfig, AzureOpenAIError
+    from .llms.anthropic.experimental_pass_through.messages.handler import (
+        AnthropicMessagesHandler,
+        AnthropicMessagesResponse,
+        AsyncHTTPHandler,
+        AsyncIterator,
+        BaseAnthropicMessagesConfig,
+        GenericLiteLLMParams,
+        LiteLLMLoggingObj,
+        ProviderConfigManager,
+        ProviderSpecificHeader,
+        anthropic_messages,
+    )
+    from .llms.azure.azure import (
+        AzureChatCompletion,
+        AzureOpenAIAssistantsAPIConfig,
+        AzureOpenAIError,
+    )
     from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
     from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
     from .llms.azure.completion.transformation import AzureOpenAITextConfig
@@ -1867,8 +1890,14 @@ if TYPE_CHECKING and _LITELLM_LAZY_IMPORTS:
 
     ### CUSTOM LLMs ###
     from .types.llms.custom_llm import CustomLLMItem
+    from .types.router import (
+        CredentialLiteLLMParams,
+        GenericLiteLLMParams,
+        ModelInfo,
+        RouterConfig,
+        UpdateRouterConfig,
+    )
     from .types.utils import GenericStreamingChunk
-
 else:
     _import_structures.setdefault("litellm._variables.config", []).extend(
         [
@@ -2056,6 +2085,7 @@ else:
         [
             "AzureOpenAIAssistantsAPIConfig",
             "AzureOpenAIError",
+            "AzureChatCompletion",
         ]
     )
     _import_structures.setdefault(
@@ -2235,6 +2265,7 @@ else:
     )
     _import_structures.setdefault("litellm.main", []).extend(
         [
+            "encoding",
             "anthropic_chat_completions",
             "azure_ai_embedding",
             "azure_audio_transcriptions",
@@ -2318,14 +2349,12 @@ else:
         [
             "together_rerank",
             "bedrock_rerank",
-            "base_llm_http_handler",
             "arerank",
             "rerank",
         ]
     )
     _import_structures.setdefault("litellm.responses.main", []).extend(
         [
-            "base_llm_http_handler",
             "aresponses",
             "responses",
         ]
@@ -2337,6 +2366,15 @@ else:
             "DefaultPriorities",
             "FlowItem",
             "Scheduler",
+        ]
+    )
+    _import_structures.setdefault("litellm.types.router", []).extend(
+        [
+            "ModelInfo",
+            "RouterConfig",
+            "UpdateRouterConfig",
+            "CredentialLiteLLMParams",
+            "GenericLiteLLMParams",
         ]
     )
     _import_structures.setdefault("litellm.types.adapter", []).extend(["AdapterItem"])
@@ -2368,14 +2406,10 @@ else:
         globals()["__file__"],
         _import_structures,
         module_spec=__spec__,
+        extra_object={"litellm_mode": litellm_mode},
     )
     sys.modules[__name__] = _module
 
-import sys
-
-litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
-if litellm_mode == "DEV":
-    dotenv.load_dotenv()
 ################################################
 _litellm = sys.modules["litellm"]
 if _litellm.set_verbose == True:

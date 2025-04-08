@@ -45,12 +45,15 @@ class _LazyModule(ModuleType):
         module_file: str,
         import_structure: _ImportStructure,
         module_spec: importlib.machinery.ModuleSpec,
+        extra_object: Dict[str, Any] = {},
     ):
         super().__init__(name)
         self._modules: FrozenSet[str] = frozenset(import_structure.keys())
 
         self._object_to_module: Dict[str, str] = {}
         self._aliases: Dict[str, str] = {}
+        self._extra_object: Dict[str, Any] = extra_object
+
         for module_name, names in import_structure.items():
             for object_name in names:
                 if isinstance(object_name, _Alias):
@@ -68,7 +71,11 @@ class _LazyModule(ModuleType):
         self._modules = self._modules.union(submodules)
 
         # Needed for autocompletion in an IDE and wildcard imports (although those won't be lazy)
-        self.__all__ = [*self._modules]
+        self.__all__ = [
+            *self._modules,
+            *self._object_to_module.keys(),
+            *extra_object.keys(),
+        ]
         self.__file__ = module_file
         self.__path__ = [os.path.dirname(module_file)]
         self.__spec__ = module_spec
@@ -84,6 +91,7 @@ class _LazyModule(ModuleType):
         module_file: str,
         import_structure: _ImportStructure,
         module_spec: importlib.machinery.ModuleSpec,
+        extra_object: Dict[str, Any] = {},
     ) -> "_LazyModule":
         """
         Create a new _LazyModule instance.
@@ -95,13 +103,15 @@ class _LazyModule(ModuleType):
                 module_file,
                 import_structure,
                 module_spec,
+                extra_object=extra_object,
             )
         return cls._cached_modules[module_file]
 
     # Needed for autocompletion in an IDE
     def __dir__(self):
         result = super().__dir__()
-        return [name for name in self.__all__ if name not in result]
+        # return [name for name in self.__all__ if name not in result
+        return [name for name in self.__all__]
 
     def __getattr__(self, name: str) -> Any:
         if name in self._object_to_module:
@@ -111,11 +121,16 @@ class _LazyModule(ModuleType):
             )
         elif name in self._modules:
             value = self._get_module(name)
+        elif name in self._extra_object:
+            value = self._extra_object[name]
         else:
             # Check if the name is an submodule
             submodule_name = f"litellm.{name}"
             if submodule_name in self._modules:
                 value = self._get_module(submodule_name)
+            elif name in ("_object_to_module", "_modules", "_aliases"):
+                # Allow access to internal attributes
+                return getattr(self, name)
             else:
                 raise AttributeError(
                     f"module '{self.__name__}' has no attribute '{name}'"
