@@ -23,11 +23,20 @@ import {
 import { InfoCircleOutlined } from '@ant-design/icons';
 import NumericalInput from "../shared/numerical_input";
 import TagInfoView from "./tag_info";
-import { fetchUserModels } from "../create_key_button";
-import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+import { modelInfoCall } from "../networking";
 import { tagCreateCall, tagListCall, tagDeleteCall } from "../networking";
 import { Tag } from "./types";
 import TagTable from "./TagTable";
+
+interface ModelInfo {
+  model_name: string;
+  litellm_params: {
+    model: string;
+  };
+  model_info: {
+    id: string;
+  };
+}
 
 interface TagProps {
   accessToken: string | null;
@@ -48,7 +57,7 @@ const TagManagement: React.FC<TagProps> = ({
   const [tagToDelete, setTagToDelete] = useState<string | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState("");
   const [form] = Form.useForm();
-  const [userModels, setUserModels] = useState<string[]>([]);
+  const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
 
   const fetchTags = async () => {
     if (!accessToken) return;
@@ -107,7 +116,18 @@ const TagManagement: React.FC<TagProps> = ({
 
   useEffect(() => {
     if (userID && userRole && accessToken) {
-      fetchUserModels(userID, userRole, accessToken, setUserModels);
+      const fetchModels = async () => {
+        try {
+          const response = await modelInfoCall(accessToken, userID, userRole);
+          if (response && response.data) {
+            setAvailableModels(response.data);
+          }
+        } catch (error) {
+          console.error("Error fetching models:", error);
+          message.error("Error fetching models: " + error);
+        }
+      };
+      fetchModels();
     }
   }, [accessToken, userID, userRole]);
 
@@ -218,9 +238,12 @@ const TagManagement: React.FC<TagProps> = ({
                   mode="multiple"
                   placeholder="Select LLMs"
                 >
-                  {userModels.map((model) => (
-                    <Select2.Option key={model} value={model}>
-                      {getModelDisplayName(model)}
+                  {availableModels.map((model) => (
+                    <Select2.Option key={model.model_info.id} value={model.model_info.id}>
+                      <div>
+                        <span>{model.model_name}</span>
+                        <span className="text-gray-400 ml-2">({model.model_info.id})</span>
+                      </div>
                     </Select2.Option>
                   ))}
                 </Select2>
