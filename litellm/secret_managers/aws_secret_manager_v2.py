@@ -50,7 +50,6 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         if use_aws_secret_manager is None or use_aws_secret_manager is False:
             return
         try:
-
             cls.validate_environment()
             litellm.secret_manager_client = cls()
             litellm._key_management_system = KeyManagementSystem.AWS_SECRET_MANAGER

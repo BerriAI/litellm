@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import time
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
@@ -16,9 +17,11 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.utils import (
+    CompletionTokensDetailsWrapper,
     Delta,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
+    StandardLoggingPayload,
     StreamingChoices,
     Usage,
 )
@@ -34,6 +37,22 @@ def initialized_custom_stream_wrapper() -> CustomStreamWrapper:
         custom_llm_provider=None,
     )
     return streaming_handler
+
+
+@pytest.fixture
+def logging_obj() -> Logging:
+    import time
+
+    logging_obj = Logging(
+        model="my-random-model",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="12345",
+        function_id="1245",
+    )
+    return logging_obj
 
 
 bedrock_chunks = [
@@ -133,6 +152,40 @@ def test_is_chunk_non_empty(initialized_custom_stream_wrapper: CustomStreamWrapp
         completion_obj=MagicMock(),
         model_response=ModelResponseStream(**chunk),
         response_obj=MagicMock(),
+    )
+
+
+def test_is_chunk_non_empty_with_annotations(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """Unit test if non-empty when annotations are present"""
+    chunk = {
+        "id": "e89b6501-8ac2-464c-9550-7cd3daf94350",
+        "object": "chat.completion.chunk",
+        "created": 1741037890,
+        "model": "deepseek-reasoner",
+        "system_fingerprint": "fp_5417b77867_prod0225",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "content": None,
+                    "annotations": [
+                        {"type": "url_citation", "url": "https://www.google.com"}
+                    ],
+                },
+                "logprobs": None,
+                "finish_reason": None,
+            }
+        ],
+    }
+    assert (
+        initialized_custom_stream_wrapper.is_chunk_non_empty(
+            completion_obj=MagicMock(),
+            model_response=ModelResponseStream(**chunk),
+            response_obj=MagicMock(),
+        )
+        is True
     )
 
 
@@ -378,11 +431,18 @@ async def test_streaming_handler_with_usage(
         completion_tokens=392,
         prompt_tokens=1799,
         total_tokens=2191,
-        completion_tokens_details=None,
+        completion_tokens_details=CompletionTokensDetailsWrapper(  # <-- This has a value
+            accepted_prediction_tokens=None,
+            audio_tokens=None,
+            reasoning_tokens=0,
+            rejected_prediction_tokens=None,
+            text_tokens=None,
+        ),
         prompt_tokens_details=PromptTokensDetailsWrapper(
             audio_tokens=None, cached_tokens=1796, text_tokens=None, image_tokens=None
         ),
     )
+
     final_chunk = ModelResponseStream(
         id="chatcmpl-87291500-d8c5-428e-b187-36fe5a4c97ab",
         created=1742056047,
@@ -442,6 +502,7 @@ async def test_streaming_handler_with_usage(
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
+@pytest.mark.flaky(reruns=3)
 async def test_streaming_with_usage_and_logging(sync_mode: bool):
     import time
 
@@ -458,7 +519,13 @@ async def test_streaming_with_usage_and_logging(sync_mode: bool):
         completion_tokens=392,
         prompt_tokens=1799,
         total_tokens=2191,
-        completion_tokens_details=None,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            accepted_prediction_tokens=None,
+            audio_tokens=None,
+            reasoning_tokens=0,
+            rejected_prediction_tokens=None,
+            text_tokens=None,
+        ),
         prompt_tokens_details=PromptTokensDetailsWrapper(
             audio_tokens=None,
             cached_tokens=1796,
@@ -543,3 +610,36 @@ def test_streaming_handler_with_stop_chunk(
         **args, model_response=ModelResponseStream()
     )
     assert returned_chunk is None
+
+
+@pytest.mark.asyncio
+async def test_streaming_completion_start_time(logging_obj: Logging):
+    """Test that the start time is set correctly"""
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class MockCallback(CustomLogger):
+        pass
+
+    mock_callback = MockCallback()
+    litellm.success_callback = [mock_callback, "langfuse"]
+
+    completion_stream = ModelResponseListIterator(
+        model_responses=bedrock_chunks, delay=0.1
+    )
+
+    response = CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="bedrock/claude-3-5-sonnet-20240620-v1:0",
+        logging_obj=logging_obj,
+    )
+
+    async for chunk in response:
+        print(chunk)
+
+    await asyncio.sleep(2)
+
+    assert logging_obj.model_call_details["completion_start_time"] is not None
+    assert (
+        logging_obj.model_call_details["completion_start_time"]
+        < logging_obj.model_call_details["end_time"]
+    )

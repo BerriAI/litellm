@@ -66,5 +66,3 @@ volumes:
   postgres_data:
     name: litellm_postgres_data  # Named volume for Postgres data persistence
 
-
-# ...rest of your docker-compose config if any

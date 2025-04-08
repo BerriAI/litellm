@@ -74,6 +74,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
     def get_complete_url(
         self,
         api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
@@ -225,9 +226,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                     ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                         inference_params[k] = v
                 if stream is True:
-                    inference_params["stream"] = (
-                        True  # cohere requires stream = True in inference params
-                    )
+                    inference_params[
+                        "stream"
+                    ] = True  # cohere requires stream = True in inference params
                 request_data = {"prompt": prompt, **inference_params}
         elif provider == "anthropic":
             return litellm.AmazonAnthropicClaude3Config().transform_request(
@@ -311,7 +312,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-
         try:
             completion_response = raw_response.json()
         except Exception:

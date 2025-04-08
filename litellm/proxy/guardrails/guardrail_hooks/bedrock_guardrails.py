@@ -192,7 +192,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     async def make_bedrock_api_request(
         self, kwargs: dict, response: Optional[Union[Any, litellm.ModelResponse]] = None
     ):
-
         credentials, aws_region_name = self._load_credentials()
         bedrock_request_data: dict = dict(
             self.convert_to_bedrock_format(

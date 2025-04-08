@@ -98,6 +98,5 @@ On the models dropdown select `thinking-anthropic-claude-3-7-sonnet`
 
 <Image img={require('../../img/litellm_thinking_openweb.gif')} />
 
-
-
-
+## Additional Resources
+- Running LiteLLM and OpenWebUI on Windows Localhost: A Comprehensive Guide [https://www.tanyongsheng.com/note/running-litellm-and-openwebui-on-windows-localhost-a-comprehensive-guide/](https://www.tanyongsheng.com/note/running-litellm-and-openwebui-on-windows-localhost-a-comprehensive-guide/)

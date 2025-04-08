@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
+from openai.types.chat.chat_completion import ChatCompletion
 from openai.types.completion_usage import (
     CompletionTokensDetails,
     CompletionUsage,
@@ -27,10 +28,13 @@ from ..litellm_core_utils.core_helpers import map_finish_reason
 from .guardrails import GuardrailEventHooks
 from .llms.openai import (
     Batch,
+    ChatCompletionAnnotation,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
+    FileSearchTool,
     OpenAIChatCompletionChunk,
+    WebSearchOptions,
 )
 from .rerank import RerankResponse
 
@@ -95,6 +99,13 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_pdf_input: Optional[bool]
     supports_native_streaming: Optional[bool]
     supports_parallel_function_calling: Optional[bool]
+    supports_web_search: Optional[bool]
+
+
+class SearchContextCostPerQuery(TypedDict, total=False):
+    search_context_size_low: float
+    search_context_size_medium: float
+    search_context_size_high: float
 
 
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
@@ -133,6 +144,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_second: Optional[float]  # for OpenAI Speech models
+    search_context_cost_per_query: Optional[
+        SearchContextCostPerQuery
+    ]  # Cost for using web search tool
 
     litellm_provider: Required[str]
     mode: Required[
@@ -468,7 +482,6 @@ from openai.types.chat.chat_completion_audio import ChatCompletionAudio
 
 
 class ChatCompletionAudioResponse(ChatCompletionAudio):
-
     def __init__(
         self,
         data: str,
@@ -527,6 +540,7 @@ class Message(OpenAIObject):
     provider_specific_fields: Optional[Dict[str, Any]] = Field(
         default=None, exclude=True
     )
+    annotations: Optional[List[ChatCompletionAnnotation]] = None
 
     def __init__(
         self,
@@ -538,6 +552,7 @@ class Message(OpenAIObject):
         provider_specific_fields: Optional[Dict[str, Any]] = None,
         reasoning_content: Optional[str] = None,
         thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None,
+        annotations: Optional[List[ChatCompletionAnnotation]] = None,
         **params,
     ):
         init_values: Dict[str, Any] = {
@@ -566,6 +581,9 @@ class Message(OpenAIObject):
         if thinking_blocks is not None:
             init_values["thinking_blocks"] = thinking_blocks
 
+        if annotations is not None:
+            init_values["annotations"] = annotations
+
         if reasoning_content is not None:
             init_values["reasoning_content"] = reasoning_content
 
@@ -578,6 +596,11 @@ class Message(OpenAIObject):
             # delete audio from self
             # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
             del self.audio
+
+        if annotations is None:
+            # ensure default response matches OpenAI spec
+            # Some OpenAI compatible APIs raise an error if annotations are passed in
+            del self.annotations
 
         if reasoning_content is None:
             # ensure default response matches OpenAI spec
@@ -623,6 +646,7 @@ class Delta(OpenAIObject):
         audio: Optional[ChatCompletionAudioResponse] = None,
         reasoning_content: Optional[str] = None,
         thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None,
+        annotations: Optional[List[ChatCompletionAnnotation]] = None,
         **params,
     ):
         super(Delta, self).__init__(**params)
@@ -633,6 +657,7 @@ class Delta(OpenAIObject):
         self.function_call: Optional[Union[FunctionCall, Any]] = None
         self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None
         self.audio: Optional[ChatCompletionAudioResponse] = None
+        self.annotations: Optional[List[ChatCompletionAnnotation]] = None
 
         if reasoning_content is not None:
             self.reasoning_content = reasoning_content
@@ -645,6 +670,12 @@ class Delta(OpenAIObject):
         else:
             # ensure default response matches OpenAI spec
             del self.thinking_blocks
+
+        # Add annotations to the delta, ensure they are only on Delta if they exist (Match OpenAI spec)
+        if annotations is not None:
+            self.annotations = annotations
+        else:
+            del self.annotations
 
         if function_call is not None and isinstance(function_call, dict):
             self.function_call = FunctionCall(**function_call)
@@ -746,6 +777,24 @@ class PromptTokensDetailsWrapper(
 
     image_tokens: Optional[int] = None
     """Image tokens sent to the model."""
+
+    character_count: Optional[int] = None
+    """Character count sent to the model. Used for Vertex AI multimodal embeddings."""
+
+    image_count: Optional[int] = None
+    """Number of images sent to the model. Used for Vertex AI multimodal embeddings."""
+
+    video_length_seconds: Optional[float] = None
+    """Length of videos sent to the model. Used for Vertex AI multimodal embeddings."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.character_count is None:
+            del self.character_count
+        if self.image_count is None:
+            del self.image_count
+        if self.video_length_seconds is None:
+            del self.video_length_seconds
 
 
 class Usage(CompletionUsage):
@@ -877,7 +926,6 @@ class StreamingChoices(OpenAIObject):
             self.finish_reason = None
         self.index = index
         if delta is not None:
-
             if isinstance(delta, Delta):
                 self.delta = delta
             elif isinstance(delta, dict):
@@ -911,7 +959,6 @@ class StreamingChoices(OpenAIObject):
 
 class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
     def __init__(self, **kwargs):
-
         new_choices = []
         for choice in kwargs["choices"]:
             new_choice = StreamingChoices(**choice).model_dump()
@@ -1597,6 +1644,46 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_end_user_id: Optional[str]
 
 
+class StandardLoggingMCPToolCall(TypedDict, total=False):
+    name: str
+    """
+    Name of the tool to call
+    """
+    arguments: dict
+    """
+    Arguments to pass to the tool
+    """
+    result: dict
+    """
+    Result of the tool call
+    """
+
+    mcp_server_name: Optional[str]
+    """
+    Name of the MCP server that the tool call was made to
+    """
+
+    mcp_server_logo_url: Optional[str]
+    """
+    Optional logo URL of the MCP server that the tool call was made to
+
+    (this is to render the logo on the logs page on litellm ui)
+    """
+
+
+class StandardBuiltInToolsParams(TypedDict, total=False):
+    """
+    Standard built-in OpenAItools parameters
+
+    This is used to calculate the cost of built-in tools, insert any standard built-in tools parameters here
+
+    OpenAI charges users based on the `web_search_options` parameter
+    """
+
+    web_search_options: Optional[WebSearchOptions]
+    file_search: Optional[FileSearchTool]
+
+
 class StandardLoggingPromptManagementMetadata(TypedDict):
     prompt_id: str
     prompt_variables: Optional[dict]
@@ -1614,6 +1701,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     requester_ip_address: Optional[str]
     requester_metadata: Optional[dict]
     prompt_management_metadata: Optional[StandardLoggingPromptManagementMetadata]
+    mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
     applied_guardrails: Optional[List[str]]
 
 
@@ -1714,6 +1802,7 @@ class StandardLoggingPayload(TypedDict):
     model_parameters: dict
     hidden_params: StandardLoggingHiddenParams
     guardrail_information: Optional[StandardLoggingGuardrailInformation]
+    standard_built_in_tools_params: Optional[StandardBuiltInToolsParams]
 
 
 from typing import AsyncIterator, Iterator
@@ -1797,6 +1886,7 @@ all_litellm_params = [
     "logger_fn",
     "verbose",
     "custom_llm_provider",
+    "model_file_id_mapping",
     "litellm_logging_obj",
     "litellm_call_id",
     "use_client",
@@ -1861,6 +1951,7 @@ all_litellm_params = [
     "use_in_pass_through",
     "merge_reasoning_content_in_choices",
     "litellm_credential_name",
+    "allowed_openai_params",
 ] + list(StandardCallbackDynamicParams.__annotations__.keys())
 
 

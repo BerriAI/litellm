@@ -496,9 +496,9 @@ class BedrockLLM(BaseAWSLLM):
                             content=None,
                         )
                         model_response.choices[0].message = _message  # type: ignore
-                        model_response._hidden_params["original_response"] = (
-                            outputText  # allow user to access raw anthropic tool calling response
-                        )
+                        model_response._hidden_params[
+                            "original_response"
+                        ] = outputText  # allow user to access raw anthropic tool calling response
                     if (
                         _is_function_call is True
                         and stream is not None
@@ -806,9 +806,9 @@ class BedrockLLM(BaseAWSLLM):
                     ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                         inference_params[k] = v
                 if stream is True:
-                    inference_params["stream"] = (
-                        True  # cohere requires stream = True in inference params
-                    )
+                    inference_params[
+                        "stream"
+                    ] = True  # cohere requires stream = True in inference params
                 data = json.dumps({"prompt": prompt, **inference_params})
         elif provider == "anthropic":
             if model.startswith("anthropic.claude-3"):
@@ -1205,7 +1205,6 @@ class BedrockLLM(BaseAWSLLM):
 def get_response_stream_shape():
     global _response_stream_shape_cache
     if _response_stream_shape_cache is None:
-
         from botocore.loaders import Loader
         from botocore.model import ServiceModel
 
@@ -1274,13 +1273,6 @@ class AWSEventStreamDecoder:
     def converse_chunk_parser(self, chunk_data: dict) -> ModelResponseStream:
         try:
             verbose_logger.debug("\n\nRaw Chunk: {}\n\n".format(chunk_data))
-            chunk_data["usage"] = {
-                "inputTokens": 3,
-                "outputTokens": 392,
-                "totalTokens": 2191,
-                "cacheReadInputTokens": 1796,
-                "cacheWriteInputTokens": 0,
-            }
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
             finish_reason = ""
@@ -1546,7 +1538,6 @@ class AmazonDeepSeekR1StreamDecoder(AWSEventStreamDecoder):
         model: str,
         sync_stream: bool,
     ) -> None:
-
         super().__init__(model=model)
         from litellm.llms.bedrock.chat.invoke_transformations.amazon_deepseek_transformation import (
             AmazonDeepseekR1ResponseIterator,

@@ -94,7 +94,7 @@ def validate_responses_api_response(response, final_chunk: bool = False):
 @pytest.mark.asyncio
 async def test_basic_openai_responses_api(sync_mode):
     litellm._turn_on_debug()
-
+    litellm.set_verbose = True
     if sync_mode:
         response = litellm.responses(
             model="gpt-4o", input="Basic ping", max_output_tokens=20
@@ -826,3 +826,219 @@ async def test_async_bad_request_bad_param_error():
         print(f"Exception details: {e.__dict__}")
     except Exception as e:
         pytest.fail(f"Unexpected exception raised: {e}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_openai_o1_pro_response_api(sync_mode):
+    """
+    Test that LiteLLM correctly handles an incomplete response from OpenAI's o1-pro model
+    due to reaching max_output_tokens limit.
+    """
+    # Mock response from o1-pro
+    mock_response = {
+        "id": "resp_67dc3dd77b388190822443a85252da5a0e13d8bdc0e28d88",
+        "object": "response",
+        "created_at": 1742486999,
+        "status": "incomplete",
+        "error": None,
+        "incomplete_details": {"reason": "max_output_tokens"},
+        "instructions": None,
+        "max_output_tokens": 20,
+        "model": "o1-pro-2025-03-19",
+        "output": [
+            {
+                "type": "reasoning",
+                "id": "rs_67dc3de50f64819097450ed50a33d5f90e13d8bdc0e28d88",
+                "summary": [],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "previous_response_id": None,
+        "reasoning": {"effort": "medium", "generate_summary": None},
+        "store": True,
+        "temperature": 1.0,
+        "text": {"format": {"type": "text"}},
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 1.0,
+        "truncation": "disabled",
+        "usage": {
+            "input_tokens": 73,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 20,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 93,
+        },
+        "user": None,
+        "metadata": {},
+    }
+
+    class MockResponse:
+        def __init__(self, json_data, status_code):
+            self._json_data = json_data
+            self.status_code = status_code
+            self.text = json.dumps(json_data)
+
+        def json(self):  # Changed from async to sync
+            return self._json_data
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        # Configure the mock to return our response
+        mock_post.return_value = MockResponse(mock_response, 200)
+
+        litellm._turn_on_debug()
+        litellm.set_verbose = True
+
+        # Call o1-pro with max_output_tokens=20
+        response = await litellm.aresponses(
+            model="openai/o1-pro",
+            input="Write a detailed essay about artificial intelligence and its impact on society",
+            max_output_tokens=20,
+        )
+
+        # Verify the request was made correctly
+        mock_post.assert_called_once()
+        request_body = json.loads(mock_post.call_args.kwargs["data"])
+        assert request_body["model"] == "o1-pro"
+        assert request_body["max_output_tokens"] == 20
+
+        # Validate the response
+        print("Response:", json.dumps(response, indent=4, default=str))
+
+        # Check that the response has the expected structure
+        assert response["id"] == mock_response["id"]
+        assert response["status"] == "incomplete"
+        assert response["incomplete_details"].reason == "max_output_tokens"
+        assert response["max_output_tokens"] == 20
+
+        # Validate usage information
+        assert response["usage"]["input_tokens"] == 73
+        assert response["usage"]["output_tokens"] == 20
+        assert response["usage"]["total_tokens"] == 93
+
+        # Validate that the response is properly identified as incomplete
+        validate_responses_api_response(response, final_chunk=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_openai_o1_pro_response_api_streaming(sync_mode):
+    """
+    Test that LiteLLM correctly handles an incomplete response from OpenAI's o1-pro model
+    due to reaching max_output_tokens limit in both sync and async streaming modes.
+    """
+    # Mock response from o1-pro
+    mock_response = {
+        "id": "resp_67dc3dd77b388190822443a85252da5a0e13d8bdc0e28d88",
+        "object": "response",
+        "created_at": 1742486999,
+        "status": "incomplete",
+        "error": None,
+        "incomplete_details": {"reason": "max_output_tokens"},
+        "instructions": None,
+        "max_output_tokens": 20,
+        "model": "o1-pro-2025-03-19",
+        "output": [
+            {
+                "type": "reasoning",
+                "id": "rs_67dc3de50f64819097450ed50a33d5f90e13d8bdc0e28d88",
+                "summary": [],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "previous_response_id": None,
+        "reasoning": {"effort": "medium", "generate_summary": None},
+        "store": True,
+        "temperature": 1.0,
+        "text": {"format": {"type": "text"}},
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 1.0,
+        "truncation": "disabled",
+        "usage": {
+            "input_tokens": 73,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 20,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 93,
+        },
+        "user": None,
+        "metadata": {},
+    }
+
+    class MockResponse:
+        def __init__(self, json_data, status_code):
+            self._json_data = json_data
+            self.status_code = status_code
+            self.text = json.dumps(json_data)
+
+        def json(self):
+            return self._json_data
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        # Configure the mock to return our response
+        mock_post.return_value = MockResponse(mock_response, 200)
+
+        litellm._turn_on_debug()
+        litellm.set_verbose = True
+
+        # Verify the request was made correctly
+        if sync_mode:
+            # For sync mode, we need to patch the sync HTTP handler
+            with patch(
+                "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+                return_value=MockResponse(mock_response, 200),
+            ) as mock_sync_post:
+                response = litellm.responses(
+                    model="openai/o1-pro",
+                    input="Write a detailed essay about artificial intelligence and its impact on society",
+                    max_output_tokens=20,
+                    stream=True,
+                )
+
+                # Process the sync stream
+                event_count = 0
+                for event in response:
+                    print(
+                        f"Sync litellm response #{event_count}:",
+                        json.dumps(event, indent=4, default=str),
+                    )
+                    event_count += 1
+
+                # Verify the sync request was made correctly
+                mock_sync_post.assert_called_once()
+                request_body = json.loads(mock_sync_post.call_args.kwargs["data"])
+                assert request_body["model"] == "o1-pro"
+                assert request_body["max_output_tokens"] == 20
+                assert "stream" not in request_body
+        else:
+            # For async mode
+            response = await litellm.aresponses(
+                model="openai/o1-pro",
+                input="Write a detailed essay about artificial intelligence and its impact on society",
+                max_output_tokens=20,
+                stream=True,
+            )
+
+            # Process the async stream
+            event_count = 0
+            async for event in response:
+                print(
+                    f"Async litellm response #{event_count}:",
+                    json.dumps(event, indent=4, default=str),
+                )
+                event_count += 1
+
+            # Verify the async request was made correctly
+            mock_post.assert_called_once()
+            request_body = json.loads(mock_post.call_args.kwargs["data"])
+            assert request_body["model"] == "o1-pro"
+            assert request_body["max_output_tokens"] == 20
+            assert "stream" not in request_body

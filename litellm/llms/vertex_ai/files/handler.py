@@ -8,7 +8,7 @@ from litellm.integrations.gcs_bucket.gcs_bucket_base import (
     GCSLoggingConfig,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.types.llms.openai import CreateFileRequest, FileObject
+from litellm.types.llms.openai import CreateFileRequest, OpenAIFileObject
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 
 from .transformation import VertexAIFilesTransformation
@@ -29,8 +29,6 @@ class VertexAIFilesHandler(GCSBucketBase):
             llm_provider=LlmProviders.VERTEX_AI,
         )
 
-    pass
-
     async def async_create_file(
         self,
         create_file_data: CreateFileRequest,
@@ -40,7 +38,7 @@ class VertexAIFilesHandler(GCSBucketBase):
         vertex_location: Optional[str],
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
-    ):
+    ) -> OpenAIFileObject:
         gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
             kwargs={}
         )
@@ -49,10 +47,11 @@ class VertexAIFilesHandler(GCSBucketBase):
             service_account_json=gcs_logging_config["path_service_account"],
         )
         bucket_name = gcs_logging_config["bucket_name"]
-        logging_payload, object_name = (
-            vertex_ai_files_transformation.transform_openai_file_content_to_vertex_ai_file_content(
-                openai_file_content=create_file_data.get("file")
-            )
+        (
+            logging_payload,
+            object_name,
+        ) = vertex_ai_files_transformation.transform_openai_file_content_to_vertex_ai_file_content(
+            openai_file_content=create_file_data.get("file")
         )
         gcs_upload_response = await self._log_json_data_on_gcs(
             headers=headers,
@@ -76,7 +75,7 @@ class VertexAIFilesHandler(GCSBucketBase):
         vertex_location: Optional[str],
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
-    ) -> Union[FileObject, Coroutine[Any, Any, FileObject]]:
+    ) -> Union[OpenAIFileObject, Coroutine[Any, Any, OpenAIFileObject]]:
         """
         Creates a file on VertexAI GCS Bucket
 

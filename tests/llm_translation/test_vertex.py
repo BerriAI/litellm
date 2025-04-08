@@ -1,3 +1,5 @@
+import base64
+import numpy as np
 import json
 import os
 import sys
@@ -23,6 +25,11 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_image
 from litellm.types.llms.vertex_ai import PartType, BlobType
 import httpx
+
+
+def encode_image_to_base64(image_path):
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode("utf-8")
 
 
 def test_completion_pydantic_obj_2():
@@ -1264,6 +1271,25 @@ from typing import Dict, Any
 # from your_module import _process_gemini_image, PartType, FileDataType, BlobType
 
 
+# Add these fixtures below existing fixtures
+@pytest.fixture
+def vertex_client():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    return HTTPHandler()
+
+
+@pytest.fixture
+def encoded_images():
+    image_paths = [
+        "./tests/llm_translation/duck.png",
+        # "./duck.png",
+        "./tests/llm_translation/guinea.png",
+        # "./guinea.png",
+    ]
+    return [encode_image_to_base64(path) for path in image_paths]
+
+
 @pytest.fixture
 def mock_convert_url_to_base64():
     with patch(
@@ -1305,3 +1331,73 @@ def test_process_gemini_image_http_url(
     # Act
     result = _process_gemini_image(http_url)
     # assert result["file_data"]["file_uri"] == http_url
+
+
+@pytest.mark.parametrize(
+    "input_string, expected_closer_index",
+    [
+        ("Duck", 0),  # Duck closer to duck image
+        ("Guinea", 1),  # Guinea closer to guinea image
+    ],
+)
+def test_aaavertex_embeddings_distances(
+    vertex_client, encoded_images, input_string, expected_closer_index
+):
+    """
+    Test cosine distances between image and text embeddings using Vertex AI multimodalembedding@001
+    """
+    from unittest.mock import patch
+
+    # Mock different embedding values to simulate realistic distances
+    mock_image_embeddings = [
+        [0.9] + [0.1] * 767,  # Duck embedding - closer to "Duck"
+        [0.1] * 767 + [0.9],  # Guinea embedding - closer to "Guinea"
+    ]
+
+    image_embeddings = []
+    mock_response = MagicMock()
+
+    def mock_auth_token(*args, **kwargs):
+        return "my-fake-token", "pathrise-project"
+
+    with patch.object(vertex_client, "post", return_value=mock_response), patch.object(
+        litellm.main.vertex_multimodal_embedding,
+        "_ensure_access_token",
+        side_effect=mock_auth_token,
+    ):
+        for idx, encoded_image in enumerate(encoded_images):
+            mock_response.json.return_value = {
+                "predictions": [{"imageEmbedding": mock_image_embeddings[idx]}]
+            }
+            mock_response.status_code = 200
+            response = litellm.embedding(
+                model="vertex_ai/multimodalembedding@001",
+                input=[f"data:image/png;base64,{encoded_image}"],
+                client=vertex_client,
+            )
+            print("response: ", response)
+            image_embeddings.append(response.data[0].embedding)
+
+    # Mock text embedding based on input string
+    mock_text_embedding = (
+        [0.9] + [0.1] * 767 if input_string == "Duck" else [0.1] * 767 + [0.9]
+    )
+    text_mock_response = MagicMock()
+    text_mock_response.json.return_value = {
+        "predictions": [{"imageEmbedding": mock_text_embedding}]
+    }
+    text_mock_response.status_code = 200
+    with patch.object(
+        vertex_client, "post", return_value=text_mock_response
+    ), patch.object(
+        litellm.main.vertex_multimodal_embedding,
+        "_ensure_access_token",
+        side_effect=mock_auth_token,
+    ):
+        text_response = litellm.embedding(
+            model="vertex_ai/multimodalembedding@001",
+            input=[input_string],
+            client=vertex_client,
+        )
+        print("text_response: ", text_response)
+        text_embedding = text_response.data[0].embedding
