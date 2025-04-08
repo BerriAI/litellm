@@ -370,7 +370,7 @@ export function AllKeysTable({
           keyData={keys.find(k => k.token === selectedKeyId)}
           onKeyDataUpdate={(updatedKeyData) => {
             setKeys(keys => keys.map(key => {
-              if (key.key_name === updatedKeyData.key_name) {
+              if (key.token === updatedKeyData.token) {
                 // The shape of key is different from that of
                 // updatedKeyData(received from keyUpdateCall in networking.tsx).
                 // Hence, we can't replace key with updatedKeys since it might lead
@@ -381,6 +381,9 @@ export function AllKeysTable({
               
               return key
             }))
+          }}
+          onDelete={() => {
+            setKeys(keys => keys.filter(key => key.token !== selectedKeyId))
           }}
           accessToken={accessToken}
           userID={userID}
