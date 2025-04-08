@@ -2,7 +2,6 @@
 openai==1.68.2
 python-dotenv
 tiktoken
-importlib_metadata
 cohere
 redis==5.2.1
 redisvl==0.4.1
