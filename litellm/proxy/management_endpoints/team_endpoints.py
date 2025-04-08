@@ -23,8 +23,10 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
+    AddPublicTeamRequest,
     BlockTeamRequest,
     CommonProxyErrors,
+    DeletePublicTeamRequest,
     DeleteTeamRequest,
     LiteLLM_AuditLogs,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
@@ -58,6 +60,9 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_endpoints.avaialable_teams_handler import (
+    AvailableTeamsDBHandler,
+)
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _set_object_metadata_field,
@@ -1494,15 +1499,21 @@ async def list_available_teams(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    available_teams = cast(
-        Optional[List[str]],
-        (
-            litellm.default_internal_user_params.get("available_teams")
-            if litellm.default_internal_user_params is not None
-            else None
-        ),
+    available_teams = (
+        cast(
+            Optional[List[str]],
+            (
+                litellm.default_internal_user_params.get("available_teams")
+                if litellm.default_internal_user_params is not None
+                else None
+            ),
+        )
+        or []
     )
-    if available_teams is None:
+    available_teams += await AvailableTeamsDBHandler._get_available_teams_from_db(
+        prisma_client
+    )
+    if len(available_teams) == 0:
         raise HTTPException(
             status_code=400,
             detail={
@@ -1534,6 +1545,104 @@ async def list_available_teams(
     ]
 
     return available_teams_correct_type
+
+
+@router.post(
+    "/team/available",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=LiteLLM_TeamTable,
+)
+@management_endpoint_wrapper
+async def add_public_team(
+    data: AddPublicTeamRequest,
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
+):
+    """
+    Add a new public team and store it under litellm_settings - default_internal_user_params.public_teams.
+
+    Parameters:
+    - team_id: str - The team id that should be made publicly available.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    available_teams_in_db = await AvailableTeamsDBHandler._get_available_teams_from_db(
+        prisma_client
+    )
+    available_teams_in_db.append(data.team_id)
+    await AvailableTeamsDBHandler._set_available_teams_in_db(
+        prisma_client, available_teams_in_db
+    )
+
+    return {
+        "status": "success",
+        "message": "Team added to publicly available teams",
+        "team_id": data.team_id,
+    }
+
+
+@router.delete(
+    "/team/available",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def delete_public_team(
+    data: DeletePublicTeamRequest,
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
+):
+    """
+    Delete a team from publicly available teams.
+
+    Note: this does not delete the team from the database, but just removes it from the list of publicly available teams.
+
+    Parameters:
+    - team_ids: List[str] - Required. List of team IDs to delete.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    available_teams_in_db = await AvailableTeamsDBHandler._get_available_teams_from_db(
+        prisma_client
+    )
+    if data.team_ids is None:
+        raise HTTPException(status_code=400, detail={"error": "team_ids is required"})
+
+    for team_id in data.team_ids:
+        if team_id not in available_teams_in_db:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"Team {team_id} not found in available teams"},
+            )
+
+    available_teams_in_db = [
+        team for team in available_teams_in_db if team not in data.team_ids
+    ]
+    await AvailableTeamsDBHandler._set_available_teams_in_db(
+        prisma_client=prisma_client,
+        available_teams=available_teams_in_db,
+    )
+
+    return {
+        "status": "success",
+        "message": "Team removed from publicly available teams",
+        "team_ids": data.team_ids,
+    }
 
 
 @router.get(

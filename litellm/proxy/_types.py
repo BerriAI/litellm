@@ -974,6 +974,14 @@ class NewTeamRequest(TeamBase):
     model_config = ConfigDict(protected_namespaces=())
 
 
+class AddPublicTeamRequest(LiteLLMPydanticObjectBase):
+    team_id: str
+
+
+class DeletePublicTeamRequest(LiteLLMPydanticObjectBase):
+    team_ids: List[str]
+
+
 class GlobalEndUsersSpend(LiteLLMPydanticObjectBase):
     api_key: Optional[str] = None
     startTime: Optional[datetime] = None
