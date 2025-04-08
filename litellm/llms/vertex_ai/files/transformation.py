@@ -126,11 +126,8 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         Get the object name for the request
         """
         extracted_file_data_content = extracted_file_data.get("content")
-        if (
-            purpose == "batch"
-            and extracted_file_data.get("content_type") == "application/jsonl"
-            and extracted_file_data_content is not None
-        ):
+
+        if purpose == "batch":
             ## 1. If jsonl, check if there's a model name
             file_content = self._get_content_from_openai_file(
                 extracted_file_data_content
