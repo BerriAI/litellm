@@ -707,7 +707,7 @@ def test_key_generation_required_params_check(
         StandardKeyGenerationConfig,
         PersonalUIKeyGenerationConfig,
     )
-    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj, KeyManagementRoutes
     from fastapi import HTTPException
 
     user_api_key_dict = UserAPIKeyAuth(
@@ -739,16 +739,32 @@ def test_key_generation_required_params_check(
 
     if expected_result:
         if key_type == "team_key":
-            assert _team_key_generation_check(team_table, user_api_key_dict, input_data)
+            assert _team_key_generation_check(
+                team_table=team_table,
+                user_api_key_dict=user_api_key_dict,
+                data=input_data,
+                route=KeyManagementRoutes.KEY_GENERATE,
+            )
         elif key_type == "personal_key":
-            assert _personal_key_generation_check(user_api_key_dict, input_data)
+            assert _personal_key_generation_check(
+                user_api_key_dict=user_api_key_dict,
+                data=input_data,
+            )
     else:
         if key_type == "team_key":
             with pytest.raises(HTTPException):
-                _team_key_generation_check(team_table, user_api_key_dict, input_data)
+                _team_key_generation_check(
+                    team_table=team_table,
+                    user_api_key_dict=user_api_key_dict,
+                    data=input_data,
+                    route=KeyManagementRoutes.KEY_GENERATE,
+                )
         elif key_type == "personal_key":
             with pytest.raises(HTTPException):
-                _personal_key_generation_check(user_api_key_dict, input_data)
+                _personal_key_generation_check(
+                    user_api_key_dict=user_api_key_dict,
+                    data=input_data,
+                )
 
 
 def test_personal_key_generation_check():
