@@ -68,12 +68,44 @@ Once you selected a model, enter your message content and click on `Submit`
 
 <Image img={require('../../img/basic_litellm.gif')} />
 
-### 3.2 Tracking Spend / Usage
+### 3.2 Tracking Usage & Spend
 
-After your request is made, navigate to `Logs` on the LiteLLM UI, you can see Team, Key, Model, Usage and Cost.
+#### Basic Tracking
 
-<!-- <Image img={require('../../img/litellm_logs_openweb.gif')} /> -->
+After making requests, navigate to the `Logs` section in the LiteLLM UI to view Model, Usage and Cost information.
 
+#### Per-User Tracking
+
+To track spend and usage for each Open WebUI user, configure both Open WebUI and LiteLLM:
+
+1. **Enable User Info Headers in Open WebUI**
+   
+  Set the following environment variable to enable user information in request headers:
+  ```dotenv
+  ENABLE_FORWARD_USER_INFO_HEADERS=True
+  ```
+
+  For more details, see the [Environment Variable Configuration Guide](https://docs.openwebui.com/getting-started/env-configuration/#enable_forward_user_info_headers).
+
+2. **Configure LiteLLM to Parse User Headers**
+   
+  Add the following to your LiteLLM config to specify a header to use for user tracking:
+
+  ```yaml
+  general_settings:
+      user_header_name: X-OpenWebUI-User-Id
+  ```
+
+  <details>
+  <summary>ⓘ Available tracking options</summary>
+
+  You may specify `X-OpenWebUI-User-Email` or even `X-OpenWebUI-User-Name` for `user_header_name` to track users by their email or user name, which may offer easier matching between these accounts.
+
+  Choose based on your needs, but note that in Open WebUI: 
+  - Users can modify their own usernames
+  - Administrators can modify both usernames and emails of any account
+
+  </details>
 
 
 ## Render `thinking` content on OpenWeb UI
