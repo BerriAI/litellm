@@ -3442,6 +3442,8 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
         }
     ]
     """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
+
     tool_block_list: List[BedrockToolBlock] = []
     for tool in tools:
         parameters = tool.get("function", {}).get(
@@ -3455,6 +3457,12 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
         description = tool.get("function", {}).get(
             "description", name
         )  # converse api requires a description
+
+        defs = parameters.pop("$defs", {})
+        # flatten the defs
+        for name, value in defs.items():
+            unpack_defs(value, defs)
+        unpack_defs(parameters, defs)
         tool_input_schema = BedrockToolInputSchemaBlock(json=parameters)
         tool_spec = BedrockToolSpecBlock(
             inputSchema=tool_input_schema, name=name, description=description
