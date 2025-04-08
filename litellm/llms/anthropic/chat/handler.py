@@ -307,6 +307,10 @@ class AnthropicChatCompletion(BaseLLM):
             model=model,
             provider=LlmProviders(custom_llm_provider),
         )
+        if config is None:
+            raise ValueError(
+                f"Provider config not found for model: {model} and provider: {custom_llm_provider}"
+            )
 
         data = config.transform_request(
             model=model,
