@@ -198,6 +198,7 @@ This budget does not apply to keys created under non-default teams.
 
 ### Auto-add SSO users to teams
 
+
 1. Specify the JWT field that contains the team ids, that the user belongs to. 
 
 ```yaml
@@ -207,7 +208,8 @@ general_settings:
     team_ids_jwt_field: "groups" # 👈 CAN BE ANY FIELD
 ```
 
-This is assuming your SSO token looks like this:
+This is assuming your SSO token looks like this. **If you need to inspect the JWT fields received from your SSO provider by LiteLLM, follow these instructions [here](#debugging-sso-jwt-fields)**
+
 ```
 {
   ...,
@@ -230,6 +232,39 @@ curl -X POST '<PROXY_BASE_URL>/team/new' \
 3. Test the SSO flow
 
 Here's a walkthrough of [how it works](https://www.loom.com/share/8959be458edf41fd85937452c29a33f3?sid=7ebd6d37-569a-4023-866e-e0cde67cb23e)
+
+### Debugging SSO JWT fields 
+
+If you need to inspect the JWT fields received from your SSO provider by LiteLLM, follow these instructions. This guide walks you through setting up a debug callback to view the JWT data during the SSO process.
+
+
+<Image img={require('../../img/debug_sso.png')}  style={{ width: '500px', height: 'auto' }} />
+<br />
+
+1. Add `/sso/debug/callback` as a redirect URL in your SSO provider 
+
+  In your SSO provider's settings, add the following URL as a new redirect (callback) URL:
+
+  ```bash showLineNumbers title="Redirect URL"
+  http://<proxy_base_url>/sso/debug/callback
+  ```
+
+
+2. Navigate to the debug login page on your browser 
+
+    Navigate to the following URL on your browser:
+
+    ```bash showLineNumbers title="URL to navigate to"
+    https://<proxy_base_url>/sso/debug/login
+    ```
+
+    This will initiate the standard SSO flow. You will be redirected to your SSO provider's login screen, and after successful authentication, you will be redirected back to LiteLLM's debug callback route.
+
+
+3. View the JWT fields 
+
+Once redirected, you should see a page called "SSO Debug Information". This page displays the JWT fields received from your SSO provider (as shown in the image above)
+
 
 ### Restrict Users from creating personal keys 
 
