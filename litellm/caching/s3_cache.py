@@ -12,7 +12,6 @@ Has 4 methods:
 import ast
 import asyncio
 import json
-from typing import Optional
 
 from litellm._logging import print_verbose, verbose_logger
 
@@ -25,7 +24,7 @@ class S3Cache(BaseCache):
         s3_bucket_name,
         s3_region_name=None,
         s3_api_version=None,
-        s3_use_ssl: Optional[bool] = True,
+        s3_use_ssl: bool = True,
         s3_verify=None,
         s3_endpoint_url=None,
         s3_aws_access_key_id=None,
@@ -35,14 +34,15 @@ class S3Cache(BaseCache):
         s3_path=None,
         **kwargs,
     ):
-        import boto3
+        # import and fail quickly if aioboto3 is not installed
+        import aioboto3
 
         self.bucket_name = s3_bucket_name
         self.key_prefix = s3_path.rstrip("/") + "/" if s3_path else ""
         # Create an S3 client with custom endpoint URL
 
-        self.s3_client = boto3.client(
-            "s3",
+        self._s3_client = None
+        self._s3_kwargs = dict(
             region_name=s3_region_name,
             endpoint_url=s3_endpoint_url,
             api_version=s3_api_version,
@@ -56,6 +56,23 @@ class S3Cache(BaseCache):
         )
 
     def set_cache(self, key, value, **kwargs):
+        raise NotImplementedError("S3 Cache is not supported in sync mode")
+
+    @property
+    async def s3_client(self):
+        import aioboto3
+
+        if self._s3_client is None:
+            session = aioboto3.Session()
+            self._s3_client = await session.client(
+                "s3",
+                **self._s3_kwargs,
+            ).__aenter__()
+
+        return self._s3_client
+
+    async def async_set_cache(self, key, value, **kwargs):
+        s3_client = await self.s3_client
         try:
             print_verbose(f"LiteLLM SET Cache - S3. Key={key}. Value={value}")
             ttl = kwargs.get("ttl", None)
@@ -71,7 +88,7 @@ class S3Cache(BaseCache):
                 expiration_time = datetime.datetime.now() + ttl
 
                 # Upload the data to S3 with the calculated expiration time
-                self.s3_client.put_object(
+                await s3_client.put_object(
                     Bucket=self.bucket_name,
                     Key=key,
                     Body=serialized_value,
@@ -84,7 +101,7 @@ class S3Cache(BaseCache):
             else:
                 cache_control = "immutable, max-age=31536000, s-maxage=31536000"
                 # Upload the data to S3 without specifying Expires
-                self.s3_client.put_object(
+                await s3_client.put_object(
                     Bucket=self.bucket_name,
                     Key=key,
                     Body=serialized_value,
@@ -96,31 +113,30 @@ class S3Cache(BaseCache):
         except Exception as e:
             # NON blocking - notify users S3 is throwing an exception
             print_verbose(f"S3 Caching: set_cache() - Got exception from S3: {e}")
-
-    async def async_set_cache(self, key, value, **kwargs):
+            raise e
         self.set_cache(key=key, value=value, **kwargs)
 
     def get_cache(self, key, **kwargs):
+        raise NotImplementedError("S3 Cache is not supported in sync mode")
+
+    async def async_get_cache(self, key, **kwargs):
+        # Boto3 is needed for exceptions
         import botocore
+
+        s3_client = await self.s3_client
 
         try:
             key = self.key_prefix + key
 
             print_verbose(f"Get S3 Cache: key: {key}")
             # Download the data from S3
-            cached_response = self.s3_client.get_object(
-                Bucket=self.bucket_name, Key=key
-            )
+            cached_response = await s3_client.get_object(Bucket=self.bucket_name, Key=key)
 
             if cached_response is not None:
                 # cached_response is in `b{} convert it to ModelResponse
-                cached_response = (
-                    cached_response["Body"].read().decode("utf-8")
-                )  # Convert bytes to string
+                cached_response = (await cached_response["Body"].read()).decode("utf-8")  # Convert bytes to string
                 try:
-                    cached_response = json.loads(
-                        cached_response
-                    )  # Convert string to dictionary
+                    cached_response = json.loads(cached_response)  # Convert string to dictionary
                 except Exception:
                     cached_response = ast.literal_eval(cached_response)
             if not isinstance(cached_response, dict):
@@ -132,25 +148,20 @@ class S3Cache(BaseCache):
             return cached_response
         except botocore.exceptions.ClientError as e:  # type: ignore
             if e.response["Error"]["Code"] == "NoSuchKey":
-                verbose_logger.debug(
-                    f"S3 Cache: The specified key '{key}' does not exist in the S3 bucket."
-                )
+                verbose_logger.debug(f"S3 Cache: The specified key '{key}' does not exist in the S3 bucket.")
                 return None
 
         except Exception as e:
             # NON blocking - notify users S3 is throwing an exception
-            verbose_logger.error(
-                f"S3 Caching: get_cache() - Got exception from S3: {e}"
-            )
-
-    async def async_get_cache(self, key, **kwargs):
-        return self.get_cache(key=key, **kwargs)
+            verbose_logger.error(f"S3 Caching: get_cache() - Got exception from S3: {e}")
 
     def flush_cache(self):
         pass
 
     async def disconnect(self):
-        pass
+        if self._s3_client is not None:
+            await self._s3_client.__aexit__()
+            self._s3_client = None
 
     async def async_set_cache_pipeline(self, cache_list, **kwargs):
         tasks = []

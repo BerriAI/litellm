@@ -209,7 +209,9 @@ class Cache:
             litellm.logging_callback_manager.add_litellm_success_callback("cache")
         if "cache" not in litellm._async_success_callback:
             litellm.logging_callback_manager.add_litellm_async_success_callback("cache")
-        self.supported_call_types = supported_call_types  # default to ["completion", "acompletion", "embedding", "aembedding"]
+        self.supported_call_types = (
+            supported_call_types  # default to ["completion", "acompletion", "embedding", "aembedding"]
+        )
         self.type = type
         self.namespace = namespace
         self.redis_flush_size = redis_flush_size
@@ -220,8 +222,7 @@ class Cache:
             self.ttl = default_in_memory_ttl
 
         if (
-            self.type == LiteLLMCacheType.REDIS
-            or self.type == LiteLLMCacheType.REDIS_SEMANTIC
+            self.type == LiteLLMCacheType.REDIS or self.type == LiteLLMCacheType.REDIS_SEMANTIC
         ) and default_in_redis_ttl is not None:
             self.ttl = default_in_redis_ttl
 
@@ -253,12 +254,8 @@ class Cache:
                 param_value: Optional[str] = self._get_param_value(param, kwargs)
                 if param_value is not None:
                     cache_key += f"{str(param)}: {str(param_value)}"
-            elif (
-                param not in litellm_param_kwargs
-            ):  # check if user passed in optional param - e.g. top_k
-                if (
-                    litellm.enable_caching_on_provider_specific_optional_params is True
-                ):  # feature flagged for now
+            elif param not in litellm_param_kwargs:  # check if user passed in optional param - e.g. top_k
+                if litellm.enable_caching_on_provider_specific_optional_params is True:  # feature flagged for now
                     if kwargs[param] is None:
                         continue  # ignore None params
                     param_value = kwargs[param]
@@ -267,9 +264,7 @@ class Cache:
         verbose_logger.debug("\nCreated cache key: %s", cache_key)
         hashed_cache_key = Cache._get_hashed_cache_key(cache_key)
         hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
-        self._set_preset_cache_key_in_kwargs(
-            preset_cache_key=hashed_cache_key, **kwargs
-        )
+        self._set_preset_cache_key_in_kwargs(preset_cache_key=hashed_cache_key, **kwargs)
         return hashed_cache_key
 
     def _get_param_value(
@@ -297,15 +292,11 @@ class Cache:
         metadata: Dict = kwargs.get("metadata", {}) or {}
         litellm_params: Dict = kwargs.get("litellm_params", {}) or {}
         metadata_in_litellm_params: Dict = litellm_params.get("metadata", {}) or {}
-        model_group: Optional[str] = metadata.get(
-            "model_group"
-        ) or metadata_in_litellm_params.get("model_group")
+        model_group: Optional[str] = metadata.get("model_group") or metadata_in_litellm_params.get("model_group")
         caching_group = self._get_caching_group(metadata, model_group)
         return caching_group or model_group or kwargs["model"]
 
-    def _get_caching_group(
-        self, metadata: dict, model_group: Optional[str]
-    ) -> Optional[str]:
+    def _get_caching_group(self, metadata: dict, model_group: Optional[str]) -> Optional[str]:
         caching_groups: Optional[List] = metadata.get("caching_groups", [])
         if caching_groups:
             for group in caching_groups:
@@ -418,11 +409,7 @@ class Cache:
         Common get cache logic across sync + async implementations
         """
         # Check if a timestamp was stored with the cached response
-        if (
-            cached_result is not None
-            and isinstance(cached_result, dict)
-            and "timestamp" in cached_result
-        ):
+        if cached_result is not None and isinstance(cached_result, dict) and "timestamp" in cached_result:
             timestamp = cached_result["timestamp"]
             current_time = time.time()
 
@@ -469,16 +456,10 @@ class Cache:
                 cache_key = self.get_cache_key(**kwargs)
             if cache_key is not None:
                 cache_control_args: DynamicCacheControl = kwargs.get("cache", {})
-                max_age = (
-                    cache_control_args.get("s-maxage")
-                    or cache_control_args.get("s-max-age")
-                    or float("inf")
-                )
+                max_age = cache_control_args.get("s-maxage") or cache_control_args.get("s-max-age") or float("inf")
                 cached_result = self.cache.get_cache(cache_key, messages=messages)
                 cached_result = self.cache.get_cache(cache_key, messages=messages)
-                return self._get_cache_logic(
-                    cached_result=cached_result, max_age=max_age
-                )
+                return self._get_cache_logic(cached_result=cached_result, max_age=max_age)
         except Exception:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
@@ -501,13 +482,9 @@ class Cache:
                 cache_key = self.get_cache_key(**kwargs)
             if cache_key is not None:
                 cache_control_args = kwargs.get("cache", {})
-                max_age = cache_control_args.get(
-                    "s-max-age", cache_control_args.get("s-maxage", float("inf"))
-                )
+                max_age = cache_control_args.get("s-max-age", cache_control_args.get("s-maxage", float("inf")))
                 cached_result = await self.cache.async_get_cache(cache_key, **kwargs)
-                return self._get_cache_logic(
-                    cached_result=cached_result, max_age=max_age
-                )
+                return self._get_cache_logic(cached_result=cached_result, max_age=max_age)
         except Exception:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
@@ -556,9 +533,7 @@ class Cache:
         try:
             if self.should_use_cache(**kwargs) is not True:
                 return
-            cache_key, cached_data, kwargs = self._add_cache_logic(
-                result=result, **kwargs
-            )
+            cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
             self.cache.set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
             verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
@@ -574,10 +549,7 @@ class Cache:
                 # high traffic - fill in results in memory and then flush
                 await self.batch_cache_write(result, **kwargs)
             else:
-                cache_key, cached_data, kwargs = self._add_cache_logic(
-                    result=result, **kwargs
-                )
-
+                cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
                 await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
             verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
@@ -655,17 +627,6 @@ class Cache:
     async def disconnect(self):
         if hasattr(self.cache, "disconnect"):
             await self.cache.disconnect()
-
-    def _supports_async(self) -> bool:
-        """
-        Internal method to check if the cache type supports async get/set operations
-
-        Only S3 Cache Does NOT support async operations
-
-        """
-        if self.type and self.type == LiteLLMCacheType.S3:
-            return False
-        return True
 
 
 def enable_cache(
