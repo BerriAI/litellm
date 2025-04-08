@@ -20,6 +20,19 @@ from litellm.utils import _add_path_to_api_base, supports_tool_choice
 
 
 class AzureAIStudioConfig(OpenAIConfig):
+    def get_supported_openai_params(self, model: str) -> List:
+        model_supports_tool_choice = True  # azure ai supports this by default
+        if not supports_tool_choice(model=f"azure_ai/{model}"):
+            model_supports_tool_choice = False
+        supported_params = super().get_supported_openai_params(model)
+        if not model_supports_tool_choice:
+            filtered_supported_params = []
+            for param in supported_params:
+                if param != "tool_choice":
+                    filtered_supported_params.append(param)
+            return filtered_supported_params
+        return supported_params
+
     def validate_environment(
         self,
         headers: dict,

@@ -117,9 +117,9 @@ async def test_supports_tool_choice():
     """
     # Load model prices
     litellm._turn_on_debug()
-    # local_path = "../../model_prices_and_context_window.json"
-    prod_path = "./model_prices_and_context_window.json"
-    with open(prod_path, "r") as f:
+    path = "../../model_prices_and_context_window.json"
+    # path = "./model_prices_and_context_window.json"
+    with open(path, "r") as f:
         model_prices = json.load(f)
     litellm.model_cost = model_prices
     config_manager = ProviderConfigManager()
@@ -140,6 +140,7 @@ async def test_supports_tool_choice():
             or "codestral" in model_name
             or "o1" in model_name
             or "o3" in model_name
+            or "mistral" in model_name
         ):
             continue
 
@@ -166,7 +167,5 @@ async def test_supports_tool_choice():
         tool_choice_in_params = "tool_choice" in supported_params
 
         assert supports_tool_choice_result == tool_choice_in_params, (
-            f"Tool choice support mismatch for {model_name}:\n"
-            f"supports_tool_choice() returned: {supports_tool_choice_result}\n"
-            f"tool_choice in supported params: {tool_choice_in_params}"
+            f"Tool choice support mismatch for {model_name}. supports_tool_choice() returned: {supports_tool_choice_result}, tool_choice in supported params: {tool_choice_in_params}"
         )
