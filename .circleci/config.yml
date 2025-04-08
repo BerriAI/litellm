@@ -610,6 +610,7 @@ jobs:
           name: Install Dependencies
           command: |
             python -m pip install --upgrade pip
+            pip install wheel
             python -m pip install -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "respx==0.21.1"
