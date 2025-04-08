@@ -31,16 +31,7 @@ def get_supported_openai_params(  # noqa: PLR0915
             return None
 
     if custom_llm_provider == "bedrock":
-        if request_type == "chat_completion":
-            from litellm.utils import ProviderConfigManager
-
-            provider_config = ProviderConfigManager.get_provider_chat_config(
-                model=model, provider=LlmProviders.BEDROCK
-            )
-            return provider_config.get_supported_openai_params(model=model)
-        raise NotImplementedError(
-            "Bedrock embeddings are not migrated to BaseConfig yet."
-        )
+        return litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "ollama":
         return litellm.OllamaConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "ollama_chat":
