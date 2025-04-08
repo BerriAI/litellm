@@ -9,6 +9,7 @@ import {
   Icon,
   Button,
   Badge,
+  Text,
 } from "@tremor/react";
 import {
   PencilAltIcon,
@@ -87,17 +88,27 @@ const TagTable: React.FC<TagTableProps> = ({
       cell: ({ row }) => {
         const tag = row.original;
         return (
-          <div className="flex flex-wrap gap-1">
-            {tag?.models?.map((llm) => (
-              <Badge
-                key={llm}
-                size="xs"
-                className="mb-1"
-                color="blue"
-              >
-                {llm}
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            {tag?.models?.length === 0 ? (
+              <Badge size="xs" className="mb-1" color="red">
+                All Models
               </Badge>
-            ))}
+            ) : (
+              tag?.models?.map((model) => (
+                <Badge
+                  key={model}
+                  size="xs"
+                  className="mb-1"
+                  color="blue"
+                >
+                  <Text>
+                    {model.length > 30
+                      ? `${model.slice(0, 30)}...`
+                      : model}
+                  </Text>
+                </Badge>
+              ))
+            )}
           </div>
         );
       },
