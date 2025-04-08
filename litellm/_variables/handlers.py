@@ -8,7 +8,7 @@ input_callback: List[CALLBACK_TYPES] = []
 success_callback: List[CALLBACK_TYPES] = []
 failure_callback: List[CALLBACK_TYPES] = []
 service_callback: List[CALLBACK_TYPES] = []
-logging_callback_manager = LoggingCallbackManager()
+logging_callback_manager: LoggingCallbackManager = LoggingCallbackManager()
 _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
     "openmeter",

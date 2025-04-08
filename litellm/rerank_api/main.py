@@ -20,7 +20,7 @@ from litellm.utils import ProviderConfigManager, client, exception_type
 # Initialize any necessary instances or variables here
 together_rerank = TogetherAIRerank()
 bedrock_rerank = BedrockRerankHandler()
-base_llm_http_handler = BaseLLMHTTPHandler()
+base_llm_http_handler: BaseLLMHTTPHandler = BaseLLMHTTPHandler()
 #################################################
 
 

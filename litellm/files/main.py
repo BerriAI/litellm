@@ -14,12 +14,12 @@ from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast
 import httpx
 
 import litellm
-from litellm import get_secret_str
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.files.handler import AzureOpenAIFilesAPI
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.openai import FileDeleted, FileObject, OpenAIFilesAPI
 from litellm.llms.vertex_ai.files.handler import VertexAIFilesHandler
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     CreateFileRequest,
     FileContentRequest,
@@ -36,7 +36,7 @@ from litellm.utils import (
     supports_httpx_timeout,
 )
 
-base_llm_http_handler = BaseLLMHTTPHandler()
+base_llm_http_handler: BaseLLMHTTPHandler = BaseLLMHTTPHandler()
 
 ####### ENVIRONMENT VARIABLES ###################
 openai_files_instance = OpenAIFilesAPI()
@@ -153,10 +153,12 @@ def create_file(
                 api_key=optional_params.api_key,
                 logging_obj=logging_obj,
                 _is_async=_is_async,
-                client=client
-                if client is not None
-                and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
-                else None,
+                client=(
+                    client
+                    if client is not None
+                    and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
+                    else None
+                ),
                 timeout=timeout,
             )
         elif custom_llm_provider == "openai":

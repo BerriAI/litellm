@@ -28,7 +28,7 @@ from .streaming_iterator import BaseResponsesAPIStreamingIterator
 
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
-base_llm_http_handler = BaseLLMHTTPHandler()
+base_llm_http_handler: BaseLLMHTTPHandler = BaseLLMHTTPHandler()
 #################################################
 
 
@@ -178,11 +178,11 @@ def responses(
         )
 
         # get provider config
-        responses_api_provider_config: Optional[
-            BaseResponsesAPIConfig
-        ] = ProviderConfigManager.get_provider_responses_api_config(
-            model=model,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+            ProviderConfigManager.get_provider_responses_api_config(
+                model=model,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if responses_api_provider_config is None:

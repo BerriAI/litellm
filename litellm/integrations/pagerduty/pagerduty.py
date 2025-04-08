@@ -55,7 +55,7 @@ class PagerDutyAlerting(SlackAlerting):
 
         self.api_key: str = _api_key
         alerting_args = alerting_args or {}
-        self.alerting_args: AlertingConfig = AlertingConfig(
+        self.alerting_args: AlertingConfig = AlertingConfig(  # type: ignore
             failure_threshold=alerting_args.get(
                 "failure_threshold", PAGERDUTY_DEFAULT_FAILURE_THRESHOLD
             ),
@@ -64,7 +64,8 @@ class PagerDutyAlerting(SlackAlerting):
                 PAGERDUTY_DEFAULT_FAILURE_THRESHOLD_WINDOW_SECONDS,
             ),
             hanging_threshold_seconds=alerting_args.get(
-                "hanging_threshold_seconds", PAGERDUTY_DEFAULT_HANGING_THRESHOLD_SECONDS
+                "hanging_threshold_seconds",
+                PAGERDUTY_DEFAULT_HANGING_THRESHOLD_SECONDS,
             ),
             hanging_threshold_window_seconds=alerting_args.get(
                 "hanging_threshold_window_seconds",
