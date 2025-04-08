@@ -39,6 +39,9 @@ from litellm.proxy.common_utils.admin_ui_utils import (
     admin_ui_disabled,
     show_missing_vars_in_env,
 )
+from litellm.proxy.common_utils.html_forms.jwt_display_template import (
+    jwt_display_template,
+)
 from litellm.proxy.common_utils.html_forms.ui_login import html_form
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.sso_helper_utils import (
@@ -977,6 +980,10 @@ async def debug_sso_callback(request: Request):
     """
     Returns the OpenID object returned by the SSO provider
     """
+    import json
+
+    from fastapi.responses import HTMLResponse
+
     from litellm.proxy.proxy_server import jwt_handler
 
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
@@ -1011,4 +1018,36 @@ async def debug_sso_callback(request: Request):
             redirect_url=redirect_url,
         )
 
-    return result
+    # If result is None, return a basic error message
+    if result is None:
+        return HTMLResponse(
+            content="<h1>SSO Authentication Failed</h1><p>No data was returned from the SSO provider.</p>",
+            status_code=400,
+        )
+
+    # Convert the OpenID object to a dictionary
+    if hasattr(result, "__dict__"):
+        result_dict = result.__dict__
+    else:
+        result_dict = dict(result)
+
+    # Filter out any None values and convert to JSON serializable format
+    filtered_result = {}
+    for key, value in result_dict.items():
+        if value is not None and not key.startswith("_"):
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                filtered_result[key] = value
+            else:
+                try:
+                    # Try to convert to string or another JSON serializable format
+                    filtered_result[key] = str(value)
+                except:
+                    filtered_result[key] = "Complex value (not displayable)"
+
+    # Replace the placeholder in the template with the actual data
+    html_content = jwt_display_template.replace(
+        "const userData = SSO_DATA;",
+        f"const userData = {json.dumps(filtered_result, indent=2)};",
+    )
+
+    return HTMLResponse(content=html_content)
