@@ -695,6 +695,7 @@ class ChatCompletionToolParamFunctionChunk(TypedDict, total=False):
     name: Required[str]
     description: str
     parameters: dict
+    strict: bool
 
 
 class OpenAIChatCompletionToolParam(TypedDict):

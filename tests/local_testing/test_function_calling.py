@@ -562,8 +562,9 @@ def test_groq_parallel_function_call():
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-3-sonnet-20240229-v1:0",
-        "claude-3-haiku-20240307",
+        # "anthropic.claude-3-sonnet-20240229-v1:0",
+        # "claude-3-haiku-20240307",
+        "databricks/databricks-claude-3-7-sonnet"
     ],
 )
 def test_anthropic_function_call_with_no_schema(model):
