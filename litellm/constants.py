@@ -148,6 +148,7 @@ LITELLM_CHAT_PROVIDERS = [
     "hosted_vllm",
     "lm_studio",
     "galadriel",
+    "bitdeerai",
 ]
 
 
@@ -208,6 +209,7 @@ openai_compatible_endpoints: List = [
     "api.sambanova.ai/v1",
     "api.x.ai/v1",
     "api.galadriel.ai/v1",
+    "https://api-inference.bitdeer.ai/v1",
 ]
 
 
@@ -237,6 +239,7 @@ openai_compatible_providers: List = [
     "hosted_vllm",
     "lm_studio",
     "galadriel",
+    "bitdeerai",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -382,6 +385,7 @@ together_ai_models: List = [
     "WizardLM/WizardLM-70B-V1.0",
 ]  # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
 
+bitdeerai_models: List = []
 
 baseten_models: List = [
     "qvv0xeq",
