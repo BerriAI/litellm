@@ -341,4 +341,21 @@ async def test_extra_body_with_fallback(respx_mock: respx.MockRouter, set_openro
     # Verify the response
     assert response is not None
     assert response.choices[0].message.content == "Hello from mocked response!"
-    
+
+
+def test_creates_new_default_msgs_in_completion(mocker):
+    from openai import OpenAI
+
+    client = OpenAI()
+    mock_create = mocker.patch.object(client.chat.completions.with_raw_response, "create")
+    spy_validate = mocker.spy(litellm.main, "validate_and_fix_openai_messages")
+    litellm.completion(model="gpt-4o-mini", client=client)  # first calling
+    mock_create.assert_called()
+    msgs1 = spy_validate.call_args_list[0][1]["messages"]
+    assert isinstance(msgs1, list)
+    assert msgs1 == []
+    litellm.completion(model="gpt-4o-mini", client=client)  # second calling
+    msgs2 = spy_validate.call_args_list[1][1]["messages"]
+    assert isinstance(msgs2, list)
+    assert msgs2 == []
+    assert msgs1 is not msgs2
