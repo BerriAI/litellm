@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel
 
@@ -7,6 +7,7 @@ class TagBase(BaseModel):
     name: str
     description: Optional[str] = None
     models: Optional[List[str]] = None
+    model_info: Optional[Dict[str, str]] = None  # maps model_id to model_name
 
 
 class TagConfig(TagBase):

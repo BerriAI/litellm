@@ -36,6 +36,18 @@ from litellm.types.tag_management import (
 router = APIRouter()
 
 
+async def _get_model_names(prisma_client, model_ids: list) -> Dict[str, str]:
+    """Helper function to get model names from model IDs"""
+    try:
+        models = await prisma_client.db.litellm_proxymodeltable.find_many(
+            where={"model_id": {"in": model_ids}}
+        )
+        return {model.model_id: model.model_name for model in models}
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error getting model names: {str(e)}")
+        return {}
+
+
 async def _get_tags_config(prisma_client) -> Dict[str, TagConfig]:
     """Helper function to get tags config from db"""
     try:
@@ -46,8 +58,17 @@ async def _get_tags_config(prisma_client) -> Dict[str, TagConfig]:
             return {}
         # Convert from JSON if needed
         if isinstance(tags_config.param_value, str):
-            return json.loads(tags_config.param_value)
-        return tags_config.param_value or {}
+            config_dict = json.loads(tags_config.param_value)
+        else:
+            config_dict = tags_config.param_value or {}
+
+        # For each tag, get the model names
+        for tag_name, tag_config in config_dict.items():
+            if isinstance(tag_config, dict) and tag_config.get("models"):
+                model_info = await _get_model_names(prisma_client, tag_config["models"])
+                tag_config["model_info"] = model_info
+
+        return config_dict
     except Exception:
         return {}
 
@@ -60,9 +81,18 @@ async def _save_tags_config(prisma_client, tags_config: Dict[str, TagConfig]):
         tags_config_dict = {}
         for name, tag in tags_config.items():
             if isinstance(tag, TagConfig):
-                tags_config_dict[name] = tag.model_dump()
+                tag_dict = tag.model_dump()
+                # Remove model_info before saving as it will be dynamically generated
+                if "model_info" in tag_dict:
+                    del tag_dict["model_info"]
+                tags_config_dict[name] = tag_dict
             else:
-                tags_config_dict[name] = tag
+                # If it's already a dict, remove model_info
+                tag_copy = tag.copy()
+                if "model_info" in tag_copy:
+                    del tag_copy["model_info"]
+                tags_config_dict[name] = tag_copy
+
         json_tags_config = json.dumps(tags_config_dict, default=str)
         verbose_proxy_logger.debug(f"JSON tags config: {json_tags_config}")
         await prisma_client.db.litellm_config.upsert(
@@ -136,7 +166,14 @@ async def new_tag(
                     tag=tag.name,
                 )
 
-        return {"message": f"Tag {tag.name} created successfully"}
+        # Get model names for response
+        model_info = await _get_model_names(prisma_client, tag.models or [])
+        tags_config[tag.name].model_info = model_info
+
+        return {
+            "message": f"Tag {tag.name} created successfully",
+            "tag": tags_config[tag.name],
+        }
     except Exception as e:
         verbose_proxy_logger.exception(f"Error creating tag: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -206,10 +243,18 @@ async def update_tag(
             }
         )
         tags_config[tag.name] = TagConfig(**tag_config_dict)
+
         # Save updated config
         await _save_tags_config(prisma_client, tags_config)
 
-        return {"message": f"Tag {tag.name} updated successfully"}
+        # Get model names for response
+        model_info = await _get_model_names(prisma_client, tag.models or [])
+        tags_config[tag.name].model_info = model_info
+
+        return {
+            "message": f"Tag {tag.name} updated successfully",
+            "tag": tags_config[tag.name],
+        }
     except Exception as e:
         verbose_proxy_logger.exception(f"Error updating tag: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -153,9 +153,9 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({
                       mode="multiple"
                       placeholder="Select LLMs"
                     >
-                      {userModels.map((model) => (
-                        <Select2.Option key={model} value={model}>
-                          {getModelDisplayName(model)}
+                      {userModels.map((modelId) => (
+                        <Select2.Option key={modelId} value={modelId}>
+                          {getModelDisplayName(modelId)}
                         </Select2.Option>
                       ))}
                     </Select2>
@@ -183,11 +183,17 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({
                     <div>
                       <Text className="font-medium">Allowed LLMs</Text>
                       <div className="flex flex-wrap gap-2 mt-2">
-                        {tagDetails.models.map((llm) => (
-                          <Badge key={llm} color="blue">
-                            {llm}
-                          </Badge>
-                        ))}
+                        {tagDetails.models.length === 0 ? (
+                          <Badge color="red">All Models</Badge>
+                        ) : (
+                          tagDetails.models.map((modelId) => (
+                            <Badge key={modelId} color="blue">
+                              <Tooltip title={`ID: ${modelId}`}>
+                                {tagDetails.model_info?.[modelId] || modelId}
+                              </Tooltip>
+                            </Badge>
+                          ))
+                        )}
                       </div>
                     </div>
                     <div>

@@ -94,18 +94,18 @@ const TagTable: React.FC<TagTableProps> = ({
                 All Models
               </Badge>
             ) : (
-              tag?.models?.map((model) => (
+              tag?.models?.map((modelId) => (
                 <Badge
-                  key={model}
+                  key={modelId}
                   size="xs"
                   className="mb-1"
                   color="blue"
                 >
-                  <Text>
-                    {model.length > 30
-                      ? `${model.slice(0, 30)}...`
-                      : model}
-                  </Text>
+                  <Tooltip title={`ID: ${modelId}`}>
+                    <Text>
+                      {tag.model_info?.[modelId] || modelId}
+                    </Text>
+                  </Tooltip>
                 </Badge>
               ))
             )}
