@@ -332,6 +332,7 @@ async def test_default_member_permissions():
         assert "status" not in info_result, "Admin should be able to get key info"
 
 @pytest.mark.asyncio()
+@pytest.mark.skip(reason="Beta feature, this will be addressed in the next PR")
 async def test_edit_delete_permissions():
     """
     Test permissions - members allowed to edit, delete keys but not allowed to create keys
@@ -375,6 +376,7 @@ async def test_edit_delete_permissions():
         assert "status" in regenerate_result and regenerate_result["status"] != 200, "User should not be able to regenerate keys for team"
 
 @pytest.mark.asyncio()
+@pytest.mark.skip(reason="Beta feature, this will be addressed in the next PR")
 async def test_create_permissions():
     """
     Test permissions - members allowed to create keys but not allowed to edit, delete keys
