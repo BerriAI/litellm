@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+from typing import Literal, Optional, get_type_hints
 
 import litellm
 from litellm import LlmProviders
@@ -31,9 +31,16 @@ def get_supported_openai_params(  # noqa: PLR0915
         except BadRequestError:
             return None
 
-    provider_config = litellm.ProviderConfigManager.get_provider_chat_config(
-        model=model, provider=LlmProviders(custom_llm_provider)
-    )
+    if custom_llm_provider in get_type_hints(LlmProviders).values():
+        provider_config = litellm.ProviderConfigManager.get_provider_chat_config(
+            model=model, provider=LlmProviders(custom_llm_provider)
+        )
+    elif custom_llm_provider.split("/")[0] in get_type_hints(LlmProviders).values():
+        provider_config = litellm.ProviderConfigManager.get_provider_chat_config(
+            model=model, provider=LlmProviders(custom_llm_provider.split("/")[0])
+        )
+    else:
+        provider_config = None
 
     if provider_config and request_type == "chat_completion":
         verbose_logger.info(
