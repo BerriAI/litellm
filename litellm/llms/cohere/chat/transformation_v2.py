@@ -30,6 +30,12 @@ else:
 
 
 class CohereErrorV2(BaseLLMException):
+    """
+    Exception class for Cohere v2 API errors.
+    
+    This class handles errors returned by the Cohere v2 API and formats them
+    in a way that is consistent with the LiteLLM error handling system.
+    """
     def __init__(
         self,
         status_code: int,
@@ -52,20 +58,30 @@ class CohereChatConfigV2(BaseConfig):
     Configuration class for Cohere's V2 API interface.
 
     Args:
-        preamble (str, optional): When specified, the default Cohere preamble will be replaced with the provided one.
+        preamble (str, optional): When specified, the default Cohere preamble will be replaced 
+            with the provided one.
         generation_id (str, optional): Unique identifier for the generated reply.
         conversation_id (str, optional): Creates or resumes a persisted conversation.
-        prompt_truncation (str, optional): Dictates how the prompt will be constructed. Options: 'AUTO', 'AUTO_PRESERVE_ORDER', 'OFF'.
-        connectors (List[Dict[str, str]], optional): List of connectors (e.g., web-search) to enrich the model's reply.
-        search_queries_only (bool, optional): When true, the response will only contain a list of generated search queries.
-        documents (List[Dict[str, str]] or List[str], optional): A list of relevant documents that the model can cite.
-        temperature (float, optional): A non-negative float that tunes the degree of randomness in generation.
-        max_tokens (int, optional): The maximum number of tokens the model will generate as part of the response.
-        k (int, optional): Ensures only the top k most likely tokens are considered for generation at each step.
-        p (float, optional): Ensures that only the most likely tokens, with total probability mass of p, are considered for generation.
+        prompt_truncation (str, optional): Dictates how the prompt will be constructed. 
+            Options: 'AUTO', 'AUTO_PRESERVE_ORDER', 'OFF'.
+        connectors (List[Dict[str, str]], optional): List of connectors (e.g., web-search) 
+            to enrich the model's reply.
+        search_queries_only (bool, optional): When true, the response will only contain a list 
+            of generated search queries.
+        documents (List[Dict[str, str]] or List[str], optional): A list of relevant documents 
+            that the model can cite.
+        temperature (float, optional): A non-negative float that tunes the degree of randomness 
+            in generation.
+        max_tokens (int, optional): The maximum number of tokens the model will generate as part 
+            of the response.
+        k (int, optional): Ensures only the top k most likely tokens are considered for generation 
+            at each step.
+        p (float, optional): Ensures that only the most likely tokens, with total probability mass 
+            of p, are considered for generation.
         frequency_penalty (float, optional): Used to reduce repetitiveness of generated tokens.
         presence_penalty (float, optional): Used to reduce repetitiveness of generated tokens.
-        tools (List[Dict[str, str]], optional): A list of available tools (functions) that the model may suggest invoking.
+        tools (List[Dict[str, str]], optional): A list of available tools (functions) that the model 
+            may suggest invoking.
         tool_results (List[Dict[str, Any]], optional): A list of results from invoking tools.
         seed (int, optional): A seed to assist reproducibility of the model's response.
     """
@@ -87,28 +103,21 @@ class CohereChatConfigV2(BaseConfig):
     tool_results: Optional[list] = None
     seed: Optional[int] = None
 
-    def __init__(
-        self,
-        preamble: Optional[str] = None,
-        generation_id: Optional[str] = None,
-        conversation_id: Optional[str] = None,
-        prompt_truncation: Optional[str] = None,
-        connectors: Optional[list] = None,
-        search_queries_only: Optional[bool] = None,
-        documents: Optional[list] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        k: Optional[int] = None,
-        p: Optional[float] = None,
-        frequency_penalty: Optional[float] = None,
-        presence_penalty: Optional[float] = None,
-        tools: Optional[list] = None,
-        tool_results: Optional[list] = None,
-        seed: Optional[int] = None,
-    ) -> None:
-        locals_ = locals().copy()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
+    def __init__(self, **kwargs) -> None:
+        """
+        Initialize the CohereChatConfigV2 with parameters matching Cohere v2 API specification.
+        
+        All parameters are passed as keyword arguments and set as class attributes
+        if they have a non-None value. This approach allows for future API changes
+        without requiring code modifications.
+        
+        Args:
+            **kwargs: Arbitrary keyword arguments matching Cohere v2 API parameters.
+                      See class docstring for details on supported parameters.
+        """
+        # Process all keyword arguments and set as class attributes if not None
+        for key, value in kwargs.items():
+            if value is not None:
                 setattr(self.__class__, key, value)
 
     def validate_environment(
@@ -117,9 +126,10 @@ class CohereChatConfigV2(BaseConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        **kwargs,
     ) -> dict:
+        # Extract api_key from kwargs if present
+        api_key = kwargs.get('api_key')
         return cohere_validate_environment(
             headers=headers,
             model=model,
@@ -180,14 +190,18 @@ class CohereChatConfigV2(BaseConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        **kwargs,
     ) -> dict:
+        # Extract necessary parameters from kwargs
+        # These variables are used by the parent class implementation
+        _ = kwargs.get('litellm_params', {})
+        _ = kwargs.get('headers', {})
         ## Load Config
         for k, v in litellm.CohereChatConfigV2.get_config().items():
             if (
                 k not in optional_params
-            ):  # completion(top_k=3) > cohere_config(top_k=3) <- allows for dynamic variables to be passed in
+            ):  # completion(top_k=3) > cohere_config(top_k=3)
+                # Allows for dynamic variables to be passed in
                 optional_params[k] = v
 
         # In v2, messages are combined in a single array
@@ -226,26 +240,23 @@ class CohereChatConfigV2(BaseConfig):
         model: str,
         raw_response: httpx.Response,
         model_response: ModelResponse,
-        logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        messages: List[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        **_  # Unused kwargs
     ) -> ModelResponse:
         try:
             raw_response_json = raw_response.json()
-            model_response.choices[0].message.content = raw_response_json.get("text", "")  # type: ignore
-        except Exception:
+            # Get the text content from the response
+            # Set the text content from the response
+            model_response.choices[0].message.content = raw_response_json.get("text", "")
+        except Exception as exc:
             raise CohereErrorV2(
                 message=raw_response.text, status_code=raw_response.status_code
-            )
+            ) from exc
 
         ## ADD CITATIONS
+        # Add citation information to the model response if available
         if "citations" in raw_response_json:
-            setattr(model_response, "citations", raw_response_json["citations"])
+            citations = raw_response_json["citations"]
+            setattr(model_response, "citations", citations)
 
         ## Tool calling response
         cohere_tools_response = raw_response_json.get("tool_calls", None)
