@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from litellm.caching import DualCache
 from litellm.proxy._types import (
