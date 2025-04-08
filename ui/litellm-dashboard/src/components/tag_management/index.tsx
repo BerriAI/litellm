@@ -39,18 +39,13 @@ import NumericalInput from "../shared/numerical_input";
 import TagInfoView from "./tag_info";
 import { fetchUserModels } from "../create_key_button";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+import { tagCreateCall, tagListCall, tagDeleteCall } from "../networking";
+import { Tag } from "./types";
 
 interface TagProps {
   accessToken: string | null;
   userID: string | null;
   userRole: string | null;
-}
-
-interface Tag {
-  name: string;
-  description?: string;
-  allowed_llms: string[];
-  created_at: string;
 }
 
 const TagManagement: React.FC<TagProps> = ({
@@ -68,17 +63,36 @@ const TagManagement: React.FC<TagProps> = ({
   const [form] = Form.useForm();
   const [userModels, setUserModels] = useState<string[]>([]);
 
+  const fetchTags = async () => {
+    if (!accessToken) return;
+    try {
+      const response = await tagListCall(accessToken);
+      console.log("List tags response:", response);
+      setTags(Object.values(response));
+    } catch (error) {
+      console.error("Error fetching tags:", error);
+      message.error("Error fetching tags: " + error);
+    }
+  };
+
   const handleRefreshClick = () => {
+    fetchTags();
     const currentDate = new Date();
     setLastRefreshed(currentDate.toLocaleString());
   };
 
   const handleCreate = async (formValues: any) => {
+    if (!accessToken) return;
     try {
-      // TODO: Implement tag creation API call
+      await tagCreateCall(accessToken, {
+        name: formValues.tag_name,
+        description: formValues.description,
+        models: formValues.allowed_llms,
+      });
       message.success("Tag created successfully");
       setIsCreateModalVisible(false);
       form.resetFields();
+      fetchTags();
     } catch (error) {
       console.error("Error creating tag:", error);
       message.error("Error creating tag: " + error);
@@ -91,9 +105,11 @@ const TagManagement: React.FC<TagProps> = ({
   };
 
   const confirmDelete = async () => {
+    if (!accessToken || !tagToDelete) return;
     try {
-      // TODO: Implement tag deletion API call
+      await tagDeleteCall(accessToken, tagToDelete);
       message.success("Tag deleted successfully");
+      fetchTags();
     } catch (error) {
       console.error("Error deleting tag:", error);
       message.error("Error deleting tag: " + error);
@@ -108,25 +124,9 @@ const TagManagement: React.FC<TagProps> = ({
     }
   }, [accessToken, userID, userRole]);
 
-  // Mock data for demonstration
-  const mockTags: Tag[] = [
-    {
-      name: "PII",
-      description: "Personally Identifiable Information",
-      allowed_llms: ["Claude 3 Opus", "GPT-4"],
-      created_at: "2024-03-15",
-    },
-    {
-      name: "Financial",
-      description: "Financial data and transactions",
-      allowed_llms: ["Claude 3 Opus"],
-      created_at: "2024-03-14",
-    }
-  ];
-
   useEffect(() => {
-    setTags(mockTags);
-  }, [lastRefreshed]);
+    fetchTags();
+  }, [accessToken]);
 
   return (
     <div className="w-full mx-4 h-[75vh]">
@@ -177,7 +177,7 @@ const TagManagement: React.FC<TagProps> = ({
                         </TableRow>
                       </TableHead>
                       <TableBody>
-                        {tags.map((tag) => (
+                        {Object.values(tags).map((tag) => (
                           <TableRow key={tag.name}>
                             <TableCell>
                               <Button
@@ -192,7 +192,7 @@ const TagManagement: React.FC<TagProps> = ({
                             <TableCell>{tag.description || "-"}</TableCell>
                             <TableCell>
                               <div className="flex flex-wrap gap-1">
-                                {tag.allowed_llms.map((llm) => (
+                                {tag?.models?.map((llm) => (
                                   <Badge
                                     key={llm}
                                     size="xs"

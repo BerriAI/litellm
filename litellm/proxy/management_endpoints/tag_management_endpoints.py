@@ -20,6 +20,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.tag_management import (
+    TagConfig,
     TagDeleteRequest,
     TagInfoRequest,
     TagNewRequest,
@@ -29,7 +30,7 @@ from litellm.types.tag_management import (
 router = APIRouter()
 
 
-async def _get_tags_config(prisma_client) -> Dict[str, Any]:
+async def _get_tags_config(prisma_client) -> Dict[str, TagConfig]:
     """Helper function to get tags config from db"""
     try:
         tags_config = await prisma_client.db.litellm_config.find_unique(
@@ -45,7 +46,7 @@ async def _get_tags_config(prisma_client) -> Dict[str, Any]:
         return {}
 
 
-async def _save_tags_config(prisma_client, tags_config: Dict[str, Any]):
+async def _save_tags_config(prisma_client, tags_config: Dict[str, TagConfig]):
     """Helper function to save tags config to db"""
     try:
         verbose_proxy_logger.debug(f"Saving tags config: {tags_config}")
@@ -99,16 +100,20 @@ async def new_tag(
             )
 
         # Add new tag
-        tags_config[tag.name] = {
-            "description": tag.description,
-            "models": tag.models,
-            "created_at": str(datetime.datetime.now()),
-            "updated_at": str(datetime.datetime.now()),
-            "created_by": user_api_key_dict.user_id,
-        }
+        tags_config[tag.name] = TagConfig(
+            name=tag.name,
+            description=tag.description,
+            models=tag.models,
+            created_at=str(datetime.datetime.now()),
+            updated_at=str(datetime.datetime.now()),
+            created_by=user_api_key_dict.user_id,
+        )
 
         # Save updated config
-        await _save_tags_config(prisma_client, tags_config)
+        await _save_tags_config(
+            prisma_client=prisma_client,
+            tags_config=tags_config,
+        )
 
         return {"message": f"Tag {tag.name} created successfully"}
     except Exception as e:
@@ -147,7 +152,8 @@ async def update_tag(
             raise HTTPException(status_code=404, detail=f"Tag {tag.name} not found")
 
         # Update tag
-        tags_config[tag.name].update(
+        tag_config_dict = dict(tags_config[tag.name])
+        tag_config_dict.update(
             {
                 "description": tag.description,
                 "models": tag.models,
@@ -155,7 +161,7 @@ async def update_tag(
                 "updated_by": user_api_key_dict.user_id,
             }
         )
-
+        tags_config[tag.name] = TagConfig(**tag_config_dict)
         # Save updated config
         await _save_tags_config(prisma_client, tags_config)
 
@@ -221,7 +227,8 @@ async def list_tags(
 
     try:
         tags_config = await _get_tags_config(prisma_client)
-        return tags_config
+        list_of_tags = list(tags_config.values())
+        return list_of_tags
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

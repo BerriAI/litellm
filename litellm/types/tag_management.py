@@ -9,6 +9,12 @@ class TagBase(BaseModel):
     models: Optional[List[str]] = None
 
 
+class TagConfig(TagBase):
+    created_at: str
+    updated_at: str
+    created_by: Optional[str] = None
+
+
 class TagNewRequest(TagBase):
     pass
 

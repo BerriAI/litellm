@@ -21,6 +21,8 @@ import {
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { fetchUserModels } from "../create_key_button";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+import { tagInfoCall, tagUpdateCall } from "../networking";
+import { Tag, TagInfoResponse } from "./types";
 
 interface TagInfoViewProps {
   tagId: string;
@@ -28,14 +30,6 @@ interface TagInfoViewProps {
   accessToken: string | null;
   is_admin: boolean;
   editTag: boolean;
-}
-
-interface TagDetails {
-  name: string;
-  description?: string;  // Made optional
-  allowed_llms: string[];
-  created_at: string;
-  updated_at: string;
 }
 
 const TagInfoView: React.FC<TagInfoViewProps> = ({
@@ -46,26 +40,34 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({
   editTag,
 }) => {
   const [form] = Form.useForm();
-  const [tagDetails, setTagDetails] = useState<TagDetails | null>(null);
+  const [tagDetails, setTagDetails] = useState<Tag | null>(null);
   const [isEditing, setIsEditing] = useState<boolean>(editTag);
   const [userModels, setUserModels] = useState<string[]>([]);
 
-  // Mock data for demonstration
-  const mockTagDetails: TagDetails = {
-    name: "PII",
-    description: "Personally Identifiable Information",
-    allowed_llms: ["Claude 3 Opus", "GPT-4"],
-    created_at: "2024-03-15",
-    updated_at: "2024-03-15",
+  const fetchTagDetails = async () => {
+    if (!accessToken) return;
+    try {
+      const response = await tagInfoCall(accessToken, [tagId]);
+      const tagData = response[tagId];
+      if (tagData) {
+        setTagDetails(tagData);
+        if (editTag) {
+          form.setFieldsValue({
+            name: tagData.name,
+            description: tagData.description,
+            models: tagData.models,
+          });
+        }
+      }
+    } catch (error) {
+      console.error("Error fetching tag details:", error);
+      message.error("Error fetching tag details: " + error);
+    }
   };
 
   useEffect(() => {
-    // TODO: Implement API call to fetch tag details
-    setTagDetails(mockTagDetails);
-    if (editTag) {
-      form.setFieldsValue(mockTagDetails);
-    }
-  }, [tagId]);
+    fetchTagDetails();
+  }, [tagId, accessToken]);
 
   useEffect(() => {
     if (accessToken) {
@@ -76,10 +78,16 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({
   }, [accessToken]);
 
   const handleSave = async (values: any) => {
+    if (!accessToken) return;
     try {
-      // TODO: Implement API call to update tag
+      await tagUpdateCall(accessToken, {
+        name: values.name,
+        description: values.description,
+        models: values.models,
+      });
       message.success("Tag updated successfully");
       setIsEditing(false);
+      fetchTagDetails();
     } catch (error) {
       console.error("Error updating tag:", error);
       message.error("Error updating tag: " + error);
@@ -139,7 +147,7 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({
                         </Tooltip>
                       </span>
                     }
-                    name="allowed_llms"
+                    name="models"
                   >
                     <Select2
                       mode="multiple"
@@ -175,7 +183,7 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({
                     <div>
                       <Text className="font-medium">Allowed LLMs</Text>
                       <div className="flex flex-wrap gap-2 mt-2">
-                        {tagDetails.allowed_llms.map((llm) => (
+                        {tagDetails.models.map((llm) => (
                           <Badge key={llm} color="blue">
                             {llm}
                           </Badge>
@@ -184,11 +192,11 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({
                     </div>
                     <div>
                       <Text className="font-medium">Created</Text>
-                      <Text>{new Date(tagDetails.created_at).toLocaleString()}</Text>
+                      <Text>{tagDetails.created_at ? new Date(tagDetails.created_at).toLocaleString() : "-"}</Text>
                     </div>
                     <div>
                       <Text className="font-medium">Last Updated</Text>
-                      <Text>{new Date(tagDetails.updated_at).toLocaleString()}</Text>
+                      <Text>{tagDetails.updated_at ? new Date(tagDetails.updated_at).toLocaleString() : "-"}</Text>
                     </div>
                   </div>
                 </Card>
