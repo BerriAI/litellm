@@ -80,7 +80,7 @@ To track spend and usage for each Open WebUI user, configure both Open WebUI and
 
 1. **Enable User Info Headers in Open WebUI**
    
-  Set the following environment variable to enable user information in request headers:
+  Set the following environment variable for Open WebUI to enable user information in request headers:
   ```dotenv
   ENABLE_FORWARD_USER_INFO_HEADERS=True
   ```
@@ -89,7 +89,7 @@ To track spend and usage for each Open WebUI user, configure both Open WebUI and
 
 2. **Configure LiteLLM to Parse User Headers**
    
-  Add the following to your LiteLLM config to specify a header to use for user tracking:
+  Add the following to your LiteLLM `config.yaml` to specify a header to use for user tracking:
 
   ```yaml
   general_settings:
@@ -99,7 +99,12 @@ To track spend and usage for each Open WebUI user, configure both Open WebUI and
   <details>
   <summary>ⓘ Available tracking options</summary>
 
-  You may specify `X-OpenWebUI-User-Email` or even `X-OpenWebUI-User-Name` for `user_header_name` to track users by their email or user name, which may offer easier matching between these accounts.
+  You can use any of the following headers for `user_header_name`:
+  - `X-OpenWebUI-User-Id`
+  - `X-OpenWebUI-User-Email`
+  - `X-OpenWebUI-User-Name`
+  
+  These may offer better readability and easier mental attribution when hosting for a small group of users that you know well.
 
   Choose based on your needs, but note that in Open WebUI: 
   - Users can modify their own usernames
