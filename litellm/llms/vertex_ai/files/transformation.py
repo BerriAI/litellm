@@ -127,6 +127,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         """
         extracted_file_data_content = extracted_file_data.get("content")
 
+        if extracted_file_data_content is None:
+            raise ValueError("file content is required")
+
         if purpose == "batch":
             ## 1. If jsonl, check if there's a model name
             file_content = self._get_content_from_openai_file(
