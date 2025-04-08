@@ -139,6 +139,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.proxy._experimental.mcp_server.server import router as mcp_router
 from litellm.proxy._experimental.mcp_server.tool_registry import (
@@ -387,6 +388,7 @@ global_max_parallel_request_retries_env: Optional[str] = os.getenv(
     "LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES"
 )
 proxy_state = ProxyState()
+SENSITIVE_DATA_MASKER = SensitiveDataMasker()
 if global_max_parallel_request_retries_env is None:
     global_max_parallel_request_retries: int = 3
 else:
@@ -1397,7 +1399,9 @@ class ProxyConfig:
         team_config: dict = {}
         for team in all_teams_config:
             if "team_id" not in team:
-                raise Exception(f"team_id missing from team: {team}")
+                raise Exception(
+                    f"team_id missing from team: {SENSITIVE_DATA_MASKER.mask_dict(team)}"
+                )
             if team_id == team["team_id"]:
                 team_config = team
                 break
