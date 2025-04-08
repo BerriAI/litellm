@@ -778,7 +778,7 @@ def mock_completion(
 def completion(  # type: ignore # noqa: PLR0915
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
-    messages: List = [],
+    messages: Optional[List[Any]] = None,
     timeout: Optional[Union[float, str, httpx.Timeout]] = None,
     temperature: Optional[float] = None,
     top_p: Optional[float] = None,
@@ -822,9 +822,9 @@ def completion(  # type: ignore # noqa: PLR0915
     Perform a completion() using any of litellm supported llms (example gpt-4, gpt-3.5-turbo, claude-2, command-nightly)
     Parameters:
         model (str): The name of the language model to use for text completion. see all supported LLMs: https://docs.litellm.ai/docs/providers/
-        messages (List): A list of message objects representing the conversation context (default is an empty list).
 
         OPTIONAL PARAMS
+        messages (List, optional): A list of message objects representing the conversation context (default is an empty list).
         functions (List, optional): A list of functions to apply to the conversation messages (default is an empty list).
         function_call (str, optional): The name of the function to call within the conversation (default is an empty string).
         temperature (float, optional): The temperature parameter for controlling the randomness of the output (default is 1.0).
@@ -867,7 +867,7 @@ def completion(  # type: ignore # noqa: PLR0915
     if model is None:
         raise ValueError("model param not passed in.")
     # validate messages
-    messages = validate_and_fix_openai_messages(messages=messages)
+    messages = validate_and_fix_openai_messages(messages=messages if messages is not None else [])
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
     ######### unpacking kwargs #####################
