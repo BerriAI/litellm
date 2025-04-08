@@ -3530,7 +3530,6 @@ async def test_completion_bedrock_httpx_models(sync_mode, model):
                 messages=[{"role": "user", "content": "Hey! how's it going?"}],
                 temperature=0.2,
                 max_tokens=200,
-                stop=["stop sequence"],
             )
 
             assert isinstance(response, litellm.ModelResponse)
@@ -3542,7 +3541,6 @@ async def test_completion_bedrock_httpx_models(sync_mode, model):
                 messages=[{"role": "user", "content": "Hey! how's it going?"}],
                 temperature=0.2,
                 max_tokens=100,
-                stop=["stop sequence"],
             )
 
             assert isinstance(response, litellm.ModelResponse)
