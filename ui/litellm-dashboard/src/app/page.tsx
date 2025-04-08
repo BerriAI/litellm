@@ -4,13 +4,15 @@ import React, { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-
+import { defaultOrg } from "@/components/common_components/default_org";
+import { KeyResponse, Team } from "@/components/key_team_helpers/key_list";
 import Navbar from "@/components/navbar";
 import UserDashboard from "@/components/user_dashboard";
 import ModelDashboard from "@/components/model_dashboard";
 import ViewUserDashboard from "@/components/view_users";
 import Teams from "@/components/teams";
 import Organizations from "@/components/organizations";
+import { fetchOrganizations } from "@/components/organizations";
 import AdminPanel from "@/components/admins";
 import Settings from "@/components/settings";
 import GeneralSettings from "@/components/general_settings";
@@ -18,12 +20,20 @@ import PassThroughSettings from "@/components/pass_through_settings";
 import BudgetPanel from "@/components/budgets/budget_panel";
 import SpendLogsTable from "@/components/view_logs";
 import ModelHub from "@/components/model_hub";
+import NewUsagePage from "@/components/new_usage";
 import APIRef from "@/components/api_ref";
 import ChatUI from "@/components/chat_ui";
 import Sidebar from "@/components/leftnav";
 import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
 import { setGlobalLitellmHeaderName } from "@/components/networking";
+import { Organization } from "@/components/networking";
+import GuardrailsPanel from "@/components/guardrails";
+import TransformRequestPanel from "@/components/transform_request";
+import { fetchUserModels } from "@/components/create_key_button";
+import { fetchTeams } from "@/components/common_components/fetch_teams";
+import MCPToolsViewer from "@/components/mcp_tools";
+import TagManagement from "@/components/tag_management";
 
 function getCookie(name: string) {
   const cookieValue = document.cookie
@@ -49,6 +59,8 @@ function formatUserRole(userRole: string) {
       return "Admin";
     case "proxy_admin_viewer":
       return "Admin Viewer";
+    case "org_admin":
+      return "Org Admin";
     case "internal_user":
       return "Internal User";
     case "internal_viewer":
@@ -73,8 +85,10 @@ export default function CreateKeyPage() {
   const [disabledPersonalKeyCreation, setDisabledPersonalKeyCreation] =
     useState(false);
   const [userEmail, setUserEmail] = useState<null | string>(null);
-  const [teams, setTeams] = useState<null | any[]>(null);
+  const [teams, setTeams] = useState<Team[] | null>(null);
   const [keys, setKeys] = useState<null | any[]>(null);
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [userModels, setUserModels] = useState<string[]>([]);
   const [proxySettings, setProxySettings] = useState<ProxySettings>({
     PROXY_BASE_URL: "",
     PROXY_LOGOUT_URL: "",
@@ -165,6 +179,19 @@ export default function CreateKeyPage() {
       }
     }
   }, [token]);
+  
+  useEffect(() => {
+    if (accessToken && userID && userRole) {
+      fetchUserModels(userID, userRole, accessToken, setUserModels);
+    }
+    if (accessToken && userID && userRole) {
+      fetchTeams(accessToken, userID, userRole, null, setTeams);
+    }
+    if (accessToken) {
+      fetchOrganizations(accessToken, setOrganizations);
+    }
+  }, [accessToken, userID, userRole]);
+
 
   return (
     <Suspense fallback={<div>Loading...</div>}>
@@ -181,16 +208,18 @@ export default function CreateKeyPage() {
             setUserEmail={setUserEmail}
             setTeams={setTeams}
             setKeys={setKeys}
+            organizations={organizations}
           />
         ) : (
           <div className="flex flex-col min-h-screen">
             <Navbar
               userID={userID}
               userRole={userRole}
-              userEmail={userEmail}
               premiumUser={premiumUser}
+              userEmail={userEmail}
               setProxySettings={setProxySettings}
               proxySettings={proxySettings}
+              accessToken={accessToken}
             />
             <div className="flex flex-1 overflow-auto">
               <div className="mt-8">
@@ -213,6 +242,7 @@ export default function CreateKeyPage() {
                   setUserEmail={setUserEmail}
                   setTeams={setTeams}
                   setKeys={setKeys}
+                  organizations={organizations}
                 />
               ) : page == "models" ? (
                 <ModelDashboard
@@ -224,6 +254,7 @@ export default function CreateKeyPage() {
                   modelData={modelData}
                   setModelData={setModelData}
                   premiumUser={premiumUser}
+                  teams={teams}
                 />
               ) : page == "llm-playground" ? (
                 <ChatUI
@@ -251,14 +282,14 @@ export default function CreateKeyPage() {
                   accessToken={accessToken}
                   userID={userID}
                   userRole={userRole}
+                  organizations={organizations}
                 />
               ) : page == "organizations" ? (
                 <Organizations
-                  teams={teams}
-                  setTeams={setTeams}
-                  searchParams={searchParams}
+                  organizations={organizations}
+                  setOrganizations={setOrganizations}
+                  userModels={userModels}
                   accessToken={accessToken}
-                  userID={userID}
                   userRole={userRole}
                   premiumUser={premiumUser}
                 />
@@ -281,7 +312,9 @@ export default function CreateKeyPage() {
                 />
               ) : page == "budgets" ? (
                 <BudgetPanel accessToken={accessToken} />
-              ) : page == "general-settings" ? (
+              ) : page == "guardrails" ? (
+                <GuardrailsPanel accessToken={accessToken} />
+              ): page == "general-settings" ? (
                 <GeneralSettings
                   userID={userID}
                   userRole={userRole}
@@ -315,8 +348,28 @@ export default function CreateKeyPage() {
                   userRole={userRole}
                   token={token}
                   accessToken={accessToken}
+                  allTeams={teams as Team[] ?? []}
                 />
-              ) : (
+              ) : page == "mcp-tools" ? (
+                <MCPToolsViewer
+                  accessToken={accessToken}
+                  userRole={userRole}
+                  userID={userID}
+                />
+              ) : page == "tag-management" ? (
+                <TagManagement
+                  accessToken={accessToken}
+                  userRole={userRole}
+                  userID={userID}
+                />
+              ) : page == "new_usage" ? (
+                <NewUsagePage
+                  userID={userID}
+                  userRole={userRole}
+                  accessToken={accessToken}
+                />
+              ) : 
+              (
                 <Usage
                   userID={userID}
                   userRole={userRole}

@@ -156,6 +156,12 @@ def test_get_guardrails_list_response():
     sample_config = [
         {
             "guardrail_name": "test-guard",
+            "litellm_params": {
+                "guardrail": "test-guard",
+                "mode": "pre_call",
+                "api_key": "test-api-key",
+                "api_base": "test-api-base",
+            },
             "guardrail_info": {
                 "params": [
                     {
@@ -188,7 +194,12 @@ def test_get_guardrails_list_response():
     assert len(empty_response.guardrails) == 0
 
     # Test case 3: Missing optional fields
-    minimal_config = [{"guardrail_name": "minimal-guard"}]
+    minimal_config = [
+        {
+            "guardrail_name": "minimal-guard",
+            "litellm_params": {"guardrail": "minimal-guard", "mode": "pre_call"},
+        }
+    ]
     minimal_response = _get_guardrails_list_response(minimal_config)
     assert isinstance(minimal_response, ListGuardrailsResponse)
     assert len(minimal_response.guardrails) == 1

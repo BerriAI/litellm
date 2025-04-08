@@ -34,9 +34,9 @@ from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
     admin_ui_disabled,
-    html_form,
     show_missing_vars_in_env,
 )
+from litellm.proxy.common_utils.html_forms.ui_login import html_form
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.sso_helper_utils import (
     check_is_admin_only_access,
@@ -213,9 +213,9 @@ async def google_login(request: Request):  # noqa: PLR0915
             if state:
                 redirect_params["state"] = state
             elif "okta" in generic_authorization_endpoint:
-                redirect_params["state"] = (
-                    uuid.uuid4().hex
-                )  # set state param for okta - required
+                redirect_params[
+                    "state"
+                ] = uuid.uuid4().hex  # set state param for okta - required
             return await generic_sso.get_login_redirect(**redirect_params)  # type: ignore
     elif ui_username is not None:
         # No Google, Microsoft SSO
@@ -485,7 +485,14 @@ async def auth_callback(request: Request):  # noqa: PLR0915
             redirect_uri=redirect_url,
             allow_insecure_http=True,
         )
-        result = await microsoft_sso.verify_and_process(request)
+        original_msft_result = await microsoft_sso.verify_and_process(
+            request=request,
+            convert_response=False,
+        )
+        result = MicrosoftSSOHandler.openid_from_response(
+            response=original_msft_result,
+            jwt_handler=jwt_handler,
+        )
     elif generic_client_id is not None:
         result = await get_generic_sso_response(
             request=request,
@@ -494,6 +501,7 @@ async def auth_callback(request: Request):  # noqa: PLR0915
             redirect_url=redirect_url,
         )
     # User is Authe'd in - generate key for the UI to access Proxy
+    verbose_proxy_logger.debug(f"SSO callback result: {result}")
     user_email: Optional[str] = getattr(result, "email", None)
     user_id: Optional[str] = getattr(result, "id", None) if result is not None else None
 
@@ -725,9 +733,9 @@ async def insert_sso_user(
         if user_defined_values.get("max_budget") is None:
             user_defined_values["max_budget"] = litellm.max_internal_user_budget
         if user_defined_values.get("budget_duration") is None:
-            user_defined_values["budget_duration"] = (
-                litellm.internal_user_budget_duration
-            )
+            user_defined_values[
+                "budget_duration"
+            ] = litellm.internal_user_budget_duration
 
     if user_defined_values["user_role"] is None:
         user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
@@ -779,3 +787,27 @@ async def get_ui_settings(request: Request):
         ),
         "DISABLE_EXPENSIVE_DB_QUERIES": disable_expensive_db_queries,
     }
+
+
+class MicrosoftSSOHandler:
+    """
+    Handles Microsoft SSO callback response and returns a CustomOpenID object
+    """
+
+    @staticmethod
+    def openid_from_response(
+        response: Optional[dict], jwt_handler: JWTHandler
+    ) -> CustomOpenID:
+        response = response or {}
+        verbose_proxy_logger.debug(f"Microsoft SSO Callback Response: {response}")
+        openid_response = CustomOpenID(
+            email=response.get("mail"),
+            display_name=response.get("displayName"),
+            provider="microsoft",
+            id=response.get("id"),
+            first_name=response.get("givenName"),
+            last_name=response.get("surname"),
+            team_ids=jwt_handler.get_team_ids_from_jwt(cast(dict, response)),
+        )
+        verbose_proxy_logger.debug(f"Microsoft SSO OpenID Response: {openid_response}")
+        return openid_response

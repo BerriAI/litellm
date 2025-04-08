@@ -18,9 +18,7 @@ import pytest
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, headers
-from litellm.proxy.utils import (
-    duration_in_seconds,
-)
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.duration_parser import (
     get_last_day_of_month,
     _extract_from_regex,
@@ -305,6 +303,24 @@ def test_aget_valid_models():
     os.environ = old_environ
 
 
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "anthropic", "xai"])
+def test_get_valid_models_with_custom_llm_provider(custom_llm_provider):
+    from litellm.utils import ProviderConfigManager
+    from litellm.types.utils import LlmProviders
+
+    provider_config = ProviderConfigManager.get_provider_model_info(
+        model=None,
+        provider=LlmProviders(custom_llm_provider),
+    )
+    assert provider_config is not None
+    valid_models = get_valid_models(
+        check_provider_endpoint=True, custom_llm_provider=custom_llm_provider
+    )
+    print(valid_models)
+    assert len(valid_models) > 0
+    assert provider_config.get_models() == valid_models
+
+
 # test_get_valid_models()
 
 
@@ -475,6 +491,25 @@ def test_token_counter():
 def test_supports_function_calling(model, expected_bool):
     try:
         assert litellm.supports_function_calling(model=model) == expected_bool
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize(
+    "model, expected_bool",
+    [
+        ("gpt-4o-mini-search-preview", True),
+        ("openai/gpt-4o-mini-search-preview", True),
+        ("gpt-4o-search-preview", True),
+        ("openai/gpt-4o-search-preview", True),
+        ("groq/deepseek-r1-distill-llama-70b", False),
+        ("groq/llama-3.3-70b-versatile", False),
+        ("codestral/codestral-latest", False),
+    ],
+)
+def test_supports_web_search(model, expected_bool):
+    try:
+        assert litellm.supports_web_search(model=model) == expected_bool
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -721,6 +756,14 @@ def test_duration_in_seconds():
     assert value - expected_duration < 2
 
 
+def test_duration_in_seconds_basic():
+    assert duration_in_seconds(duration="3s") == 3
+    assert duration_in_seconds(duration="3m") == 180
+    assert duration_in_seconds(duration="3h") == 10800
+    assert duration_in_seconds(duration="3d") == 259200
+    assert duration_in_seconds(duration="3w") == 1814400
+
+
 def test_get_llm_provider_ft_models():
     """
     All ft prefixed models should map to OpenAI
@@ -863,6 +906,25 @@ def test_convert_model_response_object():
             e.message
             == '{"type":"error","error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}'
         )
+
+
+@pytest.mark.parametrize(
+    "content, expected_reasoning, expected_content",
+    [
+        (None, None, None),
+        (
+            "<think>I am thinking here</think>The sky is a canvas of blue",
+            "I am thinking here",
+            "The sky is a canvas of blue",
+        ),
+        ("I am a regular response", None, "I am a regular response"),
+    ],
+)
+def test_parse_content_for_reasoning(content, expected_reasoning, expected_content):
+    assert litellm.utils._parse_content_for_reasoning(content) == (
+        expected_reasoning,
+        expected_content,
+    )
 
 
 @pytest.mark.parametrize(
@@ -1074,6 +1136,26 @@ def test_is_base64_encoded_2():
                 {
                     "role": "user",
                     "content": [
+                        {
+                            "type": "file",
+                            "file": {
+                                "file_id": "123",
+                                "file_name": "test.txt",
+                                "file_size": 100,
+                                "file_type": "text/plain",
+                                "file_url": "https://example.com/test.txt",
+                            },
+                        }
+                    ],
+                }
+            ],
+            True,
+        ),
+        (
+            [
+                {
+                    "role": "user",
+                    "content": [
                         {"type": "image_url", "url": "https://example.com/image.png"}
                     ],
                 }
@@ -1140,6 +1222,9 @@ def test_models_by_provider():
     """
     Make sure all providers from model map are in the valid providers list
     """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
     from litellm import models_by_provider
 
     providers = set()
@@ -1850,3 +1935,170 @@ def test_dict_to_response_format_helper():
         "ref_template": "/$defs/{model}",
     }
     _dict_to_response_format_helper(**args)
+
+
+def test_validate_user_messages_invalid_content_type():
+    from litellm.utils import validate_chat_completion_user_messages
+
+    messages = [{"content": [{"type": "invalid_type", "text": "Hello"}]}]
+
+    with pytest.raises(Exception) as e:
+        validate_chat_completion_user_messages(messages)
+
+    assert "Invalid message" in str(e)
+    print(e)
+
+
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.utils import get_applied_guardrails
+from unittest.mock import Mock
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        {
+            "name": "default_on_guardrail",
+            "callbacks": [
+                CustomGuardrail(guardrail_name="test_guardrail", default_on=True)
+            ],
+            "kwargs": {"metadata": {"requester_metadata": {"guardrails": []}}},
+            "expected": ["test_guardrail"],
+        },
+        {
+            "name": "request_specific_guardrail",
+            "callbacks": [
+                CustomGuardrail(guardrail_name="test_guardrail", default_on=False)
+            ],
+            "kwargs": {
+                "metadata": {"requester_metadata": {"guardrails": ["test_guardrail"]}}
+            },
+            "expected": ["test_guardrail"],
+        },
+        {
+            "name": "multiple_guardrails",
+            "callbacks": [
+                CustomGuardrail(guardrail_name="default_guardrail", default_on=True),
+                CustomGuardrail(guardrail_name="request_guardrail", default_on=False),
+            ],
+            "kwargs": {
+                "metadata": {
+                    "requester_metadata": {"guardrails": ["request_guardrail"]}
+                }
+            },
+            "expected": ["default_guardrail", "request_guardrail"],
+        },
+        {
+            "name": "empty_metadata",
+            "callbacks": [
+                CustomGuardrail(guardrail_name="test_guardrail", default_on=False)
+            ],
+            "kwargs": {},
+            "expected": [],
+        },
+        {
+            "name": "none_callback",
+            "callbacks": [
+                None,
+                CustomGuardrail(guardrail_name="test_guardrail", default_on=True),
+            ],
+            "kwargs": {},
+            "expected": ["test_guardrail"],
+        },
+        {
+            "name": "non_guardrail_callback",
+            "callbacks": [
+                Mock(),
+                CustomGuardrail(guardrail_name="test_guardrail", default_on=True),
+            ],
+            "kwargs": {},
+            "expected": ["test_guardrail"],
+        },
+    ],
+)
+def test_get_applied_guardrails(test_case):
+
+    # Setup
+    litellm.callbacks = test_case["callbacks"]
+
+    # Execute
+    result = get_applied_guardrails(test_case["kwargs"])
+
+    # Assert
+    assert sorted(result) == sorted(test_case["expected"])
+
+
+@pytest.mark.parametrize(
+    "endpoint, params, expected_bool",
+    [
+        ("localhost:4000/v1/rerank", ["max_chunks_per_doc"], True),
+        ("localhost:4000/v2/rerank", ["max_chunks_per_doc"], False),
+        ("localhost:4000", ["max_chunks_per_doc"], True),
+        ("localhost:4000/v1/rerank", ["max_tokens_per_doc"], True),
+        ("localhost:4000/v2/rerank", ["max_tokens_per_doc"], False),
+        ("localhost:4000", ["max_tokens_per_doc"], False),
+        (
+            "localhost:4000/v1/rerank",
+            ["max_chunks_per_doc", "max_tokens_per_doc"],
+            True,
+        ),
+        (
+            "localhost:4000/v2/rerank",
+            ["max_chunks_per_doc", "max_tokens_per_doc"],
+            False,
+        ),
+        ("localhost:4000", ["max_chunks_per_doc", "max_tokens_per_doc"], False),
+    ],
+)
+def test_should_use_cohere_v1_client(endpoint, params, expected_bool):
+    assert litellm.utils.should_use_cohere_v1_client(endpoint, params) == expected_bool
+
+
+def test_add_openai_metadata():
+    from litellm.utils import add_openai_metadata
+
+    metadata = {
+        "user_api_key_end_user_id": "123",
+        "hidden_params": {"api_key": "123"},
+        "litellm_parent_otel_span": MagicMock(),
+        "none-val": None,
+        "int-val": 1,
+        "dict-val": {"a": 1, "b": 2},
+    }
+
+    result = add_openai_metadata(metadata)
+
+    assert result == {
+        "user_api_key_end_user_id": "123",
+    }
+
+
+def test_message_object():
+    from litellm.types.utils import Message
+
+    message = Message(content="Hello, world!", role="user")
+    assert message.content == "Hello, world!"
+    assert message.role == "user"
+    assert not hasattr(message, "audio")
+    assert not hasattr(message, "thinking_blocks")
+    assert not hasattr(message, "reasoning_content")
+
+
+def test_delta_object():
+    from litellm.types.utils import Delta
+
+    delta = Delta(content="Hello, world!", role="user")
+    assert delta.content == "Hello, world!"
+    assert delta.role == "user"
+    assert not hasattr(delta, "thinking_blocks")
+    assert not hasattr(delta, "reasoning_content")
+
+
+def test_get_provider_audio_transcription_config():
+    from litellm.utils import ProviderConfigManager
+    from litellm.types.utils import LlmProviders
+
+    for provider in LlmProviders:
+        config = ProviderConfigManager.get_provider_audio_transcription_config(
+            model="whisper-1", provider=provider
+        )

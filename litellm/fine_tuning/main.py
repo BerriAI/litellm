@@ -138,7 +138,6 @@ def create_fine_tuning_job(
 
         # OpenAI
         if custom_llm_provider == "openai":
-
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
                 optional_params.api_base
@@ -183,6 +182,9 @@ def create_fine_tuning_job(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
+                client=kwargs.get(
+                    "client", None
+                ),  # note, when we add this to `GenericLiteLLMParams` it impacts a lot of other tests + linting
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":
@@ -357,7 +359,6 @@ def cancel_fine_tuning_job(
 
         # OpenAI
         if custom_llm_provider == "openai":
-
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
                 optional_params.api_base
@@ -388,6 +389,7 @@ def cancel_fine_tuning_job(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
+                client=kwargs.get("client", None),
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":
@@ -518,7 +520,6 @@ def list_fine_tuning_jobs(
 
         # OpenAI
         if custom_llm_provider == "openai":
-
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
                 optional_params.api_base
@@ -550,6 +551,7 @@ def list_fine_tuning_jobs(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
+                client=kwargs.get("client", None),
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":
@@ -701,6 +703,7 @@ def retrieve_fine_tuning_job(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
+                client=kwargs.get("client", None),
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":

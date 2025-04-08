@@ -3,11 +3,16 @@
 #    On success + failure, log events to Prometheus for litellm / adjacent services (litellm, redis, postgres, llm api providers)
 
 
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 from litellm._logging import print_verbose, verbose_logger
 from litellm.types.integrations.prometheus import LATENCY_BUCKETS
-from litellm.types.services import ServiceLoggerPayload, ServiceTypes
+from litellm.types.services import (
+    DEFAULT_SERVICE_CONFIGS,
+    ServiceLoggerPayload,
+    ServiceMetrics,
+    ServiceTypes,
+)
 
 FAILED_REQUESTS_LABELS = ["error_class", "function_name"]
 
@@ -23,7 +28,8 @@ class PrometheusServicesLogger:
     ):
         try:
             try:
-                from prometheus_client import REGISTRY, Counter, Histogram
+                from prometheus_client import REGISTRY, Counter, Gauge, Histogram
+                from prometheus_client.gc_collector import Collector
             except ImportError:
                 raise Exception(
                     "Missing prometheus_client. Run `pip install prometheus-client`"
@@ -31,36 +37,51 @@ class PrometheusServicesLogger:
 
             self.Histogram = Histogram
             self.Counter = Counter
+            self.Gauge = Gauge
             self.REGISTRY = REGISTRY
 
             verbose_logger.debug("in init prometheus services metrics")
 
-            self.services = [item.value for item in ServiceTypes]
+            self.payload_to_prometheus_map: Dict[
+                str, List[Union[Histogram, Counter, Gauge, Collector]]
+            ] = {}
 
-            self.payload_to_prometheus_map = (
-                {}
-            )  # store the prometheus histogram/counter we need to call for each field in payload
+            for service in ServiceTypes:
+                service_metrics: List[Union[Histogram, Counter, Gauge, Collector]] = []
 
-            for service in self.services:
-                histogram = self.create_histogram(service, type_of_request="latency")
-                counter_failed_request = self.create_counter(
-                    service,
-                    type_of_request="failed_requests",
-                    additional_labels=FAILED_REQUESTS_LABELS,
-                )
-                counter_total_requests = self.create_counter(
-                    service, type_of_request="total_requests"
-                )
-                self.payload_to_prometheus_map[service] = [
-                    histogram,
-                    counter_failed_request,
-                    counter_total_requests,
-                ]
+                metrics_to_initialize = self._get_service_metrics_initialize(service)
 
-            self.prometheus_to_amount_map: dict = (
-                {}
-            )  # the field / value in ServiceLoggerPayload the object needs to be incremented by
+                # Initialize only the configured metrics for each service
+                if ServiceMetrics.HISTOGRAM in metrics_to_initialize:
+                    histogram = self.create_histogram(
+                        service.value, type_of_request="latency"
+                    )
+                    if histogram:
+                        service_metrics.append(histogram)
 
+                if ServiceMetrics.COUNTER in metrics_to_initialize:
+                    counter_failed_request = self.create_counter(
+                        service.value,
+                        type_of_request="failed_requests",
+                        additional_labels=FAILED_REQUESTS_LABELS,
+                    )
+                    if counter_failed_request:
+                        service_metrics.append(counter_failed_request)
+                    counter_total_requests = self.create_counter(
+                        service.value, type_of_request="total_requests"
+                    )
+                    if counter_total_requests:
+                        service_metrics.append(counter_total_requests)
+
+                if ServiceMetrics.GAUGE in metrics_to_initialize:
+                    gauge = self.create_gauge(service.value, type_of_request="size")
+                    if gauge:
+                        service_metrics.append(gauge)
+
+                if service_metrics:
+                    self.payload_to_prometheus_map[service.value] = service_metrics
+
+            self.prometheus_to_amount_map: dict = {}
             ### MOCK TESTING ###
             self.mock_testing = mock_testing
             self.mock_testing_success_calls = 0
@@ -69,6 +90,19 @@ class PrometheusServicesLogger:
         except Exception as e:
             print_verbose(f"Got exception on init prometheus client {str(e)}")
             raise e
+
+    def _get_service_metrics_initialize(
+        self, service: ServiceTypes
+    ) -> List[ServiceMetrics]:
+        DEFAULT_METRICS = [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]
+        if service not in DEFAULT_SERVICE_CONFIGS:
+            return DEFAULT_METRICS
+
+        metrics = DEFAULT_SERVICE_CONFIGS.get(service, {}).get("metrics", [])
+        if not metrics:
+            verbose_logger.debug(f"No metrics found for service {service}")
+            return DEFAULT_METRICS
+        return metrics
 
     def is_metric_registered(self, metric_name) -> bool:
         for metric in self.REGISTRY.collect():
@@ -92,6 +126,15 @@ class PrometheusServicesLogger:
             "Latency for {} service".format(service),
             labelnames=[service],
             buckets=LATENCY_BUCKETS,
+        )
+
+    def create_gauge(self, service: str, type_of_request: str):
+        metric_name = "litellm_{}_{}".format(service, type_of_request)
+        is_registered = self.is_metric_registered(metric_name)
+        if is_registered:
+            return self._get_metric(metric_name)
+        return self.Gauge(
+            metric_name, "Gauge for {} service".format(service), labelnames=[service]
         )
 
     def create_counter(
@@ -119,6 +162,15 @@ class PrometheusServicesLogger:
         assert isinstance(histogram, self.Histogram)
 
         histogram.labels(labels).observe(amount)
+
+    def update_gauge(
+        self,
+        gauge,
+        labels: str,
+        amount: float,
+    ):
+        assert isinstance(gauge, self.Gauge)
+        gauge.labels(labels).set(amount)
 
     def increment_counter(
         self,
@@ -190,6 +242,13 @@ class PrometheusServicesLogger:
                         labels=payload.service.value,
                         amount=1,  # LOG TOTAL REQUESTS TO PROMETHEUS
                     )
+                elif isinstance(obj, self.Gauge):
+                    if payload.event_metadata:
+                        self.update_gauge(
+                            gauge=obj,
+                            labels=payload.event_metadata.get("gauge_labels") or "",
+                            amount=payload.event_metadata.get("gauge_value") or 0,
+                        )
 
     async def async_service_failure_hook(
         self,

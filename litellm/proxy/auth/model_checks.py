@@ -1,5 +1,6 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
+import copy
 from typing import Dict, List, Optional, Set
 
 import litellm
@@ -17,16 +18,8 @@ def _check_wildcard_routing(model: str) -> bool:
     - openai/*
     - *
     """
-    if model == "*":
+    if "*" in model:
         return True
-
-    if "/" in model:
-        llm_provider, potential_wildcard = model.split("/", 1)
-        if (
-            llm_provider in litellm.provider_list and potential_wildcard == "*"
-        ):  # e.g. anthropic/*
-            return True
-
     return False
 
 
@@ -38,7 +31,7 @@ def get_provider_models(provider: str) -> Optional[List[str]]:
         return get_valid_models()
 
     if provider in litellm.models_by_provider:
-        provider_models = litellm.models_by_provider[provider]
+        provider_models = copy.deepcopy(litellm.models_by_provider[provider])
         for idx, _model in enumerate(provider_models):
             if provider not in _model:
                 provider_models[idx] = f"{provider}/{_model}"
@@ -92,7 +85,7 @@ def get_key_models(
 
 
 def get_team_models(
-    user_api_key_dict: UserAPIKeyAuth,
+    team_models: List[str],
     proxy_model_list: List[str],
     model_access_groups: Dict[str, List[str]],
 ) -> List[str]:
@@ -103,10 +96,10 @@ def get_team_models(
     - If model_access_groups is provided, only return models that are in the access groups
     """
     all_models = []
-    if len(user_api_key_dict.team_models) > 0:
-        all_models = user_api_key_dict.team_models
+    if len(team_models) > 0:
+        all_models = team_models
         if SpecialModelNames.all_team_models.value in all_models:
-            all_models = user_api_key_dict.team_models
+            all_models = team_models
         if SpecialModelNames.all_proxy_models.value in all_models:
             all_models = proxy_model_list
 
@@ -156,6 +149,28 @@ def get_complete_model_list(
     return list(unique_models) + all_wildcard_models
 
 
+def get_known_models_from_wildcard(wildcard_model: str) -> List[str]:
+    try:
+        provider, model = wildcard_model.split("/", 1)
+    except ValueError:  # safely fail
+        return []
+    # get all known provider models
+    wildcard_models = get_provider_models(provider=provider)
+    if wildcard_models is None:
+        return []
+    if model == "*":
+        return wildcard_models or []
+    else:
+        model_prefix = model.replace("*", "")
+        filtered_wildcard_models = [
+            wc_model
+            for wc_model in wildcard_models
+            if wc_model.split("/")[1].startswith(model_prefix)
+        ]
+
+        return filtered_wildcard_models
+
+
 def _get_wildcard_models(
     unique_models: Set[str], return_wildcard_routes: Optional[bool] = False
 ) -> List[str]:
@@ -163,15 +178,14 @@ def _get_wildcard_models(
     all_wildcard_models = []
     for model in unique_models:
         if _check_wildcard_routing(model=model):
-
             if (
-                return_wildcard_routes is True
+                return_wildcard_routes
             ):  # will add the wildcard route to the list eg: anthropic/*.
                 all_wildcard_models.append(model)
 
-            provider = model.split("/")[0]
             # get all known provider models
-            wildcard_models = get_provider_models(provider=provider)
+            wildcard_models = get_known_models_from_wildcard(wildcard_model=model)
+
             if wildcard_models is not None:
                 models_to_remove.add(model)
                 all_wildcard_models.extend(wildcard_models)

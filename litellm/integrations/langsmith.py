@@ -75,7 +75,6 @@ class LangsmithLogger(CustomBatchLogger):
         langsmith_project: Optional[str] = None,
         langsmith_base_url: Optional[str] = None,
     ) -> LangsmithCredentialsObject:
-
         _credentials_api_key = langsmith_api_key or os.getenv("LANGSMITH_API_KEY")
         if _credentials_api_key is None:
             raise Exception(
@@ -443,9 +442,9 @@ class LangsmithLogger(CustomBatchLogger):
 
         Otherwise, use the default credentials.
         """
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-            kwargs.get("standard_callback_dynamic_params", None)
-        )
+        standard_callback_dynamic_params: Optional[
+            StandardCallbackDynamicParams
+        ] = kwargs.get("standard_callback_dynamic_params", None)
         if standard_callback_dynamic_params is not None:
             credentials = self.get_credentials_from_env(
                 langsmith_api_key=standard_callback_dynamic_params.get(
@@ -481,7 +480,6 @@ class LangsmithLogger(CustomBatchLogger):
             asyncio.run(self.async_send_batch())
 
     def get_run_by_id(self, run_id):
-
         langsmith_api_key = self.default_credentials["LANGSMITH_API_KEY"]
 
         langsmith_api_base = self.default_credentials["LANGSMITH_BASE_URL"]

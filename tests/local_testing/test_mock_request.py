@@ -175,4 +175,6 @@ def test_router_mock_request_with_mock_timeout_with_fallbacks():
     print(response)
     end_time = time.time()
     assert end_time - start_time >= 3, f"Time taken: {end_time - start_time}"
-    assert "gpt-35-turbo" in response.model, "Model should be azure gpt-35-turbo"
+    assert (
+        "gpt-3.5-turbo-0125" in response.model
+    ), "Model should be azure gpt-3.5-turbo-0125"

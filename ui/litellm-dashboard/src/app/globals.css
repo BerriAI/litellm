@@ -6,6 +6,7 @@
   --foreground-rgb: 0, 0, 0;
   --background-start-rgb: 255, 255, 255;
   --background-end-rgb: 255, 255, 255;
+  --neutral-border: #dcddeb;
 }
 
 /* @media (prefers-color-scheme: dark) {
@@ -30,4 +31,14 @@ body {
   .text-balance {
     text-wrap: balance;
   }
+}
+
+.table-wrapper {
+  overflow-x: scroll;
+  /* max-width: 80%; */
+  margin: 0px 24px;
+}
+
+.custom-border {
+  border: 1px solid var(--neutral-border);
 }

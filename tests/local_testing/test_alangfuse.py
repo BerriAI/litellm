@@ -354,6 +354,7 @@ async def test_langfuse_masked_input_output(langfuse_client):
 
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=12, delay=2)
+@pytest.mark.skip(reason="all e2e langfuse tests now run on test_langfuse_e2e_test.py")
 async def test_aaalangfuse_logging_metadata(langfuse_client):
     """
     Test that creates multiple traces, with a varying number of generations and sets various metadata fields

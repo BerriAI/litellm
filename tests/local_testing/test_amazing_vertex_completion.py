@@ -31,6 +31,7 @@ from litellm import (
     completion,
     completion_cost,
     embedding,
+    image_generation,
 )
 from litellm.llms.vertex_ai.gemini.transformation import (
     _gemini_convert_messages_with_history,
@@ -58,6 +59,7 @@ VERTEX_MODELS_TO_NOT_TEST = [
     "gemini-pro-experimental",
     "gemini-flash-experimental",
     "gemini-1.5-flash-exp-0827",
+    "gemini-2.0-pro-exp-02-05",
     "gemini-pro-flash",
     "gemini-1.5-flash-exp-0827",
     "gemini-2.0-flash-exp",
@@ -451,6 +453,7 @@ async def test_async_vertexai_response():
             or "ultra" in model
             or "002" in model
             or "gemini-2.0-flash-thinking-exp" in model
+            or "gemini-2.0-pro-exp-02-05" in model
         ):
             # our account does not have access to this model
             continue
@@ -497,6 +500,7 @@ async def test_async_vertexai_streaming_response():
             or "ultra" in model
             or "002" in model
             or "gemini-2.0-flash-thinking-exp" in model
+            or "gemini-2.0-pro-exp-02-05" in model
         ):
             # our account does not have access to this model
             continue
@@ -1518,7 +1522,7 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
                 )
         elif resp is not None:
 
-            assert resp.model == model.split("/")[1].split("@")[0]
+            assert resp.model == model.split("/")[1]
 
 
 @pytest.mark.parametrize(
@@ -2174,9 +2178,55 @@ async def test_vertexai_multimodal_embedding_base64image_in_input():
         print("Response:", response)
 
 
-@pytest.mark.skip(
-    reason="new test - works locally running into vertex version issues on ci/cd"
-)
+def test_vertexai_embedding_embedding_latest():
+    try:
+        load_vertex_ai_credentials()
+        litellm.set_verbose = True
+
+        response = embedding(
+            model="vertex_ai/text-embedding-004",
+            input=["hi"],
+            dimensions=1,
+            auto_truncate=True,
+            task_type="RETRIEVAL_QUERY",
+        )
+
+        assert len(response.data[0]["embedding"]) == 1
+        assert response.usage.prompt_tokens > 0
+        print(f"response:", response)
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_vertexai_multimodalembedding_embedding_latest():
+    try:
+        import requests, base64
+
+        load_vertex_ai_credentials()
+        litellm._turn_on_debug()
+
+        response = embedding(
+            model="vertex_ai/multimodalembedding@001",
+            input=["hi"],
+            dimensions=1,
+            auto_truncate=True,
+            task_type="RETRIEVAL_QUERY",
+        )
+
+        print(f"response.usage: {response.usage}")
+        assert response.usage is not None
+        assert response.usage.prompt_tokens_details is not None
+
+        assert response._hidden_params["response_cost"] > 0
+        print(f"response:", response)
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_vertexai_embedding_embedding_latest():
     try:
         load_vertex_ai_credentials()
@@ -2740,7 +2790,7 @@ async def test_partner_models_httpx_ai21():
                 "total_tokens": 194,
             },
             "meta": {"requestDurationMillis": 501},
-            "model": "jamba-1.5",
+            "model": "jamba-1.5-mini@001",
         }
 
     mock_response.json = return_val
@@ -2769,7 +2819,7 @@ async def test_partner_models_httpx_ai21():
         kwargs["data"] = json.loads(kwargs["data"])
 
         assert kwargs["data"] == {
-            "model": "jamba-1.5-mini",
+            "model": "jamba-1.5-mini@001",
             "messages": [
                 {
                     "role": "system",
@@ -3222,3 +3272,254 @@ def test_vertexai_code_gecko():
 
     for chunk in response:
         print(chunk)
+
+
+def vertex_ai_anthropic_thinking_mock_response(*args, **kwargs):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "id": "msg_vrtx_011pL6Np3MKxXL3R8theMRJW",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-3-7-sonnet-20250219",
+        "content": [
+            {
+                "type": "thinking",
+                "thinking": 'This is a very simple and common greeting in programming and computing. "Hello, world!" is often the first program people write when learning a new programming language, where they create a program that outputs this phrase.\n\nI should respond in a friendly way and acknowledge this greeting. I can keep it simple and welcoming.',
+                "signature": "EugBCkYQAhgCIkAqCkezmsp8DG9Jjoc/CD7yXavPXVvP4TAuwjc/ZgHRIgroz5FzAYxic3CnNiW5w2fx/4+1f4ZYVxWJVLmrEA46EgwFsxbpN2jxMxjIzy0aDIAbMy9rW6B5lGVETCIw4r2UW0A7m5Df991SMSMPvHU9VdL8p9S/F2wajLnLVpl5tH89csm4NqnMpxnou61yKlCLldFGIto1Kvit5W1jqn2gx2dGIOyR4YaJ0c8AIFfQa5TIXf+EChVDzhPKLWZ8D/Q3gCGxBx+m/4dLI8HMZA8Ob3iCMI23eBKmh62FCWJGuA==",
+            },
+            {
+                "type": "text",
+                "text": "Hi there! 👋 \n\nIt's nice to meet you! \"Hello, world!\" is such a classic phrase in computing - it's often the first output from someone's very first program.\n\nHow are you doing today? Is there something specific I can help you with?",
+            },
+        ],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 39,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 134,
+        },
+    }
+
+    return mock_response
+
+
+def test_vertex_anthropic_completion():
+    from litellm import completion
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    load_vertex_ai_credentials()
+
+    with patch.object(
+        client, "post", side_effect=vertex_ai_anthropic_thinking_mock_response
+    ):
+        response = completion(
+            model="vertex_ai/claude-3-7-sonnet@20250219",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            vertex_ai_location="us-east5",
+            vertex_ai_project="test-project",
+            thinking={"type": "enabled", "budget_tokens": 1024},
+            client=client,
+        )
+        print(response)
+        assert response.model == "claude-3-7-sonnet@20250219"
+        assert response._hidden_params["response_cost"] is not None
+        assert response._hidden_params["response_cost"] > 0
+
+        assert response.choices[0].message.reasoning_content is not None
+        assert isinstance(response.choices[0].message.reasoning_content, str)
+        assert response.choices[0].message.thinking_blocks is not None
+        assert isinstance(response.choices[0].message.thinking_blocks, list)
+        assert len(response.choices[0].message.thinking_blocks) > 0
+
+
+def test_signed_s3_url_with_format():
+    from litellm import completion
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    load_vertex_ai_credentials()
+
+    args = {
+        "model": "vertex_ai/gemini-2.0-flash-001",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://litellm-logo-aws-marketplace.s3.us-west-2.amazonaws.com/berriai-logo-github.png?response-content-disposition=inline&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Security-Token=IQoJb3JpZ2luX2VjENj%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FwEaCXVzLXdlc3QtMiJGMEQCIHlAy6QneghdEo4Dp4rw%2BHhdInKX4MU3T0hZT1qV3AD%2FAiBGY%2FtfxmBJkj%2BK6%2FxAgek6L3tpOcq6su1mBrj87El%2FCirLAwghEAEaDDg4ODYwMjIyMzQyOCIMzds7lsxAFHHCRHmkKqgDgnsJBaEmmwXBWqzyMMe3BUKsCqfvrYupFGxBREP%2BaEz%2ByLSKiTM3xWzaRz6vrP9T4HSJ97B9wQ3dhUBT22XzdOFsaq49wZapwy9hoPNrMyZ77DIa0MlEbg0uudGOaMAw4NbVEqoERQuZmIMMbNHCeoJsZxKCttRZlTDzU%2FeNNy96ltb%2FuIkX5b3OOYdUaKj%2FUjmPz%2FEufY%2Bn%2FFHawunSYXJwL4pYuBF1IKRtPjqamaYscH%2FrzD7fubGUMqk6hvyGEo%2BLqnVyruQEmVFqAnXyWlpHGqeWazEC7xcsC2lhLO%2FKUouyVML%2FxyYtL4CuKp52qtLWWauAFGnyBZnCHtSL58KLaMTSh7inhoFFIKDN2hymrJ4D9%2Bxv%2FMOzefH5X%2B0pcdJUwyxcwgL3myggRmIYq1L6IL4I%2F54BIU%2FMctJcRXQ8NhQNP2PsaCsXYHHVMXRZxps9v8t9Ciorb0PAaLr0DIGVgEqejSjwbzNTctQf59Rj0GhZ0A6A3nFaq3nL4UvO51aPP6aelN6RnLwHh8fF80iPWII7Oj9PWn9bkON%2F7%2B5k42oPFR0KDTD0yaO%2BBjrlAouRvkyHZnCuLuJdEeqc8%2Fwm4W8SbMiYDzIEPPe2wFR2sH4%2FDlnJRqia9Or00d4N%2BOefBkPv%2Bcdt68r%2FwjeWOrulczzLGjJE%2FGw1Lb9dtGtmupGm2XKOW3geJwXkk1qcr7u5zwy6DNamLJbitB026JFKorRnPajhe5axEDv%2BRu6l1f0eailIrCwZ2iytA94Ni8LTha2GbZvX7fFHcmtyNlgJPpMcELdkOEGTCNBldGck5MFHG27xrVrlR%2F7HZIkKYlImNmsOIjuK7acDiangvVdB6GlmVbzNUKtJ7YJhS2ivwvdDIf8XuaFAkhjRNpewDl0GzPvojK%2BDTizZydyJL%2B20pVkSXptyPwrrHEeiOFWwhszW2iTZij4rlRAoZW6NEdfkWsXrGMbxJTZa3E5URejJbg%2B4QgGtjLrgJhRC1pJGP02GX7VMxVWZzomfC2Hn7WaF44wgcuqjE4HGJfpA2ZLBxde52g%3D%3D&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=ASIA45ZGR4NCKIUOODV3%2F20250305%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20250305T235823Z&X-Amz-Expires=43200&X-Amz-SignedHeaders=host&X-Amz-Signature=71a900a9467eaf3811553500aaf509a10a9e743a8133cfb6a78dcbcbc6da4a05",
+                            "format": "image/jpeg",
+                        },
+                    },
+                    {"type": "text", "text": "Describe this image"},
+                ],
+            }
+        ],
+    }
+    with patch.object(client, "post", new=MagicMock()) as mock_client:
+        try:
+            response = completion(**args, client=client)
+            print(response)
+        except Exception as e:
+            print(e)
+
+        print(mock_client.call_args.kwargs)
+
+        mock_client.assert_called()
+
+        print(mock_client.call_args.kwargs)
+
+        json_str = json.dumps(mock_client.call_args.kwargs["json"])
+        assert "image/jpeg" in json_str
+        assert "image/png" not in json_str
+
+
+def test_gemini_fine_tuned_model_request_consistency():
+    """
+    Assert the same transformation is applied to Fine tuned gemini 2.0 flash and gemini 2.0 flash
+
+    - Request 1: Fine tuned: vertex_ai/gemini/ft-uuid
+    - Request 2: vertex_ai/gemini-2.0-flash-001
+    """
+    litellm.set_verbose = True
+    load_vertex_ai_credentials()
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from unittest.mock import patch, MagicMock
+
+    # Set up the messages
+    messages = [
+        {
+            "role": "system",
+            "content": "Your name is Litellm Bot, you are a helpful assistant",
+        },
+        {
+            "role": "user",
+            "content": "Hello, what is your name and can you tell me the weather?",
+        },
+    ]
+
+    # Define tools
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        }
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+
+    client = HTTPHandler(concurrent_limit=1)
+
+    # First request
+    with patch.object(client, "post", new=MagicMock()) as mock_post_1:
+        try:
+            response_1 = completion(
+                model="vertex_ai/gemini/ft-uuid",
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                client=client,
+            )
+
+        except Exception as e:
+            print(e)
+
+        # Store the request body from the first call
+        first_request_body = mock_post_1.call_args.kwargs["json"]
+        print("first_request_body", first_request_body)
+
+        # Validate correct `model` is added to the request to Vertex AI
+        print("final URL=", mock_post_1.call_args.kwargs["url"])
+        # Validate the request url
+        assert (
+            "publishers/google/models/ft-uuid:generateContent"
+            in mock_post_1.call_args.kwargs["url"]
+        )
+
+    # Second request
+    with patch.object(client, "post", new=MagicMock()) as mock_post_2:
+        try:
+            response_2 = completion(
+                model="vertex_ai/gemini-2.0-flash-001",
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        # Store the request body from the second call
+        second_request_body = mock_post_2.call_args.kwargs["json"]
+        print("second_request_body", second_request_body)
+
+    # Get the diff between the two request bodies
+    # Convert dictionaries to formatted JSON strings
+    import json
+
+    first_json = json.dumps(first_request_body, indent=2).splitlines()
+    second_json = json.dumps(second_request_body, indent=2).splitlines()
+    # Assert there is no difference between the request bodies
+    assert first_json == second_json, "Request bodies should be identical"
+
+
+@pytest.mark.parametrize("provider", ["vertex_ai", "gemini"])
+@pytest.mark.parametrize("route", ["completion", "embedding", "image_generation"])
+def test_litellm_api_base(monkeypatch, provider, route):
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "api_base", "https://litellm.com")
+
+    load_vertex_ai_credentials()
+
+    if route == "image_generation" and provider == "gemini":
+        pytest.skip("Gemini does not support image generation")
+
+    with patch.object(client, "post", new=MagicMock()) as mock_client:
+        try:
+            if route == "completion":
+                response = completion(
+                    model=f"{provider}/gemini-2.0-flash-001",
+                    messages=[{"role": "user", "content": "Hello, world!"}],
+                    client=client,
+                )
+            elif route == "embedding":
+                response = embedding(
+                    model=f"{provider}/gemini-2.0-flash-001",
+                    input=["Hello, world!"],
+                    client=client,
+                )
+            elif route == "image_generation":
+                response = image_generation(
+                    model=f"{provider}/gemini-2.0-flash-001",
+                    prompt="Hello, world!",
+                    client=client,
+                )
+        except Exception as e:
+            print(e)
+
+        mock_client.assert_called()
+        assert mock_client.call_args.kwargs["url"].startswith("https://litellm.com")

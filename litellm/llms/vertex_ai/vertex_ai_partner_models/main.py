@@ -110,7 +110,6 @@ class VertexAIPartnerModels(VertexBase):
                 message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
             )
         try:
-
             vertex_httpx_logic = VertexLLM()
 
             access_token, project_id = vertex_httpx_logic._ensure_access_token(
@@ -160,7 +159,8 @@ class VertexAIPartnerModels(VertexBase):
                 url=default_api_base,
             )
 
-            model = model.split("@")[0]
+            if "codestral" in model or "mistral" in model:
+                model = model.split("@")[0]
 
             if "codestral" in model and litellm_params.get("text_completion") is True:
                 optional_params["model"] = model

@@ -2,7 +2,8 @@
 import collections
 import os
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, List, Optional
+from functools import lru_cache
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -285,7 +286,6 @@ async def get_global_activity(
                 user_api_key_dict, start_date_obj, end_date_obj
             )
         else:
-
             sql_query = """
             SELECT
                 date_trunc('day', "startTime") AS date,
@@ -452,7 +452,6 @@ async def get_global_activity_model(
                 user_api_key_dict, start_date_obj, end_date_obj
             )
         else:
-
             sql_query = """
             SELECT
                 model_group,
@@ -1095,7 +1094,6 @@ async def get_global_spend_report(
                 start_date_obj, end_date_obj, team_id, customer_id, prisma_client
             )
         if group_by == "team":
-
             # first get data from spend logs -> SpendByModelApiKey
             # then read data from "SpendByModelApiKey" to format the response obj
             sql_query = """
@@ -1688,7 +1686,6 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         )
 
     try:
-
         # Convert the date strings to datetime objects
         start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S").replace(
             tzinfo=timezone.utc
@@ -1757,6 +1754,56 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     except Exception as e:
         verbose_proxy_logger.exception(f"Error in ui_view_spend_logs: {e}")
         raise handle_exception_on_proxy(e)
+
+
+@lru_cache(maxsize=128)
+@router.get(
+    "/spend/logs/ui/{request_id}",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def ui_view_request_response_for_request_id(
+    request_id: str,
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing key spend",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view key spend",
+    ),
+):
+    """
+    View request / response for a specific request_id
+
+    - goes through all callbacks, checks if any of them have a @property -> has_request_response_payload
+    - if so, it will return the request and response payload
+    """
+    custom_loggers = (
+        litellm.logging_callback_manager.get_active_additional_logging_utils_from_custom_logger()
+    )
+    start_date_obj: Optional[datetime] = None
+    end_date_obj: Optional[datetime] = None
+    if start_date is not None:
+        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc
+        )
+    if end_date is not None:
+        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc
+        )
+
+    for custom_logger in custom_loggers:
+        payload = await custom_logger.get_request_response_payload(
+            request_id=request_id,
+            start_time_utc=start_date_obj,
+            end_time_utc=end_date_obj,
+        )
+        if payload is not None:
+            return payload
+
+    return None
 
 
 @router.get(
@@ -2109,7 +2156,6 @@ async def global_spend_for_internal_user(
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
     try:
-
         user_id = user_api_key_dict.user_id
         if user_id is None:
             raise ValueError("/global/spend/logs Error: User ID is None")
@@ -2242,7 +2288,6 @@ async def global_spend():
     from litellm.proxy.proxy_server import prisma_client
 
     try:
-
         total_spend = 0.0
 
         if prisma_client is None:
@@ -2747,7 +2792,7 @@ async def ui_get_spend_by_tags(
             spend_date,
             log_count,
             total_spend
-        FROM DailyTagSpend
+        FROM "DailyTagSpend"
         WHERE spend_date >= $1::date AND spend_date <= $2::date
         ORDER BY total_spend DESC;
         """
@@ -2763,7 +2808,7 @@ async def ui_get_spend_by_tags(
             individual_request_tag,
             SUM(log_count) AS log_count,
             SUM(total_spend) AS total_spend
-        FROM DailyTagSpend
+        FROM "DailyTagSpend"
         WHERE spend_date >= $1::date AND spend_date <= $2::date
           AND individual_request_tag = ANY($3::text[])
         GROUP BY individual_request_tag

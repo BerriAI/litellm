@@ -143,15 +143,18 @@ def test_all_model_configs():
     )
 
     assert (
-        "max_completion_tokens" in VertexAILlama3Config().get_supported_openai_params()
+        "max_completion_tokens"
+        in VertexAILlama3Config().get_supported_openai_params(model="llama3")
     )
     assert VertexAILlama3Config().map_openai_params(
         {"max_completion_tokens": 10}, {}, "llama3", drop_params=False
     ) == {"max_tokens": 10}
 
-    assert "max_completion_tokens" in VertexAIAi21Config().get_supported_openai_params()
+    assert "max_completion_tokens" in VertexAIAi21Config().get_supported_openai_params(
+        model="jamba-1.5-mini@001"
+    )
     assert VertexAIAi21Config().map_openai_params(
-        {"max_completion_tokens": 10}, {}, "llama3", drop_params=False
+        {"max_completion_tokens": 10}, {}, "jamba-1.5-mini@001", drop_params=False
     ) == {"max_tokens": 10}
 
     from litellm.llms.fireworks_ai.chat.transformation import (
@@ -167,18 +170,6 @@ def test_all_model_configs():
         optional_params={},
         drop_params=False,
     ) == {"max_tokens": 10}
-
-    from litellm.llms.huggingface.chat.handler import HuggingfaceConfig
-
-    assert "max_completion_tokens" in HuggingfaceConfig().get_supported_openai_params(
-        model="llama3"
-    )
-    assert HuggingfaceConfig().map_openai_params(
-        non_default_params={"max_completion_tokens": 10},
-        optional_params={},
-        model="llama3",
-        drop_params=False,
-    ) == {"max_new_tokens": 10}
 
     from litellm.llms.nvidia_nim.chat import NvidiaNimConfig
 
@@ -298,31 +289,38 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"max_tokens": 10}
 
-    from litellm.llms.bedrock.common_utils import (
+    from litellm import (
         AmazonAnthropicClaude3Config,
         AmazonAnthropicConfig,
     )
 
     assert (
         "max_completion_tokens"
-        in AmazonAnthropicClaude3Config().get_supported_openai_params()
+        in AmazonAnthropicClaude3Config().get_supported_openai_params(
+            model="anthropic.claude-3-sonnet-20240229-v1:0"
+        )
     )
 
     assert AmazonAnthropicClaude3Config().map_openai_params(
         non_default_params={"max_completion_tokens": 10},
         optional_params={},
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        drop_params=False,
     ) == {"max_tokens": 10}
 
     assert (
-        "max_completion_tokens" in AmazonAnthropicConfig().get_supported_openai_params()
+        "max_completion_tokens"
+        in AmazonAnthropicConfig().get_supported_openai_params(model="")
     )
 
     assert AmazonAnthropicConfig().map_openai_params(
         non_default_params={"max_completion_tokens": 10},
         optional_params={},
+        model="",
+        drop_params=False,
     ) == {"max_tokens_to_sample": 10}
 
-    from litellm.llms.databricks.chat.handler import DatabricksConfig
+    from litellm.llms.databricks.chat.transformation import DatabricksConfig
 
     assert "max_completion_tokens" in DatabricksConfig().get_supported_openai_params()
 

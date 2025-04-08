@@ -4,7 +4,7 @@ import litellm
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
-from litellm.proxy.utils import get_instance_fn
+from litellm.proxy.types_utils.utils import get_instance_fn
 
 blue_color_code = "\033[94m"
 reset_color_code = "\033[0m"
@@ -224,18 +224,9 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
             litellm.callbacks = imported_list  # type: ignore
 
         if "prometheus" in value:
-            if premium_user is not True:
-                verbose_proxy_logger.warning(
-                    f"Prometheus metrics are only available for premium users. {CommonProxyErrors.not_premium_user.value}"
-                )
-            from litellm.proxy.proxy_server import app
+            from litellm.integrations.prometheus import PrometheusLogger
 
-            verbose_proxy_logger.debug("Starting Prometheus Metrics on /metrics")
-            from prometheus_client import make_asgi_app
-
-            # Add prometheus asgi middleware to route /metrics requests
-            metrics_app = make_asgi_app()
-            app.mount("/metrics", metrics_app)
+            PrometheusLogger._mount_metrics_endpoint(premium_user)
     else:
         litellm.callbacks = [
             get_instance_fn(
