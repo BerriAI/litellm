@@ -237,6 +237,9 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
+from litellm.proxy.management_endpoints.tag_management_endpoints import (
+    router as tag_management_router,
+)
 from litellm.proxy.management_endpoints.team_callback_endpoints import (
     router as team_callback_router,
 )
@@ -347,13 +350,13 @@ from fastapi import (
     Request,
     Response,
     UploadFile,
+    applications,
     status,
-    applications
 )
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.openapi.utils import get_openapi
 from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import (
     FileResponse,
     JSONResponse,
@@ -735,7 +738,7 @@ try:
 
 except Exception:
     pass
-# current_dir = os.path.dirname(os.path.abspath(__file__))
+current_dir = os.path.dirname(os.path.abspath(__file__))
 # ui_path = os.path.join(current_dir, "_experimental", "out")
 # # Mount this test directory instead
 # app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
@@ -753,14 +756,18 @@ app.add_middleware(PrometheusAuthMiddleware)
 
 swagger_path = os.path.join(current_dir, "swagger")
 app.mount("/swagger", StaticFiles(directory=swagger_path), name="swagger")
+
+
 def swagger_monkey_patch(*args, **kwargs):
     return get_swagger_ui_html(
         *args,
         **kwargs,
         swagger_js_url="/swagger/swagger-ui-bundle.js",
         swagger_css_url="/swagger/swagger-ui.css",
-        swagger_favicon_url="/swagger/favicon.png"
+        swagger_favicon_url="/swagger/favicon.png",
     )
+
+
 applications.get_swagger_ui_html = swagger_monkey_patch
 
 from typing import Dict
@@ -8135,3 +8142,4 @@ app.include_router(openai_files_router)
 app.include_router(team_callback_router)
 app.include_router(budget_management_router)
 app.include_router(model_management_router)
+app.include_router(tag_management_router)
