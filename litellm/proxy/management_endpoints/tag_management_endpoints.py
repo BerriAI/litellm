@@ -17,8 +17,14 @@ from typing import Dict
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_endpoints.model_management_endpoints import (
+    update_model,
+    updateDeployment,
+)
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.tag_management import (
     TagConfig,
     TagDeleteRequest,
@@ -122,10 +128,41 @@ async def new_tag(
             tags_config=tags_config,
         )
 
+        # Update models with new tag
+        if tag.models:
+            for model_id in tag.models:
+                await _add_tag_to_deployment(
+                    model_id=model_id,
+                    tag=tag.name,
+                )
+
         return {"message": f"Tag {tag.name} created successfully"}
     except Exception as e:
         verbose_proxy_logger.exception(f"Error creating tag: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _add_tag_to_deployment(model_id: str, tag: str):
+    """Helper function to add tag to deployment"""
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected")
+
+    deployment = await prisma_client.db.litellm_proxymodeltable.find_unique(
+        where={"model_id": model_id}
+    )
+    if deployment is None:
+        raise HTTPException(status_code=404, detail=f"Deployment {model_id} not found")
+
+    litellm_params = deployment.litellm_params
+    if "tags" not in litellm_params:
+        litellm_params["tags"] = []
+    litellm_params["tags"].append(tag)
+    await prisma_client.db.litellm_proxymodeltable.update(
+        where={"model_id": model_id},
+        data={"litellm_params": safe_dumps(litellm_params)},
+    )
 
 
 @router.post(
