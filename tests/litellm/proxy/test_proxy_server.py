@@ -167,8 +167,10 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
 def test_team_info_masking():
     """
     Test that sensitive team information is properly masked
+
+    Ref: https://huntr.com/bounties/661b388a-44d8-4ad5-862b-4dc5b80be30a
     """
-    from litellm.proxy.proxy_server import SENSITIVE_DATA_MASKER, ProxyConfig
+    from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
     # Test team object with sensitive data
