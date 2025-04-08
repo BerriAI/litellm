@@ -13,6 +13,8 @@ import ast
 import asyncio
 import json
 
+from tomlkit import date
+
 from litellm._logging import print_verbose, verbose_logger
 
 from .base_cache import BaseCache
@@ -85,7 +87,7 @@ class S3Cache(BaseCache):
                 import datetime
 
                 # Calculate expiration time
-                expiration_time = datetime.datetime.now() + ttl
+                expiration_time = datetime.datetime.now() + datetime.timedelta(seconds=ttl)
 
                 # Upload the data to S3 with the calculated expiration time
                 await s3_client.put_object(
@@ -114,7 +116,6 @@ class S3Cache(BaseCache):
             # NON blocking - notify users S3 is throwing an exception
             print_verbose(f"S3 Caching: set_cache() - Got exception from S3: {e}")
             raise e
-        self.set_cache(key=key, value=value, **kwargs)
 
     def get_cache(self, key, **kwargs):
         raise NotImplementedError("S3 Cache is not supported in sync mode")

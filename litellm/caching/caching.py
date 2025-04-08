@@ -81,7 +81,7 @@ class Cache:
         s3_bucket_name: Optional[str] = None,
         s3_region_name: Optional[str] = None,
         s3_api_version: Optional[str] = None,
-        s3_use_ssl: Optional[bool] = True,
+        s3_use_ssl: bool = True,
         s3_verify: Optional[Union[bool, str]] = None,
         s3_endpoint_url: Optional[str] = None,
         s3_aws_access_key_id: Optional[str] = None,
