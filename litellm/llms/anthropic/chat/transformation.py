@@ -685,8 +685,8 @@ class AnthropicConfig(BaseConfig):
     def calculate_usage(
         self, usage_object: dict, reasoning_content: Optional[str]
     ) -> Usage:
-        prompt_tokens = usage_object["input_tokens"]
-        completion_tokens = usage_object["output_tokens"]
+        prompt_tokens = usage_object.get("input_tokens", 0)
+        completion_tokens = usage_object.get("output_tokens", 0)
         _usage = usage_object
         cache_creation_input_tokens: int = 0
         cache_read_input_tokens: int = 0
