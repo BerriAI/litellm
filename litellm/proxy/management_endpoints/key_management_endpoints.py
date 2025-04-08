@@ -1721,25 +1721,26 @@ async def regenerate_key_fn(
         key = data.key if data and data.key else key
         if not key:
             raise HTTPException(status_code=400, detail={"error": "No key passed in."})
-
-        existing_key_row = await prisma_client.get_data(
-            token=key, table_name="key", query_type="find_unique"
+        hashed_api_key = _hash_token_if_needed(key)
+        _key_in_db = await prisma_client.db.litellm_verificationtoken.find_unique(
+            where={"token": hashed_api_key},
         )
-
-        if existing_key_row is None:
+        if _key_in_db is None:
             raise HTTPException(
-                status_code=404,
-                detail={"error": f"Key not found, passed key={key}"},
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"Key {key} not found."},
             )
 
+        verbose_proxy_logger.debug("key_in_db: %s", _key_in_db)
         await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
             user_api_key_dict=user_api_key_dict,
             route=KeyManagementRoutes.KEY_REGENERATE,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=user_api_key_dict.parent_otel_span,
-            existing_key_row=existing_key_row,
+            existing_key_row=_key_in_db,
         )
+
         ### 1. Create New copy that is duplicate of existing key
         ######################################################################
 
@@ -1774,22 +1775,6 @@ async def regenerate_key_fn(
                 key_name=data.new_master_key,
                 expires=None,
             )
-
-        if "sk" not in key:
-            hashed_api_key = key
-        else:
-            hashed_api_key = hash_token(key)
-
-        _key_in_db = await prisma_client.db.litellm_verificationtoken.find_unique(
-            where={"token": hashed_api_key},
-        )
-        if _key_in_db is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": f"Key {key} not found."},
-            )
-
-        verbose_proxy_logger.debug("key_in_db: %s", _key_in_db)
 
         new_token = f"sk-{secrets.token_urlsafe(LENGTH_OF_LITELLM_GENERATED_KEY)}"
         new_token_hash = hash_token(new_token)
