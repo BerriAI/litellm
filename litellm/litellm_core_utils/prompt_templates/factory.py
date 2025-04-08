@@ -2007,6 +2007,57 @@ def cohere_messages_pt_v2(  # noqa: PLR0915
     return returned_message, new_messages
 
 
+def cohere_messages_pt_v3(messages: List, model: str, llm_provider: str):
+    """
+    Format messages for Cohere v2 API
+    
+    In v2, messages are combined in a single array with the following format:
+    [
+        {"role": "USER", "content": "Hello"},
+        {"role": "ASSISTANT", "content": "Hi there!"},
+        {"role": "USER", "content": "How are you?"}
+    ]
+    
+    Returns:
+        List of formatted messages in Cohere v2 format
+    """
+    cohere_messages = []
+    
+    for msg_i, message in enumerate(messages):
+        role = message["role"].upper()
+        
+        # Map OpenAI roles to Cohere v2 roles
+        if role == "USER":
+            pass  # Keep as USER
+        elif role == "ASSISTANT":
+            role = "CHATBOT"  # Cohere v2 uses CHATBOT instead of ASSISTANT
+        elif role == "SYSTEM":
+            role = "USER"  # System messages are sent as USER with a special prefix
+            message["content"] = f"<admin>{message['content']}</admin>"
+        elif role == "TOOL":
+            # Skip tool messages as they'll be handled separately with tool_results
+            continue
+        elif role == "FUNCTION":
+            # Skip function messages as they'll be handled separately with tool_results
+            continue
+        
+        # Handle content
+        content = ""
+        if isinstance(message.get("content"), str):
+            content = message["content"]
+        elif isinstance(message.get("content"), list):
+            # Handle content list (text and images)
+            for item in message["content"]:
+                if isinstance(item, dict):
+                    if item.get("type") == "text":
+                        content += item.get("text", "")
+        
+        # Add message to the list
+        cohere_messages.append({"role": role, "content": content})
+    
+    return cohere_messages
+
+
 def cohere_message_pt(messages: list):
     tool_calls: List = get_all_tool_calls(messages=messages)
     prompt = ""

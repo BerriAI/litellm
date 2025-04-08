@@ -23,14 +23,16 @@ def _is_non_openai_azure_model(model: str) -> bool:
 
 
 def handle_cohere_chat_model_custom_llm_provider(
-    model: str, custom_llm_provider: Optional[str] = None
+    model: str, custom_llm_provider: Optional[str] = None, api_version: Optional[str] = None
 ) -> Tuple[str, Optional[str]]:
     """
     if user sets model = "cohere/command-r" -> use custom_llm_provider = "cohere_chat"
+    if api_version = "v2" -> use custom_llm_provider = "cohere_chat_v2"
 
     Args:
-        model:
-        custom_llm_provider:
+        model: The model name
+        custom_llm_provider: The custom LLM provider if specified
+        api_version: The API version (v1 or v2)
 
     Returns:
         model, custom_llm_provider
@@ -38,6 +40,9 @@ def handle_cohere_chat_model_custom_llm_provider(
 
     if custom_llm_provider:
         if custom_llm_provider == "cohere" and model in litellm.cohere_chat_models:
+            # Check if v2 API version is specified
+            if api_version == "v2":
+                return model, "cohere_chat_v2"
             return model, "cohere_chat"
 
     if "/" in model:
@@ -47,6 +52,9 @@ def handle_cohere_chat_model_custom_llm_provider(
             and _custom_llm_provider == "cohere"
             and _model in litellm.cohere_chat_models
         ):
+            # Check if v2 API version is specified
+            if api_version == "v2":
+                return _model, "cohere_chat_v2"
             return _model, "cohere_chat"
 
     return model, custom_llm_provider
@@ -122,8 +130,18 @@ def get_llm_provider(  # noqa: PLR0915
                 return model, custom_llm_provider, dynamic_api_key, api_base
 
         ### Handle cases when custom_llm_provider is set to cohere/command-r-plus but it should use cohere_chat route
+        # Extract api_version from optional_params if it exists
+        api_version = None
+        if litellm_params and hasattr(litellm_params, "optional_params") and litellm_params.optional_params:
+            api_version = litellm_params.optional_params.get("api_version")
+
+        # Handle direct cohere_chat_v2 model format
+        if model.startswith("cohere_chat_v2/"):
+            model = model.replace("cohere_chat_v2/", "")
+            custom_llm_provider = "cohere_chat_v2"
+            
         model, custom_llm_provider = handle_cohere_chat_model_custom_llm_provider(
-            model, custom_llm_provider
+            model, custom_llm_provider, api_version
         )
 
         model, custom_llm_provider = handle_anthropic_text_model_custom_llm_provider(
