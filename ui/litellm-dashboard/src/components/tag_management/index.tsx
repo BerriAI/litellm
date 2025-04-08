@@ -130,7 +130,7 @@ const TagManagement: React.FC<TagProps> = ({
       ) : (
         <div className="gap-2 p-8 h-[75vh] w-full mt-2">
           <div className="flex justify-between mt-2 w-full items-center mb-4">
-            <Text>Data Sensitivity Tags</Text>
+            <h1>Tag Management</h1>
             <div className="flex items-center space-x-2">
               {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
               <Icon
@@ -143,9 +143,17 @@ const TagManagement: React.FC<TagProps> = ({
             </div>
           </div>
           
+          
           <Text className="mb-4">
             Click on a tag name to view and edit its details.
           </Text>
+
+          <Button
+            className="mb-4"
+            onClick={() => setIsCreateModalVisible(true)}
+          >
+            + Create New Tag
+          </Button>
 
           <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
             <Col numColSpan={1}>
@@ -159,16 +167,6 @@ const TagManagement: React.FC<TagProps> = ({
                 onSelectTag={setSelectedTagId}
               />
             </Col>
-            {userRole === "Admin" && (
-              <Col numColSpan={1}>
-                <Button
-                  className="mx-auto"
-                  onClick={() => setIsCreateModalVisible(true)}
-                >
-                  + Create New Tag
-                </Button>
-              </Col>
-            )}
           </Grid>
 
           {/* Create Tag Modal */}
