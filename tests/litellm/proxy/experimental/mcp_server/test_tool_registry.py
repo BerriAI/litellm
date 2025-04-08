@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -65,8 +66,13 @@ def test_load_tools_from_config():
             "description": "A tool from config",
             "input_schema": {"type": "object"},
             "handler": "test_tool_registry.example_handler",
+            # "handler": "litellm.proxy.experimental.mcp_server.test_tool_registry.example_handler",
         }
     ]
+
+    sys.path.append(
+        str(Path(__file__).parents[4] / "litellm/proxy/experimental/mcp_server")
+    )
 
     registry.load_tools_from_config(valid_config)
     assert "config_tool" in registry.tools

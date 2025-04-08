@@ -1,7 +1,6 @@
 from typing import Literal, Optional
 
 import litellm
-from litellm import LlmProviders
 from litellm.exceptions import BadRequestError
 
 
@@ -24,6 +23,8 @@ def get_supported_openai_params(  # noqa: PLR0915
     - List if custom_llm_provider is mapped
     - None if unmapped
     """
+    from litellm import LlmProviders
+
     if not custom_llm_provider:
         try:
             custom_llm_provider = litellm.get_llm_provider(model=model)[1]
