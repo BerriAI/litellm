@@ -60,8 +60,7 @@ class S3Cache(BaseCache):
     def set_cache(self, key, value, **kwargs):
         raise NotImplementedError("S3 Cache is not supported in sync mode")
 
-    @property
-    async def s3_client(self):
+    async def get_s3_client(self):
         import aioboto3
 
         if self._s3_client is None:
@@ -74,7 +73,7 @@ class S3Cache(BaseCache):
         return self._s3_client
 
     async def async_set_cache(self, key, value, **kwargs):
-        s3_client = await self.s3_client
+        s3_client = await self.get_s3_client()
         try:
             print_verbose(f"LiteLLM SET Cache - S3. Key={key}. Value={value}")
             ttl = kwargs.get("ttl", None)
@@ -124,7 +123,7 @@ class S3Cache(BaseCache):
         # Boto3 is needed for exceptions
         import botocore
 
-        s3_client = await self.s3_client
+        s3_client = await self.get_s3_client()
 
         try:
             key = self.key_prefix + key
