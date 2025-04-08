@@ -5,6 +5,7 @@ IGNORE_FUNCTIONS = [
     "_format_type",
     "_remove_additional_properties",
     "_remove_strict_from_schema",
+    "filter_schema_fields",
     "text_completion",
     "_check_for_os_environ_vars",
     "clean_message",
