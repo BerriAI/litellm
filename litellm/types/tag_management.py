@@ -6,7 +6,7 @@ from pydantic import BaseModel
 class TagBase(BaseModel):
     name: str
     description: Optional[str] = None
-    allowed_llms: Optional[List[str]] = None
+    models: Optional[List[str]] = None
 
 
 class TagNewRequest(TagBase):

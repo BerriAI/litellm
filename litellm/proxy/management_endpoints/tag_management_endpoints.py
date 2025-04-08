@@ -12,7 +12,7 @@ All /tag management endpoints
 
 import datetime
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -20,7 +20,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.tag_management import (
-    TagBase,
     TagDeleteRequest,
     TagInfoRequest,
     TagNewRequest,
@@ -83,7 +82,7 @@ async def new_tag(
     Parameters:
     - name: str - The name of the tag
     - description: Optional[str] - Description of what this tag represents
-    - allowed_llms: List[str] - List of LLM models allowed for this tag
+    - models: List[str] - List of LLM models allowed for this tag
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -102,7 +101,7 @@ async def new_tag(
         # Add new tag
         tags_config[tag.name] = {
             "description": tag.description,
-            "allowed_llms": tag.allowed_llms,
+            "models": tag.models,
             "created_at": str(datetime.datetime.now()),
             "updated_at": str(datetime.datetime.now()),
             "created_by": user_api_key_dict.user_id,
@@ -132,7 +131,7 @@ async def update_tag(
     Parameters:
     - name: str - The name of the tag to update
     - description: Optional[str] - Updated description
-    - allowed_llms: List[str] - Updated list of allowed LLM models
+    - models: List[str] - Updated list of allowed LLM models
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -151,7 +150,7 @@ async def update_tag(
         tags_config[tag.name].update(
             {
                 "description": tag.description,
-                "allowed_llms": tag.allowed_llms,
+                "models": tag.models,
                 "updated_at": str(datetime.datetime.now()),
                 "updated_by": user_api_key_dict.user_id,
             }
