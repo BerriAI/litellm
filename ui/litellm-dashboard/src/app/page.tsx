@@ -33,6 +33,7 @@ import TransformRequestPanel from "@/components/transform_request";
 import { fetchUserModels } from "@/components/create_key_button";
 import { fetchTeams } from "@/components/common_components/fetch_teams";
 import MCPToolsViewer from "@/components/mcp_tools";
+import TagManagement from "@/components/tag_management";
 
 function getCookie(name: string) {
   const cookieValue = document.cookie
@@ -351,6 +352,12 @@ export default function CreateKeyPage() {
                 />
               ) : page == "mcp-tools" ? (
                 <MCPToolsViewer
+                  accessToken={accessToken}
+                  userRole={userRole}
+                  userID={userID}
+                />
+              ) : page == "tag-management" ? (
+                <TagManagement
                   accessToken={accessToken}
                   userRole={userRole}
                   userID={userID}
