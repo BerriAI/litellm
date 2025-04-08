@@ -6,6 +6,7 @@ import {
   Col,
   Text,
   Grid,
+  TextInput,
 } from "@tremor/react";
 import {
   InformationCircleIcon,
@@ -14,10 +15,10 @@ import {
 import {
   Modal,
   Form,
-  Input,
   Select as Select2,
   message,
-  Tooltip
+  Tooltip,
+  Input
 } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import NumericalInput from "../shared/numerical_input";
@@ -192,7 +193,7 @@ const TagManagement: React.FC<TagProps> = ({
                 name="tag_name"
                 rules={[{ required: true, message: "Please input a tag name" }]}
               >
-                <Input />
+                <TextInput />
               </Form.Item>
 
               <Form.Item
