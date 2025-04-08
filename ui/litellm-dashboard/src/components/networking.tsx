@@ -4124,11 +4124,18 @@ export const listMCPTools = async (accessToken: string) => {
 
 export const callMCPTool = async (accessToken: string, toolName: string, toolArguments: Record<string, any>) => {
   try {
-    const response = await fetch("/api/mcp/tool_call", {
+    // Construct base URL
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/mcp/tools/call`
+      : `/mcp/tools/call`;
+
+    console.log("Calling MCP tool:", toolName, "with arguments:", toolArguments);
+    
+    const response = await fetch(url, {
       method: "POST",
       headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({
         name: toolName,
@@ -4152,80 +4159,6 @@ export const callMCPTool = async (accessToken: string, toolName: string, toolArg
 };
 
 
-export const getTeamPermissionsCall = async (
-  accessToken: string,
-  teamId: string
-) => {
-  try {
-    let url = proxyBaseUrl 
-      ? `${proxyBaseUrl}/team/permissions_list?team_id=${teamId}`
-      : `/team/permissions_list?team_id=${teamId}`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
-    }
-
-    const data = await response.json();
-    console.log("Team permissions response:", data);
-    return data;
-  } catch (error) {
-    console.error("Failed to get team permissions:", error);
-    throw error;
-  }
-};
-
-
-
-export const teamPermissionsUpdateCall = async (
-  accessToken: string,
-  teamId: string,
-  permissions: string[]
-) => {
-  try {
-    let url = proxyBaseUrl  
-      ? `${proxyBaseUrl}/team/permissions_update`
-      : `/team/permissions_update`;
-      
-    
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({
-        team_id: teamId,
-        team_member_permissions: permissions,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
-    }
-
-
-    const data = await response.json();
-    console.log("Team permissions response:", data);
-    return data;
-  } catch (error) {
-    console.error("Failed to update team permissions:", error);
-    throw error;
-  }
-};
-
-
 export const tagCreateCall = async (
   accessToken: string,
   formValues: TagNewRequest
@@ -4241,25 +4174,21 @@ export const tagCreateCall = async (
         "Content-Type": "application/json",
         Authorization: `Bearer ${accessToken}`,
       },
-      
       body: JSON.stringify(formValues),
     });
 
     if (!response.ok) {
       const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      await handleError(errorData);
+      return;
     }
 
-    const data = await response.json();
-    console.log("Team permissions update response:", data);
-    return data;
+    return await response.json();
   } catch (error) {
-    console.error("Failed to update team permissions:", error);
+    console.error("Error creating tag:", error);
     throw error;
   }
 };
-
 
 export const tagUpdateCall = async (
   accessToken: string,
@@ -4378,6 +4307,81 @@ export const tagDeleteCall = async (
     return await response.json();
   } catch (error) {
     console.error("Error deleting tag:", error);
+    throw error;
+  }
+};
+
+
+
+export const getTeamPermissionsCall = async (
+  accessToken: string,
+  teamId: string
+) => {
+  try {
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/team/permissions_list?team_id=${teamId}`
+      : `/team/permissions_list?team_id=${teamId}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Team permissions response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to get team permissions:", error);
+    throw error;
+  }
+};
+
+
+
+export const teamPermissionsUpdateCall = async (
+  accessToken: string,
+  teamId: string,
+  permissions: string[]
+) => {
+  try {
+    let url = proxyBaseUrl  
+      ? `${proxyBaseUrl}/team/permissions_update`
+      : `/team/permissions_update`;
+      
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        team_id: teamId,
+        team_member_permissions: permissions,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+
+    const data = await response.json();
+    console.log("Team permissions response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to update team permissions:", error);
     throw error;
   }
 };
