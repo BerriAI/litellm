@@ -10,7 +10,8 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 from litellm import Router
-from litellm.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.router import Deployment, LiteLLM_Params
+from litellm.types.router import ModelInfo
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from dotenv import load_dotenv
@@ -343,10 +344,17 @@ async def test_get_remaining_model_group_usage():
         ]
     )
     for _ in range(2):
-        await router.acompletion(
+        resp = await router.acompletion(
             model="gemini/gemini-1.5-flash",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
             mock_response="Hello, I'm good.",
+        )
+        assert (
+            "x-ratelimit-remaining-tokens" in resp._hidden_params["additional_headers"]
+        )
+        assert (
+            "x-ratelimit-remaining-requests"
+            in resp._hidden_params["additional_headers"]
         )
         await asyncio.sleep(1)
 
@@ -356,3 +364,90 @@ async def test_get_remaining_model_group_usage():
     assert remaining_usage is not None
     assert "x-ratelimit-remaining-requests" in remaining_usage
     assert "x-ratelimit-remaining-tokens" in remaining_usage
+
+
+@pytest.mark.parametrize(
+    "potential_access_group, expected_result",
+    [("gemini-models", True), ("gemini-models-2", False), ("gemini/*", False)],
+)
+def test_router_get_model_access_groups(potential_access_group, expected_result):
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gemini/*",
+                "litellm_params": {"model": "gemini/*"},
+                "model_info": {"id": 1, "access_groups": ["gemini-models"]},
+            },
+        ]
+    )
+    access_groups = router._is_model_access_group_for_wildcard_route(
+        model_access_group=potential_access_group
+    )
+    assert access_groups == expected_result
+
+
+def test_router_redis_cache():
+    router = Router(
+        model_list=[{"model_name": "gemini/*", "litellm_params": {"model": "gemini/*"}}]
+    )
+
+    redis_cache = MagicMock()
+
+    router._update_redis_cache(cache=redis_cache)
+
+    assert router.cache.redis_cache == redis_cache
+
+
+def test_router_handle_clientside_credential():
+    deployment = {
+        "model_name": "gemini/*",
+        "litellm_params": {"model": "gemini/*"},
+        "model_info": {
+            "id": "1",
+        },
+    }
+    router = Router(model_list=[deployment])
+
+    new_deployment = router._handle_clientside_credential(
+        deployment=deployment,
+        kwargs={
+            "api_key": "123",
+            "metadata": {"model_group": "gemini/gemini-1.5-flash"},
+        },
+    )
+
+    assert new_deployment.litellm_params.api_key == "123"
+    assert len(router.get_model_list()) == 2
+
+
+def test_router_get_async_openai_model_client():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gemini/*",
+                "litellm_params": {
+                    "model": "gemini/*",
+                    "api_base": "https://api.gemini.com",
+                },
+            }
+        ]
+    )
+    model_client = router._get_async_openai_model_client(
+        deployment=MagicMock(), kwargs={}
+    )
+    assert model_client is None
+
+
+def test_router_get_deployment_credentials():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gemini/*",
+                "litellm_params": {"model": "gemini/*", "api_key": "123"},
+                "model_info": {"id": "1"},
+            }
+        ]
+    )
+    credentials = router.get_deployment_credentials(model_id="1")
+    assert credentials is not None
+    assert credentials["api_key"] == "123"

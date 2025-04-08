@@ -1,32 +1,22 @@
 # Instructor - Function Calling
 
-Use LiteLLM Router with [jxnl's instructor library](https://github.com/jxnl/instructor) for function calling in prod. 
+Use LiteLLM with [jxnl's instructor library](https://github.com/jxnl/instructor) for function calling in prod. 
 
 ## Usage
 
 ```python
-import litellm
-from litellm import Router
+import os
+
 import instructor
+from litellm import completion
 from pydantic import BaseModel
 
-litellm.set_verbose = True # 👈 print DEBUG LOGS
+os.environ["LITELLM_LOG"] = "DEBUG"  # 👈 print DEBUG LOGS
 
-client = instructor.patch(
-    Router(
-        model_list=[
-            {
-                "model_name": "gpt-3.5-turbo",  openai model name
-                "litellm_params": {  # params for litellm completion/embedding call - e.g.: https://github.com/BerriAI/litellm/blob/62a591f90c99120e1a51a8445f5c3752586868ea/litellm/router.py#L111
-                    "model": "azure/chatgpt-v-2",
-                    "api_key": os.getenv("AZURE_API_KEY"),
-                    "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
-                },
-            }
-        ]
-    )
-)
+client = instructor.from_litellm(completion)
+
+# import dotenv
+# dotenv.load_dotenv()
 
 
 class UserDetail(BaseModel):
@@ -35,7 +25,7 @@ class UserDetail(BaseModel):
 
 
 user = client.chat.completions.create(
-    model="gpt-3.5-turbo",
+    model="gpt-4o-mini",
     response_model=UserDetail,
     messages=[
         {"role": "user", "content": "Extract Jason is 25 years old"},
@@ -52,25 +42,20 @@ print(f"user: {user}")
 ## Async Calls
 
 ```python
-import litellm
+import asyncio
+import instructor
 from litellm import Router
-import instructor, asyncio
 from pydantic import BaseModel
 
-aclient = instructor.apatch(
+aclient = instructor.patch(
     Router(
         model_list=[
             {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
-                    "api_key": os.getenv("AZURE_API_KEY"),
-                    "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
-                },
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {"model": "gpt-4o-mini"},
             }
         ],
-        default_litellm_params={"acompletion": True}, # 👈 IMPORTANT - tells litellm to route to async completion function.
+        default_litellm_params={"acompletion": True},  # 👈 IMPORTANT - tells litellm to route to async completion function.
     )
 )
 
@@ -82,7 +67,7 @@ class UserExtract(BaseModel):
 
 async def main():
     model = await aclient.chat.completions.create(
-        model="gpt-3.5-turbo",
+        model="gpt-4o-mini",
         response_model=UserExtract,
         messages=[
             {"role": "user", "content": "Extract jason is 25 years old"},

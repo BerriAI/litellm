@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, TypedDict
 from litellm.types.utils import StandardLoggingPayload
 
 if TYPE_CHECKING:
-    from litellm.llms.vertex_ai_and_google_ai_studio.vertex_llm_base import VertexBase
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 else:
     VertexBase = Any
 

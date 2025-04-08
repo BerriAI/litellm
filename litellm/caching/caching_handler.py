@@ -35,13 +35,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
-from litellm.caching.caching import (
-    Cache,
-    QdrantSemanticCache,
-    RedisCache,
-    RedisSemanticCache,
-    S3Cache,
-)
+from litellm.caching.caching import S3Cache
 from litellm.litellm_core_utils.logging_utils import (
     _assemble_complete_response_from_streaming_chunks,
 )
@@ -253,7 +247,6 @@ class LLMCachingHandler:
                     pass
                 else:
                     call_type = original_function.__name__
-
                     cached_result = self._convert_cached_result_to_model_response(
                         cached_result=cached_result,
                         call_type=call_type,
@@ -550,12 +543,7 @@ class LLMCachingHandler:
         Returns:
             Optional[Any]:
         """
-        from litellm.utils import (
-            CustomStreamWrapper,
-            convert_to_model_response_object,
-            convert_to_streaming_response,
-            convert_to_streaming_response_async,
-        )
+        from litellm.utils import convert_to_model_response_object
 
         if (
             call_type == CallTypes.acompletion.value
@@ -681,6 +669,8 @@ class LLMCachingHandler:
         Raises:
             None
         """
+        if litellm.cache is None:
+            return
 
         new_kwargs = kwargs.copy()
         new_kwargs.update(
@@ -689,8 +679,6 @@ class LLMCachingHandler:
                 args,
             )
         )
-        if litellm.cache is None:
-            return
         # [OPTIONAL] ADD TO CACHE
         if self._should_store_result_in_cache(
             original_function=original_function, kwargs=new_kwargs
@@ -736,6 +724,7 @@ class LLMCachingHandler:
         """
         Sync internal method to add the result to the cache
         """
+
         new_kwargs = kwargs.copy()
         new_kwargs.update(
             convert_args_to_kwargs(
@@ -749,6 +738,7 @@ class LLMCachingHandler:
         if self._should_store_result_in_cache(
             original_function=self.original_function, kwargs=new_kwargs
         ):
+
             litellm.cache.add_cache(result, **new_kwargs)
 
         return
@@ -800,6 +790,7 @@ class LLMCachingHandler:
         - Else append the chunk to self.async_streaming_chunks
 
         """
+
         complete_streaming_response: Optional[
             Union[ModelResponse, TextCompletionResponse]
         ] = _assemble_complete_response_from_streaming_chunks(
@@ -810,7 +801,6 @@ class LLMCachingHandler:
             streaming_chunks=self.async_streaming_chunks,
             is_async=True,
         )
-
         # if a complete_streaming_response is assembled, add it to the cache
         if complete_streaming_response is not None:
             await self.async_set_cache(

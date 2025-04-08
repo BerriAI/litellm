@@ -6,10 +6,10 @@ Use this to route requests between Teams
 - If no default_deployments are set, return all deployments
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, TypedDict, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_logger
-from litellm.types.router import DeploymentTypedDict, RouterErrors
+from litellm.types.router import RouterErrors
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -17,6 +17,30 @@ if TYPE_CHECKING:
     LitellmRouter = _Router
 else:
     LitellmRouter = Any
+
+
+def is_valid_deployment_tag(
+    deployment_tags: List[str], request_tags: List[str]
+) -> bool:
+    """
+    Check if a tag is valid
+    """
+
+    if any(tag in deployment_tags for tag in request_tags):
+        verbose_logger.debug(
+            "adding deployment with tags: %s, request tags: %s",
+            deployment_tags,
+            request_tags,
+        )
+        return True
+    elif "default" in deployment_tags:
+        verbose_logger.debug(
+            "adding default deployment with tags: %s, request tags: %s",
+            deployment_tags,
+            request_tags,
+        )
+        return True
+    return False
 
 
 async def get_deployments_for_tag(
@@ -71,19 +95,7 @@ async def get_deployments_for_tag(
                 if deployment_tags is None:
                     continue
 
-                if set(request_tags).issubset(set(deployment_tags)):
-                    verbose_logger.debug(
-                        "adding deployment with tags: %s, request tags: %s",
-                        deployment_tags,
-                        request_tags,
-                    )
-                    new_healthy_deployments.append(deployment)
-                elif "default" in deployment_tags:
-                    verbose_logger.debug(
-                        "adding default deployment with tags: %s, request tags: %s",
-                        deployment_tags,
-                        request_tags,
-                    )
+                if is_valid_deployment_tag(deployment_tags, request_tags):
                     new_healthy_deployments.append(deployment)
 
             if len(new_healthy_deployments) == 0:
@@ -108,3 +120,27 @@ async def get_deployments_for_tag(
         healthy_deployments,
     )
     return healthy_deployments
+
+
+def _get_tags_from_request_kwargs(
+    request_kwargs: Optional[Dict[Any, Any]] = None
+) -> List[str]:
+    """
+    Helper to get tags from request kwargs
+
+    Args:
+        request_kwargs: The request kwargs to get tags from
+
+    Returns:
+        List[str]: The tags from the request kwargs
+    """
+    if request_kwargs is None:
+        return []
+    if "metadata" in request_kwargs:
+        metadata = request_kwargs["metadata"]
+        return metadata.get("tags", [])
+    elif "litellm_params" in request_kwargs:
+        litellm_params = request_kwargs["litellm_params"]
+        _metadata = litellm_params.get("metadata", {})
+        return _metadata.get("tags", [])
+    return []

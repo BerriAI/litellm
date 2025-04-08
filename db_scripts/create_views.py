@@ -3,7 +3,6 @@ python script to pre-create all views required by LiteLLM Proxy Server
 """
 
 import asyncio
-import os
 
 # Enter your DATABASE_URL here
 
@@ -33,7 +32,7 @@ async def check_view_exists():  # noqa: PLR0915
         # Try to select one row from the view
         await db.query_raw("""SELECT 1 FROM "LiteLLM_VerificationTokenView" LIMIT 1""")
         print("LiteLLM_VerificationTokenView Exists!")  # noqa
-    except Exception as e:
+    except Exception:
         # If an error occurs, the view does not exist, so create it
         await db.execute_raw(
             """
@@ -54,7 +53,7 @@ async def check_view_exists():  # noqa: PLR0915
     try:
         await db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpend" LIMIT 1""")
         print("MonthlyGlobalSpend Exists!")  # noqa
-    except Exception as e:
+    except Exception:
         sql_query = """
         CREATE OR REPLACE VIEW "MonthlyGlobalSpend" AS 
         SELECT
@@ -74,7 +73,7 @@ async def check_view_exists():  # noqa: PLR0915
     try:
         await db.query_raw("""SELECT 1 FROM "Last30dKeysBySpend" LIMIT 1""")
         print("Last30dKeysBySpend Exists!")  # noqa
-    except Exception as e:
+    except Exception:
         sql_query = """
         CREATE OR REPLACE VIEW "Last30dKeysBySpend" AS
         SELECT 
@@ -102,7 +101,7 @@ async def check_view_exists():  # noqa: PLR0915
     try:
         await db.query_raw("""SELECT 1 FROM "Last30dModelsBySpend" LIMIT 1""")
         print("Last30dModelsBySpend Exists!")  # noqa
-    except Exception as e:
+    except Exception:
         sql_query = """
         CREATE OR REPLACE VIEW "Last30dModelsBySpend" AS
         SELECT
@@ -124,7 +123,7 @@ async def check_view_exists():  # noqa: PLR0915
     try:
         await db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpendPerKey" LIMIT 1""")
         print("MonthlyGlobalSpendPerKey Exists!")  # noqa
-    except Exception as e:
+    except Exception:
         sql_query = """
             CREATE OR REPLACE VIEW "MonthlyGlobalSpendPerKey" AS 
             SELECT
@@ -147,7 +146,7 @@ async def check_view_exists():  # noqa: PLR0915
             """SELECT 1 FROM "MonthlyGlobalSpendPerUserPerKey" LIMIT 1"""
         )
         print("MonthlyGlobalSpendPerUserPerKey Exists!")  # noqa
-    except Exception as e:
+    except Exception:
         sql_query = """
             CREATE OR REPLACE VIEW "MonthlyGlobalSpendPerUserPerKey" AS 
             SELECT
@@ -169,11 +168,11 @@ async def check_view_exists():  # noqa: PLR0915
         print("MonthlyGlobalSpendPerUserPerKey Created!")  # noqa
 
     try:
-        await db.query_raw("""SELECT 1 FROM DailyTagSpend LIMIT 1""")
+        await db.query_raw("""SELECT 1 FROM "DailyTagSpend" LIMIT 1""")
         print("DailyTagSpend Exists!")  # noqa
-    except Exception as e:
+    except Exception:
         sql_query = """
-        CREATE OR REPLACE VIEW DailyTagSpend AS
+        CREATE OR REPLACE VIEW "DailyTagSpend" AS
         SELECT
             jsonb_array_elements_text(request_tags) AS individual_request_tag,
             DATE(s."startTime") AS spend_date,
@@ -189,7 +188,7 @@ async def check_view_exists():  # noqa: PLR0915
     try:
         await db.query_raw("""SELECT 1 FROM "Last30dTopEndUsersSpend" LIMIT 1""")
         print("Last30dTopEndUsersSpend Exists!")  # noqa
-    except Exception as e:
+    except Exception:
         sql_query = """
         CREATE VIEW "Last30dTopEndUsersSpend" AS
         SELECT end_user, COUNT(*) AS total_events, SUM(spend) AS total_spend

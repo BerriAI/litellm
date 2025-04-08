@@ -5,9 +5,17 @@ import TabItem from '@theme/TabItem';
 
 LiteLLM supports all models on VLLM.
 
+| Property | Details |
+|-------|-------|
+| Description | vLLM is a fast and easy-to-use library for LLM inference and serving. [Docs](https://docs.vllm.ai/en/latest/index.html) |
+| Provider Route on LiteLLM | `hosted_vllm/` (for OpenAI compatible server), `vllm/` (for vLLM sdk usage) |
+| Provider Doc | [vLLM ↗](https://docs.vllm.ai/en/latest/index.html) |
+| Supported Endpoints | `/chat/completions`, `/embeddings`, `/completions` |
+
+
 # Quick Start
 
-## Usage - litellm.completion (calling vLLM endpoint)
+## Usage - litellm.completion (calling OpenAI compatible endpoint)
 vLLM Provides an OpenAI compatible endpoints - here's how to call it with LiteLLM 
 
 In order to use litellm to call a hosted vllm server add the following to your completion call
@@ -29,7 +37,7 @@ print(response)
 ```
 
 
-## Usage -  LiteLLM Proxy Server (calling vLLM endpoint)
+## Usage -  LiteLLM Proxy Server (calling OpenAI compatible endpoint)
 
 Here's how to call an OpenAI-Compatible Endpoint with the LiteLLM Proxy Server
 
@@ -97,7 +105,151 @@ Here's how to call an OpenAI-Compatible Endpoint with the LiteLLM Proxy Server
   </Tabs>
 
 
-## Extras - for `vllm pip package`
+## Embeddings
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import embedding   
+import os
+
+os.environ["HOSTED_VLLM_API_BASE"] = "http://localhost:8000"
+
+
+embedding = embedding(model="hosted_vllm/facebook/opt-125m", input=["Hello world"])
+
+print(embedding)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: my-model
+      litellm_params:
+        model: hosted_vllm/facebook/opt-125m  # add hosted_vllm/ prefix to route as OpenAI provider
+        api_base: https://hosted-vllm-api.co      # add api base for OpenAI compatible provider
+```
+
+2. Start the proxy 
+
+```bash
+$ litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Test it! 
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/embeddings' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{"input": ["hello world"], "model": "my-model"}'
+```
+
+[See OpenAI SDK/Langchain/etc. examples](../proxy/user_keys.md#embeddings)
+
+</TabItem>
+</Tabs>
+
+## Send Video URL to VLLM
+
+Example Implementation from VLLM [here](https://github.com/vllm-project/vllm/pull/10020)
+
+There are two ways to send a video url to VLLM:
+
+1. Pass the video url directly
+
+```
+{"type": "video_url", "video_url": {"url": video_url}},
+```
+
+2. Pass the video data as base64
+
+```
+{"type": "video_url", "video_url": {"url": f"data:video/mp4;base64,{video_data_base64}"}}
+```
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+            model="hosted_vllm/qwen", # pass the vllm model name
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Summarize the following video"
+                        },
+                        {
+                            "type": "video_url",
+                            "video_url": {
+                                "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+                            }
+                        }
+                    ]
+                }
+            ],
+            api_base="https://hosted-vllm-api.co")
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: my-model
+      litellm_params:
+        model: hosted_vllm/qwen  # add hosted_vllm/ prefix to route as OpenAI provider
+        api_base: https://hosted-vllm-api.co      # add api base for OpenAI compatible provider
+```
+
+2. Start the proxy 
+
+```bash
+$ litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Test it! 
+
+```bash
+curl -X POST http://0.0.0.0:4000/chat/completions \
+-H "Authorization: Bearer sk-1234" \
+-H "Content-Type: application/json" \
+-d '{
+    "model": "my-model",
+    "messages": [
+        {"role": "user", "content": 
+            [
+                {"type": "text", "text": "Summarize the following video"},
+                {"type": "video_url", "video_url": {"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}}
+            ]
+        }
+    ]
+}'
+```
+
+</TabItem>
+</Tabs>
+
+
+## (Deprecated) for `vllm pip package` 
 ### Using - `litellm.completion`
 
 ```

@@ -1,16 +1,14 @@
 import json
-from typing import List, Optional
+from typing import Optional
 
 import litellm
 from litellm import verbose_logger
 from litellm.types.llms.openai import (
-    ChatCompletionDeltaChunk,
-    ChatCompletionResponseMessage,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionUsageBlock,
 )
-from litellm.types.utils import GenericStreamingChunk, ModelResponse, Usage
+from litellm.types.utils import GenericStreamingChunk, Usage
 
 
 class ModelResponseIterator:
@@ -19,7 +17,7 @@ class ModelResponseIterator:
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
-            processed_chunk = litellm.ModelResponse(**chunk, stream=True)  # type: ignore
+            processed_chunk = litellm.ModelResponseStream(**chunk)
 
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
@@ -48,16 +46,14 @@ class ModelResponseIterator:
                         .delta.tool_calls[0]  # type: ignore
                         .function.arguments,
                     ),
-                    index=processed_chunk.choices[0].index,
+                    index=processed_chunk.choices[0].delta.tool_calls[0].index,
                 )
 
             if processed_chunk.choices[0].finish_reason is not None:
                 is_finished = True
                 finish_reason = processed_chunk.choices[0].finish_reason
 
-            usage_chunk: Optional[litellm.Usage] = getattr(
-                processed_chunk, "usage", None
-            )
+            usage_chunk: Optional[Usage] = getattr(processed_chunk, "usage", None)
             if usage_chunk is not None:
 
                 usage = ChatCompletionUsageBlock(
@@ -93,7 +89,7 @@ class ModelResponseIterator:
             raise RuntimeError(f"Error receiving chunk from stream: {e}")
 
         try:
-            chunk = chunk.replace("data:", "")
+            chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
             chunk = chunk.strip()
             if len(chunk) > 0:
                 json_chunk = json.loads(chunk)
@@ -138,7 +134,7 @@ class ModelResponseIterator:
             raise RuntimeError(f"Error receiving chunk from stream: {e}")
 
         try:
-            chunk = chunk.replace("data:", "")
+            chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
             chunk = chunk.strip()
             if chunk == "[DONE]":
                 raise StopAsyncIteration

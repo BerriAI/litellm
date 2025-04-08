@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 import traceback
@@ -3934,12 +3935,13 @@ def test_completion_text_003_prompt_array():
 
 
 ##### hugging face tests
+@pytest.mark.skip(reason="local test")
 def test_completion_hf_prompt_array():
     try:
         litellm.set_verbose = True
         print("\n testing hf mistral\n")
         response = text_completion(
-            model="huggingface/mistralai/Mistral-7B-v0.1",
+            model="huggingface/mistralai/Mistral-7B-Instruct-v0.3",
             prompt=token_prompt,  # token prompt is a 2d list,
             max_tokens=0,
             temperature=0.0,
@@ -3968,14 +3970,15 @@ def test_completion_hf_prompt_array():
 
 def test_text_completion_stream():
     try:
-        response = text_completion(
-            model="huggingface/mistralai/Mistral-7B-v0.1",
-            prompt="good morning",
-            stream=True,
-            max_tokens=10,
-        )
-        for chunk in response:
-            print(f"chunk: {chunk}")
+        for _ in range(2):  # check if closed client used
+            response = text_completion(
+                model="huggingface/mistralai/Mistral-7B-Instruct-v0.3",
+                prompt="good morning",
+                stream=True,
+                max_tokens=10,
+            )
+            for chunk in response:
+                print(f"chunk: {chunk}")
     except Exception as e:
         pytest.fail(f"GOT exception for HF In streaming{e}")
 
@@ -4283,3 +4286,25 @@ def test_text_completion_with_echo(stream):
             print(chunk)
     else:
         assert isinstance(response, TextCompletionResponse)
+
+
+def test_text_completion_ollama():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_call:
+        try:
+            response = litellm.text_completion(
+                model="ollama/llama3.1:8b",
+                prompt="hello",
+                client=client,
+            )
+            print(response)
+        except Exception as e:
+            print(e)
+
+        mock_call.assert_called_once()
+        print(mock_call.call_args.kwargs)
+        json_data = json.loads(mock_call.call_args.kwargs["data"])
+        assert json_data["prompt"] == "hello"

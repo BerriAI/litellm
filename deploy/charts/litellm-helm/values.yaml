@@ -75,6 +75,12 @@ ingress:
 
 # masterkey: changeit
 
+# if set, use this secret for the master key; otherwise, autogenerate a new one
+masterkeySecretName: ""
+
+# if set, use this secret key for the master key; otherwise, use the default key
+masterkeySecretKey: ""
+
 # The elements within proxy_config are rendered as config.yaml for the proxy
 #  Examples: https://github.com/BerriAI/litellm/tree/main/litellm/proxy/example_config_yaml
 #  Reference: https://docs.litellm.ai/docs/proxy/configs
@@ -186,5 +192,12 @@ migrationJob:
   retries: 3 # Number of retries for the Job in case of failure
   backoffLimit: 4 # Backoff limit for Job restarts
   disableSchemaUpdate: false # Skip schema migrations for specific environments. When True, the job will exit with code 0.
+  annotations: {}
+  ttlSecondsAfterFinished: 120
+
+# Additional environment variables to be added to the deployment
+envVars: {
+    # USE_DDTRACE: "true"
+}
 
 

@@ -246,23 +246,6 @@ async def test_hf_completion_tgi():
 # test_get_cloudflare_response_streaming()
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
-@pytest.mark.asyncio
-async def test_completion_sagemaker():
-    # litellm.set_verbose=True
-    try:
-        response = await acompletion(
-            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
-            messages=[{"content": "Hello, how are you?", "role": "user"}],
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 def test_get_response_streaming():
     import asyncio
 

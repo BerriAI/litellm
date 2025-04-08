@@ -25,7 +25,6 @@ sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.router_utils.fallback_event_handlers import (
     run_async_fallback,
-    run_sync_fallback,
     log_success_fallback_event,
     log_failure_fallback_event,
 )
@@ -106,44 +105,6 @@ async def test_run_async_fallback(original_function):
     elif original_function == router._atext_completion:
         assert isinstance(result, litellm.TextCompletionResponse)
     elif original_function == router._aembedding:
-        assert isinstance(result, litellm.EmbeddingResponse)
-
-
-@pytest.mark.parametrize("original_function", [router._completion, router._embedding])
-def test_run_sync_fallback(original_function):
-    litellm.set_verbose = True
-    fallback_model_group = ["gpt-4"]
-    original_model_group = "gpt-3.5-turbo"
-    original_exception = litellm.exceptions.InternalServerError(
-        message="Simulated error",
-        llm_provider="openai",
-        model="gpt-3.5-turbo",
-    )
-
-    request_kwargs = {
-        "mock_response": "hello this is a test for run_async_fallback",
-        "metadata": {"previous_models": ["gpt-3.5-turbo"]},
-    }
-
-    if original_function == router._embedding:
-        request_kwargs["input"] = "hello this is a test for run_async_fallback"
-    elif original_function == router._completion:
-        request_kwargs["messages"] = [{"role": "user", "content": "Hello, world!"}]
-    result = run_sync_fallback(
-        router,
-        original_function=original_function,
-        num_retries=1,
-        fallback_model_group=fallback_model_group,
-        original_model_group=original_model_group,
-        original_exception=original_exception,
-        **request_kwargs
-    )
-
-    assert result is not None
-
-    if original_function == router._completion:
-        assert isinstance(result, litellm.ModelResponse)
-    elif original_function == router._embedding:
         assert isinstance(result, litellm.EmbeddingResponse)
 
 

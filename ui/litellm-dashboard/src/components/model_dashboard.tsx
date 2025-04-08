@@ -16,6 +16,16 @@ import {
   AccordionHeader,
   AccordionBody,
 } from "@tremor/react";
+import { CredentialItem, credentialListCall, CredentialsResponse } from "./networking";
+
+import ConditionalPublicModelName from "./add_model/conditional_public_model_name";
+import LiteLLMModelNameField from "./add_model/litellm_model_name";
+import AdvancedSettings from "./add_model/advanced_settings";
+import ProviderSpecificFields from "./add_model/provider_specific_fields";
+import { handleAddModelSubmit } from "./add_model/handle_add_model_submit";
+import CredentialsPanel from "@/components/model_add/credentials";
+import { getDisplayModelName } from "./view_model/model_name_display";
+import EditModelModal, { handleEditModelSubmit } from "./edit_model/edit_model_modal";
 import {
   TabPanel,
   TabPanels,
@@ -60,7 +70,7 @@ import {
   Popover,
   Form,
   Input,
-  Select as Select2,
+  Select as AntdSelect,
   InputNumber,
   message,
   Descriptions,
@@ -83,6 +93,8 @@ import {
   CheckCircleIcon,
   XCircleIcon,
   FilterIcon,
+  ChevronUpIcon,
+  ChevronDownIcon,
 } from "@heroicons/react/outline";
 import DeleteModelButton from "./delete_model_button";
 const { Title: Title2, Link } = Typography;
@@ -92,6 +104,14 @@ import { Upload } from "antd";
 import TimeToFirstToken from "./model_metrics/time_to_first_token";
 import DynamicFields from "./model_add/dynamic_form";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { Team } from "./key_team_helpers/key_list";
+import TeamInfoView from "./team/team_info";
+import { Providers, provider_map, providerLogoMap, getProviderLogoAndName, getPlaceholder, getProviderModels } from "./provider_info_helpers";
+import ModelInfoView from "./model_info_view";
+import AddModelTab from "./add_model/add_model_tab";
+import { ModelDataTable } from "./model_dashboard/table";
+import { columns } from "./model_dashboard/columns";
+import { all_admin_roles } from "@/utils/roles";
 
 interface ModelDashboardProps {
   accessToken: string | null;
@@ -102,6 +122,7 @@ interface ModelDashboardProps {
   keys: any[] | null;
   setModelData: any;
   premiumUser: boolean;
+  teams: Team[] | null;
 }
 
 interface EditModelModalProps {
@@ -136,42 +157,6 @@ interface ProviderSettings {
   fields: ProviderFields[];
 }
 
-enum Providers {
-  OpenAI = "OpenAI",
-  Azure = "Azure",
-  Azure_AI_Studio = "Azure AI Studio",
-  Anthropic = "Anthropic",
-  Google_AI_Studio = "Google AI Studio",
-  Bedrock = "Amazon Bedrock",
-  Groq = "Groq",
-  MistralAI = "Mistral AI",
-  Deepseek = "Deepseek",
-  OpenAI_Compatible = "OpenAI-Compatible Endpoints (Together AI, etc.)",
-  Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
-  Cohere = "Cohere",
-  Databricks = "Databricks",
-  Ollama = "Ollama",
-  xAI = "xAI",
-}
-
-const provider_map: Record<string, string> = {
-  OpenAI: "openai",
-  Azure: "azure",
-  Azure_AI_Studio: "azure_ai",
-  Anthropic: "anthropic",
-  Google_AI_Studio: "gemini",
-  Bedrock: "bedrock",
-  Groq: "groq",
-  MistralAI: "mistral",
-  Cohere: "cohere_chat",
-  OpenAI_Compatible: "openai",
-  Vertex_AI: "vertex_ai",
-  Databricks: "databricks",
-  xAI: "xai",
-  Deepseek: "deepseek",
-  Ollama: "ollama",
-
-};
 
 const retry_policy_map: Record<string, string> = {
   "BadRequestError (400)": "BadRequestErrorRetries",
@@ -180,100 +165,6 @@ const retry_policy_map: Record<string, string> = {
   "RateLimitError (429)": "RateLimitErrorRetries",
   "ContentPolicyViolationError (400)": "ContentPolicyViolationErrorRetries",
   "InternalServerError (500)": "InternalServerErrorRetries",
-};
-
-const handleSubmit = async (
-  formValues: Record<string, any>,
-  accessToken: string,
-  form: any
-) => {
-  try {
-    /**
-     * For multiple litellm model names - create a separate deployment for each
-     * - get the list
-     * - iterate through it
-     * - create a new deployment for each
-     *
-     * For single model name -> make it a 1 item list
-     */
-
-    // get the list of deployments
-    let deployments: Array<string> = Array.isArray(formValues["model"])
-      ? formValues["model"]
-      : [formValues["model"]];
-    console.log(`received deployments: ${deployments}`);
-    console.log(`received type of deployments: ${typeof deployments}`);
-    deployments.forEach(async (litellm_model) => {
-      console.log(`litellm_model: ${litellm_model}`);
-      const litellmParamsObj: Record<string, any> = {};
-      const modelInfoObj: Record<string, any> = {};
-      // Iterate through the key-value pairs in formValues
-      litellmParamsObj["model"] = litellm_model;
-      let modelName: string = "";
-      console.log("formValues add deployment:", formValues);
-      for (const [key, value] of Object.entries(formValues)) {
-        if (value === "") {
-          continue;
-        }
-        if (key == "model_name") {
-          modelName = modelName + value;
-        } else if (key == "custom_llm_provider") {
-          console.log("custom_llm_provider:", value);
-          const mappingResult = provider_map[value]; // Get the corresponding value from the mapping
-          litellmParamsObj["custom_llm_provider"] = mappingResult;
-          console.log("custom_llm_provider mappingResult:", mappingResult);
-        } else if (key == "model") {
-          continue;
-        }
-
-        // Check if key is "base_model"
-        else if (key === "base_model") {
-          // Add key-value pair to model_info dictionary
-          modelInfoObj[key] = value;
-        }
-        else if (key === "custom_model_name") {
-          litellmParamsObj["model"] = value;
-        } else if (key == "litellm_extra_params") {
-          console.log("litellm_extra_params:", value);
-          let litellmExtraParams = {};
-          if (value && value != undefined) {
-            try {
-              litellmExtraParams = JSON.parse(value);
-            } catch (error) {
-              message.error(
-                "Failed to parse LiteLLM Extra Params: " + error,
-                10
-              );
-              throw new Error("Failed to parse litellm_extra_params: " + error);
-            }
-            for (const [key, value] of Object.entries(litellmExtraParams)) {
-              litellmParamsObj[key] = value;
-            }
-          }
-        }
-
-        // Check if key is any of the specified API related keys
-        else {
-          // Add key-value pair to litellm_params dictionary
-          litellmParamsObj[key] = value;
-        }
-      }
-
-      const new_model: Model = {
-        model_name: modelName,
-        litellm_params: litellmParamsObj,
-        model_info: modelInfoObj,
-      };
-
-      const response: any = await modelCreateCall(accessToken, new_model);
-
-      console.log(`response for model create call: ${response["data"]}`);
-    });
-
-    form.resetFields();
-  } catch (error) {
-    message.error("Failed to create model: " + error, 10);
-  }
 };
 
 const ModelDashboard: React.FC<ModelDashboardProps> = ({
@@ -285,12 +176,13 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   keys,
   setModelData,
   premiumUser,
+  teams,
 }) => {
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
   const [form] = Form.useForm();
   const [modelMap, setModelMap] = useState<any>(null);
   const [lastRefreshed, setLastRefreshed] = useState("");
-
+  
   const [providerModels, setProviderModels] = useState<Array<string>>([]); // Explicitly typing providerModels as a string array
 
   const providers = Object.values(Providers).filter((key) =>
@@ -300,10 +192,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [providerSettings, setProviderSettings] = useState<ProviderSettings[]>(
     []
   );
-  const [selectedProvider, setSelectedProvider] = useState<String>("OpenAI");
+  const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
   const [healthCheckResponse, setHealthCheckResponse] = useState<string>("");
   const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
-  const [infoModalVisible, setInfoModalVisible] = useState<boolean>(false);
 
   const [selectedModel, setSelectedModel] = useState<any>(null);
   const [availableModelGroups, setAvailableModelGroups] = useState<
@@ -345,6 +236,158 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
   const [allEndUsers, setAllEndUsers] = useState<any[]>([]);
 
+  const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([]);
+
+  // Add state for advanced settings visibility
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
+
+  // Add these state variables
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+  const [editModel, setEditModel] = useState<boolean>(false);
+
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
+
+  const setProviderModelsFn = (provider: Providers) => {
+    const _providerModels = getProviderModels(provider, modelMap);
+    setProviderModels(_providerModels);
+    console.log(`providerModels: ${_providerModels}`);
+  };
+
+  const updateModelMetrics = async (
+    modelGroup: string | null,
+    startTime: Date | undefined,
+    endTime: Date | undefined,
+  ) => {
+    console.log("Updating model metrics for group:", modelGroup);
+    if (!accessToken || !userID || !userRole || !startTime || !endTime) {
+      return;
+    }
+    console.log(
+      "inside updateModelMetrics - startTime:",
+      startTime,
+      "endTime:",
+      endTime
+    );
+    setSelectedModelGroup(modelGroup); // If you want to store the selected model group in state
+
+    let selected_token = selectedAPIKey?.token;
+    if (selected_token === undefined) {
+      selected_token = null;
+    }
+
+    let selected_customer = selectedCustomer;
+    if (selected_customer === undefined) {
+      selected_customer = null;
+    }
+
+    // make startTime and endTime to last hour of the day
+    startTime.setHours(0);
+    startTime.setMinutes(0);
+    startTime.setSeconds(0);
+
+    endTime.setHours(23);
+    endTime.setMinutes(59);
+    endTime.setSeconds(59);
+
+
+    try {
+      const modelMetricsResponse = await modelMetricsCall(
+        accessToken,
+        userID,
+        userRole,
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString(),
+        selected_token,
+        selected_customer
+      );
+      console.log("Model metrics response:", modelMetricsResponse);
+
+      // Assuming modelMetricsResponse now contains the metric data for the specified model group
+      setModelMetrics(modelMetricsResponse.data);
+      setModelMetricsCategories(modelMetricsResponse.all_api_bases);
+
+      const streamingModelMetricsResponse = await streamingModelMetricsCall(
+        accessToken,
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString()
+      );
+
+      // Assuming modelMetricsResponse now contains the metric data for the specified model group
+      setStreamingModelMetrics(streamingModelMetricsResponse.data);
+      setStreamingModelMetricsCategories(
+        streamingModelMetricsResponse.all_api_bases
+      );
+
+      const modelExceptionsResponse = await modelExceptionsCall(
+        accessToken,
+        userID,
+        userRole,
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString(),
+        selected_token,
+        selected_customer
+      );
+      console.log("Model exceptions response:", modelExceptionsResponse);
+      setModelExceptions(modelExceptionsResponse.data);
+      setAllExceptions(modelExceptionsResponse.exception_types);
+
+      const slowResponses = await modelMetricsSlowResponsesCall(
+        accessToken,
+        userID,
+        userRole,
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString(),
+        selected_token,
+        selected_customer
+      );
+
+      console.log("slowResponses:", slowResponses);
+
+      setSlowResponsesData(slowResponses);
+
+
+      if (modelGroup) {
+        const dailyExceptions = await adminGlobalActivityExceptions(
+          accessToken,
+          startTime?.toISOString().split('T')[0],
+          endTime?.toISOString().split('T')[0],
+          modelGroup,
+        );
+
+        setGlobalExceptionData(dailyExceptions);
+
+        const dailyExceptionsPerDeplyment = await adminGlobalActivityExceptionsPerDeployment(
+          accessToken,
+          startTime?.toISOString().split('T')[0],
+          endTime?.toISOString().split('T')[0],
+          modelGroup,
+        )
+
+        setGlobalExceptionPerDeployment(dailyExceptionsPerDeplyment);
+
+      }
+
+      
+    } catch (error) {
+      console.error("Failed to fetch model metrics", error);
+    }
+  };
+
+  const fetchCredentials = async (accessToken: string) => {
+    try {
+      const response: CredentialsResponse = await credentialListCall(accessToken);
+      console.log(`credentials: ${JSON.stringify(response)}`);
+      setCredentialsList(response.credentials);
+    } catch (error) {
+      console.error('Error fetching credentials:', error);
+    }
+  };
+
+
   useEffect(() => {
     updateModelMetrics(
       selectedModelGroup,
@@ -362,142 +405,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     return null;
   }
 
-  const EditModelModal: React.FC<EditModelModalProps> = ({
-    visible,
-    onCancel,
-    model,
-    onSubmit,
-  }) => {
-    const [form] = Form.useForm();
-    let litellm_params_to_edit: Record<string, any> = {};
-    let model_name = "";
-    let model_id = "";
-    if (model) {
-      litellm_params_to_edit = model.litellm_params;
-      model_name = model.model_name;
-      let model_info = model.model_info;
-      if (model_info) {
-        model_id = model_info.id;
-        console.log(`model_id: ${model_id}`);
-        litellm_params_to_edit.model_id = model_id;
-      }
-    }
-
-    const handleOk = () => {
-      form
-        .validateFields()
-        .then((values) => {
-          onSubmit(values);
-          form.resetFields();
-        })
-        .catch((error) => {
-          console.error("Validation failed:", error);
-        });
-    };
-
-    return (
-      <Modal
-        title={"Edit Model " + model_name}
-        visible={visible}
-        width={800}
-        footer={null}
-        onOk={handleOk}
-        onCancel={onCancel}
-      >
-        <Form
-          form={form}
-          onFinish={handleEditSubmit}
-          initialValues={litellm_params_to_edit} // Pass initial values here
-          labelCol={{ span: 8 }}
-          wrapperCol={{ span: 16 }}
-          labelAlign="left"
-        >
-          <>
-            <Form.Item className="mt-8" label="api_base" name="api_base">
-              <TextInput />
-            </Form.Item>
-            <Form.Item
-              label="organization"
-              name="organization"
-              tooltip="OpenAI Organization ID"
-            >
-                <TextInput />
-            </Form.Item>
-
-            <Form.Item
-              label="tpm"
-              name="tpm"
-              tooltip="int (optional) - Tokens limit for this deployment: in tokens per minute (tpm). Find this information on your model/providers website"
-            >
-              <InputNumber min={0} step={1} />
-            </Form.Item>
-
-            <Form.Item
-              label="rpm"
-              name="rpm"
-              tooltip="int (optional) - Rate limit for this deployment: in requests per minute (rpm). Find this information on your model/providers website"
-            >
-              <InputNumber min={0} step={1} />
-            </Form.Item>
-
-            <Form.Item label="max_retries" name="max_retries">
-              <InputNumber min={0} step={1} />
-            </Form.Item>
-
-            <Form.Item
-              label="timeout"
-              name="timeout"
-              tooltip="int (optional) - Timeout in seconds for LLM requests (Defaults to 600 seconds)"
-            >
-              <InputNumber min={0} step={1} />
-            </Form.Item>
-
-            <Form.Item
-              label="stream_timeout"
-              name="stream_timeout"
-              tooltip="int (optional) - Timeout for stream requests (seconds)"
-            >
-              <InputNumber min={0} step={1} />
-            </Form.Item>
-
-            <Form.Item
-              label="Input Cost per 1M Tokens"
-              name="input_cost_per_million_tokens"
-              tooltip="float (optional) - Input cost per 1 million tokens"
-            >
-              <InputNumber min={0} step={0.01} />
-            </Form.Item>
-
-            <Form.Item
-              label="Output Cost per 1M Tokens"
-              name="output_cost_per_million_tokens"
-              tooltip="float (optional) - Output cost per 1 million tokens"
-            >
-              <InputNumber min={0} step={0.01} />
-            </Form.Item>
-
-            <Form.Item
-              label="model_id"
-              name="model_id"
-              hidden={true}
-            ></Form.Item>
-          </>
-          <div style={{ textAlign: "right", marginTop: "10px" }}>
-            <Button2 htmlType="submit">Save</Button2>
-          </div>
-        </Form>
-      </Modal>
-    );
-  };
-
   const handleEditClick = (model: any) => {
     setSelectedModel(model);
     setEditModalVisible(true);
-  };
-
-  const handleInfoClick = (model: any) => {
-    setSelectedModel(model);
-    setInfoModalVisible(true);
   };
 
   const handleEditCancel = () => {
@@ -505,62 +415,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     setSelectedModel(null);
   };
 
-  const handleInfoCancel = () => {
-    setInfoModalVisible(false);
-    setSelectedModel(null);
-  };
 
-  const handleEditSubmit = async (formValues: Record<string, any>) => {
-    // Call API to update team with teamId and values
-
-    console.log("handleEditSubmit:", formValues);
-    if (accessToken == null) {
-      return;
-    }
-
-    let newLiteLLMParams: Record<string, any> = {};
-    let model_info_model_id = null;
-
-    if (formValues.input_cost_per_million_tokens) {
-      formValues.input_cost_per_token = formValues.input_cost_per_million_tokens / 1000000;
-      delete formValues.input_cost_per_million_tokens;
-    }
-    if (formValues.output_cost_per_million_tokens) {
-      formValues.output_cost_per_token = formValues.output_cost_per_million_tokens / 1000000;
-      delete formValues.output_cost_per_million_tokens;
-    }
-
-    for (const [key, value] of Object.entries(formValues)) {
-      if (key !== "model_id") {
-        newLiteLLMParams[key] = value;
-      } else {
-        model_info_model_id = value;
-      }
-    }
-
-    let payload = {
-      litellm_params: newLiteLLMParams,
-      model_info: {
-        id: model_info_model_id,
-      },
-    };
-
-    console.log("handleEditSubmit payload:", payload);
-
-    try {
-      let newModelValue = await modelUpdateCall(accessToken, payload);
-      message.success(
-        "Model updated successfully, restart server to see updates"
-      );
-
-      setEditModalVisible(false);
-      setSelectedModel(null);
-    } catch (error) {
-      console.log(`Error occurred`);
-    }
-  };
-
-  const props: UploadProps = {
+  const uploadProps: UploadProps = {
     name: "file",
     accept: ".json",
     beforeUpload: (file) => {
@@ -624,9 +480,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     }
     const fetchData = async () => {
       try {
-        const _providerSettings = await modelSettingsCall(accessToken);
-        setProviderSettings(_providerSettings);
-
         // Replace with your actual API call for model data
         const modelDataResponse = await modelInfoCall(
           accessToken,
@@ -635,6 +488,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         );
         console.log("Model data response:", modelDataResponse.data);
         setModelData(modelDataResponse);
+        const _providerSettings = await modelSettingsCall(accessToken);
+        if (_providerSettings) {
+          setProviderSettings(_providerSettings);
+        }
+
+        
 
         // loop through modelDataResponse and get all`model_name` values
         let all_model_groups: Set<string> = new Set();
@@ -893,22 +752,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   }
   // when users click request access show pop up to allow them to request access
 
-  // sort modelData.data by provider alphabetically, check if provider exists and is not null / undefined
-  if (modelData.data && modelData.data.length > 0) {
-    modelData.data.sort((a: any, b: any) => {
-      if (a.provider && b.provider) {
-        return a.provider.localeCompare(b.provider);
-      } else if (a.provider && !b.provider) {
-        return -1;
-      } else if (!a.provider && b.provider) {
-        return 1;
-      } else {
-        return 0;
-      }
-    });
-  }
-
-
   if (userRole && userRole == "Admin Viewer") {
     const { Title, Paragraph } = Typography;
     return (
@@ -921,53 +764,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     );
   }
 
-  const setProviderModelsFn = (provider: string) => {
-    console.log(`received provider string: ${provider}`);
-    const providerKey = Object.keys(Providers).find(
-      (key) => (Providers as { [index: string]: any })[key] === provider
-    );
-
-    if (providerKey) {
-      const mappingResult = provider_map[providerKey]; // Get the corresponding value from the mapping
-      console.log(`mappingResult: ${mappingResult}`);
-      let _providerModels: Array<string> = [];
-      if (typeof modelMap === "object") {
-        Object.entries(modelMap).forEach(([key, value]) => {
-          if (
-            value !== null &&
-            typeof value === "object" &&
-            "litellm_provider" in (value as object) &&
-            ((value as any)["litellm_provider"] === mappingResult ||
-              (value as any)["litellm_provider"].includes(mappingResult))
-          ) {
-            _providerModels.push(key);
-          }
-        });
-
-        // Special case for cohere_chat
-        // we need both cohere_chat and cohere models to show on dropdown
-        if (providerKey == Providers.Cohere) {
-          console.log("adding cohere chat model")
-          Object.entries(modelMap).forEach(([key, value]) => {
-            if (
-              value !== null &&
-              typeof value === "object" &&
-              "litellm_provider" in (value as object) &&
-              ((value as any)["litellm_provider"] === "cohere")
-            ) {
-              _providerModels.push(key);
-            }
-          });
-        }
-      }
-
-      
-
-      setProviderModels(_providerModels);
-      console.log(`providerModels: ${providerModels}`);
-    }
-  };
-
   const runHealthCheck = async () => {
     try {
       message.info("Running health check...");
@@ -979,131 +775,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       setHealthCheckResponse("Error running health check");
     }
   };
-
-  const updateModelMetrics = async (
-    modelGroup: string | null,
-    startTime: Date | undefined,
-    endTime: Date | undefined,
-  ) => {
-    console.log("Updating model metrics for group:", modelGroup);
-    if (!accessToken || !userID || !userRole || !startTime || !endTime) {
-      return;
-    }
-    console.log(
-      "inside updateModelMetrics - startTime:",
-      startTime,
-      "endTime:",
-      endTime
-    );
-    setSelectedModelGroup(modelGroup); // If you want to store the selected model group in state
-
-    let selected_token = selectedAPIKey?.token;
-    if (selected_token === undefined) {
-      selected_token = null;
-    }
-
-    let selected_customer = selectedCustomer;
-    if (selected_customer === undefined) {
-      selected_customer = null;
-    }
-
-    // make startTime and endTime to last hour of the day
-    startTime.setHours(0);
-    startTime.setMinutes(0);
-    startTime.setSeconds(0);
-
-    endTime.setHours(23);
-    endTime.setMinutes(59);
-    endTime.setSeconds(59);
-
-
-    try {
-      const modelMetricsResponse = await modelMetricsCall(
-        accessToken,
-        userID,
-        userRole,
-        modelGroup,
-        startTime.toISOString(),
-        endTime.toISOString(),
-        selected_token,
-        selected_customer
-      );
-      console.log("Model metrics response:", modelMetricsResponse);
-
-      // Assuming modelMetricsResponse now contains the metric data for the specified model group
-      setModelMetrics(modelMetricsResponse.data);
-      setModelMetricsCategories(modelMetricsResponse.all_api_bases);
-
-      const streamingModelMetricsResponse = await streamingModelMetricsCall(
-        accessToken,
-        modelGroup,
-        startTime.toISOString(),
-        endTime.toISOString()
-      );
-
-      // Assuming modelMetricsResponse now contains the metric data for the specified model group
-      setStreamingModelMetrics(streamingModelMetricsResponse.data);
-      setStreamingModelMetricsCategories(
-        streamingModelMetricsResponse.all_api_bases
-      );
-
-      const modelExceptionsResponse = await modelExceptionsCall(
-        accessToken,
-        userID,
-        userRole,
-        modelGroup,
-        startTime.toISOString(),
-        endTime.toISOString(),
-        selected_token,
-        selected_customer
-      );
-      console.log("Model exceptions response:", modelExceptionsResponse);
-      setModelExceptions(modelExceptionsResponse.data);
-      setAllExceptions(modelExceptionsResponse.exception_types);
-
-      const slowResponses = await modelMetricsSlowResponsesCall(
-        accessToken,
-        userID,
-        userRole,
-        modelGroup,
-        startTime.toISOString(),
-        endTime.toISOString(),
-        selected_token,
-        selected_customer
-      );
-
-      console.log("slowResponses:", slowResponses);
-
-      setSlowResponsesData(slowResponses);
-
-
-      if (modelGroup) {
-        const dailyExceptions = await adminGlobalActivityExceptions(
-          accessToken,
-          startTime?.toISOString().split('T')[0],
-          endTime?.toISOString().split('T')[0],
-          modelGroup,
-        );
-  
-        setGlobalExceptionData(dailyExceptions);
-  
-        const dailyExceptionsPerDeplyment = await adminGlobalActivityExceptionsPerDeployment(
-          accessToken,
-          startTime?.toISOString().split('T')[0],
-          endTime?.toISOString().split('T')[0],
-          modelGroup,
-        )
-  
-        setGlobalExceptionPerDeployment(dailyExceptionsPerDeplyment);
-
-      }
-
-      
-    } catch (error) {
-      console.error("Failed to fetch model metrics", error);
-    }
-  };
-
 
   const FilterByContent = (
       <div >
@@ -1314,30 +985,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     );
   };
 
-  const getPlaceholder = (selectedProvider: string): string => {
-    if (selectedProvider === Providers.Vertex_AI) {
-      return "gemini-pro";
-    } else if (selectedProvider == Providers.Anthropic) {
-      return "claude-3-opus";
-    } else if (selectedProvider == Providers.Bedrock) {
-      return "claude-3-opus";
-    } else if (selectedProvider == Providers.Google_AI_Studio) {
-      return "gemini-pro";
-    } else if (selectedProvider == Providers.Azure_AI_Studio) {
-      return "azure_ai/command-r-plus";
-    } else if (selectedProvider == Providers.Azure) {
-      return "azure/my-deployment";
-    } else {
-      return "gpt-3.5-turbo";
-    }
-  };
 
   const handleOk = () => {
     form
       .validateFields()
       .then((values) => {
-        handleSubmit(values, accessToken, form);
-        // form.resetFields();
+        handleAddModelSubmit(values, accessToken, form, handleRefreshClick);
       })
       .catch((error) => {
         console.error("Validation failed:", error);
@@ -1352,59 +1005,448 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   );
 
   let dynamicProviderForm: ProviderSettings | undefined = undefined;
-  if (providerKey) {
+  if (providerKey && providerSettings) {
     dynamicProviderForm = providerSettings.find(
       (provider) => provider.name === provider_map[providerKey]
     );
   }
 
+  // If a team is selected, render TeamInfoView in full page layout
+  if (selectedTeamId) {
+    return (
+      <div className="w-full h-full">
+        <TeamInfoView 
+          teamId={selectedTeamId} 
+          onClose={() => setSelectedTeamId(null)}
+          accessToken={accessToken}
+          is_team_admin={userRole === "Admin"}
+          is_proxy_admin={userRole === "Proxy Admin"}
+          userModels={all_models_on_proxy}
+          editTeam={false}
+        />
+      </div>
+    );
+  }
+
   return (
     <div style={{ width: "100%", height: "100%" }}>
-      <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
-        <TabList className="flex justify-between mt-2 w-full items-center">
-          <div className="flex">
-            <Tab>All Models</Tab>
-            <Tab>Add Model</Tab>
-            <Tab>
-              <pre>/health Models</pre>
-            </Tab>
-            <Tab>Model Analytics</Tab>
-            <Tab>Model Retry Settings</Tab>
-          </div>
+      {selectedModelId ? (
+        <ModelInfoView 
+          modelId={selectedModelId}
+          editModel={true}
+          onClose={() => {
+            setSelectedModelId(null);
+            setEditModel(false);
+          }}
+          modelData={modelData.data.find((model: any) => model.model_info.id === selectedModelId)}
+          accessToken={accessToken}
+          userID={userID}
+          userRole={userRole}
+          setEditModalVisible={setEditModalVisible}
+          setSelectedModel={setSelectedModel}
+          onModelUpdate={(updatedModel) => {
+            // Update the model in the modelData.data array
+            const updatedModelData = {
+              ...modelData,
+              data: modelData.data.map((model: any) => 
+                model.model_info.id === updatedModel.model_info.id ? updatedModel : model
+              )
+            };
+            setModelData(updatedModelData);
+            // Trigger a refresh to update UI
+            handleRefreshClick();
+          }}
+        />
+      ) : (
+        <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
+          
+          <TabList className="flex justify-between mt-2 w-full items-center">
+            <div className="flex">
+              {all_admin_roles.includes(userRole) ? <Tab>All Models</Tab> : <Tab>Your Models</Tab>}
+              <Tab>Add Model</Tab>
+              {all_admin_roles.includes(userRole) && <Tab>LLM Credentials</Tab>}
+              {all_admin_roles.includes(userRole) && <Tab>
+                <pre>/health Models</pre>
+              </Tab>}
+              {all_admin_roles.includes(userRole) && <Tab>Model Analytics</Tab>}
+              {all_admin_roles.includes(userRole) && <Tab>Model Retry Settings</Tab>}
+              
+            </div>
 
-          <div className="flex items-center space-x-2">
-            {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
-            <Icon
-              icon={RefreshIcon} // Modify as necessary for correct icon name
-              variant="shadow"
-              size="xs"
-              className="self-center"
-              onClick={handleRefreshClick}
-            />
-          </div>
-        </TabList>
-        <TabPanels>
-          <TabPanel>
-            <Grid>
+            <div className="flex items-center space-x-2">
+              {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
+              <Icon
+                icon={RefreshIcon} // Modify as necessary for correct icon name
+                variant="shadow"
+                size="xs"
+                className="self-center"
+                onClick={handleRefreshClick}
+              />
+            </div>
+          </TabList>
+          <TabPanels>
+            <TabPanel>
+              <Grid>
+              <div className="flex justify-between items-center mb-6">
+                {/* Left side - Title and description */}
+                <div>
+                  <Title>Model Management</Title>
+                  {!all_admin_roles.includes(userRole) ? (
+                    <Text className="text-tremor-content">
+                      Add models for teams you are an admin for.
+                    </Text>
+                  ) : (
+                    <Text className="text-tremor-content">
+                      Add and manage models for the proxy
+                    </Text>
+                  )}
+                </div>
+
+                {/* Right side - Filter */}
+                <div className="flex items-center gap-2">
+                  <Text>Filter by Public Model Name:</Text>
+                  <Select
+                    className="w-64"
+                    defaultValue={selectedModelGroup ?? "all"}
+                    onValueChange={(value) => setSelectedModelGroup(value === "all" ? "all" : value)}
+                    value={selectedModelGroup ?? "all"}
+                  >
+                    <SelectItem value="all">All Models</SelectItem>
+                    {availableModelGroups.map((group, idx) => (
+                      <SelectItem
+                        key={idx}
+                        value={group}
+                        onClick={() => setSelectedModelGroup(group)}
+                      >
+                        {group}
+                      </SelectItem>
+                    ))}
+                  </Select>
+                </div>
+              </div>
+              <ModelDataTable
+                columns={columns(
+                  premiumUser,
+                  setSelectedModelId,
+                  setSelectedTeamId,
+                  getDisplayModelName,
+                  handleEditClick,
+                  handleRefreshClick,
+                  setEditModel
+                )}
+                data={modelData.data.filter(
+                  (model: any) =>
+                    selectedModelGroup === "all" ||
+                    model.model_name === selectedModelGroup ||
+                    !selectedModelGroup
+                )}
+                isLoading={false} // Add loading state if needed
+              />
+              </Grid>
+            </TabPanel>
+            <TabPanel className="h-full">
+              <AddModelTab
+                form={form}
+                handleOk={handleOk}
+                selectedProvider={selectedProvider}
+                setSelectedProvider={setSelectedProvider}
+                providerModels={providerModels}
+                setProviderModelsFn={setProviderModelsFn}
+                getPlaceholder={getPlaceholder}
+                uploadProps={uploadProps}
+                showAdvancedSettings={showAdvancedSettings}
+                setShowAdvancedSettings={setShowAdvancedSettings}
+                teams={teams}
+                credentials={credentialsList}
+                accessToken={accessToken}
+                userRole={userRole}
+              />
+            </TabPanel>
+            <TabPanel>
+              <CredentialsPanel accessToken={accessToken} uploadProps={uploadProps} credentialList={credentialsList} fetchCredentials={fetchCredentials} />
+            </TabPanel>
+            <TabPanel>
+              <Card>
+                <Text>
+                  `/health` will run a very small request through your models
+                  configured on litellm
+                </Text>
+
+                <Button onClick={runHealthCheck}>Run `/health`</Button>
+                {healthCheckResponse && (
+                  <pre>{JSON.stringify(healthCheckResponse, null, 2)}</pre>
+                )}
+              </Card>
+            </TabPanel>
+            <TabPanel>
+              <Grid numItems={4} className="mt-2 mb-2">
+                <Col>
+                  <Text>Select Time Range</Text>
+                  <DateRangePicker
+                    enableSelect={true}
+                    value={dateValue}
+                    className="mr-2"
+                    onValueChange={(value) => {
+                      setDateValue(value);
+                      updateModelMetrics(
+                        selectedModelGroup,
+                        value.from,
+                        value.to
+                      ); // Call updateModelMetrics with the new date range
+                    }}
+                  />
+                </Col>
+                <Col className="ml-2">
+                  <Text>Select Model Group</Text>
+                  <Select
+                    defaultValue={
+                      selectedModelGroup
+                        ? selectedModelGroup
+                        : availableModelGroups[0]
+                    }
+                    value={
+                      selectedModelGroup
+                        ? selectedModelGroup
+                        : availableModelGroups[0]
+                    }
+                  >
+                    {availableModelGroups.map((group, idx) => (
+                      <SelectItem
+                        key={idx}
+                        value={group}
+                        onClick={() =>
+                          updateModelMetrics(group, dateValue.from, dateValue.to)
+                        }
+                      >
+                        {group}
+                      </SelectItem>
+                    ))}
+                  </Select>
+                </Col>
+                <Col>
+                <Popover
+                  trigger="click" content={FilterByContent}
+                  overlayStyle={{
+                    width: "20vw"
+                  }}
+                  >
+                <Button
+                icon={FilterIcon}
+                size="md"
+                variant="secondary"
+                className="mt-4 ml-2"
+                style={{
+                  border: "none",
+                }}
+                onClick={() => setShowAdvancedFilters(true)}
+                  >
+                </Button>      
+                </Popover>
+                </Col>
+
+                </Grid>
+
+
+              <Grid numItems={2}>
+                <Col>
+                  <Card className="mr-2 max-h-[400px] min-h-[400px]">
+                    <TabGroup>
+                      <TabList variant="line" defaultValue="1">
+                        <Tab value="1">Avg. Latency per Token</Tab>
+                        <Tab value="2">Time to first token</Tab>
+                      </TabList>
+                      <TabPanels>
+                        <TabPanel>
+                          <p className="text-gray-500 italic"> (seconds/token)</p>
+                          <Text className="text-gray-500 italic mt-1 mb-1">
+                            average Latency for successfull requests divided by
+                            the total tokens
+                          </Text>
+                          {modelMetrics && modelMetricsCategories && (
+                            <AreaChart
+                              title="Model Latency"
+                              className="h-72"
+                              data={modelMetrics}
+                              showLegend={false}
+                              index="date"
+                              categories={modelMetricsCategories}
+                              connectNulls={true}
+                              customTooltip={customTooltip}
+                            />
+                          )}
+                        </TabPanel>
+                        <TabPanel>
+                          <TimeToFirstToken
+                            modelMetrics={streamingModelMetrics}
+                            modelMetricsCategories={
+                              streamingModelMetricsCategories
+                            }
+                            customTooltip={customTooltip}
+                            premiumUser={premiumUser}
+                          />
+                        </TabPanel>
+                      </TabPanels>
+                    </TabGroup>
+                  </Card>
+                </Col>
+                <Col>
+                  <Card className="ml-2 max-h-[400px] min-h-[400px]  overflow-y-auto">
+                    <Table>
+                      <TableHead>
+                        <TableRow>
+                          <TableHeaderCell>Deployment</TableHeaderCell>
+                          <TableHeaderCell>Success Responses</TableHeaderCell>
+                          <TableHeaderCell>
+                            Slow Responses <p>Success Responses taking 600+s</p>
+                          </TableHeaderCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {slowResponsesData.map((metric, idx) => (
+                          <TableRow key={idx}>
+                            <TableCell>{metric.api_base}</TableCell>
+                            <TableCell>{metric.total_count}</TableCell>
+                            <TableCell>{metric.slow_count}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </Card>
+                </Col>
+              </Grid>
+              <Grid numItems={1} className="gap-2 w-full mt-2">
+              <Card>
+
+              <Title>All Exceptions for {selectedModelGroup}</Title>
+               
+              <BarChart
+                      className="h-60"
+                      data={modelExceptions}
+                      index="model"
+                      categories={allExceptions}
+                      stack={true}
+                      
+                      yAxisWidth={30}
+                /> 
+                            </Card>
+            
+              </Grid>
+
+
+              <Grid numItems={1} className="gap-2 w-full mt-2">
+                  <Card>
+                  <Title>All Up Rate Limit Errors (429) for {selectedModelGroup}</Title>
+                  <Grid numItems={1}>
+                  <Col>
+                  <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Num Rate Limit Errors { (globalExceptionData.sum_num_rate_limit_exceptions)}</Subtitle>
+                  <BarChart
+                      className="h-40"
+                      data={globalExceptionData.daily_data}
+                      index="date"
+                      colors={['rose']}
+                      categories={['num_rate_limit_exceptions']}
+                      onValueChange={(v) => console.log(v)}
+                    />
+                    </Col>
+                    <Col>
+
+                 
+
+                  </Col>
+
+                  </Grid>
+                  
+
+                  </Card>
+
+                  {
+                    premiumUser ? ( 
+                      <>
+                      {globalExceptionPerDeployment.map((globalActivity, index) => (
+                    <Card key={index}>
+                      <Title>{globalActivity.api_base ? globalActivity.api_base : "Unknown API Base"}</Title>
+                      <Grid numItems={1}>
+                        <Col>
+                          <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Num Rate Limit Errors (429) {(globalActivity.sum_num_rate_limit_exceptions)}</Subtitle>
+                          <BarChart
+                            className="h-40"
+                            data={globalActivity.daily_data}
+                            index="date"
+                            colors={['rose']}
+                            categories={['num_rate_limit_exceptions']}
+                
+                            onValueChange={(v) => console.log(v)}
+                          />
+                          
+                        </Col>
+                      </Grid>
+                    </Card>
+                  ))}
+                      </>
+                    ) : 
+                    <>
+                    {globalExceptionPerDeployment && globalExceptionPerDeployment.length > 0 &&
+                      globalExceptionPerDeployment.slice(0, 1).map((globalActivity, index) => (
+                        <Card key={index}>
+                          <Title>✨ Rate Limit Errors by Deployment</Title>
+                          <p className="mb-2 text-gray-500 italic text-[12px]">Upgrade to see exceptions for all deployments</p>
+                          <Button variant="primary" className="mb-2">
+                            <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
+                              Get Free Trial
+                            </a>
+                          </Button>
+                          <Card>
+                          <Title>{globalActivity.api_base}</Title>
+                          <Grid numItems={1}>
+                            <Col>
+                              <Subtitle
+                                style={{
+                                  fontSize: "15px",
+                                  fontWeight: "normal",
+                                  color: "#535452",
+                                }}
+                              >
+                                Num Rate Limit Errors {(globalActivity.sum_num_rate_limit_exceptions)}
+                              </Subtitle>
+                              <BarChart
+                                  className="h-40"
+                                  data={globalActivity.daily_data}
+                                  index="date"
+                                  colors={['rose']}
+                                  categories={['num_rate_limit_exceptions']}
+                
+                                  onValueChange={(v) => console.log(v)}
+                                />
+                            </Col>
+                            
+                            
+                          </Grid>
+                          </Card>
+                        </Card>
+                      ))}
+                  </>
+                  }              
+                </Grid>
+                
+            </TabPanel>
+            <TabPanel>
               <div className="flex items-center">
                 <Text>Filter by Public Model Name</Text>
+
                 <Select
                   className="mb-4 mt-2 ml-2 w-50"
                   defaultValue={
                     selectedModelGroup
                       ? selectedModelGroup
-                      : undefined
-                  }
-                  onValueChange={(value) =>
-                    setSelectedModelGroup(value === "all" ? "all" : value)
+                      : availableModelGroups[0]
                   }
                   value={
                     selectedModelGroup
                       ? selectedModelGroup
-                      : undefined
+                      : availableModelGroups[0]
                   }
+                  onValueChange={(value) => setSelectedModelGroup(value)}
                 >
-                  <SelectItem value={"all"}>All Models</SelectItem>
                   {availableModelGroups.map((group, idx) => (
                     <SelectItem
                       key={idx}
@@ -1416,1014 +1458,72 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   ))}
                 </Select>
               </div>
-              <Card>
-                <Table style={{ maxWidth: "1500px", width: "100%" }}>
-                  <TableHead>
-                    <TableRow>
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "150px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px",
-                        }}
-                      >
-                        Public Model Name
-                      </TableHeaderCell>
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "100px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px",
-                        }}
-                      >
-                        Provider
-                      </TableHeaderCell>
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "150px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px",
-                        }}
-                      >
-                        LiteLLM Model
-                      </TableHeaderCell>
-                      {userRole === "Admin" && (
-                        <TableHeaderCell
-                          style={{
-                            maxWidth: "150px",
-                            whiteSpace: "normal",
-                            wordBreak: "break-word",
-                            fontSize: "11px",
-                          }}
-                        >
-                          API Base
-                        </TableHeaderCell>
-                      )}
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "85px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px",
-                        }}
-                      >
-                        Input Price{" "}
-                        <p style={{ fontSize: "10px", color: "gray" }}>
-                          /1M Tokens ($)
-                        </p>
-                      </TableHeaderCell>
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "85px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px",
-                        }}
-                      >
-                        Output Price{" "}
-                        <p style={{ fontSize: "10px", color: "gray" }}>
-                          /1M Tokens ($)
-                        </p>
-                      </TableHeaderCell>
 
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "100px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px",
-                        }}
-                      >
-                        {premiumUser ? (
-                          "Created At"
-                        ) : (
-                          <a
-                            href="https://forms.gle/W3U4PZpJGFHWtHyA9"
-                            target="_blank"
-                            style={{ color: "#72bcd4" }}
-                          >
-                            {" "}
-                            ✨ Created At
-                          </a>
-                        )}
-                      </TableHeaderCell>
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "100px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px",
-                        }}
-                      >
-                        {premiumUser ? (
-                          "Created By"
-                        ) : (
-                          <a
-                            href="https://forms.gle/W3U4PZpJGFHWtHyA9"
-                            target="_blank"
-                            style={{ color: "#72bcd4" }}
-                          >
-                            {" "}
-                            ✨ Created By
-                          </a>
-                        )}
-                      </TableHeaderCell>
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "50px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px",
-                        }}
-                      >
-                        Status
-                      </TableHeaderCell>
-                      <TableHeaderCell></TableHeaderCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {modelData.data
-                      .filter(
-                        (model: any) =>
-                          selectedModelGroup === "all" ||
-                          model.model_name === selectedModelGroup ||
-                          selectedModelGroup === null ||
-                          selectedModelGroup === undefined ||
-                          selectedModelGroup === ""
-                      )
-                      .map((model: any, index: number) => (
-                        <TableRow
-                          key={index}
-                          style={{ maxHeight: "1px", minHeight: "1px" }}
-                        >
-                          <TableCell
-                            style={{
-                              maxWidth: "100px",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                            <p className="text-xs">{model.model_name || "-"}</p>
-                          </TableCell>
-                          <TableCell
-                            style={{
-                              maxWidth: "100px",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                            <p className="text-xs">{model.provider || "-"}</p>
-                          </TableCell>
-                          <TableCell
-                            style={{
-                              maxWidth: "100px",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                            <Tooltip title={model && model.litellm_model_name}>
-                                <pre
-                                  style={{
-                                    maxWidth: "150px",
-                                    whiteSpace: "normal",
-                                    wordBreak: "break-word",
-                                  }}
-                                  className="text-xs"
-                                  title={
-                                    model && model.litellm_model_name
-                                      ? model.litellm_model_name
-                                      : ""
-                                  }
-                                >
-                                  {model && model.litellm_model_name
-                                    ? model.litellm_model_name.slice(0, 20) + (model.litellm_model_name.length > 20 ? "..." : "")
-                                    : "-"}
-                                </pre>
-                              </Tooltip>
-                            
-                          </TableCell>
-                          {userRole === "Admin" && (
-                            <TableCell
-                              style={{
-                                maxWidth: "150px",
-                                whiteSpace: "normal",
-                                wordBreak: "break-word",
-                              }}
-                            >
-                              <Tooltip title={model && model.api_base}>
-                                <pre
-                                  style={{
-                                    maxWidth: "150px",
-                                    whiteSpace: "normal",
-                                    wordBreak: "break-word",
-                                  }}
-                                  className="text-xs"
-                                  title={
-                                    model && model.api_base
-                                      ? model.api_base
-                                      : ""
-                                  }
-                                >
-                                  {model && model.api_base
-                                    ? model.api_base.slice(0, 20)
-                                    : "-"}
-                                </pre>
-                              </Tooltip>
-                            </TableCell>
-                          )}
-                          <TableCell
-                            style={{
-                              maxWidth: "80px",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                            <pre className="text-xs">
-                              {model.input_cost
-                                ? model.input_cost
-                                : model.litellm_params.input_cost_per_token != null && model.litellm_params.input_cost_per_token != undefined
-                                  ? (
-                                      Number(
-                                        model.litellm_params
-                                          .input_cost_per_token
-                                      ) * 1000000
-                                    ).toFixed(2)
-                                  : null}
-                            </pre>
-                          </TableCell>
-                          <TableCell
-                            style={{
-                              maxWidth: "80px",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                            <pre className="text-xs">
-                              {model.output_cost
-                                ? model.output_cost
-                                : model.litellm_params.output_cost_per_token
-                                  ? (
-                                      Number(
-                                        model.litellm_params
-                                          .output_cost_per_token
-                                      ) * 1000000
-                                    ).toFixed(2)
-                                  : null}
-                            </pre>
-                          </TableCell>
-                          <TableCell>
-                            <p className="text-xs">
-                              {premiumUser
-                                ? formatCreatedAt(
-                                    model.model_info.created_at
-                                  ) || "-"
-                                : "-"}
-                            </p>
-                          </TableCell>
-                          <TableCell>
-                            <p className="text-xs">
-                              {premiumUser
-                                ? model.model_info.created_by || "-"
-                                : "-"}
-                            </p>
-                          </TableCell>
-                          <TableCell
-                            style={{
-                              maxWidth: "100px",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                            {model.model_info.db_model ? (
-                              <Badge size="xs" className="text-white">
-                                <p className="text-xs">DB Model</p>
-                              </Badge>
-                            ) : (
-                              <Badge size="xs" className="text-black">
-                                <p className="text-xs">Config Model</p>
-                              </Badge>
-                            )}
-                          </TableCell>
-                          <TableCell
-                            style={{
-                              maxWidth: "150px",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                            <Grid numItems={3}>
-                              <Col>
-                                <Icon
-                                  icon={InformationCircleIcon}
-                                  size="sm"
-                                  onClick={() => handleInfoClick(model)}
-                                />
-                              </Col>
-                              <Col>
-                                <Icon
-                                  icon={PencilAltIcon}
-                                  size="sm"
-                                  onClick={() => handleEditClick(model)}
-                                />
-                              </Col>
-
-                              <Col>
-                                <DeleteModelButton
-                                  modelID={model.model_info.id}
-                                  accessToken={accessToken}
-                                />
-                              </Col>
-                            </Grid>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                  </TableBody>
-                </Table>
-              </Card>
-            </Grid>
-            <EditModelModal
-              visible={editModalVisible}
-              onCancel={handleEditCancel}
-              model={selectedModel}
-              onSubmit={handleEditSubmit}
-            />
-            <Modal
-              title={selectedModel && selectedModel.model_name}
-              visible={infoModalVisible}
-              width={800}
-              footer={null}
-              onCancel={handleInfoCancel}
-            >
-              <Title>Model Info</Title>
-              <SyntaxHighlighter language="json">
-                {selectedModel && JSON.stringify(selectedModel, null, 2)}
-              </SyntaxHighlighter>
-            </Modal>
-          </TabPanel>
-          <TabPanel className="h-full">
-            <Title2 level={2}>Add new model</Title2>
-            <Card>
-              <Form
-                form={form}
-                onFinish={handleOk}
-                labelCol={{ span: 10 }}
-                wrapperCol={{ span: 16 }}
-                labelAlign="left"
-              >
-                <>
-                  <Form.Item
-                    rules={[{ required: true, message: "Required" }]}
-                    label="Provider:"
-                    name="custom_llm_provider"
-                    tooltip="E.g. OpenAI, Azure OpenAI, Anthropic, Bedrock, etc."
-                    labelCol={{ span: 10 }}
-                    labelAlign="left"
-                  >
-                    <Select value={selectedProvider.toString()}>
-                      {providers.map((provider, index) => (
-                        <SelectItem
-                          key={index}
-                          value={provider}
-                          onClick={() => {
-                            setProviderModelsFn(provider);
-                            setSelectedProvider(provider);
-                          }}
-                        >
-                          {provider}
-                        </SelectItem>
-                      ))}
-                    </Select>
-                  </Form.Item>
-
-                  <Form.Item
-                    rules={[{ required: true, message: "Required" }]}
-                    label="Public Model Name"
-                    name="model_name"
-                    tooltip="Model name your users will pass in. Also used for load-balancing, LiteLLM will load balance between all models with this public name."
-                    className="mb-0"
-                  >
-                    <TextInput
-                      
-                    />
-                  </Form.Item>
-                  <Row>
-                    <Col span={10}></Col>
-                    <Col span={10}>
-                      <Text className="mb-3 mt-1">
-                        Model name your users will pass in.
-                      </Text>
-                    </Col>
-                  </Row>
-                  <Form.Item
-                  label="LiteLLM Model Name(s)"
-                  tooltip="Actual model name used for making litellm.completion() / litellm.embedding() call."
-                  className="mb-0"
-                >
-                  <Form.Item
-                    name="model"
-                    rules={[{ required: true, message: "Required" }]}
-                    noStyle
-                  >
-                     { (selectedProvider === Providers.Azure) || (selectedProvider === Providers.OpenAI_Compatible) || (selectedProvider === Providers.Ollama) ? (
-                      <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
-                    ) : providerModels.length > 0 ? (
-                      <MultiSelect>
-                      <MultiSelectItem value="custom">Custom Model Name (Enter below)</MultiSelectItem>
-                        {providerModels.map((model, index) => (
-                          <MultiSelectItem key={index} value={model}>
-                            {model}
-                          </MultiSelectItem>
-                        ))}
-                      </MultiSelect>
-                    ) : (
-                      <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
-                    )}
-                  </Form.Item>
-
-                  <Form.Item
-                    noStyle
-                    shouldUpdate={(prevValues, currentValues) => prevValues.model !== currentValues.model}
-                  >
-                    {({ getFieldValue }) => {
-                      const selectedModels = getFieldValue('model') || [];
-                      return selectedModels.includes('custom') && (
-                        <Form.Item
-                          name="custom_model_name"
-                          rules={[{ required: true, message: "Please enter a custom model name" }]}
-                          className="mt-2"
-                        >
-                          <TextInput placeholder="Enter custom model name" />
-                        </Form.Item>
-                      )
-                    }}
-                  </Form.Item>
-                </Form.Item>
-                  <Row>
-                    <Col span={10}></Col>
-                    <Col span={10}>
-                      <Text className="mb-3 mt-1">
-                        Actual model name used for making{" "}
-                        <Link
-                          href="https://docs.litellm.ai/docs/providers"
-                          target="_blank"
-                        >
-                          litellm.completion() call
-                        </Link>
-                        . We&apos;ll{" "}
-                        <Link
-                          href="https://docs.litellm.ai/docs/proxy/reliability#step-1---set-deployments-on-config"
-                          target="_blank"
-                        >
-                          loadbalance
-                        </Link>{" "}
-                        models with the same &apos;public name&apos;
-                      </Text>
-                    </Col>
-                  </Row>
-                  {dynamicProviderForm !== undefined &&
-                    dynamicProviderForm.fields.length > 0 && (
-                      <DynamicFields
-                        fields={dynamicProviderForm.fields}
-                        selectedProvider={dynamicProviderForm.name}
-                      />
-                    )}
-                  {selectedProvider != Providers.Bedrock &&
-                    selectedProvider != Providers.Vertex_AI &&
-                    selectedProvider != Providers.Ollama &&
-                    (dynamicProviderForm === undefined ||
-                      dynamicProviderForm.fields.length == 0) && (
-                      <Form.Item
-                        rules={[{ required: true, message: "Required" }]}
-                        label="API Key"
-                        name="api_key"
-                      >
-                        <TextInput placeholder="sk-" type="password" />
-                      </Form.Item>
-                    )}
-                  {selectedProvider == Providers.OpenAI && (
-                    <Form.Item label="Organization ID" name="organization">
-                      <TextInput placeholder="[OPTIONAL] my-unique-org" />
-                    </Form.Item>
-                  )}
-                  {selectedProvider == Providers.Vertex_AI && (
-                    <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
-                      label="Vertex Project"
-                      name="vertex_project"
-                    >
-                      <TextInput placeholder="adroit-cadet-1234.." />
-                    </Form.Item>
-                  )}
-                  {selectedProvider == Providers.Vertex_AI && (
-                    <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
-                      label="Vertex Location"
-                      name="vertex_location"
-                    >
-                      <TextInput placeholder="us-east-1" />
-                    </Form.Item>
-                  )}
-                  {selectedProvider == Providers.Vertex_AI && (
-                    <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
-                      label="Vertex Credentials"
-                      name="vertex_credentials"
-                      className="mb-0"
-                    >
-                      <Upload {...props}>
-                        <Button2 icon={<UploadOutlined />}>
-                          Click to Upload
-                        </Button2>
-                      </Upload>
-                    </Form.Item>
-                  )}
-                  {selectedProvider == Providers.Vertex_AI && (
-                    <Row>
-                      <Col span={10}></Col>
-                      <Col span={10}>
-                        <Text className="mb-3 mt-1">
-                          Give litellm a gcp service account(.json file), so it
-                          can make the relevant calls
-                        </Text>
-                      </Col>
-                    </Row>
-                  )}
-                  {(selectedProvider == Providers.Azure ||
-                    selectedProvider == Providers.OpenAI_Compatible) && (
-                    <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
-                      label="API Base"
-                      name="api_base"
-                    >
-                      <TextInput placeholder="https://..." />
-                    </Form.Item>
-                  )}
-                  {selectedProvider == Providers.Azure && (
-                    <Form.Item
-                      label="API Version"
-                      name="api_version"
-                      tooltip="By default litellm will use the latest version. If you want to use a different version, you can specify it here"
-                    >
-                      <TextInput placeholder="2023-07-01-preview" />
-                    </Form.Item>
-                  )}
-                  {selectedProvider == Providers.Azure && (
-                    <div>
-                      <Form.Item
-                        label="Base Model"
-                        name="base_model"
-                        className="mb-0"
-                      >
-                        <TextInput placeholder="azure/gpt-3.5-turbo" />
-                      </Form.Item>
-                      <Row>
-                        <Col span={10}></Col>
-                        <Col span={10}>
-                          <Text className="mb-2">
-                            The actual model your azure deployment uses. Used
-                            for accurate cost tracking. Select name from{" "}
-                            <Link
-                              href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
-                              target="_blank"
-                            >
-                              here
-                            </Link>
-                          </Text>
-                        </Col>
-                      </Row>
-                    </div>
-                  )}
-                  {selectedProvider == Providers.Bedrock && (
-                    <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
-                      label="AWS Access Key ID"
-                      name="aws_access_key_id"
-                      tooltip="You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
-                    >
-                      <TextInput placeholder="" />
-                    </Form.Item>
-                  )}
-                  {selectedProvider == Providers.Bedrock && (
-                    <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
-                      label="AWS Secret Access Key"
-                      name="aws_secret_access_key"
-                      tooltip="You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
-                    >
-                      <TextInput placeholder="" />
-                    </Form.Item>
-                  )}
-                  {selectedProvider == Providers.Bedrock && (
-                    <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
-                      label="AWS Region Name"
-                      name="aws_region_name"
-                      tooltip="You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
-                    >
-                      <TextInput placeholder="us-east-1" />
-                    </Form.Item>
-                  )}
-                  <Form.Item
-                    label="LiteLLM Params"
-                    name="litellm_extra_params"
-                    tooltip="Optional litellm params used for making a litellm.completion() call."
-                    className="mb-0"
-                  >
-                    <TextArea
-                      rows={4}
-                      placeholder='{
-                    "rpm": 100,
-                    "timeout": 0,
-                    "stream_timeout": 0
-                  }'
-                    />
-                  </Form.Item>
-                  <Row>
-                    <Col span={10}></Col>
-                    <Col span={10}>
-                      <Text className="mb-3 mt-1">
-                        Pass JSON of litellm supported params{" "}
-                        <Link
-                          href="https://docs.litellm.ai/docs/completion/input"
-                          target="_blank"
-                        >
-                          litellm.completion() call
-                        </Link>
-                      </Text>
-                    </Col>
-                  </Row>
-                </>
-                <div style={{ textAlign: "center", marginTop: "10px" }}>
-                  <Button2 htmlType="submit">Add Model</Button2>
-                </div>
-                <Tooltip title="Get help on our github">
-                  <Typography.Link href="https://github.com/BerriAI/litellm/issues">
-                    Need Help?
-                  </Typography.Link>
-                </Tooltip>
-              </Form>
-            </Card>
-          </TabPanel>
-          <TabPanel>
-            <Card>
-              <Text>
-                `/health` will run a very small request through your models
-                configured on litellm
+              <Title>Retry Policy for {selectedModelGroup}</Title>
+              <Text className="mb-6">
+                How many retries should be attempted based on the Exception
               </Text>
+              {retry_policy_map && (
+                <table>
+                  <tbody>
+                    {Object.entries(retry_policy_map).map(
+                      ([exceptionType, retryPolicyKey], idx) => {
+                        let retryCount =
+                          modelGroupRetryPolicy?.[selectedModelGroup!]?.[
+                            retryPolicyKey
+                          ];
+                        if (retryCount == null) {
+                          retryCount = defaultRetry;
+                        }
 
-              <Button onClick={runHealthCheck}>Run `/health`</Button>
-              {healthCheckResponse && (
-                <pre>{JSON.stringify(healthCheckResponse, null, 2)}</pre>
-              )}
-            </Card>
-          </TabPanel>
-          <TabPanel>
-            <Grid numItems={4} className="mt-2 mb-2">
-              <Col>
-                <Text>Select Time Range</Text>
-                <DateRangePicker
-                  enableSelect={true}
-                  value={dateValue}
-                  className="mr-2"
-                  onValueChange={(value) => {
-                    setDateValue(value);
-                    updateModelMetrics(
-                      selectedModelGroup,
-                      value.from,
-                      value.to
-                    ); // Call updateModelMetrics with the new date range
-                  }}
-                />
-              </Col>
-              <Col className="ml-2">
-                <Text>Select Model Group</Text>
-                <Select
-                  defaultValue={
-                    selectedModelGroup
-                      ? selectedModelGroup
-                      : availableModelGroups[0]
-                  }
-                  value={
-                    selectedModelGroup
-                      ? selectedModelGroup
-                      : availableModelGroups[0]
-                  }
-                >
-                  {availableModelGroups.map((group, idx) => (
-                    <SelectItem
-                      key={idx}
-                      value={group}
-                      onClick={() =>
-                        updateModelMetrics(group, dateValue.from, dateValue.to)
-                      }
-                    >
-                      {group}
-                    </SelectItem>
-                  ))}
-                </Select>
-              </Col>
-              <Col>
-              <Popover
-                trigger="click" content={FilterByContent}
-                overlayStyle={{
-                  width: "20vw"
-                }}
-                >
-              <Button
-              icon={FilterIcon}
-              size="md"
-              variant="secondary"
-              className="mt-4 ml-2"
-              style={{
-                border: "none",
-              }}
-              onClick={() => setShowAdvancedFilters(true)}
-                >
-              </Button>      
-              </Popover>
-              </Col>
-  
-              </Grid>
-
-
-            <Grid numItems={2}>
-              <Col>
-                <Card className="mr-2 max-h-[400px] min-h-[400px]">
-                  <TabGroup>
-                    <TabList variant="line" defaultValue="1">
-                      <Tab value="1">Avg. Latency per Token</Tab>
-                      <Tab value="2">✨ Time to first token</Tab>
-                    </TabList>
-                    <TabPanels>
-                      <TabPanel>
-                        <p className="text-gray-500 italic"> (seconds/token)</p>
-                        <Text className="text-gray-500 italic mt-1 mb-1">
-                          average Latency for successfull requests divided by
-                          the total tokens
-                        </Text>
-                        {modelMetrics && modelMetricsCategories && (
-                          <AreaChart
-                            title="Model Latency"
-                            className="h-72"
-                            data={modelMetrics}
-                            showLegend={false}
-                            index="date"
-                            categories={modelMetricsCategories}
-                            connectNulls={true}
-                            customTooltip={customTooltip}
-                          />
-                        )}
-                      </TabPanel>
-                      <TabPanel>
-                        <TimeToFirstToken
-                          modelMetrics={streamingModelMetrics}
-                          modelMetricsCategories={
-                            streamingModelMetricsCategories
-                          }
-                          customTooltip={customTooltip}
-                          premiumUser={premiumUser}
-                        />
-                      </TabPanel>
-                    </TabPanels>
-                  </TabGroup>
-                </Card>
-              </Col>
-              <Col>
-                <Card className="ml-2 max-h-[400px] min-h-[400px]  overflow-y-auto">
-                  <Table>
-                    <TableHead>
-                      <TableRow>
-                        <TableHeaderCell>Deployment</TableHeaderCell>
-                        <TableHeaderCell>Success Responses</TableHeaderCell>
-                        <TableHeaderCell>
-                          Slow Responses <p>Success Responses taking 600+s</p>
-                        </TableHeaderCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {slowResponsesData.map((metric, idx) => (
-                        <TableRow key={idx}>
-                          <TableCell>{metric.api_base}</TableCell>
-                          <TableCell>{metric.total_count}</TableCell>
-                          <TableCell>{metric.slow_count}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </Card>
-              </Col>
-            </Grid>
-            <Grid numItems={1} className="gap-2 w-full mt-2">
-            <Card>
-
-            <Title>All Exceptions for {selectedModelGroup}</Title>
-             
-            <BarChart
-                    className="h-60"
-                    data={modelExceptions}
-                    index="model"
-                    categories={allExceptions}
-                    stack={true}
-                    
-                    yAxisWidth={30}
-              /> 
-                          </Card>
-      
-            </Grid>
-
-
-            <Grid numItems={1} className="gap-2 w-full mt-2">
-                <Card>
-                <Title>All Up Rate Limit Errors (429) for {selectedModelGroup}</Title>
-                <Grid numItems={1}>
-                <Col>
-                <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Num Rate Limit Errors { (globalExceptionData.sum_num_rate_limit_exceptions)}</Subtitle>
-                <BarChart
-                    className="h-40"
-                    data={globalExceptionData.daily_data}
-                    index="date"
-                    colors={['rose']}
-                    categories={['num_rate_limit_exceptions']}
-                    onValueChange={(v) => console.log(v)}
-                  />
-                  </Col>
-                  <Col>
-
-               
-
-                </Col>
-
-                </Grid>
-                
-
-                </Card>
-
-                {
-                  premiumUser ? ( 
-                    <>
-                    {globalExceptionPerDeployment.map((globalActivity, index) => (
-                <Card key={index}>
-                  <Title>{globalActivity.api_base ? globalActivity.api_base : "Unknown API Base"}</Title>
-                  <Grid numItems={1}>
-                    <Col>
-                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Num Rate Limit Errors (429) {(globalActivity.sum_num_rate_limit_exceptions)}</Subtitle>
-                      <BarChart
-                        className="h-40"
-                        data={globalActivity.daily_data}
-                        index="date"
-                        colors={['rose']}
-                        categories={['num_rate_limit_exceptions']}
-          
-                        onValueChange={(v) => console.log(v)}
-                      />
-                      
-                    </Col>
-                  </Grid>
-                </Card>
-              ))}
-                    </>
-                  ) : 
-                  <>
-                  {globalExceptionPerDeployment && globalExceptionPerDeployment.length > 0 &&
-                    globalExceptionPerDeployment.slice(0, 1).map((globalActivity, index) => (
-                      <Card key={index}>
-                        <Title>✨ Rate Limit Errors by Deployment</Title>
-                        <p className="mb-2 text-gray-500 italic text-[12px]">Upgrade to see exceptions for all deployments</p>
-                        <Button variant="primary" className="mb-2">
-                          <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
-                            Get Free Trial
-                          </a>
-                        </Button>
-                        <Card>
-                        <Title>{globalActivity.api_base}</Title>
-                        <Grid numItems={1}>
-                          <Col>
-                            <Subtitle
-                              style={{
-                                fontSize: "15px",
-                                fontWeight: "normal",
-                                color: "#535452",
-                              }}
-                            >
-                              Num Rate Limit Errors {(globalActivity.sum_num_rate_limit_exceptions)}
-                            </Subtitle>
-                            <BarChart
-                                className="h-40"
-                                data={globalActivity.daily_data}
-                                index="date"
-                                colors={['rose']}
-                                categories={['num_rate_limit_exceptions']}
-                  
-                                onValueChange={(v) => console.log(v)}
+                        return (
+                          <tr
+                            key={idx}
+                            className="flex justify-between items-center mt-2"
+                          >
+                            <td>
+                              <Text>{exceptionType}</Text>
+                            </td>
+                            <td>
+                              <InputNumber
+                                className="ml-5"
+                                value={retryCount}
+                                min={0}
+                                step={1}
+                                onChange={(value) => {
+                                  setModelGroupRetryPolicy(
+                                    (prevModelGroupRetryPolicy) => {
+                                      const prevRetryPolicy =
+                                        prevModelGroupRetryPolicy?.[
+                                          selectedModelGroup!
+                                        ] ?? {};
+                                      return {
+                                        ...(prevModelGroupRetryPolicy ?? {}),
+                                        [selectedModelGroup!]: {
+                                          ...prevRetryPolicy,
+                                          [retryPolicyKey!]: value,
+                                        },
+                                      } as RetryPolicyObject;
+                                    }
+                                  );
+                                }}
                               />
-                          </Col>
-                          
-                          
-                        </Grid>
-                        </Card>
-                      </Card>
-                    ))}
-                </>
-                }              
-              </Grid>
-              
-          </TabPanel>
-          <TabPanel>
-            <div className="flex items-center">
-              <Text>Filter by Public Model Name</Text>
-
-              <Select
-                className="mb-4 mt-2 ml-2 w-50"
-                defaultValue={
-                  selectedModelGroup
-                    ? selectedModelGroup
-                    : availableModelGroups[0]
-                }
-                value={
-                  selectedModelGroup
-                    ? selectedModelGroup
-                    : availableModelGroups[0]
-                }
-                onValueChange={(value) => setSelectedModelGroup(value)}
-              >
-                {availableModelGroups.map((group, idx) => (
-                  <SelectItem
-                    key={idx}
-                    value={group}
-                    onClick={() => setSelectedModelGroup(group)}
-                  >
-                    {group}
-                  </SelectItem>
-                ))}
-              </Select>
-            </div>
-
-            <Title>Retry Policy for {selectedModelGroup}</Title>
-            <Text className="mb-6">
-              How many retries should be attempted based on the Exception
-            </Text>
-            {retry_policy_map && (
-              <table>
-                <tbody>
-                  {Object.entries(retry_policy_map).map(
-                    ([exceptionType, retryPolicyKey], idx) => {
-                      let retryCount =
-                        modelGroupRetryPolicy?.[selectedModelGroup!]?.[
-                          retryPolicyKey
-                        ];
-                      if (retryCount == null) {
-                        retryCount = defaultRetry;
+                            </td>
+                          </tr>
+                        );
                       }
-
-                      return (
-                        <tr
-                          key={idx}
-                          className="flex justify-between items-center mt-2"
-                        >
-                          <td>
-                            <Text>{exceptionType}</Text>
-                          </td>
-                          <td>
-                            <InputNumber
-                              className="ml-5"
-                              value={retryCount}
-                              min={0}
-                              step={1}
-                              onChange={(value) => {
-                                setModelGroupRetryPolicy(
-                                  (prevModelGroupRetryPolicy) => {
-                                    const prevRetryPolicy =
-                                      prevModelGroupRetryPolicy?.[
-                                        selectedModelGroup!
-                                      ] ?? {};
-                                    return {
-                                      ...(prevModelGroupRetryPolicy ?? {}),
-                                      [selectedModelGroup!]: {
-                                        ...prevRetryPolicy,
-                                        [retryPolicyKey!]: value,
-                                      },
-                                    } as RetryPolicyObject;
-                                  }
-                                );
-                              }}
-                            />
-                          </td>
-                        </tr>
-                      );
-                    }
-                  )}
-                </tbody>
-              </table>
-            )}
-            <Button className="mt-6 mr-8" onClick={handleSaveRetrySettings}>
-              Save
-            </Button>
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+                    )}
+                  </tbody>
+                </table>
+              )}
+              <Button className="mt-6 mr-8" onClick={handleSaveRetrySettings}>
+                Save
+              </Button>
+            </TabPanel>
+            
+          </TabPanels>
+        </TabGroup>
+      )}
     </div>  
   );
 };

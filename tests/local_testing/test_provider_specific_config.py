@@ -5,7 +5,7 @@
 import os
 import sys
 import traceback
-
+import json
 import pytest
 
 sys.path.insert(
@@ -166,51 +166,6 @@ def cohere_test_completion():
 
 
 # cohere_test_completion()
-
-#  AI21
-
-
-def ai21_test_completion():
-    litellm.AI21Config(maxTokens=10)
-    litellm.set_verbose = True
-    try:
-        # OVERRIDE WITH DYNAMIC MAX TOKENS
-        response_1 = litellm.completion(
-            model="j2-mid",
-            messages=[
-                {
-                    "content": "Hello, how are you? Be as verbose as possible",
-                    "role": "user",
-                }
-            ],
-            max_tokens=100,
-        )
-        response_1_text = response_1.choices[0].message.content
-        print(f"response_1_text: {response_1_text}")
-
-        # USE CONFIG TOKENS
-        response_2 = litellm.completion(
-            model="j2-mid",
-            messages=[
-                {
-                    "content": "Hello, how are you? Be as verbose as possible",
-                    "role": "user",
-                }
-            ],
-        )
-        response_2_text = response_2.choices[0].message.content
-        print(f"response_2_text: {response_2_text}")
-
-        assert len(response_2_text) < len(response_1_text)
-
-        response_3 = litellm.completion(
-            model="j2-light",
-            messages=[{"content": "Hello, how are you?", "role": "user"}],
-            n=2,
-        )
-        assert len(response_3.choices) > 1
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 # ai21_test_completion()
@@ -510,7 +465,8 @@ def test_sagemaker_default_region():
         )
         mock_post.assert_called_once()
         _, kwargs = mock_post.call_args
-        args_to_sagemaker = kwargs["json"]
+        print(f"kwargs: {kwargs}")
+        args_to_sagemaker = json.loads(kwargs["data"])
         print("Arguments passed to sagemaker=", args_to_sagemaker)
         print("url=", kwargs["url"])
 
@@ -562,7 +518,7 @@ def test_sagemaker_environment_region():
         )
         mock_post.assert_called_once()
         _, kwargs = mock_post.call_args
-        args_to_sagemaker = kwargs["json"]
+        args_to_sagemaker = json.loads(kwargs["data"])
         print("Arguments passed to sagemaker=", args_to_sagemaker)
         print("url=", kwargs["url"])
 
@@ -619,7 +575,7 @@ def test_sagemaker_config_region():
 
         mock_post.assert_called_once()
         _, kwargs = mock_post.call_args
-        args_to_sagemaker = kwargs["json"]
+        args_to_sagemaker = json.loads(kwargs["data"])
         print("Arguments passed to sagemaker=", args_to_sagemaker)
         print("url=", kwargs["url"])
 

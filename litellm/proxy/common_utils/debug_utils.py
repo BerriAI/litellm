@@ -5,8 +5,7 @@ import tracemalloc
 
 from fastapi import APIRouter
 
-import litellm
-from litellm import get_secret, get_secret_str
+from litellm import get_secret_str
 from litellm._logging import verbose_proxy_logger
 
 router = APIRouter()
@@ -116,7 +115,6 @@ async def memory_usage_in_mem_cache_items():
 
 @router.get("/otel-spans", include_in_schema=False)
 async def get_otel_spans():
-    from litellm.integrations.opentelemetry import OpenTelemetry
     from litellm.proxy.proxy_server import open_telemetry_logger
 
     if open_telemetry_logger is None:

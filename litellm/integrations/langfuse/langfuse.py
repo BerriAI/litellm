@@ -3,19 +3,28 @@
 import copy
 import os
 import traceback
-import types
-from collections.abc import MutableMapping, MutableSequence, MutableSet
-from typing import TYPE_CHECKING, Any, Dict, Optional, cast
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 from packaging.version import Version
-from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
+from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse import *
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.utils import (
+    EmbeddingResponse,
+    ImageResponse,
+    ModelResponse,
+    RerankResponse,
+    StandardLoggingPayload,
+    StandardLoggingPromptManagementMetadata,
+    TextCompletionResponse,
+    TranscriptionResponse,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
@@ -53,9 +62,11 @@ class LangFuseLogger:
             self.langfuse_host = "http://" + self.langfuse_host
         self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
-        self.langfuse_flush_interval = (
-            os.getenv("LANGFUSE_FLUSH_INTERVAL") or flush_interval
+        self.langfuse_flush_interval = LangFuseLogger._get_langfuse_flush_interval(
+            flush_interval
         )
+        http_client = _get_httpx_client()
+        self.langfuse_client = http_client.client
 
         parameters = {
             "public_key": self.public_key,
@@ -64,9 +75,11 @@ class LangFuseLogger:
             "release": self.langfuse_release,
             "debug": self.langfuse_debug,
             "flush_interval": self.langfuse_flush_interval,  # flush interval in seconds
+            "httpx_client": self.langfuse_client,
         }
+        self.langfuse_sdk_version: str = langfuse.version.__version__
 
-        if Version(langfuse.version.__version__) >= Version("2.6.0"):
+        if Version(self.langfuse_sdk_version) >= Version("2.6.0"):
             parameters["sdk_integration"] = "litellm"
 
         self.Langfuse = Langfuse(**parameters)
@@ -145,26 +158,31 @@ class LangFuseLogger:
 
         return metadata
 
-    # def log_error(kwargs, response_obj, start_time, end_time):
-    #     generation = trace.generation(
-    #         level ="ERROR" # can be any of DEBUG, DEFAULT, WARNING or ERROR
-    #         status_message='error' # can be any string (e.g. stringified stack trace or error body)
-    #     )
-    def log_event(  # noqa: PLR0915
+    def log_event_on_langfuse(
         self,
-        kwargs,
-        response_obj,
-        start_time,
-        end_time,
-        user_id,
-        print_verbose,
-        level="DEFAULT",
-        status_message=None,
+        kwargs: dict,
+        response_obj: Union[
+            None,
+            dict,
+            EmbeddingResponse,
+            ModelResponse,
+            TextCompletionResponse,
+            ImageResponse,
+            TranscriptionResponse,
+            RerankResponse,
+            HttpxBinaryResponseContent,
+        ],
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        user_id: Optional[str] = None,
+        level: str = "DEFAULT",
+        status_message: Optional[str] = None,
     ) -> dict:
-        # Method definition
-
+        """
+        Logs a success or error event on Langfuse
+        """
         try:
-            print_verbose(
+            verbose_logger.debug(
                 f"Langfuse Logging - Enters logging function for model {kwargs}"
             )
 
@@ -181,6 +199,7 @@ class LangFuseLogger:
             optional_params = copy.deepcopy(kwargs.get("optional_params", {}))
 
             prompt = {"messages": kwargs.get("messages")}
+
             functions = optional_params.pop("functions", None)
             tools = optional_params.pop("tools", None)
             if functions is not None:
@@ -197,98 +216,46 @@ class LangFuseLogger:
                         # if casting value to str fails don't block logging
                         pass
 
-            # end of processing langfuse ########################
-            if (
-                level == "ERROR"
-                and status_message is not None
-                and isinstance(status_message, str)
-            ):
-                input = prompt
-                output = status_message
-            elif response_obj is not None and (
-                kwargs.get("call_type", None) == "embedding"
-                or isinstance(response_obj, litellm.EmbeddingResponse)
-            ):
-                input = prompt
-                output = None
-            elif response_obj is not None and isinstance(
-                response_obj, litellm.ModelResponse
-            ):
-                input = prompt
-                output = response_obj["choices"][0]["message"].json()
-            elif response_obj is not None and isinstance(
-                response_obj, litellm.HttpxBinaryResponseContent
-            ):
-                input = prompt
-                output = "speech-output"
-            elif response_obj is not None and isinstance(
-                response_obj, litellm.TextCompletionResponse
-            ):
-                input = prompt
-                output = response_obj.choices[0].text
-            elif response_obj is not None and isinstance(
-                response_obj, litellm.ImageResponse
-            ):
-                input = prompt
-                output = response_obj["data"]
-            elif response_obj is not None and isinstance(
-                response_obj, litellm.TranscriptionResponse
-            ):
-                input = prompt
-                output = response_obj["text"]
-            elif response_obj is not None and isinstance(
-                response_obj, litellm.RerankResponse
-            ):
-                input = prompt
-                output = response_obj.results
-            elif (
-                kwargs.get("call_type") is not None
-                and kwargs.get("call_type") == "_arealtime"
-                and response_obj is not None
-                and isinstance(response_obj, list)
-            ):
-                input = kwargs.get("input")
-                output = response_obj
-            elif (
-                kwargs.get("call_type") is not None
-                and kwargs.get("call_type") == "pass_through_endpoint"
-                and response_obj is not None
-                and isinstance(response_obj, dict)
-            ):
-                input = prompt
-                output = response_obj.get("response", "")
-            print_verbose(f"OUTPUT IN LANGFUSE: {output}; original: {response_obj}")
+            input, output = self._get_langfuse_input_output_content(
+                kwargs=kwargs,
+                response_obj=response_obj,
+                prompt=prompt,
+                level=level,
+                status_message=status_message,
+            )
+            verbose_logger.debug(
+                f"OUTPUT IN LANGFUSE: {output}; original: {response_obj}"
+            )
             trace_id = None
             generation_id = None
             if self._is_langfuse_v2():
                 trace_id, generation_id = self._log_langfuse_v2(
-                    user_id,
-                    metadata,
-                    litellm_params,
-                    output,
-                    start_time,
-                    end_time,
-                    kwargs,
-                    optional_params,
-                    input,
-                    response_obj,
-                    level,
-                    print_verbose,
-                    litellm_call_id,
+                    user_id=user_id,
+                    metadata=metadata,
+                    litellm_params=litellm_params,
+                    output=output,
+                    start_time=start_time,
+                    end_time=end_time,
+                    kwargs=kwargs,
+                    optional_params=optional_params,
+                    input=input,
+                    response_obj=response_obj,
+                    level=level,
+                    litellm_call_id=litellm_call_id,
                 )
             elif response_obj is not None:
                 self._log_langfuse_v1(
-                    user_id,
-                    metadata,
-                    output,
-                    start_time,
-                    end_time,
-                    kwargs,
-                    optional_params,
-                    input,
-                    response_obj,
+                    user_id=user_id,
+                    metadata=metadata,
+                    output=output,
+                    start_time=start_time,
+                    end_time=end_time,
+                    kwargs=kwargs,
+                    optional_params=optional_params,
+                    input=input,
+                    response_obj=response_obj,
                 )
-            print_verbose(
+            verbose_logger.debug(
                 f"Langfuse Layer Logging - final response object: {response_obj}"
             )
             verbose_logger.info("Langfuse Layer Logging - logging success")
@@ -300,11 +267,108 @@ class LangFuseLogger:
             )
             return {"trace_id": None, "generation_id": None}
 
+    def _get_langfuse_input_output_content(
+        self,
+        kwargs: dict,
+        response_obj: Union[
+            None,
+            dict,
+            EmbeddingResponse,
+            ModelResponse,
+            TextCompletionResponse,
+            ImageResponse,
+            TranscriptionResponse,
+            RerankResponse,
+            HttpxBinaryResponseContent,
+        ],
+        prompt: dict,
+        level: str,
+        status_message: Optional[str],
+    ) -> Tuple[Optional[dict], Optional[Union[str, dict, list]]]:
+        """
+        Get the input and output content for Langfuse logging
+
+        Args:
+            kwargs: The keyword arguments passed to the function
+            response_obj: The response object returned by the function
+            prompt: The prompt used to generate the response
+            level: The level of the log message
+            status_message: The status message of the log message
+
+        Returns:
+            input: The input content for Langfuse logging
+            output: The output content for Langfuse logging
+        """
+        input = None
+        output: Optional[Union[str, dict, List[Any]]] = None
+        if (
+            level == "ERROR"
+            and status_message is not None
+            and isinstance(status_message, str)
+        ):
+            input = prompt
+            output = status_message
+        elif response_obj is not None and (
+            kwargs.get("call_type", None) == "embedding"
+            or isinstance(response_obj, litellm.EmbeddingResponse)
+        ):
+            input = prompt
+            output = None
+        elif response_obj is not None and isinstance(
+            response_obj, litellm.ModelResponse
+        ):
+            input = prompt
+            output = self._get_chat_content_for_langfuse(response_obj)
+        elif response_obj is not None and isinstance(
+            response_obj, litellm.HttpxBinaryResponseContent
+        ):
+            input = prompt
+            output = "speech-output"
+        elif response_obj is not None and isinstance(
+            response_obj, litellm.TextCompletionResponse
+        ):
+            input = prompt
+            output = self._get_text_completion_content_for_langfuse(response_obj)
+        elif response_obj is not None and isinstance(
+            response_obj, litellm.ImageResponse
+        ):
+            input = prompt
+            output = response_obj.get("data", None)
+        elif response_obj is not None and isinstance(
+            response_obj, litellm.TranscriptionResponse
+        ):
+            input = prompt
+            output = response_obj.get("text", None)
+        elif response_obj is not None and isinstance(
+            response_obj, litellm.RerankResponse
+        ):
+            input = prompt
+            output = response_obj.results
+        elif (
+            kwargs.get("call_type") is not None
+            and kwargs.get("call_type") == "_arealtime"
+            and response_obj is not None
+            and isinstance(response_obj, list)
+        ):
+            input = kwargs.get("input")
+            output = response_obj
+        elif (
+            kwargs.get("call_type") is not None
+            and kwargs.get("call_type") == "pass_through_endpoint"
+            and response_obj is not None
+            and isinstance(response_obj, dict)
+        ):
+            input = prompt
+            output = response_obj.get("response", "")
+        return input, output
+
     async def _async_log_event(
-        self, kwargs, response_obj, start_time, end_time, user_id, print_verbose
+        self, kwargs, response_obj, start_time, end_time, user_id
     ):
         """
-        TODO: support async calls when langfuse is truly async
+        Langfuse SDK uses a background thread to log events
+
+        This approach does not impact latency and runs in the background
         """
 
     def _is_langfuse_v2(self):
@@ -356,109 +420,60 @@ class LangFuseLogger:
             )
         )
 
-    def is_base_type(self, value: Any) -> bool:
-        # Check if the value is of a base type
-        base_types = (int, float, str, bool, list, dict, tuple)
-        return isinstance(value, base_types)
-
-    def _prepare_metadata(self, metadata: Optional[dict]) -> Any:
-        try:
-            if metadata is None:
-                return None
-
-            #  Filter out function types from the metadata
-            sanitized_metadata = {k: v for k, v in metadata.items() if not callable(v)}
-
-            return copy.deepcopy(sanitized_metadata)
-        except Exception as e:
-            verbose_logger.debug(f"Langfuse Layer Error - {e}, metadata: {metadata}")
-
-        new_metadata: Dict[str, Any] = {}
-
-        # if metadata is not a MutableMapping, return an empty dict since we can't call items() on it
-        if not isinstance(metadata, MutableMapping):
-            verbose_logger.debug(
-                "Langfuse Layer Logging - metadata is not a MutableMapping, returning empty dict"
-            )
-            return new_metadata
-
-        for key, value in metadata.items():
-            try:
-                if isinstance(value, MutableMapping):
-                    new_metadata[key] = self._prepare_metadata(cast(dict, value))
-                elif isinstance(value, MutableSequence):
-                    # For lists or other mutable sequences
-                    new_metadata[key] = list(
-                        (
-                            self._prepare_metadata(cast(dict, v))
-                            if isinstance(v, MutableMapping)
-                            else copy.deepcopy(v)
-                        )
-                        for v in value
-                    )
-                elif isinstance(value, MutableSet):
-                    # For sets specifically, create a new set by passing an iterable
-                    new_metadata[key] = set(
-                        (
-                            self._prepare_metadata(cast(dict, v))
-                            if isinstance(v, MutableMapping)
-                            else copy.deepcopy(v)
-                        )
-                        for v in value
-                    )
-                elif isinstance(value, BaseModel):
-                    new_metadata[key] = value.model_dump()
-                elif self.is_base_type(value):
-                    new_metadata[key] = value
-                else:
-                    verbose_logger.debug(
-                        f"Langfuse Layer Error - Unsupported metadata type: {type(value)} for key: {key}"
-                    )
-                    continue
-
-            except (TypeError, copy.Error):
-                verbose_logger.debug(
-                    f"Langfuse Layer Error - Couldn't copy metadata key: {key}, type of key: {type(key)}, type of value: {type(value)} - {traceback.format_exc()}"
-                )
-
-        return new_metadata
-
     def _log_langfuse_v2(  # noqa: PLR0915
         self,
-        user_id,
-        metadata,
-        litellm_params,
-        output,
-        start_time,
-        end_time,
-        kwargs,
-        optional_params,
-        input,
+        user_id: Optional[str],
+        metadata: dict,
+        litellm_params: dict,
+        output: Optional[Union[str, dict, list]],
+        start_time: Optional[datetime],
+        end_time: Optional[datetime],
+        kwargs: dict,
+        optional_params: dict,
+        input: Optional[dict],
         response_obj,
-        level,
-        print_verbose,
-        litellm_call_id,
+        level: str,
+        litellm_call_id: Optional[str],
     ) -> tuple:
-        import langfuse
-
-        print_verbose("Langfuse Layer Logging - logging to langfuse v2")
+        verbose_logger.debug("Langfuse Layer Logging - logging to langfuse v2")
 
         try:
-            metadata = self._prepare_metadata(metadata)
+            metadata = metadata or {}
+            standard_logging_object: Optional[StandardLoggingPayload] = cast(
+                Optional[StandardLoggingPayload],
+                kwargs.get("standard_logging_object", None),
+            )
+            tags = (
+                self._get_langfuse_tags(standard_logging_object=standard_logging_object)
+                if self._supports_tags()
+                else []
+            )
 
-            langfuse_version = Version(langfuse.version.__version__)
+            if standard_logging_object is None:
+                end_user_id = None
+                prompt_management_metadata: Optional[
+                    StandardLoggingPromptManagementMetadata
+                ] = None
+            else:
+                end_user_id = standard_logging_object["metadata"].get(
+                    "user_api_key_end_user_id", None
+                )
 
-            supports_tags = langfuse_version >= Version("2.6.3")
-            supports_prompt = langfuse_version >= Version("2.7.3")
-            supports_costs = langfuse_version >= Version("2.7.3")
-            supports_completion_start_time = langfuse_version >= Version("2.7.3")
-
-            tags = metadata.pop("tags", []) if supports_tags else []
+                prompt_management_metadata = cast(
+                    Optional[StandardLoggingPromptManagementMetadata],
+                    standard_logging_object["metadata"].get(
+                        "prompt_management_metadata", None
+                    ),
+                )
 
             # Clean Metadata before logging - never log raw metadata
             # the raw metadata can contain circular references which leads to infinite recursion
             # we clean out all extra litellm metadata params before logging
-            clean_metadata = {}
+            clean_metadata: Dict[str, Any] = {}
+            if prompt_management_metadata is not None:
+                clean_metadata["prompt_management_metadata"] = (
+                    prompt_management_metadata
+                )
             if isinstance(metadata, dict):
                 for key, value in metadata.items():
                     # generate langfuse tags - Default Tags sent to Langfuse from LiteLLM Proxy
@@ -486,10 +501,10 @@ class LangFuseLogger:
             )
 
             session_id = clean_metadata.pop("session_id", None)
-            trace_name = clean_metadata.pop("trace_name", None)
+            trace_name = cast(Optional[str], clean_metadata.pop("trace_name", None))
             trace_id = clean_metadata.pop("trace_id", litellm_call_id)
             existing_trace_id = clean_metadata.pop("existing_trace_id", None)
-            update_trace_keys = clean_metadata.pop("update_trace_keys", [])
+            update_trace_keys = cast(list, clean_metadata.pop("update_trace_keys", []))
             debug = clean_metadata.pop("debug_langfuse", None)
             mask_input = clean_metadata.pop("mask_input", False)
             mask_output = clean_metadata.pop("mask_output", False)
@@ -502,7 +517,7 @@ class LangFuseLogger:
                 trace_name = f"litellm-{kwargs.get('call_type', 'completion')}"
 
             if existing_trace_id is not None:
-                trace_params = {"id": existing_trace_id}
+                trace_params: Dict[str, Any] = {"id": existing_trace_id}
 
                 # Update the following keys for this trace
                 for metadata_param_key in update_trace_keys:
@@ -538,7 +553,7 @@ class LangFuseLogger:
                     "version": clean_metadata.pop(
                         "trace_version", clean_metadata.get("version", None)
                     ),  # If provided just version, it will applied to the trace as well, if applied a trace version it will take precedence
-                    "user_id": user_id,
+                    "user_id": end_user_id,
                 }
                 for key in list(
                     filter(lambda key: key.startswith("trace_"), clean_metadata.keys())
@@ -562,11 +577,7 @@ class LangFuseLogger:
                     trace_params["metadata"] = {"metadata_passed_to_litellm": metadata}
 
             cost = kwargs.get("response_cost", None)
-            print_verbose(f"trace: {cost}")
-
-            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
-                "standard_logging_object", None
-            )
+            verbose_logger.debug(f"trace: {cost}")
 
             clean_metadata["litellm_response_cost"] = cost
             if standard_logging_object is not None:
@@ -595,7 +606,7 @@ class LangFuseLogger:
             if aws_region_name:
                 clean_metadata["aws_region_name"] = aws_region_name
 
-            if supports_tags:
+            if self._supports_tags():
                 if "cache_hit" in kwargs:
                     if kwargs["cache_hit"] is None:
                         kwargs["cache_hit"] = False
@@ -641,15 +652,19 @@ class LangFuseLogger:
                     usage = {
                         "prompt_tokens": _usage_obj.prompt_tokens,
                         "completion_tokens": _usage_obj.completion_tokens,
-                        "total_cost": cost if supports_costs else None,
+                        "total_cost": cost if self._supports_costs() else None,
                     }
             generation_name = clean_metadata.pop("generation_name", None)
             if generation_name is None:
                 # if `generation_name` is None, use sensible default values
                 # If using litellm proxy user `key_alias` if not None
                 # If `key_alias` is None, just log `litellm-{call_type}` as the generation name
-                _user_api_key_alias = clean_metadata.get("user_api_key_alias", None)
-                generation_name = f"litellm-{kwargs.get('call_type', 'completion')}"
+                _user_api_key_alias = cast(
+                    Optional[str], clean_metadata.get("user_api_key_alias", None)
+                )
+                generation_name = (
+                    f"litellm-{cast(str, kwargs.get('call_type', 'completion'))}"
+                )
                 if _user_api_key_alias is not None:
                     generation_name = f"litellm:{_user_api_key_alias}"
 
@@ -680,14 +695,17 @@ class LangFuseLogger:
             if parent_observation_id is not None:
                 generation_params["parent_observation_id"] = parent_observation_id
 
-            if supports_prompt:
+            if self._supports_prompt():
                 generation_params = _add_prompt_to_generation_params(
-                    generation_params=generation_params, clean_metadata=clean_metadata
+                    generation_params=generation_params,
+                    clean_metadata=clean_metadata,
+                    prompt_management_metadata=prompt_management_metadata,
+                    langfuse_client=self.Langfuse,
                 )
             if output is not None and isinstance(output, str) and level == "ERROR":
                 generation_params["status_message"] = output
 
-            if supports_completion_start_time:
+            if self._supports_completion_start_time():
                 generation_params["completion_start_time"] = kwargs.get(
                     "completion_start_time", None
                 )
@@ -698,6 +716,39 @@ class LangFuseLogger:
         except Exception:
             verbose_logger.error(f"Langfuse Layer Error - {traceback.format_exc()}")
             return None, None
+
+    @staticmethod
+    def _get_chat_content_for_langfuse(
+        response_obj: ModelResponse,
+    ):
+        """
+        Get the chat content for Langfuse logging
+        """
+        if response_obj.choices and len(response_obj.choices) > 0:
+            output = response_obj["choices"][0]["message"].json()
+            return output
+        else:
+            return None
+
+    @staticmethod
+    def _get_text_completion_content_for_langfuse(
+        response_obj: TextCompletionResponse,
+    ):
+        """
+        Get the text completion content for Langfuse logging
+        """
+        if response_obj.choices and len(response_obj.choices) > 0:
+            return response_obj.choices[0].text
+        else:
+            return None
+
+    @staticmethod
+    def _get_langfuse_tags(
+        standard_logging_object: Optional[StandardLoggingPayload],
+    ) -> List[str]:
+        if standard_logging_object is None:
+            return []
+        return standard_logging_object.get("request_tags", []) or []
 
     def add_default_langfuse_tags(self, tags, kwargs, metadata):
         """
@@ -726,10 +777,46 @@ class LangFuseLogger:
                 tags.append(f"cache_key:{_cache_key}")
         return tags
 
+    def _supports_tags(self):
+        """Check if current langfuse version supports tags"""
+        return Version(self.langfuse_sdk_version) >= Version("2.6.3")
+
+    def _supports_prompt(self):
+        """Check if current langfuse version supports prompt"""
+        return Version(self.langfuse_sdk_version) >= Version("2.7.3")
+
+    def _supports_costs(self):
+        """Check if current langfuse version supports costs"""
+        return Version(self.langfuse_sdk_version) >= Version("2.7.3")
+
+    def _supports_completion_start_time(self):
+        """Check if current langfuse version supports completion start time"""
+        return Version(self.langfuse_sdk_version) >= Version("2.7.3")
+
+    @staticmethod
+    def _get_langfuse_flush_interval(flush_interval: int) -> int:
+        """
+        Get the langfuse flush interval to initialize the Langfuse client
+
+        Reads `LANGFUSE_FLUSH_INTERVAL` from the environment variable.
+        If not set, uses the flush interval passed in as an argument.
+
+        Args:
+            flush_interval: The flush interval to use if LANGFUSE_FLUSH_INTERVAL is not set
+
+        Returns:
+            [int] The flush interval to use to initialize the Langfuse client
+        """
+        return int(os.getenv("LANGFUSE_FLUSH_INTERVAL") or flush_interval)
+
 
 def _add_prompt_to_generation_params(
-    generation_params: dict, clean_metadata: dict
+    generation_params: dict,
+    clean_metadata: dict,
+    prompt_management_metadata: Optional[StandardLoggingPromptManagementMetadata],
+    langfuse_client: Any,
 ) -> dict:
+    from langfuse import Langfuse
     from langfuse.model import (
         ChatPromptClient,
         Prompt_Chat,
@@ -737,8 +824,10 @@ def _add_prompt_to_generation_params(
         TextPromptClient,
     )
 
+    langfuse_client = cast(Langfuse, langfuse_client)
+
     user_prompt = clean_metadata.pop("prompt", None)
-    if user_prompt is None:
+    if user_prompt is None and prompt_management_metadata is None:
         pass
     elif isinstance(user_prompt, dict):
         if user_prompt.get("type", "") == "chat":
@@ -790,6 +879,20 @@ def _add_prompt_to_generation_params(
             verbose_logger.error(
                 "[Non-blocking] Langfuse Logger: Invalid prompt format. No prompt logged to Langfuse"
             )
+    elif (
+        prompt_management_metadata is not None
+        and prompt_management_metadata["prompt_integration"] == "langfuse"
+    ):
+        try:
+            generation_params["prompt"] = langfuse_client.get_prompt(
+                prompt_management_metadata["prompt_id"]
+            )
+        except Exception as e:
+            verbose_logger.debug(
+                f"[Non-blocking] Langfuse Logger: Error getting prompt client for logging: {e}"
+            )
+            pass
+
     else:
         generation_params["prompt"] = user_prompt
 

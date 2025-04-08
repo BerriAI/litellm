@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 import traceback
@@ -76,11 +77,50 @@ def test_ollama_json_mode():
 # test_ollama_json_mode()
 
 
+def test_ollama_vision_model():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    from unittest.mock import patch
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            litellm.completion(
+                model="ollama/llama3.2-vision:11b",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Whats in this image?"},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": "https://dummyimage.com/100/100/fff&text=Test+image"
+                                },
+                            },
+                        ],
+                    }
+                ],
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+        mock_post.assert_called()
+
+        print(mock_post.call_args.kwargs)
+
+        json_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert json_data["model"] == "llama3.2-vision:11b"
+        assert "images" in json_data
+        assert "prompt" in json_data
+        assert json_data["prompt"].startswith("### User:\n")
+
+
 mock_ollama_embedding_response = EmbeddingResponse(model="ollama/nomic-embed-text")
 
 
 @mock.patch(
-    "litellm.llms.ollama.ollama_embeddings",
+    "litellm.llms.ollama.completion.handler.ollama_embeddings",
     return_value=mock_ollama_embedding_response,
 )
 def test_ollama_embeddings(mock_embeddings):
@@ -107,7 +147,7 @@ def test_ollama_embeddings(mock_embeddings):
 
 
 @mock.patch(
-    "litellm.llms.ollama.ollama_aembeddings",
+    "litellm.llms.ollama.completion.handler.ollama_aembeddings",
     return_value=mock_ollama_embedding_response,
 )
 def test_ollama_aembeddings(mock_aembeddings):
@@ -174,3 +214,67 @@ def test_ollama_chat_function_calling():
     print(json.loads(tool_calls[0].function.arguments))
 
     print(response)
+
+
+def test_ollama_ssl_verify():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    import ssl
+    import httpx
+
+    try:
+        response = litellm.completion(
+            model="ollama/llama3.1",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What's the weather like in San Francisco?",
+                }
+            ],
+            ssl_verify=False,
+        )
+    except Exception as e:
+        print(e)
+
+    client: HTTPHandler = litellm.in_memory_llm_clients_cache.get_cache(
+        "httpx_clientssl_verify_False"
+    )
+
+    test_client = httpx.Client(verify=False)
+    print(client)
+    assert (
+        client.client._transport._pool._ssl_context.verify_mode
+        == test_client._transport._pool._ssl_context.verify_mode
+    )
+
+
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.asyncio
+async def test_async_ollama_ssl_verify(stream):
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    import httpx
+
+    try:
+        response = await litellm.acompletion(
+            model="ollama/llama3.1",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What's the weather like in San Francisco?",
+                }
+            ],
+            ssl_verify=False,
+            stream=stream,
+        )
+    except Exception as e:
+        print(e)
+
+    client: AsyncHTTPHandler = litellm.in_memory_llm_clients_cache.get_cache(
+        "async_httpx_clientssl_verify_Falseollama"
+    )
+
+    test_client = httpx.AsyncClient(verify=False)
+    print(client)
+    assert (
+        client.client._transport._pool._ssl_context.verify_mode
+        == test_client._transport._pool._ssl_context.verify_mode
+    )

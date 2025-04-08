@@ -3,7 +3,13 @@ import TabItem from '@theme/TabItem';
 
 # Prompt Caching 
 
-For OpenAI + Anthropic + Deepseek, LiteLLM follows the OpenAI prompt caching usage object format:
+Supported Providers:
+- OpenAI (`openai/`)
+- Anthropic API (`anthropic/`)
+- Bedrock (`bedrock/`, `bedrock/invoke/`, `bedrock/converse`) ([All models bedrock supports prompt caching on](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html))
+- Deepseek API (`deepseek/`)
+
+For the supported providers, LiteLLM follows the OpenAI prompt caching usage object format:
 
 ```bash
 "usage": {

@@ -1,5 +1,3 @@
-from fastapi import HTTPException
-
 from litellm.proxy._types import LitellmUserRoles
 
 

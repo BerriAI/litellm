@@ -122,8 +122,13 @@ async def test_async_chat_openai_stream():
 
         complete_streaming_response = complete_streaming_response.strip("'")
 
+        print(f"complete_streaming_response: {complete_streaming_response}")
+
         await asyncio.sleep(3)
 
+        print(
+            f"tmp_function.complete_streaming_response_in_callback: {tmp_function.complete_streaming_response_in_callback}"
+        )
         # problematic line
         response1 = tmp_function.complete_streaming_response_in_callback["choices"][0][
             "message"
@@ -256,6 +261,7 @@ def test_azure_completion_stream():
 @pytest.mark.asyncio
 async def test_async_custom_handler_completion():
     try:
+        litellm._turn_on_debug
         customHandler_success = MyCustomHandler()
         customHandler_failure = MyCustomHandler()
         # success
@@ -279,6 +285,7 @@ async def test_async_custom_handler_completion():
             == "gpt-3.5-turbo"
         )
         # failure
+        litellm.logging_callback_manager._reset_all_callbacks()
         litellm.callbacks = [customHandler_failure]
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},

@@ -3,17 +3,12 @@
 
 import json
 import os
-import traceback
-import uuid
 
-import dotenv
 import httpx
 
 import litellm
-from litellm import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
     HTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,

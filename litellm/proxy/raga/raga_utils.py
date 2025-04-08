@@ -1,3 +1,5 @@
+import traceback
+
 from fastapi import HTTPException
 
 API_KEY = "api_key"
@@ -23,10 +25,10 @@ def modify_user_request(data):
             set_api_keys_from_vault(data)
             del data["user_id"]
         return data
-    except HTTPException as e:
-        raise e
     except Exception as e:
-        return HTTPException(status_code=500, detail=e)
+        print(f"exception in getting api keys: {str(e)}")
+        traceback.print_exc()
+        raise e
 
 
 def set_api_keys_from_vault(data):

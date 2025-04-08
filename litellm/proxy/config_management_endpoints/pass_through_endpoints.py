@@ -4,29 +4,8 @@ What is this?
 CRUD endpoints for managing pass-through endpoints
 """
 
-import asyncio
-import traceback
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from fastapi import APIRouter, Depends, Request, Response
 
-import fastapi
-import httpx
-from fastapi import (
-    APIRouter,
-    Depends,
-    File,
-    Form,
-    Header,
-    HTTPException,
-    Request,
-    Response,
-    UploadFile,
-    status,
-)
-
-import litellm
-from litellm._logging import verbose_proxy_logger
-from litellm.batches.main import FileObject
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 

@@ -1,5 +1,5 @@
 # Local Debugging
-There's 2 ways to do local debugging - `litellm.set_verbose=True` and by passing in a custom function `completion(...logger_fn=<your_local_function>)`. Warning: Make sure to not use `set_verbose` in production. It logs API keys, which might end up in log files.
+There's 2 ways to do local debugging - `litellm._turn_on_debug()` and by passing in a custom function `completion(...logger_fn=<your_local_function>)`. Warning: Make sure to not use `_turn_on_debug()` in production. It logs API keys, which might end up in log files.
 
 ## Set Verbose 
 
@@ -8,7 +8,7 @@ This is good for getting print statements for everything litellm is doing.
 import litellm
 from litellm import completion
 
-litellm.set_verbose=True # 👈 this is the 1-line change you need to make
+litellm._turn_on_debug() # 👈 this is the 1-line change you need to make
 
 ## set ENV variables
 os.environ["OPENAI_API_KEY"] = "openai key"

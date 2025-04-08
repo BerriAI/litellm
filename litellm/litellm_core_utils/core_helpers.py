@@ -1,11 +1,11 @@
 # What is this?
 ## Helper utilities
-import os
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.types.llms.openai import AllMessageValues
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -54,17 +54,18 @@ def map_finish_reason(
     return finish_reason
 
 
-def remove_index_from_tool_calls(messages, tool_calls):
-    for tool_call in tool_calls:
-        if "index" in tool_call:
-            tool_call.pop("index")
-
-    for message in messages:
-        if "tool_calls" in message:
-            tool_calls = message["tool_calls"]
-            for tool_call in tool_calls:
-                if "index" in tool_call:
-                    tool_call.pop("index")
+def remove_index_from_tool_calls(
+    messages: Optional[List[AllMessageValues]],
+):
+    if messages is not None:
+        for message in messages:
+            _tool_calls = message.get("tool_calls")
+            if _tool_calls is not None and isinstance(_tool_calls, list):
+                for tool_call in _tool_calls:
+                    if (
+                        isinstance(tool_call, dict) and "index" in tool_call
+                    ):  # Type guard to ensure it's a dict
+                        tool_call.pop("index", None)
 
     return
 
@@ -72,8 +73,19 @@ def remove_index_from_tool_calls(messages, tool_calls):
 def get_litellm_metadata_from_kwargs(kwargs: dict):
     """
     Helper to get litellm metadata from all litellm request kwargs
+
+    Return `litellm_metadata` if it exists, otherwise return `metadata`
     """
-    return kwargs.get("litellm_params", {}).get("metadata", {})
+    litellm_params = kwargs.get("litellm_params", {})
+    if litellm_params:
+        metadata = litellm_params.get("metadata", {})
+        litellm_metadata = litellm_params.get("litellm_metadata", {})
+        if litellm_metadata:
+            return litellm_metadata
+        elif metadata:
+            return metadata
+
+    return {}
 
 
 # Helper functions used for OTEL logging

@@ -1,14 +1,10 @@
 #### What this does ####
 #    On success + failure, log events to Supabase
 
-import datetime
 import os
 import traceback
 import uuid
 from typing import Any
-
-import dotenv
-import requests  # type: ignore
 
 import litellm
 

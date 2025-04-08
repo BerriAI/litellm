@@ -63,8 +63,8 @@ async def test_vLLM_token_counting():
     print("response: ", response)
 
     assert (
-        response.tokenizer_type == "huggingface_tokenizer"
-    )  # SHOULD use the hugging face tokenizer
+        response.tokenizer_type == "openai_tokenizer"
+    )  # SHOULD use the default tokenizer
     assert response.model_used == "wolfram/miquliz-120b-v2.0"
 
 

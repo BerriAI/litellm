@@ -36,7 +36,7 @@ def migrate_models(config_file, proxy_base_url):
 
         litellm_model_name = litellm_params.get("model", "") or ""
         if "vertex_ai/" in litellm_model_name:
-            print(f"\033[91m\nSkipping Vertex AI model\033[0m", model)
+            print("\033[91m\nSkipping Vertex AI model\033[0m", model)
             continue
 
         for param, value in litellm_params.items():

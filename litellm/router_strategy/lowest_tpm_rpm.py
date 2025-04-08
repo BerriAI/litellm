@@ -1,36 +1,18 @@
 #### What this does ####
 #   identifies lowest tpm deployment
-import os
-import random
 import traceback
 from datetime import datetime
 from typing import Dict, List, Optional, Union
-
-import dotenv
-import requests
-from pydantic import BaseModel
 
 from litellm import token_counter
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.utils import LiteLLMPydanticObjectBase
 from litellm.utils import print_verbose
 
 
-class LiteLLMBase(BaseModel):
-    """
-    Implements default functions, all pydantic objects should have.
-    """
-
-    def json(self, **kwargs):  # type: ignore
-        try:
-            return self.model_dump()  # noqa
-        except Exception:
-            # if using pydantic v1
-            return self.dict()
-
-
-class RoutingArgs(LiteLLMBase):
+class RoutingArgs(LiteLLMPydanticObjectBase):
     ttl: int = 1 * 60  # 1min (RPM/TPM expire key)
 
 
