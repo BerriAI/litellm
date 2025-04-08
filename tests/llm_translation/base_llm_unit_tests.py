@@ -1272,3 +1272,5 @@ class BaseAnthropicChatTest(ABC):
             reasoning_effort="high",
         )
         assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+
+        assert "reasoning_effort" not in optional_params
