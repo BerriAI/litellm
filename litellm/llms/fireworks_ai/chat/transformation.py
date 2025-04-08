@@ -159,7 +159,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
     ) -> List[OpenAIChatCompletionToolParam]:
         for tool in tools:
             if tool.get("type") == "function":
-                tool["function"].pop("strict")
+                tool["function"].pop("strict", None)
         return tools
 
     def _transform_messages_helper(
