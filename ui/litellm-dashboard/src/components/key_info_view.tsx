@@ -27,13 +27,14 @@ interface KeyInfoViewProps {
   keyId: string;
   onClose: () => void;
   keyData: KeyResponse | undefined;
+  onKeyDataUpdate?: (data: Partial<KeyResponse>) => void;
   accessToken: string | null;
   userID: string | null;
   userRole: string | null;
   teams: any[] | null;
 }
 
-export default function KeyInfoView({ keyId, onClose, keyData, accessToken, userID, userRole, teams }: KeyInfoViewProps) {
+export default function KeyInfoView({ keyId, onClose, keyData, accessToken, userID, userRole, teams, onKeyDataUpdate }: KeyInfoViewProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -93,6 +94,9 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
       }
 
       const newKeyValues = await keyUpdateCall(accessToken, formValues);
+      if (onKeyDataUpdate) {
+        onKeyDataUpdate(newKeyValues)
+      }
       message.success("Key updated successfully");
       setIsEditing(false);
       // Refresh key data here if needed
