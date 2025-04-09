@@ -1,7 +1,6 @@
 from typing import Literal, Optional
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.exceptions import BadRequestError
 from litellm.types.utils import LlmProviders, LlmProvidersSet
 
