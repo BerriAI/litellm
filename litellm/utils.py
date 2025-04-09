@@ -7,6 +7,7 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
+import array
 import ast
 import asyncio
 import base64
@@ -6038,6 +6039,17 @@ def get_base64_str(s: str) -> str:
     if "," in s:
         return s.split(",")[1]
     return s
+
+
+def encode_base64_floats(values: List[float]) -> str:
+    """
+    Encodes a list of floats as a base64 string.
+    """
+    return base64.b64encode(array.array("f", values).tobytes()).decode("utf-8")
+
+
+def decode_base64_floats(s: str) -> List[float]:
+    return array.array("f", base64.b64decode(s)).tolist()
 
 
 def has_tool_call_blocks(messages: List[AllMessageValues]) -> bool:
