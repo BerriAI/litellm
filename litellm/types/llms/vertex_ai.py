@@ -187,6 +187,7 @@ class Tools(TypedDict, total=False):
     function_declarations: List[FunctionDeclaration]
     googleSearch: dict
     googleSearchRetrieval: dict
+    enterpriseWebSearch: dict
     code_execution: dict
     retrieval: Retrieval
 
