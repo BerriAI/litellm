@@ -20,10 +20,10 @@ class BedrockCohereEmbeddingConfig:
     def map_openai_params(
         self, non_default_params: dict, optional_params: dict
     ) -> dict:
-        for k, v in non_default_params.items():
-            if k == "encoding_format":
-                optional_params["embedding_types"] = v
-        return optional_params
+        return CohereEmbeddingConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+        )
 
     def _is_v3_model(self, model: str) -> bool:
         return "3" in model
