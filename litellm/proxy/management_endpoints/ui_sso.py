@@ -802,6 +802,9 @@ class SSOAuthenticationHandler:
                         uuid.uuid4().hex
                     )  # set state param for okta - required
                 return await generic_sso.get_login_redirect(**redirect_params)  # type: ignore
+        raise ValueError(
+            "Unknown SSO provider. Please setup SSO with client IDs https://docs.litellm.ai/docs/proxy/admin_ui_sso"
+        )
 
     @staticmethod
     def should_use_sso_handler(
