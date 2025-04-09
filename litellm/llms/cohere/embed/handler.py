@@ -54,7 +54,7 @@ async def async_embedding(
     api_key: Optional[str],
     headers: dict,
     encoding: Callable,
-    should_output_base64: bool,
+    encoding_format: Optional[str],
     client: Optional[AsyncHTTPHandler] = None,
 ):
     ## LOGGING
@@ -106,7 +106,7 @@ async def async_embedding(
         model=model,
         encoding=encoding,
         input=input,
-        should_output_base64=should_output_base64,
+        encoding_format=encoding_format,
     )
 
 
@@ -118,7 +118,7 @@ def embedding(
     optional_params: dict,
     headers: dict,
     encoding: Any,
-    should_output_base64: bool,
+    encoding_format: Optional[str],
     data: Optional[Union[dict, CohereEmbeddingRequest]] = None,
     complete_api_base: Optional[str] = None,
     api_key: Optional[str] = None,
@@ -148,7 +148,7 @@ def embedding(
             api_key=api_key,
             headers=headers,
             encoding=encoding,
-            should_output_base64=should_output_base64,
+            encoding_format=encoding_format,
             client=(
                 client
                 if client is not None and isinstance(client, AsyncHTTPHandler)
@@ -178,5 +178,5 @@ def embedding(
         model=model,
         encoding=encoding,
         input=input,
-        should_output_base64=should_output_base64,
+        encoding_format=encoding_format,
     )

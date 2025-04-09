@@ -331,7 +331,7 @@ class BedrockEmbedding(BaseAWSLLM):
         model_response: EmbeddingResponse,
         print_verbose: Callable,
         encoding,
-        should_output_base64: bool,
+        encoding_format: Optional[str],
         logging_obj,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]],
         timeout: Optional[Union[float, httpx.Timeout]],
@@ -471,7 +471,7 @@ class BedrockEmbedding(BaseAWSLLM):
             logging_obj=logging_obj,
             optional_params=optional_params,
             encoding=encoding,
-            should_output_base64=should_output_base64,
+            encoding_format=encoding_format,
             data=data,  # type: ignore
             complete_api_base=prepped.url,
             api_key=None,

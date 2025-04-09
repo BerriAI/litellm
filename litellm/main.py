@@ -3590,7 +3590,7 @@ def embedding(  # noqa: PLR0915
                 input=input,
                 optional_params=optional_params,
                 encoding=encoding,
-                should_output_base64=encoding_format == "base64",
+                encoding_format=encoding_format,
                 api_key=cohere_key,  # type: ignore
                 headers=headers,
                 logging_obj=logging,
@@ -3627,7 +3627,7 @@ def embedding(  # noqa: PLR0915
                 model=model,
                 input=transformed_input,
                 encoding=encoding,
-                should_output_base64=encoding_format == "base64",
+                encoding_format=encoding_format,
                 logging_obj=logging,
                 optional_params=optional_params,
                 model_response=EmbeddingResponse(),
