@@ -1,5 +1,6 @@
 #### What this tests ####
 #    This tests litellm.token_counter() function
+from importlib import resources
 import traceback
 import os
 import sys
@@ -386,7 +387,7 @@ def test_token_encode_disallowed_special():
 
 import unittest
 from unittest.mock import patch, MagicMock
-from litellm.utils import encoding, _select_tokenizer_helper, claude_json_str
+from litellm.utils import encoding, _select_tokenizer_helper
 
 
 class TestTokenizerSelection(unittest.TestCase):
@@ -403,7 +404,7 @@ class TestTokenizerSelection(unittest.TestCase):
 
         # Verify fallback to OpenAI tokenizer
         self.assertEqual(result["type"], "openai_tokenizer")
-        self.assertEqual(result["tokenizer"], encoding)
+        self.assertEqual(result["tokenizer"], encoding())
 
     @patch("litellm.utils.Tokenizer.from_pretrained")
     def test_cohere_tokenizer_api_failure(self, mock_from_pretrained):
@@ -423,10 +424,16 @@ class TestTokenizerSelection(unittest.TestCase):
 
         # Verify fallback to OpenAI tokenizer
         self.assertEqual(result["type"], "openai_tokenizer")
-        self.assertEqual(result["tokenizer"], encoding)
+        self.assertEqual(result["tokenizer"], encoding())
 
     @patch("litellm.utils.Tokenizer.from_str")
     def test_claude_tokenizer_api_failure(self, mock_from_str):
+        
+        with resources.open_text(
+            "litellm.litellm_core_utils.tokenizers", "anthropic_tokenizer.json"
+        ) as f:
+            claude_json_str = f.read()
+        
         # Setup mock to raise an error
         mock_from_str.side_effect = Exception("Failed to load tokenizer")
 
@@ -441,7 +448,7 @@ class TestTokenizerSelection(unittest.TestCase):
 
         # Verify fallback to OpenAI tokenizer
         self.assertEqual(result["type"], "openai_tokenizer")
-        self.assertEqual(result["tokenizer"], encoding)
+        self.assertEqual(result["tokenizer"], encoding())
 
     @patch("litellm.utils.Tokenizer.from_pretrained")
     def test_llama2_tokenizer_api_failure(self, mock_from_pretrained):
@@ -458,7 +465,7 @@ class TestTokenizerSelection(unittest.TestCase):
 
         # Verify fallback to OpenAI tokenizer
         self.assertEqual(result["type"], "openai_tokenizer")
-        self.assertEqual(result["tokenizer"], encoding)
+        self.assertEqual(result["tokenizer"], encoding())
 
     @patch("litellm.utils._return_huggingface_tokenizer")
     def test_disable_hf_tokenizer_download(self, mock_return_huggingface_tokenizer):
@@ -469,7 +476,7 @@ class TestTokenizerSelection(unittest.TestCase):
         result = _select_tokenizer_helper("grok-32r22r")
         mock_return_huggingface_tokenizer.assert_not_called()
         assert result["type"] == "openai_tokenizer"
-        assert result["tokenizer"] == encoding
+        assert result["tokenizer"] == encoding()
 
 
 @pytest.mark.parametrize(

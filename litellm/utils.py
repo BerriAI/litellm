@@ -13,6 +13,7 @@ import base64
 import binascii
 import copy
 import datetime
+import functools
 import hashlib
 import inspect
 import io
@@ -180,12 +181,13 @@ from litellm.types.utils import (
     all_litellm_params,
 )
 
-with resources.open_text(
-    "litellm.litellm_core_utils.tokenizers", "anthropic_tokenizer.json"
-) as f:
-    json_data = json.load(f)
-# Convert to str (if necessary)
-claude_json_str = json.dumps(json_data)
+@functools.lru_cache(maxsize=None)
+def get_anthropic_tokenizer():
+    with resources.open_text(
+        "litellm.litellm_core_utils.tokenizers", "anthropic_tokenizer.json"
+    ) as f:
+        claude_json_str = f.read()
+    return Tokenizer.from_str(claude_json_str)
 import importlib.metadata
 from typing import (
     TYPE_CHECKING,
@@ -1547,7 +1549,7 @@ def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
 
 
 def _return_openai_tokenizer(model: str) -> SelectTokenizerResponse:
-    return {"type": "openai_tokenizer", "tokenizer": encoding}
+    return {"type": "openai_tokenizer", "tokenizer": encoding()}
 
 
 def _return_huggingface_tokenizer(model: str) -> Optional[SelectTokenizerResponse]:
@@ -1559,7 +1561,7 @@ def _return_huggingface_tokenizer(model: str) -> Optional[SelectTokenizerRespons
         return {"type": "huggingface_tokenizer", "tokenizer": cohere_tokenizer}
     # anthropic
     elif model in litellm.anthropic_models and "claude-3" not in model:
-        claude_tokenizer = Tokenizer.from_str(claude_json_str)
+        claude_tokenizer = get_anthropic_tokenizer()
         return {"type": "huggingface_tokenizer", "tokenizer": claude_tokenizer}
     # llama2
     elif "llama-2" in model.lower() or "replicate" in model.lower():
@@ -1815,7 +1817,7 @@ def _get_num_tokens_from_content_list(
         for c in content_list:
             if c["type"] == "text":
                 text += c["text"]
-                num_tokens += len(encoding.encode(c["text"], disallowed_special=()))
+                num_tokens += len(encoding().encode(c["text"], disallowed_special=()))
             elif c["type"] == "image_url":
                 if isinstance(c["image_url"], dict):
                     image_url_dict = c["image_url"]
@@ -1948,7 +1950,7 @@ def token_counter(
                     default_token_count=default_token_count,
                 )
     else:
-        num_tokens = len(encoding.encode(text, disallowed_special=()))  # type: ignore
+        num_tokens = len(encoding().encode(text, disallowed_special=()))  # type: ignore
     return num_tokens
 
 
@@ -5245,7 +5247,7 @@ def prompt_token_calculator(model, messages):
         anthropic_obj = Anthropic()
         num_tokens = anthropic_obj.count_tokens(text)  # type: ignore
     else:
-        num_tokens = len(encoding.encode(text))
+        num_tokens = len(encoding().encode(text))
     return num_tokens
 
 
