@@ -4,6 +4,7 @@ import json
 import os
 import sys
 from datetime import timezone
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -65,7 +66,7 @@ def test_sanitize_request_body_for_spend_logs_payload_non_string_values():
 
 
 def test_sanitize_request_body_for_spend_logs_payload_empty():
-    request_body = {}
+    request_body: dict[str, Any] = {}
     sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
     assert sanitized == request_body
 
@@ -86,3 +87,16 @@ def test_sanitize_request_body_for_spend_logs_payload_mixed_types():
     assert len(sanitized["nested"]["dict"]["key"]) == 1000 + len(
         "... (truncated 1000 chars)"
     )
+
+
+def test_sanitize_request_body_for_spend_logs_payload_circular_reference():
+    # Create a circular reference
+    a: dict[str, Any] = {}
+    b: dict[str, Any] = {"a": a}
+    a["b"] = b
+
+    # Test that it handles circular reference without infinite recursion
+    sanitized = _sanitize_request_body_for_spend_logs_payload(a)
+    assert sanitized == {
+        "b": {"a": {}}
+    }  # Should return empty dict for circular reference

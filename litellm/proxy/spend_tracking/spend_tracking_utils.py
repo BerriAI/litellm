@@ -362,6 +362,7 @@ def _get_messages_for_spend_logs_payload(
 
 def _sanitize_request_body_for_spend_logs_payload(
     request_body: dict,
+    visited: Optional[set] = None,
 ) -> dict:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
@@ -369,9 +370,18 @@ def _sanitize_request_body_for_spend_logs_payload(
     """
     MAX_STRING_LENGTH = 1000
 
+    if visited is None:
+        visited = set()
+
+    # Get the object's memory address to track visited objects
+    obj_id = id(request_body)
+    if obj_id in visited:
+        return {}
+    visited.add(obj_id)
+
     def _sanitize_value(value: Any) -> Any:
         if isinstance(value, dict):
-            return _sanitize_request_body_for_spend_logs_payload(value)
+            return _sanitize_request_body_for_spend_logs_payload(value, visited)
         elif isinstance(value, list):
             return [_sanitize_value(item) for item in value]
         elif isinstance(value, str):
