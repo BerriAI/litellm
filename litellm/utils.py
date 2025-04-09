@@ -223,6 +223,7 @@ from litellm.llms.base_llm.files.transformation import BaseFilesConfig
 from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
 )
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 
@@ -6521,6 +6522,19 @@ class ProviderConfigManager:
             from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
 
             return VertexAIFilesConfig()
+        return None
+
+    @staticmethod
+    def get_provider_realtime_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseRealtimeConfig]:
+        if LlmProviders.BEDROCK == provider:
+            from litellm.llms.bedrock.realtime.transformation import (
+                BedrockRealtimeConfig,
+            )
+
+            return BedrockRealtimeConfig()
         return None
 
 
