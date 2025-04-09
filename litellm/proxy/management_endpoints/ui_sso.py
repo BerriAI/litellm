@@ -363,7 +363,6 @@ async def auth_callback(request: Request):  # noqa: PLR0915
             request=request,
             microsoft_client_id=microsoft_client_id,
             redirect_url=redirect_url,
-            jwt_handler=jwt_handler,
         )
     elif generic_client_id is not None:
         result = await get_generic_sso_response(
@@ -856,7 +855,6 @@ class MicrosoftSSOHandler:
         request: Request,
         microsoft_client_id: str,
         redirect_url: str,
-        jwt_handler: JWTHandler,
         return_raw_sso_response: bool = False,
     ) -> Union[CustomOpenID, OpenID, dict]:
         """
@@ -905,14 +903,13 @@ class MicrosoftSSOHandler:
 
         result = MicrosoftSSOHandler.openid_from_response(
             response=original_msft_result,
-            jwt_handler=jwt_handler,
             team_ids=user_team_ids,
         )
         return result
 
     @staticmethod
     def openid_from_response(
-        response: Optional[dict], jwt_handler: JWTHandler, team_ids: List[str]
+        response: Optional[dict], team_ids: List[str]
     ) -> CustomOpenID:
         response = response or {}
         verbose_proxy_logger.debug(f"Microsoft SSO Callback Response: {response}")
@@ -1151,7 +1148,6 @@ async def debug_sso_callback(request: Request):
             request=request,
             microsoft_client_id=microsoft_client_id,
             redirect_url=redirect_url,
-            jwt_handler=jwt_handler,
             return_raw_sso_response=True,
         )
     elif generic_client_id is not None:
