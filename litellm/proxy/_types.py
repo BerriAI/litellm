@@ -1625,6 +1625,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     model_max_budget: Optional[Dict] = {}
     model_spend: Optional[Dict] = {}
     user_email: Optional[str] = None
+    user_alias: Optional[str] = None
     models: list = []
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None

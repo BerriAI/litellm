@@ -110,5 +110,8 @@ def get_litellm_params(
         "azure_password": kwargs.get("azure_password"),
         "max_retries": max_retries,
         "timeout": kwargs.get("timeout"),
+        "bucket_name": kwargs.get("bucket_name"),
+        "vertex_credentials": kwargs.get("vertex_credentials"),
+        "vertex_project": kwargs.get("vertex_project"),
     }
     return litellm_params

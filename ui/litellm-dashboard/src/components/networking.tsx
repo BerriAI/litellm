@@ -4,6 +4,7 @@
 import { all_admin_roles } from "@/utils/roles";
 import { message } from "antd";
 import { TagNewRequest, TagUpdateRequest, TagDeleteRequest, TagInfoRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
+import { Team } from "./key_team_helpers/key_list";
 
 const isLocal = process.env.NODE_ENV === "development";
 export const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
@@ -2983,7 +2984,7 @@ export const teamUpdateCall = async (
       console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
-    const data = await response.json();
+    const data = await response.json() as { data: Team, team_id: string };
     console.log("Update Team Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
