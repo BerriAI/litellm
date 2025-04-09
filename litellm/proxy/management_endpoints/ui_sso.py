@@ -311,7 +311,7 @@ def get_disabled_non_admin_personal_key_creation():
 
 
 @router.get("/sso/callback", tags=["experimental"], include_in_schema=False)
-async def auth_callback(request: Request):
+async def auth_callback(request: Request):  # noqa: PLR0915
     """Verify login"""
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         generate_key_helper_fn,
@@ -603,9 +603,9 @@ async def insert_sso_user(
         if user_defined_values.get("max_budget") is None:
             user_defined_values["max_budget"] = litellm.max_internal_user_budget
         if user_defined_values.get("budget_duration") is None:
-            user_defined_values[
-                "budget_duration"
-            ] = litellm.internal_user_budget_duration
+            user_defined_values["budget_duration"] = (
+                litellm.internal_user_budget_duration
+            )
 
     if user_defined_values["user_role"] is None:
         user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
@@ -798,9 +798,9 @@ class SSOAuthenticationHandler:
                 if state:
                     redirect_params["state"] = state
                 elif "okta" in generic_authorization_endpoint:
-                    redirect_params[
-                        "state"
-                    ] = uuid.uuid4().hex  # set state param for okta - required
+                    redirect_params["state"] = (
+                        uuid.uuid4().hex
+                    )  # set state param for okta - required
                 return await generic_sso.get_login_redirect(**redirect_params)  # type: ignore
 
     @staticmethod
@@ -1077,8 +1077,8 @@ async def debug_sso_callback(request: Request):
                 try:
                     # Try to convert to string or another JSON serializable format
                     filtered_result[key] = str(value)
-                except:
-                    filtered_result[key] = "Complex value (not displayable)"
+                except Exception as e:
+                    filtered_result[key] = f"Complex value (not displayable): {str(e)}"
 
     # Replace the placeholder in the template with the actual data
     html_content = jwt_display_template.replace(
