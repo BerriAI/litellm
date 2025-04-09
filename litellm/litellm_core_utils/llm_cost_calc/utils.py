@@ -111,10 +111,16 @@ def _get_token_base_cost(model_info: ModelInfo, usage: Usage) -> Tuple[float, fl
                     1000 if "k" in threshold_str else 1
                 )
                 if usage.prompt_tokens > threshold:
-                    prompt_base_cost = model_info[key]
-                    completion_base_cost = model_info.get(
-                        f"output_cost_per_token_above_{threshold_str}_tokens",
-                        completion_base_cost,
+                    prompt_base_cost = cast(
+                        float,
+                        model_info.get(key, prompt_base_cost),
+                    )
+                    completion_base_cost = cast(
+                        float,
+                        model_info.get(
+                            f"output_cost_per_token_above_{threshold_str}_tokens",
+                            completion_base_cost,
+                        ),
                     )
                     break
             except (IndexError, ValueError):
