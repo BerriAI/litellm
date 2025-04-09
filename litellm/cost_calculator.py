@@ -417,12 +417,6 @@ def _select_model_name_for_cost_calc(
         model=model, custom_llm_provider=custom_llm_provider
     )
 
-    if custom_pricing is True:
-        return_model = model
-
-    if base_model is not None:
-        return_model = base_model
-
     completion_response_model: Optional[str] = None
     if completion_response is not None:
         if isinstance(completion_response, BaseModel):
@@ -430,6 +424,21 @@ def _select_model_name_for_cost_calc(
         elif isinstance(completion_response, dict):
             completion_response_model = completion_response.get("model", None)
     hidden_params: Optional[dict] = getattr(completion_response, "_hidden_params", None)
+
+    if custom_pricing is True:
+        if (
+            hidden_params is not None
+            and hidden_params.get("model_id", None) is not None
+        ):
+            return_model = hidden_params.get(
+                "model_id", model
+            )  # if router has set a model_id, use that
+        else:
+            return_model = model
+
+    if base_model is not None:
+        return_model = base_model
+
     if completion_response_model is None and hidden_params is not None:
         if (
             hidden_params.get("model", None) is not None
@@ -618,6 +627,8 @@ def completion_cost(  # noqa: PLR0915
             custom_pricing=custom_pricing,
             base_model=base_model,
         )
+
+        verbose_logger.info(f"selected_model for cost calculation: {selected_model}")
 
         potential_model_names = [selected_model]
         if model is not None:

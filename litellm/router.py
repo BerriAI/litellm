@@ -4302,17 +4302,13 @@ class Router:
         )
 
         ## REGISTER MODEL INFO IN LITELLM MODEL COST MAP
-        _model_name = deployment.litellm_params.model
-        if deployment.litellm_params.custom_llm_provider is not None:
-            _model_name = (
-                deployment.litellm_params.custom_llm_provider + "/" + _model_name
+        model_id = deployment.model_info.id
+        if model_id is not None:
+            litellm.register_model(
+                model_cost={
+                    model_id: _model_info,
+                }
             )
-
-        litellm.register_model(
-            model_cost={
-                _model_name: _model_info,
-            }
-        )
 
         ## Check if LLM Deployment is allowed for this deployment
         if self.deployment_is_active_for_environment(deployment=deployment) is not True:

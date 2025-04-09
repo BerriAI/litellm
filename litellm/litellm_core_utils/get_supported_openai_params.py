@@ -43,9 +43,6 @@ def get_supported_openai_params(  # noqa: PLR0915
         provider_config = None
 
     if provider_config and request_type == "chat_completion":
-        verbose_logger.info(
-            f"using provider_config: {provider_config} for checking supported params"
-        )
         return provider_config.get_supported_openai_params(model=model)
 
     if custom_llm_provider == "bedrock":
