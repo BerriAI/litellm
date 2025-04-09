@@ -240,6 +240,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         gtool_func_declarations = []
         googleSearch: Optional[dict] = None
         googleSearchRetrieval: Optional[dict] = None
+        enterpriseWebSearch: Optional[dict] = None
         code_execution: Optional[dict] = None
         # remove 'additionalProperties' from tools
         value = _remove_additional_properties(value)
@@ -273,6 +274,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 googleSearch = tool["googleSearch"]
             elif tool.get("googleSearchRetrieval", None) is not None:
                 googleSearchRetrieval = tool["googleSearchRetrieval"]
+            elif tool.get("enterpriseWebSearch", None) is not None:
+                enterpriseWebSearch = tool["enterpriseWebSearch"]
             elif tool.get("code_execution", None) is not None:
                 code_execution = tool["code_execution"]
             elif openai_function_object is not None:
@@ -299,6 +302,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             _tools["googleSearch"] = googleSearch
         if googleSearchRetrieval is not None:
             _tools["googleSearchRetrieval"] = googleSearchRetrieval
+        if enterpriseWebSearch is not None:
+            _tools["enterpriseWebSearch"] = enterpriseWebSearch
         if code_execution is not None:
             _tools["code_execution"] = code_execution
         return [_tools]
