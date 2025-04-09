@@ -541,6 +541,13 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "enum": ["text", "audio", "image", "video"],
                     },
                 },
+                "supported_output_modalities": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["text", "image"],
+                    },
+                },
                 "supports_native_streaming": {"type": "boolean"},
             },
             "additionalProperties": False,
