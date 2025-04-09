@@ -621,7 +621,6 @@ class Logging(LiteLLMLoggingBaseClass):
                     ] = RawRequestTypedDict(
                         error=str(e),
                     )
-                    traceback.print_exc()
                     _metadata[
                         "raw_request"
                     ] = "Unable to Log \
