@@ -420,3 +420,36 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
         content_type=content_type,
         headers=file_headers,
     )
+
+def unpack_defs(schema, defs):
+    properties = schema.get("properties", None)
+    if properties is None:
+        return
+
+    for name, value in properties.items():
+        ref_key = value.get("$ref", None)
+        if ref_key is not None:
+            ref = defs[ref_key.split("defs/")[-1]]
+            unpack_defs(ref, defs)
+            properties[name] = ref
+            continue
+
+        anyof = value.get("anyOf", None)
+        if anyof is not None:
+            for i, atype in enumerate(anyof):
+                ref_key = atype.get("$ref", None)
+                if ref_key is not None:
+                    ref = defs[ref_key.split("defs/")[-1]]
+                    unpack_defs(ref, defs)
+                    anyof[i] = ref
+            continue
+
+        items = value.get("items", None)
+        if items is not None:
+            ref_key = items.get("$ref", None)
+            if ref_key is not None:
+                ref = defs[ref_key.split("defs/")[-1]]
+                unpack_defs(ref, defs)
+                value["items"] = ref
+                continue
+
