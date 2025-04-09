@@ -374,7 +374,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["responseLogprobs"] = value
             elif param == "top_logprobs":
                 optional_params["logprobs"] = value
-            elif (param == "tools" or param == "functions") and isinstance(value, list):
+            elif (
+                (param == "tools" or param == "functions")
+                and isinstance(value, list)
+                and value
+            ):
                 optional_params["tools"] = self._map_function(value=value)
                 optional_params["litellm_param_is_function_call"] = (
                     True if param == "functions" else False

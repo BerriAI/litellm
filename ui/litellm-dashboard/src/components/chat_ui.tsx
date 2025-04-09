@@ -31,6 +31,7 @@ import { litellmModeMapping, ModelMode, EndpointType, getEndpointType } from "./
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import EndpointSelector from "./chat_ui/EndpointSelector";
+import TagSelector from "./tag_management/TagSelector";
 import { determineEndpointType } from "./chat_ui/EndpointUtils";
 import { 
   SendOutlined, 
@@ -40,7 +41,8 @@ import {
   RobotOutlined, 
   UserOutlined,
   DeleteOutlined,
-  LoadingOutlined
+  LoadingOutlined,
+  TagsOutlined
 } from "@ant-design/icons";
 
 interface ChatUIProps {
@@ -73,6 +75,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [endpointType, setEndpointType] = useState<string>(EndpointType.CHAT);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -202,6 +205,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             (chunk, model) => updateTextUI("assistant", chunk, model),
             selectedModel,
             effectiveApiKey,
+            selectedTags,
             signal
           );
         } else if (endpointType === EndpointType.IMAGE) {
@@ -211,6 +215,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             (imageUrl, model) => updateImageUI(imageUrl, model),
             selectedModel,
             effectiveApiKey,
+            selectedTags,
             signal
           );
         }
@@ -343,6 +348,18 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   endpointType={endpointType}
                   onEndpointChange={handleEndpointChange}
                   className="mb-4"
+                />  
+              </div>
+
+              <div>
+                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                  <TagsOutlined className="mr-2" /> Tags
+                </Text>
+                <TagSelector
+                  value={selectedTags}
+                  onChange={setSelectedTags}
+                  className="mb-4"
+                  accessToken={accessToken || ""}
                 />
               </div>
               

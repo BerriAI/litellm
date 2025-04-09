@@ -13,7 +13,11 @@ from unittest.mock import MagicMock, patch
 from pydantic import BaseModel
 
 import litellm
-from litellm.cost_calculator import response_cost_calculator
+from litellm.cost_calculator import (
+    handle_realtime_stream_cost_calculation,
+    response_cost_calculator,
+)
+from litellm.types.llms.openai import OpenAIRealtimeStreamList
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 
 
@@ -71,3 +75,66 @@ def test_cost_calculator_with_usage():
     )
 
     assert result == expected_cost, f"Got {result}, Expected {expected_cost}"
+
+
+def test_handle_realtime_stream_cost_calculation():
+    # Setup test data
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "gpt-3.5-turbo"}},
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150}
+            },
+        },
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "input_tokens": 200,
+                    "output_tokens": 100,
+                    "total_tokens": 300,
+                }
+            },
+        },
+    ]
+
+    # Test with explicit model name
+    cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        custom_llm_provider="openai",
+        litellm_model_name="gpt-3.5-turbo",
+    )
+
+    # Calculate expected cost
+    # gpt-3.5-turbo costs: $0.0015/1K tokens input, $0.002/1K tokens output
+    expected_cost = (300 * 0.0015 / 1000) + (  # input tokens (100 + 200)
+        150 * 0.002 / 1000
+    )  # output tokens (50 + 100)
+    assert (
+        abs(cost - expected_cost) <= 0.00075
+    )  # Allow small floating point differences
+
+    # Test with different model name in session
+    results[0]["session"]["model"] = "gpt-4"
+    cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        custom_llm_provider="openai",
+        litellm_model_name="gpt-3.5-turbo",
+    )
+
+    # Calculate expected cost using gpt-4 rates
+    # gpt-4 costs: $0.03/1K tokens input, $0.06/1K tokens output
+    expected_cost = (300 * 0.03 / 1000) + (  # input tokens
+        150 * 0.06 / 1000
+    )  # output tokens
+    assert abs(cost - expected_cost) < 0.00076
+
+    # Test with no response.done events
+    results = [{"type": "session.created", "session": {"model": "gpt-3.5-turbo"}}]
+    cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        custom_llm_provider="openai",
+        litellm_model_name="gpt-3.5-turbo",
+    )
+    assert cost == 0.0  # No usage, no cost

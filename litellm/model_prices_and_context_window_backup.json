@@ -2300,6 +2300,18 @@
         "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/000-000.mistral-ai-large-2407-offer?tab=Overview",
         "supports_tool_choice": true
     },
+    "azure_ai/mistral-large-latest": {
+        "max_tokens": 4096,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000006,
+        "litellm_provider": "azure_ai",
+        "supports_function_calling": true,
+        "mode": "chat",
+        "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/000-000.mistral-ai-large-2407-offer?tab=Overview",
+        "supports_tool_choice": true
+    },
     "azure_ai/ministral-3b": {
         "max_tokens": 4096,
         "max_input_tokens": 128000,
@@ -3455,7 +3467,7 @@
         "input_cost_per_token": 0.0000008,
         "output_cost_per_token": 0.000004,
         "cache_creation_input_token_cost": 0.000001,
-        "cache_read_input_token_cost": 0.0000008,
+        "cache_read_input_token_cost": 0.00000008,
         "litellm_provider": "anthropic",
         "mode": "chat",
         "supports_function_calling": true,
@@ -8444,7 +8456,8 @@
         "input_cost_per_token": 0.0000015,
         "output_cost_per_token": 0.0000020,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/*/1-month-commitment/cohere.command-text-v14": {
         "max_tokens": 4096, 
@@ -8453,7 +8466,8 @@
         "input_cost_per_second": 0.011,
         "output_cost_per_second": 0.011,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/*/6-month-commitment/cohere.command-text-v14": {
         "max_tokens": 4096, 
@@ -8462,7 +8476,8 @@
         "input_cost_per_second": 0.0066027,
         "output_cost_per_second": 0.0066027,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "cohere.command-light-text-v14": {
         "max_tokens": 4096, 
@@ -8471,7 +8486,8 @@
         "input_cost_per_token": 0.0000003,
         "output_cost_per_token": 0.0000006,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/*/1-month-commitment/cohere.command-light-text-v14": {
         "max_tokens": 4096, 
@@ -8480,7 +8496,8 @@
         "input_cost_per_second": 0.001902,
         "output_cost_per_second": 0.001902,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/*/6-month-commitment/cohere.command-light-text-v14": {
         "max_tokens": 4096, 
@@ -8489,7 +8506,8 @@
         "input_cost_per_second": 0.0011416,
         "output_cost_per_second": 0.0011416,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "cohere.command-r-plus-v1:0": {
         "max_tokens": 4096, 
@@ -8498,7 +8516,8 @@
         "input_cost_per_token": 0.0000030,
         "output_cost_per_token": 0.000015,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "cohere.command-r-v1:0": {
         "max_tokens": 4096, 
@@ -8507,7 +8526,8 @@
         "input_cost_per_token": 0.0000005,
         "output_cost_per_token": 0.0000015,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "cohere.embed-english-v3": {
         "max_tokens": 512, 

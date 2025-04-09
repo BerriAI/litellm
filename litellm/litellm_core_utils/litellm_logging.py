@@ -32,7 +32,10 @@ from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
 )
-from litellm.cost_calculator import _select_model_name_for_cost_calc
+from litellm.cost_calculator import (
+    _select_model_name_for_cost_calc,
+    handle_realtime_stream_cost_calculation,
+)
 from litellm.integrations.arize.arize import ArizeLogger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
@@ -1049,6 +1052,13 @@ class Logging(LiteLLMLoggingBaseClass):
                 result = self._handle_anthropic_messages_response_logging(result=result)
             ## if model in model cost map - log the response cost
             ## else set cost to None
+
+            if self.call_type == CallTypes.arealtime.value and isinstance(result, list):
+                self.model_call_details[
+                    "response_cost"
+                ] = handle_realtime_stream_cost_calculation(
+                    result, self.custom_llm_provider, self.model
+                )
             if (
                 standard_logging_object is None
                 and result is not None
