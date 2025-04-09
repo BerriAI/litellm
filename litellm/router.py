@@ -116,6 +116,7 @@ from litellm.types.router import (
     AllowedFailsPolicy,
     AssistantsTypedDict,
     CredentialLiteLLMParams,
+    CustomPricingLiteLLMParams,
     CustomRoutingStrategyBase,
     Deployment,
     DeploymentTypedDict,
@@ -4300,6 +4301,10 @@ class Router:
             litellm_params=LiteLLM_Params(**_litellm_params),
             model_info=_model_info,
         )
+
+        for field in CustomPricingLiteLLMParams.model_fields.keys():
+            if deployment.litellm_params.get(field) is not None:
+                _model_info[field] = deployment.litellm_params[field]
 
         ## REGISTER MODEL INFO IN LITELLM MODEL COST MAP
         model_id = deployment.model_info.id

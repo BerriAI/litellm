@@ -433,6 +433,7 @@ def _select_model_name_for_cost_calc(
             return_model = hidden_params.get(
                 "model_id", model
             )  # if router has set a model_id, use that
+            return return_model
         else:
             return_model = model
 
@@ -627,8 +628,6 @@ def completion_cost(  # noqa: PLR0915
             custom_pricing=custom_pricing,
             base_model=base_model,
         )
-
-        verbose_logger.info(f"selected_model for cost calculation: {selected_model}")
 
         potential_model_names = [selected_model]
         if model is not None:

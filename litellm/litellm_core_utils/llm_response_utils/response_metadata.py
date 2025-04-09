@@ -32,19 +32,26 @@ class ResponseMetadata:
             or isinstance(self.result, TranscriptionResponse)
         )
 
+    def set_and_apply_model_id(self, kwargs: dict):
+        ## ADD MODEL ID FIRST (NEEDED FOR COST CALCULATION)
+        model_id = kwargs.get("model_info", {}).get("id", None)
+        self._update_hidden_params({"model_id": model_id})
+        self.apply()
+
     def set_hidden_params(
         self, logging_obj: LiteLLMLoggingObject, model: Optional[str], kwargs: dict
     ) -> None:
         """Set hidden parameters on the response"""
-        ## ADD MODEL ID FIRST (NEEDED FOR COST CALCULATION)
-        model_id = kwargs.get("model_info", {}).get("id", None)
-        self._update_hidden_params({"model_id": model_id})
 
         ## ADD OTHER HIDDEN PARAMS
+        model_id = kwargs.get("model_info", {}).get("id", None)
         new_params = {
             "litellm_call_id": getattr(logging_obj, "litellm_call_id", None),
             "api_base": get_api_base(model=model or "", optional_params=kwargs),
-            "response_cost": logging_obj._response_cost_calculator(result=self.result),
+            "model_id": model_id,
+            "response_cost": logging_obj._response_cost_calculator(
+                result=self.result, litellm_model_name=model_id
+            ),
             "additional_headers": process_response_headers(
                 self._get_value_from_hidden_params("additional_headers") or {}
             ),
@@ -116,6 +123,7 @@ def update_response_metadata(
         return
 
     metadata = ResponseMetadata(result)
+    metadata.set_and_apply_model_id(kwargs)
     metadata.set_hidden_params(logging_obj, model, kwargs)
     metadata.set_timing_metrics(start_time, end_time, logging_obj)
     metadata.apply()
