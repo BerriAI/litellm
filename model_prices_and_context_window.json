@@ -4527,6 +4527,9 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
+        "supported_endpoints": ["/v1/chat/completions", "/v1/completions"],
+        "supported_modalities": ["text", "image", "audio", "video"],
+        "supported_output_modalities": ["text"],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
     "gemini-2.0-pro-exp-02-05": {
@@ -4563,6 +4566,7 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
+        "supported_endpoints": ["/v1/chat/completions", "/v1/completions"],
         "supported_modalities": ["text", "image", "audio", "video"],
         "supported_output_modalities": ["text"],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
