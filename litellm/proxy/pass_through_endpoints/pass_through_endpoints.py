@@ -8,12 +8,21 @@ from typing import Dict, List, Optional, Union
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from fastapi.responses import StreamingResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import (
     ConfigFieldInfo,
@@ -358,6 +367,74 @@ class HttpPassThroughEndpointHelpers:
             )
         return response
 
+    @staticmethod
+    async def non_streaming_http_request_handler(
+        request: Request,
+        async_client: httpx.AsyncClient,
+        url: httpx.URL,
+        headers: dict,
+        requested_query_params: Optional[dict] = None,
+        _parsed_body: Optional[dict] = None,
+    ) -> httpx.Response:
+        """
+        Handle non-streaming HTTP requests
+
+        Handles special cases when GET requests, multipart/form-data requests, and generic httpx requests
+        """
+        if request.method == "GET":
+            response = await async_client.request(
+                method=request.method,
+                url=url,
+                headers=headers,
+                params=requested_query_params,
+            )
+        elif HttpPassThroughEndpointHelpers.is_multipart(request) is True:
+            files_data = await HttpPassThroughEndpointHelpers._process_multipart(
+                request
+            )
+            response = await async_client.request(
+                method=request.method,
+                url=url,
+                headers=headers,
+                params=requested_query_params,
+                files=files_data,
+            )
+        else:
+            # Generic httpx method
+            response = await async_client.request(
+                method=request.method,
+                url=url,
+                headers=headers,
+                params=requested_query_params,
+                json=_parsed_body,
+            )
+        return response
+
+    @staticmethod
+    def is_multipart(request: Request) -> bool:
+        """Check if the request is a multipart/form-data request"""
+        return "multipart/form-data" in request.headers.get("content-type", "")
+
+    @staticmethod
+    async def _process_multipart(request: Request) -> dict:
+        """Process multipart/form-data requests, handling both files and form fields"""
+        form_data = await request.form()
+        files = {}
+        data = {}
+
+        for field_name, field_value in form_data.items():
+            if isinstance(field_value, UploadFile):
+                file_content = await field_value.read()
+                files[field_name] = (
+                    field_value.filename,
+                    file_content,
+                    field_value.content_type,
+                )
+            else:
+                data[field_name] = field_value
+
+        return {"files": files, "data": data}
+
 
 async def pass_through_request(  # noqa: PLR0915
     request: Request,
@@ -424,7 +501,7 @@ async def pass_through_request(  # noqa: PLR0915
         start_time = datetime.now()
         logging_obj = Logging(
             model="unknown",
-            messages=[{"role": "user", "content": json.dumps(_parsed_body)}],
+            messages=[{"role": "user", "content": safe_dumps(_parsed_body)}],
             stream=False,
             call_type="pass_through_endpoint",
             start_time=start_time,
@@ -453,7 +530,6 @@ async def pass_through_request(  # noqa: PLR0915
         logging_obj.model_call_details["litellm_call_id"] = litellm_call_id
 
         # combine url with query params for logging
-
         requested_query_params: Optional[dict] = (
             query_params or request.query_params.__dict__
         )
@@ -474,7 +550,7 @@ async def pass_through_request(  # noqa: PLR0915
                 logging_url = str(url) + "?" + requested_query_params_str
 
         logging_obj.pre_call(
-            input=[{"role": "user", "content": json.dumps(_parsed_body)}],
+            input=[{"role": "user", "content": safe_dumps(_parsed_body)}],
             api_key="",
             additional_args={
                 "complete_input_dict": _parsed_body,
@@ -525,22 +601,16 @@ async def pass_through_request(  # noqa: PLR0915
         )
         verbose_proxy_logger.debug("request body: {}".format(_parsed_body))
 
-        if request.method == "GET":
-            response = await async_client.request(
-                method=request.method,
+        response = (
+            await HttpPassThroughEndpointHelpers.non_streaming_http_request_handler(
+                request=request,
+                async_client=async_client,
                 url=url,
                 headers=headers,
-                params=requested_query_params,
+                requested_query_params=requested_query_params,
+                _parsed_body=_parsed_body,
             )
-        else:
-            response = await async_client.request(
-                method=request.method,
-                url=url,
-                headers=headers,
-                params=requested_query_params,
-                json=_parsed_body,
-            )
-
+        )
         verbose_proxy_logger.debug("response.headers= %s", response.headers)
 
         if _is_streaming_response(response) is True:
