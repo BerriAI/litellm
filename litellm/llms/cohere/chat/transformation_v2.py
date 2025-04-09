@@ -126,10 +126,10 @@ class CohereChatConfigV2(BaseConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
-        **kwargs,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
-        # Extract api_key from kwargs if present
-        api_key = kwargs.get('api_key')
+        # Use the api_key parameter directly
         return cohere_validate_environment(
             headers=headers,
             model=model,
@@ -190,12 +190,11 @@ class CohereChatConfigV2(BaseConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
-        **kwargs,
+        litellm_params: dict,
+        headers: dict,
     ) -> dict:
-        # Extract necessary parameters from kwargs
+        # Use the explicit parameters passed to the method
         # These variables are used by the parent class implementation
-        _ = kwargs.get('litellm_params', {})
-        _ = kwargs.get('headers', {})
         ## Load Config
         for k, v in litellm.CohereChatConfigV2.get_config().items():
             if (
@@ -240,13 +239,25 @@ class CohereChatConfigV2(BaseConfig):
         model: str,
         raw_response: httpx.Response,
         model_response: ModelResponse,
-        **_  # Unused kwargs
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         try:
             raw_response_json = raw_response.json()
             # Get the text content from the response
             # Set the text content from the response
-            model_response.choices[0].message.content = raw_response_json.get("text", "")
+            # Handle both regular and streaming choices
+            if hasattr(model_response.choices[0], 'message'):
+                model_response.choices[0].message.content = raw_response_json.get("text", "")
+            else:
+                # For streaming responses
+                model_response.choices[0].delta.content = raw_response_json.get("text", "")
         except Exception as exc:
             raise CohereErrorV2(
                 message=raw_response.text, status_code=raw_response.status_code
@@ -351,7 +362,7 @@ class CohereChatConfigV2(BaseConfig):
         streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
         sync_stream: bool,
         json_mode: Optional[bool] = False,
-    ):
+    ) -> Any:
         return CohereModelResponseIterator(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
