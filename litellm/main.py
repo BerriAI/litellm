@@ -2108,7 +2108,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_key=cohere_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
-        elif custom_llm_provider == "cohere_chat_v2":
+        elif custom_llm_provider == "cohere_v2":
             cohere_key = (
                 api_key
                 or litellm.cohere_key
@@ -2140,12 +2140,13 @@ def completion(  # type: ignore # noqa: PLR0915
                 model_response=model_response,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                custom_llm_provider="cohere_chat_v2",
+                custom_llm_provider="cohere_v2",
                 timeout=timeout,
                 headers=headers,
                 encoding=encoding,
                 api_key=cohere_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
+                client=client,
             )
         elif custom_llm_provider == "maritalk":
             maritalk_key = (

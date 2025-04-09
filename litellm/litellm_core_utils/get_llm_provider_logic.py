@@ -135,10 +135,15 @@ def get_llm_provider(  # noqa: PLR0915
         if litellm_params and hasattr(litellm_params, "optional_params") and litellm_params.optional_params:
             api_version = litellm_params.optional_params.get("api_version")
 
-        # Handle direct cohere_chat_v2 model format
-        if model.startswith("cohere_chat_v2/"):
+        # Handle direct cohere_v2 model format
+        if model.startswith("cohere_v2/"):
+            model = model.replace("cohere_v2/", "")
+            custom_llm_provider = "cohere_v2"
+            
+        # For backward compatibility
+        elif model.startswith("cohere_chat_v2/"):
             model = model.replace("cohere_chat_v2/", "")
-            custom_llm_provider = "cohere_chat_v2"
+            custom_llm_provider = "cohere_v2"
             
         model, custom_llm_provider = handle_cohere_chat_model_custom_llm_provider(
             model, custom_llm_provider, api_version
