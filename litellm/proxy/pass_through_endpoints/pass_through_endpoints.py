@@ -450,6 +450,7 @@ class HttpPassThroughEndpointHelpers:
             headers=headers,
             params=requested_query_params,
             files=files,
+            data=form_data_dict,
         )
         return response
 
