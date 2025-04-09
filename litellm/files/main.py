@@ -63,16 +63,17 @@ async def acreate_file(
         loop = asyncio.get_event_loop()
         kwargs["acreate_file"] = True
 
-        # Use a partial function to pass your keyword arguments
-        func = partial(
-            create_file,
-            file,
-            purpose,
-            custom_llm_provider,
-            extra_headers,
-            extra_body,
+        call_args = {
+            "file": file,
+            "purpose": purpose,
+            "custom_llm_provider": custom_llm_provider,
+            "extra_headers": extra_headers,
+            "extra_body": extra_body,
             **kwargs,
-        )
+        }
+
+        # Use a partial function to pass your keyword arguments
+        func = partial(create_file, **call_args)
 
         # Add the context to the function
         ctx = contextvars.copy_context()
@@ -92,7 +93,7 @@ async def acreate_file(
 def create_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Optional[Literal["openai", "azure", "vertex_ai"]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -101,6 +102,8 @@ def create_file(
     Files are used to upload documents that can be used with features like Assistants, Fine-tuning, and Batch API.
 
     LiteLLM Equivalent of POST: POST https://api.openai.com/v1/files
+
+    Specify either provider_list or custom_llm_provider.
     """
     try:
         _is_async = kwargs.pop("acreate_file", False) is True
@@ -120,7 +123,7 @@ def create_file(
         if (
             timeout is not None
             and isinstance(timeout, httpx.Timeout)
-            and supports_httpx_timeout(custom_llm_provider) is False
+            and supports_httpx_timeout(cast(str, custom_llm_provider)) is False
         ):
             read_timeout = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout

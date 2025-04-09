@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.types.caching import *
 from litellm.types.utils import all_litellm_params
@@ -406,7 +407,7 @@ class Cache:
                     }
                 ]
             }
-            time.sleep(0.02)
+            time.sleep(CACHED_STREAMING_CHUNK_DELAY)
 
     def _get_cache_logic(
         self,

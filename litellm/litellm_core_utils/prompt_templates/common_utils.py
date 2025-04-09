@@ -7,6 +7,7 @@ from typing import Dict, List, Literal, Optional, Union, cast
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
+    ChatCompletionFileObject,
     ChatCompletionUserMessage,
 )
 from litellm.types.utils import Choices, ModelResponse, StreamingChoices
@@ -34,7 +35,7 @@ def handle_messages_with_content_list_to_str_conversion(
 
 
 def strip_name_from_messages(
-    messages: List[AllMessageValues],
+    messages: List[AllMessageValues], allowed_name_roles: List[str] = ["user"]
 ) -> List[AllMessageValues]:
     """
     Removes 'name' from messages
@@ -43,7 +44,7 @@ def strip_name_from_messages(
     for message in messages:
         msg_role = message.get("role")
         msg_copy = message.copy()
-        if msg_role == "user":
+        if msg_role not in allowed_name_roles:
             msg_copy.pop("name", None)  # type: ignore
         new_messages.append(msg_copy)
     return new_messages
@@ -292,3 +293,91 @@ def get_completion_messages(
         messages, assistant_continue_message, ensure_alternating_roles
     )
     return messages
+
+
+def get_file_ids_from_messages(messages: List[AllMessageValues]) -> List[str]:
+    """
+    Gets file ids from messages
+    """
+    file_ids = []
+    for message in messages:
+        if message.get("role") == "user":
+            content = message.get("content")
+            if content:
+                if isinstance(content, str):
+                    continue
+                for c in content:
+                    if c["type"] == "file":
+                        file_object = cast(ChatCompletionFileObject, c)
+                        file_object_file_field = file_object["file"]
+                        file_id = file_object_file_field.get("file_id")
+                        if file_id:
+                            file_ids.append(file_id)
+    return file_ids
+
+
+def update_messages_with_model_file_ids(
+    messages: List[AllMessageValues],
+    model_id: str,
+    model_file_id_mapping: Dict[str, Dict[str, str]],
+) -> List[AllMessageValues]:
+    """
+    Updates messages with model file ids.
+
+    model_file_id_mapping: Dict[str, Dict[str, str]] = {
+        "litellm_proxy/file_id": {
+            "model_id": "provider_file_id"
+        }
+    }
+    """
+    for message in messages:
+        if message.get("role") == "user":
+            content = message.get("content")
+            if content:
+                if isinstance(content, str):
+                    continue
+                for c in content:
+                    if c["type"] == "file":
+                        file_object = cast(ChatCompletionFileObject, c)
+                        file_object_file_field = file_object["file"]
+                        file_id = file_object_file_field.get("file_id")
+                        if file_id:
+                            provider_file_id = (
+                                model_file_id_mapping.get(file_id, {}).get(model_id)
+                                or file_id
+                            )
+                            file_object_file_field["file_id"] = provider_file_id
+    return messages
+
+
+def unpack_defs(schema, defs):
+    properties = schema.get("properties", None)
+    if properties is None:
+        return
+
+    for name, value in properties.items():
+        ref_key = value.get("$ref", None)
+        if ref_key is not None:
+            ref = defs[ref_key.split("defs/")[-1]]
+            unpack_defs(ref, defs)
+            properties[name] = ref
+            continue
+
+        anyof = value.get("anyOf", None)
+        if anyof is not None:
+            for i, atype in enumerate(anyof):
+                ref_key = atype.get("$ref", None)
+                if ref_key is not None:
+                    ref = defs[ref_key.split("defs/")[-1]]
+                    unpack_defs(ref, defs)
+                    anyof[i] = ref
+            continue
+
+        items = value.get("items", None)
+        if items is not None:
+            ref_key = items.get("$ref", None)
+            if ref_key is not None:
+                ref = defs[ref_key.split("defs/")[-1]]
+                unpack_defs(ref, defs)
+                value["items"] = ref
+                continue

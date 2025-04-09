@@ -21,7 +21,6 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.types.llms.anthropic import (
-    AnthropicChatCompletionUsageBlock,
     ContentBlockDelta,
     ContentBlockStart,
     ContentBlockStop,
@@ -32,13 +31,13 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.openai import (
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
-    ChatCompletionUsageBlock,
 )
 from litellm.types.utils import (
     Delta,
     GenericStreamingChunk,
     ModelResponseStream,
     StreamingChoices,
+    Usage,
 )
 from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
 
@@ -308,6 +307,10 @@ class AnthropicChatCompletion(BaseLLM):
             model=model,
             provider=LlmProviders(custom_llm_provider),
         )
+        if config is None:
+            raise ValueError(
+                f"Provider config not found for model: {model} and provider: {custom_llm_provider}"
+            )
 
         data = config.transform_request(
             model=model,
@@ -487,10 +490,8 @@ class ModelResponseIterator:
             return True
         return False
 
-    def _handle_usage(
-        self, anthropic_usage_chunk: Union[dict, UsageDelta]
-    ) -> AnthropicChatCompletionUsageBlock:
-        usage_block = AnthropicChatCompletionUsageBlock(
+    def _handle_usage(self, anthropic_usage_chunk: Union[dict, UsageDelta]) -> Usage:
+        usage_block = Usage(
             prompt_tokens=anthropic_usage_chunk.get("input_tokens", 0),
             completion_tokens=anthropic_usage_chunk.get("output_tokens", 0),
             total_tokens=anthropic_usage_chunk.get("input_tokens", 0)
@@ -581,7 +582,7 @@ class ModelResponseIterator:
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
             finish_reason = ""
-            usage: Optional[ChatCompletionUsageBlock] = None
+            usage: Optional[Usage] = None
             provider_specific_fields: Dict[str, Any] = {}
             reasoning_content: Optional[str] = None
             thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None

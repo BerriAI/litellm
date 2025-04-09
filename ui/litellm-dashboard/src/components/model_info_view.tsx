@@ -12,8 +12,8 @@ import {
   Badge,
   Button as TremorButton,
   TextInput,
-  NumberInput,
 } from "@tremor/react";
+import NumericalInput from "./shared/numerical_input";
 import { ArrowLeftIcon, TrashIcon, KeyIcon } from "@heroicons/react/outline";
 import { modelDeleteCall, modelUpdateCall, CredentialItem, credentialGetCall, credentialCreateCall, modelInfoCall, modelInfoV1Call } from "./networking";
 import { Button, Form, Input, InputNumber, message, Select, Modal } from "antd";
@@ -369,7 +369,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">Input Cost (per 1M tokens)</Text>
                       {isEditing ? (
                         <Form.Item name="input_cost" className="mb-0">
-                          <NumberInput placeholder="Enter input cost" />
+                          <NumericalInput placeholder="Enter input cost" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
@@ -384,7 +384,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">Output Cost (per 1M tokens)</Text>
                       {isEditing ? (
                         <Form.Item name="output_cost" className="mb-0">
-                          <NumberInput placeholder="Enter output cost" />
+                          <NumericalInput placeholder="Enter output cost" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
@@ -438,7 +438,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">TPM (Tokens per Minute)</Text>
                       {isEditing ? (
                         <Form.Item name="tpm" className="mb-0">
-                          <NumberInput placeholder="Enter TPM" />
+                          <NumericalInput placeholder="Enter TPM" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
@@ -448,10 +448,10 @@ export default function ModelInfoView({
                     </div>
 
                     <div>
-                      <Text className="font-medium">RPM (Requests per Minute)</Text>
+                      <Text className="font-medium">RPM VVV(Requests per Minute)</Text>
                       {isEditing ? (
                         <Form.Item name="rpm" className="mb-0">
-                          <NumberInput placeholder="Enter RPM" />
+                          <NumericalInput placeholder="Enter RPM" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
@@ -464,7 +464,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">Max Retries</Text>
                       {isEditing ? (
                         <Form.Item name="max_retries" className="mb-0">
-                          <NumberInput placeholder="Enter max retries" />
+                          <NumericalInput placeholder="Enter max retries" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
@@ -477,7 +477,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">Timeout (seconds)</Text>
                       {isEditing ? (
                         <Form.Item name="timeout" className="mb-0">
-                          <NumberInput placeholder="Enter timeout" />
+                          <NumericalInput placeholder="Enter timeout" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
@@ -490,7 +490,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">Stream Timeout (seconds)</Text>
                       {isEditing ? (
                         <Form.Item name="stream_timeout" className="mb-0">
-                          <NumberInput placeholder="Enter stream timeout" />
+                          <NumericalInput placeholder="Enter stream timeout" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">

@@ -9,10 +9,17 @@ from pydantic import BaseModel
 import litellm
 import litellm._logging
 from litellm import verbose_logger
+from litellm.constants import (
+    DEFAULT_MAX_LRU_CACHE_SIZE,
+    DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND,
+)
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
-from litellm.litellm_core_utils.llm_cost_calc.utils import _generic_cost_per_character
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    _generic_cost_per_character,
+    generic_cost_per_token,
+)
 from litellm.llms.anthropic.cost_calculation import (
     cost_per_token as anthropic_cost_per_token,
 )
@@ -50,6 +57,9 @@ from litellm.llms.vertex_ai.image_generation.cost_calculator import (
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
+    OpenAIRealtimeStreamList,
+    OpenAIRealtimeStreamResponseBaseObject,
+    OpenAIRealtimeStreamSessionEvents,
     ResponseAPIUsage,
     ResponsesAPIResponse,
 )
@@ -355,9 +365,7 @@ def cost_per_token(  # noqa: PLR0915
 def get_replicate_completion_pricing(completion_response: dict, total_time=0.0):
     # see https://replicate.com/pricing
     # for all litellm currently supported LLMs, almost all requests go to a100_80gb
-    a100_80gb_price_per_second_public = (
-        0.001400  # assume all calls sent to A100 80GB for now
-    )
+    a100_80gb_price_per_second_public = DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND  # assume all calls sent to A100 80GB for now
     if total_time == 0.0:  # total time is in ms
         start_time = completion_response.get("created", time.time())
         end_time = getattr(completion_response, "ended", time.time())
@@ -450,7 +458,7 @@ def _select_model_name_for_cost_calc(
     return return_model
 
 
-@lru_cache(maxsize=16)
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
 def _model_contains_known_llm_provider(model: str) -> bool:
     """
     Check if the model contains a known llm provider
@@ -1139,3 +1147,50 @@ def batch_cost_calculator(
         )  # batch cost is usually half of the regular token cost
 
     return total_prompt_cost, total_completion_cost
+
+
+def handle_realtime_stream_cost_calculation(
+    results: OpenAIRealtimeStreamList, custom_llm_provider: str, litellm_model_name: str
+) -> float:
+    """
+    Handles the cost calculation for realtime stream responses.
+
+    Pick the 'response.done' events. Calculate total cost across all 'response.done' events.
+
+    Args:
+        results: A list of OpenAIRealtimeStreamBaseObject objects
+    """
+    response_done_events: List[OpenAIRealtimeStreamResponseBaseObject] = cast(
+        List[OpenAIRealtimeStreamResponseBaseObject],
+        [result for result in results if result["type"] == "response.done"],
+    )
+    received_model = None
+    potential_model_names = []
+    for result in results:
+        if result["type"] == "session.created":
+            received_model = cast(OpenAIRealtimeStreamSessionEvents, result)["session"][
+                "model"
+            ]
+            potential_model_names.append(received_model)
+
+    potential_model_names.append(litellm_model_name)
+    input_cost_per_token = 0.0
+    output_cost_per_token = 0.0
+    for result in response_done_events:
+        usage_object = (
+            ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                result["response"].get("usage", {})
+            )
+        )
+
+        for model_name in potential_model_names:
+            _input_cost_per_token, _output_cost_per_token = generic_cost_per_token(
+                model=model_name,
+                usage=usage_object,
+                custom_llm_provider=custom_llm_provider,
+            )
+            input_cost_per_token += _input_cost_per_token
+            output_cost_per_token += _output_cost_per_token
+    total_cost = input_cost_per_token + output_cost_per_token
+
+    return total_cost

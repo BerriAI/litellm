@@ -11,6 +11,10 @@ from litellm.constants import (
     DEFAULT_IMAGE_HEIGHT,
     DEFAULT_IMAGE_TOKEN_COUNT,
     DEFAULT_IMAGE_WIDTH,
+    MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES,
+    MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES,
+    MAX_TILE_HEIGHT,
+    MAX_TILE_WIDTH,
 )
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
@@ -97,11 +101,14 @@ def resize_image_high_res(
     height: int,
 ) -> Tuple[int, int]:
     # Maximum dimensions for high res mode
-    max_short_side = 768
-    max_long_side = 2000
+    max_short_side = MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES
+    max_long_side = MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES
 
     # Return early if no resizing is needed
-    if width <= 768 and height <= 768:
+    if (
+        width <= MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES
+        and height <= MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES
+    ):
         return width, height
 
     # Determine the longer and shorter sides
@@ -132,7 +139,10 @@ def resize_image_high_res(
 
 # Test the function with the given example
 def calculate_tiles_needed(
-    resized_width, resized_height, tile_width=512, tile_height=512
+    resized_width,
+    resized_height,
+    tile_width=MAX_TILE_WIDTH,
+    tile_height=MAX_TILE_HEIGHT,
 ):
     tiles_across = (resized_width + tile_width - 1) // tile_width
     tiles_down = (resized_height + tile_height - 1) // tile_height

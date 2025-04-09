@@ -56,12 +56,17 @@ class HttpxCodeExecutionResult(TypedDict):
     output: str
 
 
+class HttpxBlobType(TypedDict):
+    mimeType: str
+    data: str
+
+
 class HttpxPartType(TypedDict, total=False):
     text: str
-    inline_data: BlobType
-    file_data: FileDataType
+    inlineData: HttpxBlobType
+    fileData: FileDataType
     functionCall: HttpxFunctionCall
-    function_response: FunctionResponse
+    functionResponse: FunctionResponse
     executableCode: HttpxExecutableCode
     codeExecutionResult: HttpxCodeExecutionResult
 
@@ -82,12 +87,27 @@ class SystemInstructions(TypedDict):
 
 class Schema(TypedDict, total=False):
     type: Literal["STRING", "INTEGER", "BOOLEAN", "NUMBER", "ARRAY", "OBJECT"]
+    format: str
+    title: str
     description: str
-    enum: List[str]
-    items: List["Schema"]
-    properties: "Schema"
-    required: List[str]
     nullable: bool
+    default: Any
+    items: "Schema"
+    minItems: str
+    maxItems: str
+    enum: List[str]
+    properties: Dict[str, "Schema"]
+    propertyOrdering: List[str]
+    required: List[str]
+    minProperties: str
+    maxProperties: str
+    minimum: float
+    maximum: float
+    minLength: str
+    maxLength: str
+    pattern: str
+    example: Any
+    anyOf: List["Schema"]
 
 
 class FunctionDeclaration(TypedDict, total=False):
@@ -160,6 +180,7 @@ class GenerationConfig(TypedDict, total=False):
     seed: int
     responseLogprobs: bool
     logprobs: int
+    responseModalities: List[Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]]
 
 
 class Tools(TypedDict, total=False):

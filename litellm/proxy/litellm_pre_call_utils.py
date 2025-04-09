@@ -191,6 +191,7 @@ def clean_headers(
     if litellm_key_header_name is not None:
         special_headers.append(litellm_key_header_name.lower())
     clean_headers = {}
+
     for header, value in headers.items():
         if header.lower() not in special_headers:
             clean_headers[header] = value
@@ -528,7 +529,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     _metadata_variable_name = _get_metadata_variable_name(request)
 
-    if _metadata_variable_name not in data:
+    if data.get(_metadata_variable_name, None) is None:
         data[_metadata_variable_name] = {}
 
     # We want to log the "metadata" from the client side request. Avoid circular reference by not directly assigning metadata to itself.

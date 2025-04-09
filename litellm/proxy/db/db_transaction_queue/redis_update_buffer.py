@@ -4,6 +4,7 @@ Handles buffering database `UPDATE` transactions in Redis before committing them
 This is to prevent deadlocks and improve reliability
 """
 
+import asyncio
 import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
@@ -16,11 +17,13 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import DailyUserSpendTransaction, DBSpendUpdateTransactions
+from litellm.proxy.db.db_transaction_queue.base_update_queue import service_logger_obj
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
     DailySpendUpdateQueue,
 )
 from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
 from litellm.secret_managers.main import str_to_bool
+from litellm.types.services import ServiceTypes
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -136,17 +139,26 @@ class RedisUpdateBuffer:
             return
 
         list_of_transactions = [safe_dumps(db_spend_update_transactions)]
-        await self.redis_cache.async_rpush(
+        current_redis_buffer_size = await self.redis_cache.async_rpush(
             key=REDIS_UPDATE_BUFFER_KEY,
             values=list_of_transactions,
+        )
+        await self._emit_new_item_added_to_redis_buffer_event(
+            queue_size=current_redis_buffer_size,
+            service=ServiceTypes.REDIS_SPEND_UPDATE_QUEUE,
         )
 
         list_of_daily_spend_update_transactions = [
             safe_dumps(daily_spend_update_transactions)
         ]
-        await self.redis_cache.async_rpush(
+
+        current_redis_buffer_size = await self.redis_cache.async_rpush(
             key=REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
             values=list_of_daily_spend_update_transactions,
+        )
+        await self._emit_new_item_added_to_redis_buffer_event(
+            queue_size=current_redis_buffer_size,
+            service=ServiceTypes.REDIS_DAILY_SPEND_UPDATE_QUEUE,
         )
 
     @staticmethod
@@ -300,3 +312,20 @@ class RedisUpdateBuffer:
                         )
 
         return combined_transaction
+
+    async def _emit_new_item_added_to_redis_buffer_event(
+        self,
+        service: ServiceTypes,
+        queue_size: int,
+    ):
+        asyncio.create_task(
+            service_logger_obj.async_service_success_hook(
+                service=service,
+                duration=0,
+                call_type="_emit_new_item_added_to_queue_event",
+                event_metadata={
+                    "gauge_labels": service,
+                    "gauge_value": queue_size,
+                },
+            )
+        )

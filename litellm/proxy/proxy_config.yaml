@@ -4,3 +4,18 @@ model_list:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
+  - model_name: openai/gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: fake-key
+
+litellm_settings:
+  default_team_settings:
+      - team_id: test_dev
+        success_callback: ["langfuse", "s3"]
+        langfuse_secret: secret-test-key
+        langfuse_public_key: public-test-key
+      - team_id: my_workflows
+        success_callback: ["langfuse", "s3"]
+        langfuse_secret: secret-workflows-key
+        langfuse_public_key: public-workflows-key
