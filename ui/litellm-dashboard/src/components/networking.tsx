@@ -4310,3 +4310,65 @@ export const tagDeleteCall = async (
     throw error;
   }
 };
+
+export const addPublicTeamCall = async (
+  accessToken: string,
+  teamId: string
+) => {
+  try {
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/team/available`
+      : `/team/available`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`
+      },
+      body: JSON.stringify({
+        team_id: teamId
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || 'Failed to add public team');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error adding public team:', error);
+    throw error;
+  }
+};
+
+export const deletePublicTeamCall = async (
+  accessToken: string,
+  teamIds: string[]
+) => {
+  try {
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/team/available`
+      : `/team/available`;
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`
+      },
+      body: JSON.stringify({
+        team_ids: teamIds
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || 'Failed to delete public team');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error deleting public team:', error);
+    throw error;
+  }
+};
