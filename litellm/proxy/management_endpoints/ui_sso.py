@@ -1065,8 +1065,9 @@ class MicrosoftSSOHandler:
     ) -> List[str]:
         group_ids = []
         for _object in response.get("value", []) or []:
-            if _object.get("id") is not None:
-                group_ids.append(_object.get("id"))
+            _group_id = _object.get("id")
+            if _group_id is not None:
+                group_ids.append(_group_id)
         return group_ids
 
     @staticmethod
