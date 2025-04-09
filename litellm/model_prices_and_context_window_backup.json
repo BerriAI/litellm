@@ -3467,7 +3467,7 @@
         "input_cost_per_token": 0.0000008,
         "output_cost_per_token": 0.000004,
         "cache_creation_input_token_cost": 0.000001,
-        "cache_read_input_token_cost": 0.0000008,
+        "cache_read_input_token_cost": 0.00000008,
         "litellm_provider": "anthropic",
         "mode": "chat",
         "supports_function_calling": true,
@@ -8466,7 +8466,8 @@
         "input_cost_per_second": 0.011,
         "output_cost_per_second": 0.011,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/*/6-month-commitment/cohere.command-text-v14": {
         "max_tokens": 4096, 
@@ -8475,7 +8476,8 @@
         "input_cost_per_second": 0.0066027,
         "output_cost_per_second": 0.0066027,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "cohere.command-light-text-v14": {
         "max_tokens": 4096, 
@@ -8494,7 +8496,8 @@
         "input_cost_per_second": 0.001902,
         "output_cost_per_second": 0.001902,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/*/6-month-commitment/cohere.command-light-text-v14": {
         "max_tokens": 4096, 
@@ -8503,7 +8506,8 @@
         "input_cost_per_second": 0.0011416,
         "output_cost_per_second": 0.0011416,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "cohere.command-r-plus-v1:0": {
         "max_tokens": 4096, 
