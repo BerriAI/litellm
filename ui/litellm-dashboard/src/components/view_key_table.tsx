@@ -418,6 +418,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     <div>
       <AllKeysTable 
         keys={keys}
+        setKeys={setKeys}
         isLoading={isLoading}
         pagination={pagination}
         onPageChange={handlePageChange}
