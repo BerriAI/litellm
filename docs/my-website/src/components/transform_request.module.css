@@ -1,0 +1,215 @@
+.transform-playground {
+  width: 100%;
+  margin: 0;
+  padding: 2rem;
+  background: var(--ifm-background-color);
+  min-height: calc(70vh - 42px);
+}
+
+.playground-container {
+  display: flex;
+  flex-direction: row;
+  gap: 1.5rem;
+  width: 100%;
+  margin-top: 1rem;
+  min-height: calc(70vh - 140px);
+}
+
+@media (min-width: 1024px) {
+  .playground-container {
+    flex-direction: row;
+  }
+
+  .panel {
+    padding: 2rem;
+    min-width: 45%;
+  }
+}
+
+.panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--ifm-background-surface-color);
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 12px;
+  padding: 1.5rem;
+  min-height: calc(70vh - 140px);
+}
+
+.panel-header {
+  margin-bottom: 1rem;
+}
+
+.panel-header h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem 0;
+  color: var(--ifm-heading-color);
+}
+
+.panel-header p {
+  color: var(--ifm-color-emphasis-600);
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.panel-header .note {
+  font-size: 0.75rem;
+  margin-top: 0.5rem;
+  color: var(--ifm-color-emphasis-500);
+}
+
+.code-input {
+  flex: 1;
+  width: 100%;
+  padding: 1rem;
+  background: var(--ifm-background-color);
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 8px;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.875rem;
+  color: var(--ifm-color-content);
+  resize: none;
+  margin-bottom: 1rem;
+  min-height: calc(70vh - 245px);
+}
+
+.code-output-container {
+  position: relative;
+  background: var(--ifm-background-color);
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 8px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: calc(70vh - 245px);
+}
+
+.code-output {
+  padding: 1rem;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.875rem;
+  margin: 0;
+  overflow: auto;
+  flex: 1;
+  color: var(--ifm-color-content);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+.code-output .string { color: #a8ff60; }
+.code-output .number { color: #ff9d00; }
+.code-output .boolean { color: #ff628c; }
+.code-output .null { color: #ff628c; }
+.code-output .key { color: #5ccfe6; }
+
+.panel-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 1rem;
+}
+
+.transform-button {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 0.5rem !important;
+  background: var(--ifm-color-primary) !important;
+  border: none !important;
+  color: white !important;
+  padding: 0.5rem 1rem !important;
+  border-radius: 6px !important;
+  cursor: pointer !important;
+  font-size: 0.875rem !important;
+  font-weight: 500 !important;
+}
+
+.transform-button:hover {
+  background: var(--ifm-color-primary-darker) !important;
+}
+
+.copy-button {
+  position: absolute !important;
+  right: 0.75rem !important;
+  top: 0.75rem !important;
+  color: var(--ifm-color-emphasis-600) !important;
+  background: transparent !important;
+  border: none !important;
+  cursor: pointer !important;
+  padding: 0.25rem !important;
+  border-radius: 4px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 0.25rem !important;
+}
+
+.copy-button:hover {
+  color: var(--ifm-color-primary) !important;
+  background: var(--ifm-color-emphasis-200) !important;
+}
+
+/* View toggle styles */
+.view-toggle {
+  display: flex;
+  gap: 0.5rem;
+  background: var(--ifm-color-emphasis-100);
+  padding: 0.25rem;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+}
+
+.view-toggle button {
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--ifm-color-emphasis-700);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.view-toggle button:hover {
+  background: var(--ifm-color-emphasis-200);
+}
+
+.view-toggle button.active {
+  background: var(--ifm-color-primary);
+  color: white;
+}
+
+/* Responsive layout */
+@media (max-width: 768px) {
+  .playground-container {
+    flex-direction: column;
+  }
+  
+  .panel {
+    width: 100%;
+  }
+}
+
+.footer {
+  text-align: right;
+  margin-top: 1.5rem;
+  padding: 0 1rem;
+}
+
+.footer p {
+  color: var(--ifm-color-emphasis-600);
+  font-size: 1rem;
+  margin: 0;
+}
+
+.footer a {
+  color: var(--ifm-color-primary);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.footer a:hover {
+  text-decoration: underline;
+} 
