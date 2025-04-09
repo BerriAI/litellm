@@ -138,3 +138,53 @@ def test_handle_realtime_stream_cost_calculation():
         litellm_model_name="gpt-3.5-turbo",
     )
     assert cost == 0.0  # No usage, no cost
+
+
+def test_custom_pricing_with_router_model_id():
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "prod/claude-3-5-sonnet-20240620",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-5-sonnet-20240620",
+                    "api_key": "test_api_key",
+                },
+                "model_info": {
+                    "input_cost_per_token": 0.000006,
+                    "output_cost_per_token": 0.00003,
+                    "cache_creation_input_token_cost": 0.0000075,
+                    "cache_read_input_token_cost": 0.0000006,
+                },
+            },
+            {
+                "model_name": "claude-3-5-sonnet-20240620",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-5-sonnet-20240620",
+                    "api_key": "test_api_key",
+                },
+                "model_info": {
+                    "input_cost_per_token": 100,
+                    "output_cost_per_token": 200,
+                },
+            },
+        ]
+    )
+
+    result = router.completion(
+        model="claude-3-5-sonnet-20240620",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        mock_response=True,
+    )
+
+    result_2 = router.completion(
+        model="prod/claude-3-5-sonnet-20240620",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        mock_response=True,
+    )
+
+    assert (
+        result._hidden_params["response_cost"]
+        > result_2._hidden_params["response_cost"]
+    )
