@@ -495,8 +495,10 @@ async def auth_callback(request: Request):  # noqa: PLR0915
                 user_role = (
                     user_info.user_role or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
                 )
-            sso_teams = getattr(result, "team_ids", [])
-            await add_missing_team_member(user_info=user_info, sso_teams=sso_teams)
+            await SSOAuthenticationHandler.add_user_to_teams_from_sso_response(
+                result=result,
+                user_info=user_info,
+            )
 
     except Exception as e:
         verbose_proxy_logger.debug(
@@ -839,6 +841,20 @@ class SSOAuthenticationHandler:
         else:
             redirect_url += "/" + sso_callback_route
         return redirect_url
+
+    @staticmethod
+    async def add_user_to_teams_from_sso_response(
+        result: Optional[Union[CustomOpenID, OpenID, dict]],
+        user_info: Union[NewUserResponse, LiteLLM_UserTable],
+    ):
+        """
+        Adds the user as a team member to the teams specified in the SSO responses `team_ids` field
+
+
+        The `team_ids` field is populated by litellm after processing the SSO response
+        """
+        sso_teams = getattr(result, "team_ids", [])
+        await add_missing_team_member(user_info=user_info, sso_teams=sso_teams)
 
 
 class MicrosoftSSOHandler:
