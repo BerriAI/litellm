@@ -4,7 +4,7 @@ import json
 import uuid
 from base64 import b64encode
 from datetime import datetime
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
@@ -18,6 +18,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import StreamingResponse
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -389,15 +390,12 @@ class HttpPassThroughEndpointHelpers:
                 params=requested_query_params,
             )
         elif HttpPassThroughEndpointHelpers.is_multipart(request) is True:
-            files_data = await HttpPassThroughEndpointHelpers._process_multipart(
-                request
-            )
-            response = await async_client.request(
-                method=request.method,
+            return await HttpPassThroughEndpointHelpers.make_multipart_http_request(
+                request=request,
+                async_client=async_client,
                 url=url,
                 headers=headers,
-                params=requested_query_params,
-                files=files_data,
+                requested_query_params=requested_query_params,
             )
         else:
             # Generic httpx method
@@ -416,24 +414,44 @@ class HttpPassThroughEndpointHelpers:
         return "multipart/form-data" in request.headers.get("content-type", "")
 
     @staticmethod
-    async def _process_multipart(request: Request) -> dict:
+    async def build_request_files_from_upload_file(
+        upload_file: Union[UploadFile, StarletteUploadFile],
+    ) -> Tuple[Optional[str], bytes, Optional[str]]:
+        """Build a request files dict from an UploadFile object"""
+        file_content = await upload_file.read()
+        return (upload_file.filename, file_content, upload_file.content_type)
+
+    @staticmethod
+    async def make_multipart_http_request(
+        request: Request,
+        async_client: httpx.AsyncClient,
+        url: httpx.URL,
+        headers: dict,
+        requested_query_params: Optional[dict] = None,
+    ) -> httpx.Response:
         """Process multipart/form-data requests, handling both files and form fields"""
         form_data = await request.form()
         files = {}
-        data = {}
+        form_data_dict = {}
 
         for field_name, field_value in form_data.items():
-            if isinstance(field_value, UploadFile):
-                file_content = await field_value.read()
+            if isinstance(field_value, (StarletteUploadFile, UploadFile)):
                 files[field_name] = (
-                    field_value.filename,
-                    file_content,
-                    field_value.content_type,
+                    await HttpPassThroughEndpointHelpers.build_request_files_from_upload_file(
+                        upload_file=field_value
+                    )
                 )
             else:
-                data[field_name] = field_value
+                form_data_dict[field_name] = field_value
 
-        return {"files": files, "data": data}
+        response = await async_client.request(
+            method=request.method,
+            url=url,
+            headers=headers,
+            params=requested_query_params,
+            files=files,
+        )
+        return response
 
 
 async def pass_through_request(  # noqa: PLR0915
