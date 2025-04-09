@@ -9,7 +9,6 @@ sys.path.insert(
 
 from litellm.llms.cohere.embed.transformation import CohereEmbeddingConfig, EmbeddingResponse
 from litellm.utils import decode_base64_floats
-import numpy as np
 
 class TestCohereTransform:
     def setup_method(self):
