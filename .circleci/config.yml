@@ -1125,6 +1125,7 @@ jobs:
           name: Install Dependencies
           command: |
             python -m pip install --upgrade pip
+            python -m pip install wheel setuptools
             python -m pip install -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
