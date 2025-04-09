@@ -60,7 +60,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.avaialable_teams_handler import (
+from litellm.proxy.management_endpoints.available_teams_db_handler import (
     AvailableTeamsDBHandler,
 )
 from litellm.proxy.management_endpoints.common_utils import (
