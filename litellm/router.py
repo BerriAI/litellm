@@ -182,7 +182,9 @@ class Router:
         redis_port: Optional[int] = None,
         redis_password: Optional[str] = None,
         cache_responses: Optional[bool] = False,
-        cache_kwargs: dict = {},  # additional kwargs to pass to RedisCache (see caching.py)
+        cache_kwargs: Optional[
+            Dict
+        ] = None,  # additional kwargs to pass to RedisCache (see caching.py)
         caching_groups: Optional[
             List[tuple]
         ] = None,  # if you want to cache across model groups
@@ -206,21 +208,21 @@ class Router:
         default_fallbacks: Optional[
             List[str]
         ] = None,  # generic fallbacks, works across all deployments
-        fallbacks: List = [],
-        context_window_fallbacks: List = [],
-        content_policy_fallbacks: List = [],
+        fallbacks: Optional[List] = None,
+        context_window_fallbacks: Optional[List] = None,
+        content_policy_fallbacks: Optional[List] = None,
         model_group_alias: Optional[
             Dict[str, Union[str, RouterModelGroupAliasItem]]
-        ] = {},
+        ] = None,
         enable_pre_call_checks: bool = False,
         enable_tag_filtering: bool = False,
         retry_after: int = 0,  # min time to wait before retrying a failed request
         retry_policy: Optional[
             Union[RetryPolicy, dict]
         ] = None,  # set custom retries for different exceptions
-        model_group_retry_policy: Dict[
-            str, RetryPolicy
-        ] = {},  # set custom retry policies based on model group
+        model_group_retry_policy: Optional[
+            Dict[str, RetryPolicy]
+        ] = None,  # set custom retry policies based on model group
         allowed_fails: Optional[
             int
         ] = None,  # Number of times a deployment can failbefore being added to cooldown
@@ -240,12 +242,10 @@ class Router:
             "usage-based-routing-v2",
         ] = "simple-shuffle",
         optional_pre_call_checks: Optional[OptionalPreCallChecks] = None,
-        routing_strategy_args: dict = {},  # just for latency-based
+        routing_strategy_args: Optional[Dict] = None,  # just for latency-based
         provider_budget_config: Optional[GenericBudgetConfigType] = None,
         alerting_config: Optional[AlertingConfig] = None,
-        router_general_settings: Optional[
-            RouterGeneralSettings
-        ] = RouterGeneralSettings(),
+        router_general_settings: Optional[RouterGeneralSettings] = None,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -314,6 +314,14 @@ class Router:
         router = Router(model_list=model_list, fallbacks=[{"azure-gpt-3.5-turbo": "openai-gpt-3.5-turbo"}])
         ```
         """
+        cache_kwargs = cache_kwargs or {}
+        fallbacks = fallbacks or []
+        context_window_fallbacks = context_window_fallbacks or []
+        content_policy_fallbacks = content_policy_fallbacks or []
+        model_group_alias = model_group_alias or {}
+        model_group_retry_policy = model_group_retry_policy or {}
+        routing_strategy_args = routing_strategy_args or {}
+        router_general_settings = router_general_settings or RouterGeneralSettings()
 
         from litellm._service_logger import ServiceLogging
 
@@ -1327,7 +1335,10 @@ class Router:
                     # Request Number X, Model Number Y
                     _tasks.append(
                         _async_completion_no_exceptions_return_idx(
-                            model=model, idx=idx, messages=message, **kwargs  # type: ignore
+                            model=model,
+                            idx=idx,
+                            messages=message,  # type: ignore
+                            **kwargs,
                         )
                     )
             responses = await asyncio.gather(*_tasks)
@@ -1488,7 +1499,7 @@ class Router:
         self, model: str, messages: List[AllMessageValues], priority: int, stream: Literal[False] = False, **kwargs
     ) -> ModelResponse: 
         ...
-    
+
     @overload
     async def schedule_acompletion(
         self, model: str, messages: List[AllMessageValues], priority: int, stream: Literal[True], **kwargs
@@ -2947,7 +2958,8 @@ class Router:
                     new_kwargs = copy.deepcopy(kwargs)
                     new_kwargs.pop("custom_llm_provider", None)
                     return await litellm.aretrieve_batch(
-                        custom_llm_provider=custom_llm_provider, **new_kwargs  # type: ignore
+                        custom_llm_provider=custom_llm_provider,
+                        **new_kwargs,  # type: ignore
                     )
                 except Exception as e:
                     receieved_exceptions.append(e)
@@ -4896,7 +4908,9 @@ class Router:
 
             if model_group_info is None:
                 model_group_info = ModelGroupInfo(
-                    model_group=user_facing_model_group_name, providers=[llm_provider], **model_info  # type: ignore
+                    model_group=user_facing_model_group_name,
+                    providers=[llm_provider],
+                    **model_info,  # type: ignore
                 )
             else:
                 # if max_input_tokens > curr
@@ -4951,8 +4965,7 @@ class Router:
                 ):
                     model_group_info.supports_parallel_function_calling = True
                 if (
-                    model_info.get("supports_vision", None) is not None
-                    and model_info["supports_vision"] is True  # type: ignore
+                    model_info.get("supports_vision", None) is not None and model_info["supports_vision"] is True  # type: ignore
                 ):
                     model_group_info.supports_vision = True
                 if (
@@ -6067,7 +6080,8 @@ class Router:
 
         if self.routing_strategy == "least-busy" and self.leastbusy_logger is not None:
             deployment = self.leastbusy_logger.get_available_deployments(
-                model_group=model, healthy_deployments=healthy_deployments  # type: ignore
+                model_group=model,
+                healthy_deployments=healthy_deployments,  # type: ignore
             )
         elif self.routing_strategy == "simple-shuffle":
             # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm

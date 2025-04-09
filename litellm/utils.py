@@ -525,8 +525,8 @@ def function_setup(  # noqa: PLR0915
             for callback in all_callbacks:
                 # check if callback is a string - e.g. "lago", "openmeter"
                 if isinstance(callback, str):
-                    callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
-                        callback, internal_usage_cache=None, llm_router=None  # type: ignore
+                    callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
+                        callback, internal_usage_cache=None, llm_router=None # type: ignore
                     )
                     if callback is None or any(
                         isinstance(cb, type(callback))
@@ -877,9 +877,7 @@ def client(original_function):  # noqa: PLR0915
                             isinstance(original_response, ModelResponse)
                             and len(original_response.choices) > 0
                         ):
-                            model_response: Optional[str] = original_response.choices[
-                                0
-                            ].message.content  # type: ignore
+                            model_response: Optional[str] = original_response.choices[0].message.content  # type: ignore
                             if model_response is not None:
                                 ### POST-CALL RULES ###
                                 rules_obj.post_call_rules(
@@ -986,7 +984,7 @@ def client(original_function):  # noqa: PLR0915
                     and kwargs["complete_response"] is True
                 ):
                     chunks = []
-                    for idx, chunk in enumerate(result):
+                    for _, chunk in enumerate(result):
                         chunks.append(chunk)
                     return litellm.stream_chunk_builder(
                         chunks, messages=kwargs.get("messages", None)
@@ -1130,7 +1128,7 @@ def client(original_function):  # noqa: PLR0915
                     and kwargs["complete_response"] is True
                 ):
                     chunks = []
-                    for idx, chunk in enumerate(result):
+                    for _, chunk in enumerate(result):
                         chunks.append(chunk)
                     return litellm.stream_chunk_builder(
                         chunks, messages=kwargs.get("messages", None)
@@ -1318,7 +1316,7 @@ def client(original_function):  # noqa: PLR0915
                     and kwargs["complete_response"] is True
                 ):
                     chunks = []
-                    for idx, chunk in enumerate(result):
+                    for _, chunk in enumerate(result):
                         chunks.append(chunk)
                     return litellm.stream_chunk_builder(
                         chunks, messages=kwargs.get("messages", None)
@@ -1593,7 +1591,12 @@ def encode(model="", text="", custom_tokenizer: Optional[dict] = None):
     return enc
 
 
-def decode(model="", tokens: List[int] = [], custom_tokenizer: Optional[dict] = None):
+def decode(
+    model="",
+    tokens: Optional[List[int]] = None,
+    custom_tokenizer: Optional[dict] = None,
+):
+    tokens = tokens or []
     tokenizer_json = custom_tokenizer or _select_tokenizer(model=model)
     dec = tokenizer_json["tokenizer"].decode(tokens)
     return dec
@@ -1707,7 +1710,9 @@ def create_pretrained_tokenizer(
 
     try:
         tokenizer = Tokenizer.from_pretrained(
-            identifier, revision=revision, auth_token=auth_token  # type: ignore
+            identifier,
+            revision=revision,
+            auth_token=auth_token,  # type: ignore
         )
     except Exception as e:
         verbose_logger.error(
@@ -2771,7 +2776,7 @@ def _remove_additional_properties(schema):
             del schema["additionalProperties"]
 
         # Recursively process all dictionary values
-        for key, value in schema.items():
+        for _, value in schema.items():
             _remove_additional_properties(value)
 
     elif isinstance(schema, list):
@@ -2792,7 +2797,7 @@ def _remove_strict_from_schema(schema):
             del schema["strict"]
 
         # Recursively process all dictionary values
-        for key, value in schema.items():
+        for _, value in schema.items():
             _remove_strict_from_schema(value)
 
     elif isinstance(schema, list):
@@ -5372,10 +5377,10 @@ def _calculate_retry_after(
 # custom prompt helper function
 def register_prompt_template(
     model: str,
-    roles: dict = {},
+    roles: Optional[Dict] = None,
     initial_prompt_value: str = "",
     final_prompt_value: str = "",
-    tokenizer_config: dict = {},
+    tokenizer_config: Optional[Dict] = None,
 ):
     """
     Register a prompt template to follow your custom format for a given model
@@ -5412,6 +5417,8 @@ def register_prompt_template(
     )
     ```
     """
+    roles = roles or {}
+    tokenizer_config = tokenizer_config or {}
     complete_model = model
     potential_models = [complete_model]
     try:
