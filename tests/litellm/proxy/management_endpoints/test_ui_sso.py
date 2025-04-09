@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -5,15 +6,19 @@ from typing import Optional, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
 
 sys.path.insert(
-    0, os.path.abspath("../../..")
+    0, os.path.abspath("../../../")
 )  # Adds the parent directory to the system path
 
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.management_endpoints.types import CustomOpenID
-from litellm.proxy.management_endpoints.ui_sso import MicrosoftSSOHandler
+from litellm.proxy.management_endpoints.ui_sso import (
+    GoogleSSOHandler,
+    MicrosoftSSOHandler,
+)
 
 
 def test_microsoft_sso_handler_openid_from_response():
@@ -79,3 +84,125 @@ def test_microsoft_sso_handler_with_empty_response():
 
     # Make sure the JWT handler was called with an empty dict
     mock_jwt_handler.get_team_ids_from_jwt.assert_called_once_with({})
+
+
+def test_get_microsoft_callback_response():
+    # Arrange
+    mock_request = MagicMock(spec=Request)
+    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_response = {
+        "mail": "microsoft_user@example.com",
+        "displayName": "Microsoft User",
+        "id": "msft123",
+        "givenName": "Microsoft",
+        "surname": "User",
+    }
+
+    future = asyncio.Future()
+    future.set_result(mock_response)
+
+    with patch.dict(
+        os.environ,
+        {"MICROSOFT_CLIENT_SECRET": "mock_secret", "MICROSOFT_TENANT": "mock_tenant"},
+    ):
+        with patch(
+            "fastapi_sso.sso.microsoft.MicrosoftSSO.verify_and_process",
+            return_value=future,
+        ):
+            # Act
+            result = asyncio.run(
+                MicrosoftSSOHandler.get_microsoft_callback_response(
+                    request=mock_request,
+                    microsoft_client_id="mock_client_id",
+                    redirect_url="http://mock_redirect_url",
+                    jwt_handler=mock_jwt_handler,
+                )
+            )
+
+    # Assert
+    assert isinstance(result, CustomOpenID)
+    assert result.email == "microsoft_user@example.com"
+    assert result.display_name == "Microsoft User"
+    assert result.provider == "microsoft"
+    assert result.id == "msft123"
+    assert result.first_name == "Microsoft"
+    assert result.last_name == "User"
+
+
+def test_get_microsoft_callback_response_raw_sso_response():
+    # Arrange
+    mock_request = MagicMock(spec=Request)
+    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_response = {
+        "mail": "microsoft_user@example.com",
+        "displayName": "Microsoft User",
+        "id": "msft123",
+        "givenName": "Microsoft",
+        "surname": "User",
+    }
+
+    future = asyncio.Future()
+    future.set_result(mock_response)
+    with patch.dict(
+        os.environ,
+        {"MICROSOFT_CLIENT_SECRET": "mock_secret", "MICROSOFT_TENANT": "mock_tenant"},
+    ):
+        with patch(
+            "fastapi_sso.sso.microsoft.MicrosoftSSO.verify_and_process",
+            return_value=future,
+        ):
+            # Act
+            result = asyncio.run(
+                MicrosoftSSOHandler.get_microsoft_callback_response(
+                    request=mock_request,
+                    microsoft_client_id="mock_client_id",
+                    redirect_url="http://mock_redirect_url",
+                    jwt_handler=mock_jwt_handler,
+                    return_raw_sso_response=True,
+                )
+            )
+
+    # Assert
+    print("result from verify_and_process", result)
+    assert isinstance(result, dict)
+    assert result["mail"] == "microsoft_user@example.com"
+    assert result["displayName"] == "Microsoft User"
+    assert result["id"] == "msft123"
+    assert result["givenName"] == "Microsoft"
+    assert result["surname"] == "User"
+
+
+def test_get_google_callback_response():
+    # Arrange
+    mock_request = MagicMock(spec=Request)
+    mock_response = {
+        "email": "google_user@example.com",
+        "name": "Google User",
+        "sub": "google123",
+        "given_name": "Google",
+        "family_name": "User",
+    }
+
+    future = asyncio.Future()
+    future.set_result(mock_response)
+
+    with patch.dict(os.environ, {"GOOGLE_CLIENT_SECRET": "mock_secret"}):
+        with patch(
+            "fastapi_sso.sso.google.GoogleSSO.verify_and_process", return_value=future
+        ):
+            # Act
+            result = asyncio.run(
+                GoogleSSOHandler.get_google_callback_response(
+                    request=mock_request,
+                    google_client_id="mock_client_id",
+                    redirect_url="http://mock_redirect_url",
+                )
+            )
+
+    # Assert
+    assert isinstance(result, dict)
+    assert result.get("email") == "google_user@example.com"
+    assert result.get("name") == "Google User"
+    assert result.get("sub") == "google123"
+    assert result.get("given_name") == "Google"
+    assert result.get("family_name") == "User"
