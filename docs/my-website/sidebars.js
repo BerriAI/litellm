@@ -519,6 +519,13 @@ const sidebars = {
       ],
     },
     "troubleshoot",
+    {
+      type: 'category',
+      label: 'Playground',
+      items: [
+        'playground/transform_request',
+      ],
+    },
   ],
 };
 
