@@ -213,9 +213,9 @@ async def google_login(request: Request):  # noqa: PLR0915
             if state:
                 redirect_params["state"] = state
             elif "okta" in generic_authorization_endpoint:
-                redirect_params[
-                    "state"
-                ] = uuid.uuid4().hex  # set state param for okta - required
+                redirect_params["state"] = (
+                    uuid.uuid4().hex
+                )  # set state param for okta - required
             return await generic_sso.get_login_redirect(**redirect_params)  # type: ignore
     elif ui_username is not None:
         # No Google, Microsoft SSO
@@ -489,6 +489,12 @@ async def auth_callback(request: Request):  # noqa: PLR0915
             request=request,
             convert_response=False,
         )
+
+        await MicrosoftSSOHandler.get_graph_result(
+            request=request,
+            access_token=microsoft_sso.access_token,
+        )
+
         result = MicrosoftSSOHandler.openid_from_response(
             response=original_msft_result,
             jwt_handler=jwt_handler,
@@ -733,9 +739,9 @@ async def insert_sso_user(
         if user_defined_values.get("max_budget") is None:
             user_defined_values["max_budget"] = litellm.max_internal_user_budget
         if user_defined_values.get("budget_duration") is None:
-            user_defined_values[
-                "budget_duration"
-            ] = litellm.internal_user_budget_duration
+            user_defined_values["budget_duration"] = (
+                litellm.internal_user_budget_duration
+            )
 
     if user_defined_values["user_role"] is None:
         user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
@@ -800,6 +806,7 @@ class MicrosoftSSOHandler:
     ) -> CustomOpenID:
         response = response or {}
         verbose_proxy_logger.debug(f"Microsoft SSO Callback Response: {response}")
+
         openid_response = CustomOpenID(
             email=response.get("mail"),
             display_name=response.get("displayName"),
@@ -811,3 +818,43 @@ class MicrosoftSSOHandler:
         )
         verbose_proxy_logger.debug(f"Microsoft SSO OpenID Response: {openid_response}")
         return openid_response
+
+    @staticmethod
+    async def get_graph_result(request: Request, access_token: Optional[str] = None):
+        # Get user profile
+        import httpx
+
+        async_client = httpx.AsyncClient()
+
+        # Get user groups
+        user_groups_response = await async_client.get(
+            "https://graph.microsoft.com/v1.0/me/memberOf",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        user_groups: dict = user_groups_response.json()
+        # print("USER GROUPS", user_groups)
+
+        # Extract group names
+        group_names = []
+        if "value" in user_groups:
+            group_names = [
+                {"displayName": group.get("displayName"), "id": group.get("id")}
+                for group in user_groups["value"]
+            ]
+
+        # use nextLink to get more groups
+        while user_groups.get("@odata.nextLink"):
+            user_groups_response = await async_client.get(
+                user_groups["@odata.nextLink"],
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            user_groups: dict = user_groups_response.json()
+            group_names.extend(
+                [
+                    {"displayName": group.get("displayName"), "id": group.get("id")}
+                    for group in user_groups["value"]
+                ]
+            )
+
+        # print("ALL GROUP NAMES", group_names)
+        return group_names
