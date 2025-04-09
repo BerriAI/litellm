@@ -1075,7 +1075,7 @@ export const organizationDeleteCall = async (
 };
 
 
-export const userDailyActivityCall = async (accessToken: String, startTime: Date, endTime: Date) => {
+export const userDailyActivityCall = async (accessToken: String, startTime: Date, endTime: Date, page: number = 1) => {
   /**
    * Get daily user activity on proxy
    */
@@ -1084,6 +1084,8 @@ export const userDailyActivityCall = async (accessToken: String, startTime: Date
     const queryParams = new URLSearchParams();
     queryParams.append('start_date', startTime.toISOString());
     queryParams.append('end_date', endTime.toISOString());
+    queryParams.append('page_size', '1000');
+    queryParams.append('page', page.toString());
     const queryString = queryParams.toString();
     if (queryString) {
       url += `?${queryString}`;
