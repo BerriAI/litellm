@@ -1126,7 +1126,7 @@ jobs:
           command: |
             python -m pip install --upgrade pip
             python -m pip install wheel setuptools
-            python -m pip install ml_dtypes==0.4.1  # Install problematic package first
+            pip install --only-binary :all: ml_dtypes==0.4.1 || echo "No pre-built wheel available"
             python -m pip install -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
