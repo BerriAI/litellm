@@ -6,12 +6,16 @@ import litellm
 from litellm import get_llm_provider
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import LlmProviders
 
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime
+from ..llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from ..llms.openai.realtime.handler import OpenAIRealtime
+from ..utils import ProviderConfigManager
 from ..utils import client as wrapper_client
 
+llm_http_handler = BaseLLMHTTPHandler()
 azure_realtime = AzureOpenAIRealtime()
 openai_realtime = OpenAIRealtime()
 
@@ -62,7 +66,18 @@ async def _arealtime(
         custom_llm_provider=_custom_llm_provider,
     )
 
-    if _custom_llm_provider == "azure":
+    provider_realtime_config = ProviderConfigManager.get_provider_realtime_config(
+        model=model,
+        provider=LlmProviders(_custom_llm_provider),
+    )
+    if provider_realtime_config:
+        await llm_http_handler._arealtime(
+            model=model,
+            websocket=websocket,
+            litellm_params=litellm_params.model_dump(),
+            provider_config=provider_realtime_config,
+        )
+    elif _custom_llm_provider == "azure":
         api_base = (
             dynamic_api_base
             or litellm_params.api_base

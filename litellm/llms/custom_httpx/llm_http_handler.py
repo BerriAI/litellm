@@ -8,12 +8,14 @@ import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.files.transformation import BaseFilesConfig
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.http_handler import (
@@ -1207,6 +1209,48 @@ class BaseLLMHTTPHandler:
             raw_response=response,
             logging_obj=logging_obj,
         )
+
+    async def _arealtime(
+        self,
+        model: str,
+        websocket: Any,
+        litellm_params: dict,
+        client: Optional[Any] = None,
+        logging_obj: Optional[LiteLLMLoggingObj] = None,
+        timeout: Optional[float] = None,
+        provider_config: Optional[BaseRealtimeConfig] = None,
+    ):
+        import websockets
+
+        if provider_config is None:
+            raise ValueError(
+                "provider_config is required for Base LLM HTTP Handler calls"
+            )
+
+        url = provider_config.get_complete_url(
+            api_base=litellm_params.get("api_base"),
+            api_key=litellm_params.get("api_key"),
+            model=model,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        try:
+            async with websockets.connect(  # type: ignore
+                url,
+                extra_headers={
+                    "api-key": api_key,  # type: ignore
+                },
+            ) as backend_ws:
+                realtime_streaming = RealTimeStreaming(
+                    websocket, backend_ws, logging_obj
+                )
+                await realtime_streaming.bidirectional_forward()
+
+        except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
+            await websocket.close(code=e.status_code, reason=str(e))
+        except Exception:
+            pass
 
     def create_file(
         self,
