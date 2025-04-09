@@ -414,7 +414,7 @@ class HttpPassThroughEndpointHelpers:
         return "multipart/form-data" in request.headers.get("content-type", "")
 
     @staticmethod
-    async def build_request_files_from_upload_file(
+    async def _build_request_files_from_upload_file(
         upload_file: Union[UploadFile, StarletteUploadFile],
     ) -> Tuple[Optional[str], bytes, Optional[str]]:
         """Build a request files dict from an UploadFile object"""
@@ -437,7 +437,7 @@ class HttpPassThroughEndpointHelpers:
         for field_name, field_value in form_data.items():
             if isinstance(field_value, (StarletteUploadFile, UploadFile)):
                 files[field_name] = (
-                    await HttpPassThroughEndpointHelpers.build_request_files_from_upload_file(
+                    await HttpPassThroughEndpointHelpers._build_request_files_from_upload_file(
                         upload_file=field_value
                     )
                 )
