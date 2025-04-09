@@ -25,10 +25,7 @@
     "react": "^17.0.2",
     "react-dom": "^17.0.2",
     "sharp": "^0.32.6",
-    "uuid": "^9.0.1",
-    "antd": "^4.24.0",
-    "@ant-design/icons": "^4.8.0",
-    "@tremor/react": "^2.0.0"
+    "uuid": "^9.0.1"
   },
   "devDependencies": {
     "@docusaurus/module-type-aliases": "2.4.1"
