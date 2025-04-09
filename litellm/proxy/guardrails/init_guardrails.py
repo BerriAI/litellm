@@ -99,7 +99,6 @@ def init_guardrails_v2(
         }
 
         litellm_params = LitellmParams(**_litellm_params_kwargs)  # type: ignore
-
         if (
             "category_thresholds" in litellm_params_data
             and litellm_params_data["category_thresholds"]
@@ -152,11 +151,19 @@ def init_guardrails_v2(
             spec.loader.exec_module(module)  # type: ignore
             _guardrail_class = getattr(module, _class_name)
 
+            # Split params into known and additional parameters
+            known_params = {k: litellm_params_data[k] for k in LitellmParams.__annotations__.keys() if k in litellm_params_data}
+            additional_params = {k: v for k, v in litellm_params_data.items() if k not in LitellmParams.__annotations__.keys()}
+            
+            # Initialize with known parameters
             _guardrail_callback = _guardrail_class(
-                guardrail_name=guardrail["guardrail_name"],
-                event_hook=litellm_params["mode"],
-                default_on=litellm_params["default_on"],
+                **known_params
             )
+
+            # Update optional parameters while preserving existing ones
+            if not hasattr(_guardrail_callback, 'optional_params'):
+                _guardrail_callback.optional_params = {}
+            _guardrail_callback.optional_params.update(additional_params)
             litellm.logging_callback_manager.add_litellm_callback(_guardrail_callback)  # type: ignore
         else:
             raise ValueError(f"Unsupported guardrail: {guardrail_type}")
