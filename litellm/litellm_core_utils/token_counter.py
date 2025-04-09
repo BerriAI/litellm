@@ -528,7 +528,7 @@ def _get_count_function(
     else:
 
         def count_tokens(text: str) -> int:
-            return len(default_encoding.encode(text, disallowed_special=()))
+            return len(default_encoding().encode(text, disallowed_special=()))
 
     return count_tokens
 

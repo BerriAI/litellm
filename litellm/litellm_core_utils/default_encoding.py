@@ -1,6 +1,7 @@
 import os
 
 import litellm
+from functools import lru_cache
 
 try:
     # New and recommended way to access resources
@@ -19,5 +20,8 @@ os.environ["TIKTOKEN_CACHE_DIR"] = os.getenv(
     "CUSTOM_TIKTOKEN_CACHE_DIR", filename
 )  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
 import tiktoken
+from tiktoken import Encoding
 
-encoding = tiktoken.get_encoding("cl100k_base")
+@lru_cache(maxsize=None)
+def encoding() -> Encoding:
+    return tiktoken.get_encoding("cl100k_base")
