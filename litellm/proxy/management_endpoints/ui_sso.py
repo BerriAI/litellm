@@ -957,18 +957,26 @@ class MicrosoftSSOHandler:
             )
 
             all_group_ids = []
-            next_link = MicrosoftSSOHandler.graph_api_user_groups_endpoint
+            next_link: Optional[str] = (
+                MicrosoftSSOHandler.graph_api_user_groups_endpoint
+            )
             auth_headers = {"Authorization": f"Bearer {access_token}"}
             page_count = 0
 
-            while next_link and page_count < MicrosoftSSOHandler.MAX_GRAPH_API_PAGES:
+            while (
+                next_link is not None
+                and page_count < MicrosoftSSOHandler.MAX_GRAPH_API_PAGES
+            ):
                 group_ids, next_link = await MicrosoftSSOHandler.fetch_and_parse_groups(
                     url=next_link, headers=auth_headers, async_client=async_client
                 )
                 all_group_ids.extend(group_ids)
                 page_count += 1
 
-            if next_link and page_count >= MicrosoftSSOHandler.MAX_GRAPH_API_PAGES:
+            if (
+                next_link is not None
+                and page_count >= MicrosoftSSOHandler.MAX_GRAPH_API_PAGES
+            ):
                 verbose_proxy_logger.warning(
                     f"Reached maximum page limit of {MicrosoftSSOHandler.MAX_GRAPH_API_PAGES}. Some groups may not be included."
                 )
