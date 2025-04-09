@@ -6051,6 +6051,9 @@ def encode_base64_floats(values: List[float]) -> str:
 
 
 def decode_base64_floats(s: str) -> List[float]:
+    """
+    Decodes a base64 string into a list of floats
+    """
     return array.array("f", base64.b64decode(s)).tolist()
 
 
