@@ -2664,7 +2664,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         )
         final_params = {**optional_params, **kwargs}
         return final_params
-    elif custom_llm_provider == "bedrock":
+    elif custom_llm_provider == "bedrock" or custom_llm_provider == "cohere":
         # if dimensions is in non_default_params -> pass it for model=bedrock/amazon.titan-embed-text-v2
         if "amazon.titan-embed-text-v1" in model:
             object: Any = litellm.AmazonTitanG1Config()
@@ -2672,8 +2672,10 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             object = litellm.AmazonTitanMultimodalEmbeddingG1Config()
         elif "amazon.titan-embed-text-v2:0" in model:
             object = litellm.AmazonTitanV2Config()
-        elif "cohere.embed-multilingual-v3" in model:
+        elif "cohere.embed-multilingual-v3" in model or "cohere.embed-english-v3" in model:
             object = litellm.BedrockCohereEmbeddingConfig()
+        elif "embed-multilingual-v3.0" in model or "embed-english-v3.0" in model:
+            object = litellm.CohereEmbeddingConfig()
         else:  # unmapped model
             supported_params = []
             _check_valid_arg(supported_params=supported_params)

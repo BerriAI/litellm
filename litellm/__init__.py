@@ -919,6 +919,7 @@ from .llms.bedrock.embed.amazon_titan_v2_transformation import (
     AmazonTitanV2Config,
 )
 from .llms.cohere.chat.transformation import CohereChatConfig
+from .llms.cohere.embed.transformation import CohereEmbeddingConfig
 from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
 from .llms.openai.openai import OpenAIConfig, MistralEmbeddingConfig
 from .llms.openai.image_variations.transformation import OpenAIImageVariationConfig
