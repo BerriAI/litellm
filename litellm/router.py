@@ -132,6 +132,7 @@ from litellm.types.router import (
 )
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import GenericBudgetConfigType
+from litellm.types.utils import ModelInfo
 from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import (
@@ -4798,6 +4799,32 @@ class Router:
         model_name = model_info["model_name"]
         return self.get_model_list(model_name=model_name)
 
+    def get_deployment_model_info(self, model_id: str) -> Optional[ModelInfo]:
+        """
+        For a given model id, return the model info
+
+        1. Check if model_id is in model info
+        2. If not, check if litellm model name is in model info
+        3. If not, return None
+        """
+        model_info: Optional[ModelInfo] = None
+        try:
+            model_info = litellm.get_model_info(model=model_id)
+            return model_info
+        except Exception:
+            pass
+
+        deployment = self.get_deployment(model_id=model_id)
+        if deployment is None:
+            return None
+        litellm_model_name = deployment.litellm_params.model
+        try:
+            model_info = litellm.get_model_info(model=litellm_model_name)
+        except Exception:
+            pass
+
+        return model_info
+
     def _set_model_group_info(  # noqa: PLR0915
         self, model_group: str, user_facing_model_group_name: str
     ) -> Optional[ModelGroupInfo]:
@@ -4856,7 +4883,11 @@ class Router:
 
             # get model info
             try:
-                model_info = litellm.get_model_info(model=litellm_params.model)
+                model_id = model.get("model_info", {}).get("id", None)
+                if model_id is not None:
+                    model_info = self.get_deployment_model_info(model_id=model_id)
+                else:
+                    model_info = None
             except Exception:
                 model_info = None
             # get llm provider

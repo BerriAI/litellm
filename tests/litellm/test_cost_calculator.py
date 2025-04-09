@@ -152,6 +152,7 @@ def test_custom_pricing_with_router_model_id():
                     "api_key": "test_api_key",
                 },
                 "model_info": {
+                    "id": "my-unique-model-id",
                     "input_cost_per_token": 0.000006,
                     "output_cost_per_token": 0.00003,
                     "cache_creation_input_token_cost": 0.0000075,
@@ -188,3 +189,10 @@ def test_custom_pricing_with_router_model_id():
         result._hidden_params["response_cost"]
         > result_2._hidden_params["response_cost"]
     )
+
+    model_info = router.get_deployment_model_info(model_id="my-unique-model-id")
+    assert model_info is not None
+    assert model_info["input_cost_per_token"] == 0.000006
+    assert model_info["output_cost_per_token"] == 0.00003
+    assert model_info["cache_creation_input_token_cost"] == 0.0000075
+    assert model_info["cache_read_input_token_cost"] == 0.0000006
