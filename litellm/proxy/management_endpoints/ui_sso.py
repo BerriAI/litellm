@@ -848,7 +848,14 @@ class MicrosoftSSOHandler:
 
     graph_api_base_url = "https://graph.microsoft.com/v1.0"
     graph_api_user_groups_endpoint = f"{graph_api_base_url}/me/memberOf"
+
+    """
+    Constants
+    """
     MAX_GRAPH_API_PAGES = 200
+
+    # used for debugging to show the user groups litellm found from Graph API
+    GRAPH_API_RESPONSE_KEY = "graph_api_user_groups"
 
     @staticmethod
     async def get_microsoft_callback_response(
@@ -888,18 +895,24 @@ class MicrosoftSSOHandler:
             redirect_uri=redirect_url,
             allow_insecure_http=True,
         )
-        original_msft_result = await microsoft_sso.verify_and_process(
-            request=request,
-            convert_response=False,
+        original_msft_result = (
+            await microsoft_sso.verify_and_process(
+                request=request,
+                convert_response=False,
+            )
+            or {}
         )
-
-        # if user is trying to get the raw sso response for debugging, return the raw sso response
-        if return_raw_sso_response:
-            return original_msft_result or {}
 
         user_team_ids = await MicrosoftSSOHandler.get_user_groups_from_graph_api(
             access_token=microsoft_sso.access_token
         )
+
+        # if user is trying to get the raw sso response for debugging, return the raw sso response
+        if return_raw_sso_response:
+            original_msft_result[MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY] = (
+                user_team_ids
+            )
+            return original_msft_result or {}
 
         result = MicrosoftSSOHandler.openid_from_response(
             response=original_msft_result,
@@ -1150,6 +1163,7 @@ async def debug_sso_callback(request: Request):
             redirect_url=redirect_url,
             return_raw_sso_response=True,
         )
+
     elif generic_client_id is not None:
         result = await get_generic_sso_response(
             request=request,
