@@ -1476,8 +1476,8 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             file_message = cast(ChatCompletionFileObject, m)
                             file_data = file_message["file"].get("file_data")
                             if file_data:
-                                image_chunk = convert_to_anthropic_image_obj(
-                                    openai_image_url=file_data,
+                                image_chunk = convert_to_anthropic_media_obj(
+                                    openai_media_url=file_data,
                                     format=file_message["file"].get("format"),
                                 )
                                 anthropic_document_param = (

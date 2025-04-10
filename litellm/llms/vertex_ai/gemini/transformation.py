@@ -211,10 +211,9 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                         elif element["type"] == "video_url":
                             element = cast(ChatCompletionVideoObject, element)
                             video_element = element
-                            format: Optional[str] = None
                             if isinstance(video_element["video_url"], dict):
                                 video_url = video_element["video_url"]["url"]
-                                format = img_element["video_url"].get("format")
+                                format = video_element["video_url"].get("format")
                             else:
                                 video_url = video_element["video_url"]
                             _part = _process_gemini_media(
@@ -224,8 +223,8 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                         elif element["type"] == "input_audio":
                             audio_element = cast(ChatCompletionAudioObject, element)
                             if audio_element["input_audio"].get("data") is not None:
-                                _part = _process_gemini_image(
-                                    image_url=audio_element["input_audio"]["data"],
+                                _part = _process_gemini_media(
+                                    media_url=audio_element["input_audio"]["data"],
                                     format=audio_element["input_audio"].get("format"),
                                 )
                                 _parts.append(_part)
@@ -240,8 +239,8 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                     "Unknown file type. Please pass in a file_id or file_data"
                                 )
                             try:
-                                _part = _process_gemini_image(
-                                    image_url=passed_file, format=format
+                                _part = _process_gemini_media(
+                                    media_url=passed_file, format=format
                                 )
                                 _parts.append(_part)
                             except Exception:
