@@ -403,6 +403,7 @@ def _select_model_name_for_cost_calc(
     base_model: Optional[str] = None,
     custom_pricing: Optional[bool] = None,
     custom_llm_provider: Optional[str] = None,
+    router_model_id: Optional[str] = None,
 ) -> Optional[str]:
     """
     1. If custom pricing is true, return received model name
@@ -417,12 +418,6 @@ def _select_model_name_for_cost_calc(
         model=model, custom_llm_provider=custom_llm_provider
     )
 
-    if custom_pricing is True:
-        return_model = model
-
-    if base_model is not None:
-        return_model = base_model
-
     completion_response_model: Optional[str] = None
     if completion_response is not None:
         if isinstance(completion_response, BaseModel):
@@ -430,6 +425,16 @@ def _select_model_name_for_cost_calc(
         elif isinstance(completion_response, dict):
             completion_response_model = completion_response.get("model", None)
     hidden_params: Optional[dict] = getattr(completion_response, "_hidden_params", None)
+
+    if custom_pricing is True:
+        if router_model_id is not None and router_model_id in litellm.model_cost:
+            return_model = router_model_id
+        else:
+            return_model = model
+
+    if base_model is not None:
+        return_model = base_model
+
     if completion_response_model is None and hidden_params is not None:
         if (
             hidden_params.get("model", None) is not None
@@ -559,6 +564,7 @@ def completion_cost(  # noqa: PLR0915
     base_model: Optional[str] = None,
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams] = None,
     litellm_model_name: Optional[str] = None,
+    router_model_id: Optional[str] = None,
 ) -> float:
     """
     Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
@@ -617,12 +623,12 @@ def completion_cost(  # noqa: PLR0915
             custom_llm_provider=custom_llm_provider,
             custom_pricing=custom_pricing,
             base_model=base_model,
+            router_model_id=router_model_id,
         )
 
         potential_model_names = [selected_model]
         if model is not None:
             potential_model_names.append(model)
-
         for idx, model in enumerate(potential_model_names):
             try:
                 verbose_logger.info(
@@ -943,6 +949,7 @@ def response_cost_calculator(
     prompt: str = "",
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams] = None,
     litellm_model_name: Optional[str] = None,
+    router_model_id: Optional[str] = None,
 ) -> float:
     """
     Returns
@@ -973,6 +980,8 @@ def response_cost_calculator(
                 base_model=base_model,
                 prompt=prompt,
                 standard_built_in_tools_params=standard_built_in_tools_params,
+                litellm_model_name=litellm_model_name,
+                router_model_id=router_model_id,
             )
         return response_cost
     except Exception as e:

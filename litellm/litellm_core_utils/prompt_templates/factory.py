@@ -1,7 +1,6 @@
 import copy
 import json
 import re
-import traceback
 import uuid
 import xml.etree.ElementTree as ET
 from enum import Enum
@@ -748,7 +747,6 @@ def convert_to_anthropic_image_obj(
             data=base64_data,
         )
     except Exception as e:
-        traceback.print_exc()
         if "Error: Unable to fetch image from URL" in str(e):
             raise e
         raise Exception(

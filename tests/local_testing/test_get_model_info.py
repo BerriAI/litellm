@@ -314,12 +314,14 @@ def test_get_model_info_custom_model_router():
                     "input_cost_per_token": 1,
                     "output_cost_per_token": 1,
                     "model": "openai/meta-llama/Meta-Llama-3-8B-Instruct",
-                    "model_id": "c20d603e-1166-4e0f-aa65-ed9c476ad4ca",
                 },
+                "model_info": {
+                    "id": "c20d603e-1166-4e0f-aa65-ed9c476ad4ca",
+                }
             }
         ]
     )
-    info = get_model_info("openai/meta-llama/Meta-Llama-3-8B-Instruct")
+    info = get_model_info("c20d603e-1166-4e0f-aa65-ed9c476ad4ca")
     print("info", info)
     assert info is not None
 
