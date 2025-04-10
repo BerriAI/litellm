@@ -816,9 +816,6 @@ async def add_member_to_organization(
         return user_object, organization_membership
 
     except Exception as e:
-        import traceback
-
-        traceback.print_exc()
         raise ValueError(
             f"Error adding member={member} to organization={organization_id}: {e}"
         )

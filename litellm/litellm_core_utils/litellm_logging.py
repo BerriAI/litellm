@@ -622,7 +622,6 @@ class Logging(LiteLLMLoggingBaseClass):
                     ] = RawRequestTypedDict(
                         error=str(e),
                     )
-                    traceback.print_exc()
                     _metadata[
                         "raw_request"
                     ] = "Unable to Log \
@@ -906,6 +905,7 @@ class Logging(LiteLLMLoggingBaseClass):
         ],
         cache_hit: Optional[bool] = None,
         litellm_model_name: Optional[str] = None,
+        router_model_id: Optional[str] = None,
     ) -> Optional[float]:
         """
         Calculate response cost using result + logging object variables.
@@ -944,6 +944,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "custom_pricing": custom_pricing,
                 "prompt": prompt,
                 "standard_built_in_tools_params": self.standard_built_in_tools_params,
+                "router_model_id": router_model_id,
             }
         except Exception as e:  # error creating kwargs for cost calculation
             debug_info = StandardLoggingModelCostFailureDebugInformation(
