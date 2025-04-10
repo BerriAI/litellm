@@ -296,6 +296,8 @@ When you connect litellm to your SSO provider, litellm can auto-create teams. Us
 
 **Usage**
 
+1. Set the default params for new teams
+
 ```yaml showLineNumbers title="Default Params for new teams"
 litellm_settings:
   default_team_params:             # Default Params to apply when litellm auto creates a team from SSO IDP provider
