@@ -4315,6 +4315,19 @@ class Router:
                 }
             )
 
+        ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
+        _model_name = deployment.litellm_params.model
+        if deployment.litellm_params.custom_llm_provider is not None:
+            _model_name = (
+                deployment.litellm_params.custom_llm_provider + "/" + _model_name
+            )
+
+        litellm.register_model(
+            model_cost={
+                _model_name: _model_info,
+            }
+        )
+
         ## Check if LLM Deployment is allowed for this deployment
         if self.deployment_is_active_for_environment(deployment=deployment) is not True:
             verbose_router_logger.warning(
