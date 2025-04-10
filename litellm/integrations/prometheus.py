@@ -1483,6 +1483,8 @@ class PrometheusLogger(CustomLogger):
         from litellm.proxy.proxy_server import proxy_logging_obj
 
         pod_lock_manager = proxy_logging_obj.db_spend_update_writer.pod_lock_manager
+
+        # if using redis, ensure only one pod emits the metrics at a time
         if pod_lock_manager and pod_lock_manager.redis_cache:
             if await pod_lock_manager.acquire_lock(
                 cronjob_id=PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME
@@ -1494,6 +1496,7 @@ class PrometheusLogger(CustomLogger):
                         cronjob_id=PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME
                     )
         else:
+            # if not using redis, initialize the metrics directly
             await self._initialize_remaining_budget_metrics()
 
     async def _initialize_remaining_budget_metrics(self):
