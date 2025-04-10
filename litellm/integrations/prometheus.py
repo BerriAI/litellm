@@ -1500,6 +1500,7 @@ class PrometheusLogger(CustomLogger):
         """
         Helper to initialize remaining budget metrics for all teams and API keys.
         """
+        verbose_logger.debug("Emitting key, team budget metrics....")
         await self._initialize_team_budget_metrics()
         await self._initialize_api_key_budget_metrics()
 
@@ -1783,7 +1784,7 @@ class PrometheusLogger(CustomLogger):
             scheduler.add_job(
                 prometheus_logger.initialize_remaining_budget_metrics,
                 "interval",
-                minutes=PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES,
+                seconds=PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES,
             )
 
     @staticmethod
