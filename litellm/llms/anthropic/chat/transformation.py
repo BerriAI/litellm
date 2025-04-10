@@ -682,6 +682,45 @@ class AnthropicConfig(BaseConfig):
                     reasoning_content += block["thinking"]
         return text_content, citations, thinking_blocks, reasoning_content, tool_calls
 
+    def calculate_usage(
+        self, usage_object: dict, reasoning_content: Optional[str]
+    ) -> Usage:
+        prompt_tokens = usage_object.get("input_tokens", 0)
+        completion_tokens = usage_object.get("output_tokens", 0)
+        _usage = usage_object
+        cache_creation_input_tokens: int = 0
+        cache_read_input_tokens: int = 0
+
+        if "cache_creation_input_tokens" in _usage:
+            cache_creation_input_tokens = _usage["cache_creation_input_tokens"]
+        if "cache_read_input_tokens" in _usage:
+            cache_read_input_tokens = _usage["cache_read_input_tokens"]
+            prompt_tokens += cache_read_input_tokens
+
+        prompt_tokens_details = PromptTokensDetailsWrapper(
+            cached_tokens=cache_read_input_tokens
+        )
+        completion_token_details = (
+            CompletionTokensDetailsWrapper(
+                reasoning_tokens=token_counter(
+                    text=reasoning_content, count_response_tokens=True
+                )
+            )
+            if reasoning_content
+            else None
+        )
+        total_tokens = prompt_tokens + completion_tokens
+        usage = Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            prompt_tokens_details=prompt_tokens_details,
+            cache_creation_input_tokens=cache_creation_input_tokens,
+            cache_read_input_tokens=cache_read_input_tokens,
+            completion_tokens_details=completion_token_details,
+        )
+        return usage
+
     def transform_response(
         self,
         model: str,
@@ -772,45 +811,14 @@ class AnthropicConfig(BaseConfig):
             )
 
         ## CALCULATING USAGE
-        prompt_tokens = completion_response["usage"]["input_tokens"]
-        completion_tokens = completion_response["usage"]["output_tokens"]
-        _usage = completion_response["usage"]
-        cache_creation_input_tokens: int = 0
-        cache_read_input_tokens: int = 0
+        usage = self.calculate_usage(
+            usage_object=completion_response["usage"],
+            reasoning_content=reasoning_content,
+        )
+        setattr(model_response, "usage", usage)  # type: ignore
 
         model_response.created = int(time.time())
         model_response.model = completion_response["model"]
-        if "cache_creation_input_tokens" in _usage:
-            cache_creation_input_tokens = _usage["cache_creation_input_tokens"]
-            prompt_tokens += cache_creation_input_tokens
-        if "cache_read_input_tokens" in _usage:
-            cache_read_input_tokens = _usage["cache_read_input_tokens"]
-            prompt_tokens += cache_read_input_tokens
-
-        prompt_tokens_details = PromptTokensDetailsWrapper(
-            cached_tokens=cache_read_input_tokens
-        )
-        completion_token_details = (
-            CompletionTokensDetailsWrapper(
-                reasoning_tokens=token_counter(
-                    text=reasoning_content, count_response_tokens=True
-                )
-            )
-            if reasoning_content
-            else None
-        )
-        total_tokens = prompt_tokens + completion_tokens
-        usage = Usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=total_tokens,
-            prompt_tokens_details=prompt_tokens_details,
-            cache_creation_input_tokens=cache_creation_input_tokens,
-            cache_read_input_tokens=cache_read_input_tokens,
-            completion_tokens_details=completion_token_details,
-        )
-
-        setattr(model_response, "usage", usage)  # type: ignore
 
         model_response._hidden_params = _hidden_params
         return model_response
@@ -868,6 +876,7 @@ class AnthropicConfig(BaseConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> Dict:
