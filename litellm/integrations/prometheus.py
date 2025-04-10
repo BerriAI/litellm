@@ -1772,6 +1772,7 @@ class PrometheusLogger(CustomLogger):
                 callback_type=PrometheusLogger
             )
         )
+        # we need to get the initialized prometheus logger instance(s) and call logger.initialize_remaining_budget_metrics() on them
         verbose_logger.debug("found %s prometheus loggers", len(prometheus_loggers))
         if len(prometheus_loggers) > 0:
             prometheus_logger = cast(PrometheusLogger, prometheus_loggers[0])
