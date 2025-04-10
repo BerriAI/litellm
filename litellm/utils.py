@@ -2245,7 +2245,8 @@ def supports_embedding_image_input(
 ####### HELPER FUNCTIONS ################
 def _update_dictionary(existing_dict: Dict, new_dict: dict) -> dict:
     for k, v in new_dict.items():
-        existing_dict[k] = v
+        if v is not None:
+            existing_dict[k] = v
 
     return existing_dict
 
