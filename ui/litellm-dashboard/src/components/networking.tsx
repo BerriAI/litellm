@@ -4,6 +4,7 @@
 import { all_admin_roles } from "@/utils/roles";
 import { message } from "antd";
 import { TagNewRequest, TagUpdateRequest, TagDeleteRequest, TagInfoRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
+import { Team } from "./key_team_helpers/key_list";
 
 const isLocal = process.env.NODE_ENV === "development";
 export const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
@@ -1073,8 +1074,40 @@ export const organizationDeleteCall = async (
   }
 };
 
+export const transformRequestCall = async (accessToken: String, request: object) => {
+  /**
+   * Transform request
+   */
 
-export const userDailyActivityCall = async (accessToken: String, startTime: Date, endTime: Date) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/utils/transform_request` : `/utils/transform_request`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+  
+  
+}
+
+export const userDailyActivityCall = async (accessToken: String, startTime: Date, endTime: Date, page: number = 1) => {
   /**
    * Get daily user activity on proxy
    */
@@ -1083,6 +1116,8 @@ export const userDailyActivityCall = async (accessToken: String, startTime: Date
     const queryParams = new URLSearchParams();
     queryParams.append('start_date', startTime.toISOString());
     queryParams.append('end_date', endTime.toISOString());
+    queryParams.append('page_size', '1000');
+    queryParams.append('page', page.toString());
     const queryString = queryParams.toString();
     if (queryString) {
       url += `?${queryString}`;
@@ -2983,7 +3018,7 @@ export const teamUpdateCall = async (
       console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
-    const data = await response.json();
+    const data = await response.json() as { data: Team, team_id: string };
     console.log("Update Team Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
