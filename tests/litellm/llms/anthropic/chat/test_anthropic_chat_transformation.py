@@ -33,3 +33,26 @@ def test_response_format_transformation_unit_test():
         "agent_doing": {"title": "Agent Doing", "type": "string"}
     }
     print(result)
+
+
+def test_calculate_usage():
+    """
+    Do not include cache_creation_input_tokens in the prompt_tokens
+
+    Fixes https://github.com/BerriAI/litellm/issues/9812
+    """
+    config = AnthropicConfig()
+
+    usage_object = {
+        "input_tokens": 3,
+        "cache_creation_input_tokens": 12304,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 550,
+    }
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
+    assert usage.prompt_tokens == 3
+    assert usage.completion_tokens == 550
+    assert usage.total_tokens == 3 + 550
+    assert usage.prompt_tokens_details.cached_tokens == 0
+    assert usage._cache_creation_input_tokens == 12304
+    assert usage._cache_read_input_tokens == 0
