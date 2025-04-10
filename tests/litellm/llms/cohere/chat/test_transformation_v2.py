@@ -21,7 +21,6 @@ import pytest
 import litellm
 from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
 from unittest.mock import AsyncMock, patch
-from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 litellm.num_retries = 3
