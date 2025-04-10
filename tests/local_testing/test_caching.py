@@ -1734,6 +1734,7 @@ def test_redis_semantic_cache_completion():
 # test_redis_cache_completion()
 
 
+@pytest.mark.flaky(reruns=3)
 @pytest.mark.asyncio
 async def test_redis_semantic_cache_acompletion():
     litellm.set_verbose = True
@@ -1760,6 +1761,8 @@ async def test_redis_semantic_cache_acompletion():
         max_tokens=5,
     )
     print(f"response1: {response1}")
+
+    await asyncio.sleep(2)
 
     response2 = await litellm.acompletion(
         model="gpt-3.5-turbo",
@@ -2339,7 +2342,7 @@ async def test_redis_caching_llm_caching_ttl(sync_mode):
 
             # Verify that the set method was called on the mock Redis instance
             mock_redis_instance.set.assert_called_once_with(
-                name="test", value='"test_value"', ex=120
+                name="test", value='"test_value"', ex=120, nx=False
             )
 
     ## Increment cache

@@ -142,3 +142,21 @@ def test_completion_xai(stream):
             assert response.choices[0].message.content is not None
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+def test_xai_message_name_filtering():
+    messages = [
+        {
+            "role": "system",
+            "content": "*I press the green button*",
+            "name": "example_user"
+        },
+        {"role": "user", "content": "Hello", "name": "John"},
+        {"role": "assistant", "content": "Hello", "name": "Jane"},
+    ]
+    response = completion(
+        model="xai/grok-beta",
+        messages=messages,
+    )
+    assert response is not None
+    assert response.choices[0].message.content is not None

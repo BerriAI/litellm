@@ -27,16 +27,18 @@ os.environ["AWS_REGION_NAME"] = ""
 
 
 # pdf url
-image_url = "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
+file_url = "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
 
 # model
 model = "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
 
-image_content = [
+file_content = [
     {"type": "text", "text": "What's this file about?"},
     {
-        "type": "image_url",
-        "image_url": image_url, # OR {"url": image_url}
+        "type": "file",
+        "file": {
+            "file_id": file_url,
+        }
     },
 ]
 
@@ -46,7 +48,7 @@ if not supports_pdf_input(model, None):
 
 response = completion(
     model=model,
-    messages=[{"role": "user", "content": image_content}],
+    messages=[{"role": "user", "content": file_content}],
 )
 assert response is not None
 ```
@@ -80,11 +82,15 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -d '{
     "model": "bedrock-model",
     "messages": [
-        {"role": "user", "content": {"type": "text", "text": "What's this file about?"}},
-        {
-            "type": "image_url",
-            "image_url": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-        }
+        {"role": "user", "content": [
+            {"type": "text", "text": "What's this file about?"},
+            {
+                "type": "file",
+                "file": {
+                    "file_id": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+                }
+            }
+        ]},
     ]
 }'
 ```
@@ -116,11 +122,13 @@ base64_url = f"data:application/pdf;base64,{encoded_file}"
 # model
 model = "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
 
-image_content = [
+file_content = [
     {"type": "text", "text": "What's this file about?"},
     {
-        "type": "image_url",
-        "image_url": base64_url, # OR {"url": base64_url}
+        "type": "file",
+        "file": {
+            "file_data": base64_url,
+        }
     },
 ]
 
@@ -130,9 +138,51 @@ if not supports_pdf_input(model, None):
 
 response = completion(
     model=model,
-    messages=[{"role": "user", "content": image_content}],
+    messages=[{"role": "user", "content": file_content}],
 )
 assert response is not None
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: bedrock-model
+    litellm_params:
+      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_region_name: os.environ/AWS_REGION_NAME
+```
+
+2. Start the proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "bedrock-model",
+    "messages": [
+        {"role": "user", "content": [
+            {"type": "text", "text": "What's this file about?"},
+            {
+                "type": "file",
+                "file": {
+                    "file_data": "data:application/pdf;base64...",
+                }
+            }
+        ]},
+    ]
+}'
 ```
 </TabItem>
 </Tabs>
@@ -196,95 +246,6 @@ Expected Response
     }
   ]
 }
-```
-
-</TabItem>
-</Tabs>
-
-
-## OpenAI 'file' message type
-
-This is currently only supported for OpenAI models. 
-
-This will be supported for all providers soon. 
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-import base64
-from litellm import completion
-
-with open("draconomicon.pdf", "rb") as f:
-    data = f.read()
-
-base64_string = base64.b64encode(data).decode("utf-8")
-
-completion = completion(
-    model="gpt-4o",
-    messages=[
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "file",
-                    "file": {
-                        "filename": "draconomicon.pdf",
-                        "file_data": f"data:application/pdf;base64,{base64_string}",
-                    }
-                },
-                {
-                    "type": "text",
-                    "text": "What is the first dragon in the book?",
-                }
-            ],
-        },
-    ],
-)
-
-print(completion.choices[0].message.content)
-```
-
-</TabItem>
-
-<TabItem value="proxy" label="PROXY">
-
-1. Setup config.yaml
-
-```yaml
-model_list:
-  - model_name: openai-model
-    litellm_params:
-      model: gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
-```
-
-2. Start the proxy
-
-```bash
-litellm --config config.yaml
-```
-
-3. Test it!
-
-```bash
-curl -X POST 'http://0.0.0.0:4000/chat/completions' \
--H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
--d '{ 
-    "model": "openai-model",
-    "messages": [
-        {"role": "user", "content": [
-            {
-                "type": "file",
-                "file": {
-                    "filename": "draconomicon.pdf",
-                    "file_data": f"data:application/pdf;base64,{base64_string}",
-                }
-            }
-        ]}
-    ]
-}'
 ```
 
 </TabItem>

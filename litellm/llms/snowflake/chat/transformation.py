@@ -92,6 +92,7 @@ class SnowflakeConfig(OpenAIGPTConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
@@ -135,6 +136,7 @@ class SnowflakeConfig(OpenAIGPTConfig):
     def get_complete_url(
         self,
         api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,

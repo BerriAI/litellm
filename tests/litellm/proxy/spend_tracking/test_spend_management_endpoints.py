@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import json
 import os
@@ -11,12 +12,23 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
 
+from unittest.mock import MagicMock, patch
+
+import litellm
+from litellm.proxy._types import SpendLogsPayload
+from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.proxy_server import app, prisma_client
+from litellm.router import Router
 
 
 @pytest.fixture
 def client():
     return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def add_anthropic_api_key_to_env(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-1234567890")
 
 
 @pytest.mark.asyncio
@@ -400,3 +412,273 @@ async def test_ui_view_spend_logs_unauthorized(client):
         headers={"Authorization": "Bearer invalid-token"},
     )
     assert response.status_code == 401 or response.status_code == 403
+
+
+class TestSpendLogsPayload:
+    @pytest.mark.asyncio
+    async def test_spend_logs_payload_e2e(self):
+        litellm.callbacks = [_ProxyDBLogger(message_logging=False)]
+        # litellm._turn_on_debug()
+
+        with patch.object(
+            litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter,
+            "_insert_spend_log_to_db",
+        ) as mock_client, patch.object(litellm.proxy.proxy_server, "prisma_client"):
+            response = await litellm.acompletion(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": "Hello, world!"}],
+                mock_response="Hello, world!",
+                metadata={"user_api_key_end_user_id": "test_user_1"},
+            )
+
+            assert response.choices[0].message.content == "Hello, world!"
+
+            await asyncio.sleep(1)
+
+            mock_client.assert_called_once()
+
+            kwargs = mock_client.call_args.kwargs
+            payload: SpendLogsPayload = kwargs["payload"]
+            expected_payload = SpendLogsPayload(
+                **{
+                    "request_id": "chatcmpl-34df56d5-4807-45c1-bb99-61e52586b802",
+                    "call_type": "acompletion",
+                    "api_key": "",
+                    "cache_hit": "None",
+                    "startTime": datetime.datetime(
+                        2025, 3, 24, 22, 2, 42, 975883, tzinfo=datetime.timezone.utc
+                    ),
+                    "endTime": datetime.datetime(
+                        2025, 3, 24, 22, 2, 42, 989132, tzinfo=datetime.timezone.utc
+                    ),
+                    "completionStartTime": datetime.datetime(
+                        2025, 3, 24, 22, 2, 42, 989132, tzinfo=datetime.timezone.utc
+                    ),
+                    "model": "gpt-4o",
+                    "user": "",
+                    "team_id": "",
+                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "usage_object": {"completion_tokens": 20, "prompt_tokens": 10, "total_tokens": 30, "completion_tokens_details": null, "prompt_tokens_details": null}, "model_map_information": {"model_map_key": "gpt-4o", "model_map_value": {"key": "gpt-4o", "max_tokens": 16384, "max_input_tokens": 128000, "max_output_tokens": 16384, "input_cost_per_token": 2.5e-06, "cache_creation_input_token_cost": null, "cache_read_input_token_cost": 1.25e-06, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": 1.25e-06, "output_cost_per_token_batches": 5e-06, "output_cost_per_token": 1e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "openai", "mode": "chat", "supports_system_messages": true, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": false, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": false, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": true, "search_context_cost_per_query": {"search_context_size_low": 0.03, "search_context_size_medium": 0.035, "search_context_size_high": 0.05}, "tpm": null, "rpm": null, "supported_openai_params": ["frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "max_tokens", "max_completion_tokens", "modalities", "prediction", "n", "presence_penalty", "seed", "stop", "stream", "stream_options", "temperature", "top_p", "tools", "tool_choice", "function_call", "functions", "max_retries", "extra_headers", "parallel_tool_calls", "audio", "response_format", "user"]}}, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": null}}',
+                    "cache_key": "Cache OFF",
+                    "spend": 0.00022500000000000002,
+                    "total_tokens": 30,
+                    "prompt_tokens": 10,
+                    "completion_tokens": 20,
+                    "request_tags": "[]",
+                    "end_user": "test_user_1",
+                    "api_base": "",
+                    "model_group": "",
+                    "model_id": "",
+                    "requester_ip_address": None,
+                    "custom_llm_provider": "openai",
+                    "messages": "{}",
+                    "response": "{}",
+                }
+            )
+
+            for key, value in expected_payload.items():
+                if key in [
+                    "request_id",
+                    "startTime",
+                    "endTime",
+                    "completionStartTime",
+                    "endTime",
+                ]:
+                    assert payload[key] is not None
+                else:
+                    assert (
+                        payload[key] == value
+                    ), f"Expected {key} to be {value}, but got {payload[key]}"
+
+    def mock_anthropic_response(*args, **kwargs):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "application/json"}
+        mock_response.json.return_value = {
+            "content": [{"text": "Hi! My name is Claude.", "type": "text"}],
+            "id": "msg_013Zva2CMHLNnXjNJJKqJ2EF",
+            "model": "claude-3-7-sonnet-20250219",
+            "role": "assistant",
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "type": "message",
+            "usage": {"input_tokens": 2095, "output_tokens": 503},
+        }
+        return mock_response
+
+    @pytest.mark.asyncio
+    async def test_spend_logs_payload_success_log_with_api_base(self, monkeypatch):
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+        litellm.callbacks = [_ProxyDBLogger(message_logging=False)]
+        # litellm._turn_on_debug()
+
+        client = AsyncHTTPHandler()
+
+        with patch.object(
+            litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter,
+            "_insert_spend_log_to_db",
+        ) as mock_client, patch.object(
+            litellm.proxy.proxy_server, "prisma_client"
+        ), patch.object(
+            client, "post", side_effect=self.mock_anthropic_response
+        ):
+            response = await litellm.acompletion(
+                model="claude-3-7-sonnet-20250219",
+                messages=[{"role": "user", "content": "Hello, world!"}],
+                metadata={"user_api_key_end_user_id": "test_user_1"},
+                client=client,
+            )
+
+            assert response.choices[0].message.content == "Hi! My name is Claude."
+
+            await asyncio.sleep(1)
+
+            mock_client.assert_called_once()
+
+            kwargs = mock_client.call_args.kwargs
+            payload: SpendLogsPayload = kwargs["payload"]
+            expected_payload = SpendLogsPayload(
+                **{
+                    "request_id": "chatcmpl-34df56d5-4807-45c1-bb99-61e52586b802",
+                    "call_type": "acompletion",
+                    "api_key": "",
+                    "cache_hit": "None",
+                    "startTime": datetime.datetime(
+                        2025, 3, 24, 22, 2, 42, 975883, tzinfo=datetime.timezone.utc
+                    ),
+                    "endTime": datetime.datetime(
+                        2025, 3, 24, 22, 2, 42, 989132, tzinfo=datetime.timezone.utc
+                    ),
+                    "completionStartTime": datetime.datetime(
+                        2025, 3, 24, 22, 2, 42, 989132, tzinfo=datetime.timezone.utc
+                    ),
+                    "model": "claude-3-7-sonnet-20250219",
+                    "user": "",
+                    "team_id": "",
+                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-3-7-sonnet-20250219", "model_map_value": {"key": "claude-3-7-sonnet-20250219", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
+                    "cache_key": "Cache OFF",
+                    "spend": 0.01383,
+                    "total_tokens": 2598,
+                    "prompt_tokens": 2095,
+                    "completion_tokens": 503,
+                    "request_tags": "[]",
+                    "end_user": "test_user_1",
+                    "api_base": "https://api.anthropic.com/v1/messages",
+                    "model_group": "",
+                    "model_id": "",
+                    "requester_ip_address": None,
+                    "custom_llm_provider": "anthropic",
+                    "messages": "{}",
+                    "response": "{}",
+                }
+            )
+
+            for key, value in expected_payload.items():
+                if key in [
+                    "request_id",
+                    "startTime",
+                    "endTime",
+                    "completionStartTime",
+                    "endTime",
+                ]:
+                    assert payload[key] is not None
+                else:
+                    assert (
+                        payload[key] == value
+                    ), f"Expected {key} to be {value}, but got {payload[key]}"
+
+    @pytest.mark.asyncio
+    async def test_spend_logs_payload_success_log_with_router(self):
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+        litellm.callbacks = [_ProxyDBLogger(message_logging=False)]
+        # litellm._turn_on_debug()
+
+        client = AsyncHTTPHandler()
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "my-anthropic-model-group",
+                    "litellm_params": {
+                        "model": "claude-3-7-sonnet-20250219",
+                    },
+                    "model_info": {
+                        "id": "my-unique-model-id",
+                    },
+                }
+            ]
+        )
+
+        with patch.object(
+            litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter,
+            "_insert_spend_log_to_db",
+        ) as mock_client, patch.object(
+            litellm.proxy.proxy_server, "prisma_client"
+        ), patch.object(
+            client, "post", side_effect=self.mock_anthropic_response
+        ):
+            response = await router.acompletion(
+                model="my-anthropic-model-group",
+                messages=[{"role": "user", "content": "Hello, world!"}],
+                metadata={"user_api_key_end_user_id": "test_user_1"},
+                client=client,
+            )
+
+            assert response.choices[0].message.content == "Hi! My name is Claude."
+
+            await asyncio.sleep(1)
+
+            mock_client.assert_called_once()
+
+            kwargs = mock_client.call_args.kwargs
+            payload: SpendLogsPayload = kwargs["payload"]
+            expected_payload = SpendLogsPayload(
+                **{
+                    "request_id": "chatcmpl-34df56d5-4807-45c1-bb99-61e52586b802",
+                    "call_type": "acompletion",
+                    "api_key": "",
+                    "cache_hit": "None",
+                    "startTime": datetime.datetime(
+                        2025, 3, 24, 22, 2, 42, 975883, tzinfo=datetime.timezone.utc
+                    ),
+                    "endTime": datetime.datetime(
+                        2025, 3, 24, 22, 2, 42, 989132, tzinfo=datetime.timezone.utc
+                    ),
+                    "completionStartTime": datetime.datetime(
+                        2025, 3, 24, 22, 2, 42, 989132, tzinfo=datetime.timezone.utc
+                    ),
+                    "model": "claude-3-7-sonnet-20250219",
+                    "user": "",
+                    "team_id": "",
+                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-3-7-sonnet-20250219", "model_map_value": {"key": "claude-3-7-sonnet-20250219", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
+                    "cache_key": "Cache OFF",
+                    "spend": 0.01383,
+                    "total_tokens": 2598,
+                    "prompt_tokens": 2095,
+                    "completion_tokens": 503,
+                    "request_tags": "[]",
+                    "end_user": "test_user_1",
+                    "api_base": "https://api.anthropic.com/v1/messages",
+                    "model_group": "my-anthropic-model-group",
+                    "model_id": "my-unique-model-id",
+                    "requester_ip_address": None,
+                    "custom_llm_provider": "anthropic",
+                    "messages": "{}",
+                    "response": "{}",
+                }
+            )
+
+            for key, value in expected_payload.items():
+                if key in [
+                    "request_id",
+                    "startTime",
+                    "endTime",
+                    "completionStartTime",
+                    "endTime",
+                ]:
+                    assert payload[key] is not None
+                else:
+                    assert (
+                        payload[key] == value
+                    ), f"Expected {key} to be {value}, but got {payload[key]}"

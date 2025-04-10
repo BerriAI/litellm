@@ -114,7 +114,6 @@ class AsyncHTTPHandler:
         event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]],
         ssl_verify: Optional[VerifyTypes] = None,
     ) -> httpx.AsyncClient:
-
         # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
         # /path/to/certificate.pem
         if ssl_verify is None:
@@ -193,7 +192,7 @@ class AsyncHTTPHandler:
     async def post(
         self,
         url: str,
-        data: Optional[Union[dict, str]] = None,  # type: ignore
+        data: Optional[Union[dict, str, bytes]] = None,  # type: ignore
         json: Optional[dict] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
@@ -428,7 +427,7 @@ class AsyncHTTPHandler:
         self,
         url: str,
         client: httpx.AsyncClient,
-        data: Optional[Union[dict, str]] = None,  # type: ignore
+        data: Optional[Union[dict, str, bytes]] = None,  # type: ignore
         json: Optional[dict] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
@@ -528,7 +527,7 @@ class HTTPHandler:
     def post(
         self,
         url: str,
-        data: Optional[Union[dict, str]] = None,
+        data: Optional[Union[dict, str, bytes]] = None,
         json: Optional[Union[dict, str, List]] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
@@ -574,7 +573,6 @@ class HTTPHandler:
                 setattr(e, "text", error_text)
 
             setattr(e, "status_code", e.response.status_code)
-
             raise e
         except Exception as e:
             raise e
@@ -590,7 +588,6 @@ class HTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
     ):
         try:
-
             if timeout is not None:
                 req = self.client.build_request(
                     "PATCH", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore
@@ -609,7 +606,6 @@ class HTTPHandler:
                 llm_provider="litellm-httpx-handler",
             )
         except httpx.HTTPStatusError as e:
-
             if stream is True:
                 setattr(e, "message", mask_sensitive_info(e.response.read()))
                 setattr(e, "text", mask_sensitive_info(e.response.read()))
@@ -635,7 +631,6 @@ class HTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
     ):
         try:
-
             if timeout is not None:
                 req = self.client.build_request(
                     "PUT", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore

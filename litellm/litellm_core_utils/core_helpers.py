@@ -10,7 +10,7 @@ from litellm.types.llms.openai import AllMessageValues
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     Span = Any
 

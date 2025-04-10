@@ -17,7 +17,6 @@ from litellm.types.rerank import RerankRequest
 
 
 class ModelParamHelper:
-
     @staticmethod
     def get_standard_logging_model_parameters(
         model_parameters: dict,
@@ -138,13 +137,22 @@ class ModelParamHelper:
                 TranscriptionCreateParamsNonStreaming,
                 TranscriptionCreateParamsStreaming,
             )
-            non_streaming_kwargs = set(getattr(TranscriptionCreateParamsNonStreaming, "__annotations__", {}).keys())
-            streaming_kwargs = set(getattr(TranscriptionCreateParamsStreaming, "__annotations__", {}).keys())
+
+            non_streaming_kwargs = set(
+                getattr(
+                    TranscriptionCreateParamsNonStreaming, "__annotations__", {}
+                ).keys()
+            )
+            streaming_kwargs = set(
+                getattr(
+                    TranscriptionCreateParamsStreaming, "__annotations__", {}
+                ).keys()
+            )
 
             all_transcription_kwargs = non_streaming_kwargs.union(streaming_kwargs)
             return all_transcription_kwargs
         except Exception as e:
-            verbose_logger.warning("Error getting transcription kwargs %s", str(e))
+            verbose_logger.debug("Error getting transcription kwargs %s", str(e))
             return set()
 
     @staticmethod

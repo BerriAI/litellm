@@ -39,6 +39,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
@@ -65,6 +66,7 @@ class AzureAIStudioConfig(OpenAIConfig):
     def get_complete_url(
         self,
         api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
@@ -145,7 +147,6 @@ class AzureAIStudioConfig(OpenAIConfig):
             2. If message contains an image or audio, send as is (user-intended)
         """
         for message in messages:
-
             # Do nothing if the message contains an image or audio
             if _audio_or_image_in_message_content(message):
                 continue

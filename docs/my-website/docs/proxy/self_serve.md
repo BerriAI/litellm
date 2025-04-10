@@ -161,6 +161,89 @@ Here's the available UI roles for a LiteLLM Internal User:
   - `internal_user`: can login, view/create/delete their own keys, view their spend. **Cannot** add new users.
   - `internal_user_viewer`: can login, view their own keys, view their own spend. **Cannot** create/delete keys, add new users.
 
+## Auto-add SSO users to teams
+
+This walks through setting up sso auto-add for **Okta, Google SSO**
+
+### Okta, Google SSO 
+
+1. Specify the JWT field that contains the team ids, that the user belongs to. 
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  litellm_jwtauth:
+    team_ids_jwt_field: "groups" # 👈 CAN BE ANY FIELD
+```
+
+This is assuming your SSO token looks like this. **If you need to inspect the JWT fields received from your SSO provider by LiteLLM, follow these instructions [here](#debugging-sso-jwt-fields)**
+
+```
+{
+  ...,
+  "groups": ["team_id_1", "team_id_2"]
+}
+```
+
+2. Create the teams on LiteLLM 
+
+```bash
+curl -X POST '<PROXY_BASE_URL>/team/new' \
+-H 'Authorization: Bearer <PROXY_MASTER_KEY>' \
+-H 'Content-Type: application/json' \
+-D '{
+    "team_alias": "team_1",
+    "team_id": "team_id_1" # 👈 MUST BE THE SAME AS THE SSO GROUP ID
+}'
+```
+
+3. Test the SSO flow
+
+Here's a walkthrough of [how it works](https://www.loom.com/share/8959be458edf41fd85937452c29a33f3?sid=7ebd6d37-569a-4023-866e-e0cde67cb23e)
+
+### Microsoft Entra ID SSO group assignment
+
+This walks through setting up sso auto-add for **Microsoft Entra ID**
+
+Follow along this video for a walkthrough of how to set this up with Microsoft Entra ID
+
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/ea711323aa9a496d84a01fd7b2a12f54?sid=c53e238c-5bfd-4135-b8fb-b5b1a08632cf" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
+
+### Debugging SSO JWT fields 
+
+If you need to inspect the JWT fields received from your SSO provider by LiteLLM, follow these instructions. This guide walks you through setting up a debug callback to view the JWT data during the SSO process.
+
+
+<Image img={require('../../img/debug_sso.png')}  style={{ width: '500px', height: 'auto' }} />
+<br />
+
+1. Add `/sso/debug/callback` as a redirect URL in your SSO provider 
+
+  In your SSO provider's settings, add the following URL as a new redirect (callback) URL:
+
+  ```bash showLineNumbers title="Redirect URL"
+  http://<proxy_base_url>/sso/debug/callback
+  ```
+
+
+2. Navigate to the debug login page on your browser 
+
+    Navigate to the following URL on your browser:
+
+    ```bash showLineNumbers title="URL to navigate to"
+    https://<proxy_base_url>/sso/debug/login
+    ```
+
+    This will initiate the standard SSO flow. You will be redirected to your SSO provider's login screen, and after successful authentication, you will be redirected back to LiteLLM's debug callback route.
+
+
+3. View the JWT fields 
+
+Once redirected, you should see a page called "SSO Debug Information". This page displays the JWT fields received from your SSO provider (as shown in the image above)
+
+
 ## Advanced
 ### Setting custom logout URLs
 
@@ -196,40 +279,6 @@ This budget does not apply to keys created under non-default teams.
 
 [**Go Here**](./team_budgets.md)
 
-### Auto-add SSO users to teams
-
-1. Specify the JWT field that contains the team ids, that the user belongs to. 
-
-```yaml
-general_settings:
-  master_key: sk-1234
-  litellm_jwtauth:
-    team_ids_jwt_field: "groups" # 👈 CAN BE ANY FIELD
-```
-
-This is assuming your SSO token looks like this:
-```
-{
-  ...,
-  "groups": ["team_id_1", "team_id_2"]
-}
-```
-
-2. Create the teams on LiteLLM 
-
-```bash
-curl -X POST '<PROXY_BASE_URL>/team/new' \
--H 'Authorization: Bearer <PROXY_MASTER_KEY>' \
--H 'Content-Type: application/json' \
--D '{
-    "team_alias": "team_1",
-    "team_id": "team_id_1" # 👈 MUST BE THE SAME AS THE SSO GROUP ID
-}'
-```
-
-3. Test the SSO flow
-
-Here's a walkthrough of [how it works](https://www.loom.com/share/8959be458edf41fd85937452c29a33f3?sid=7ebd6d37-569a-4023-866e-e0cde67cb23e)
 
 ### Restrict Users from creating personal keys 
 

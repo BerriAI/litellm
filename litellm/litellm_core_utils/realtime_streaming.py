@@ -30,6 +30,11 @@ import json
 from typing import Any, Dict, List, Optional, Union
 
 import litellm
+from litellm._logging import verbose_logger
+from litellm.types.llms.openai import (
+    OpenAIRealtimeStreamResponseBaseObject,
+    OpenAIRealtimeStreamSessionEvents,
+)
 
 from .litellm_logging import Logging as LiteLLMLogging
 
@@ -53,7 +58,12 @@ class RealTimeStreaming:
         self.websocket = websocket
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
-        self.messages: List = []
+        self.messages: List[
+            Union[
+                OpenAIRealtimeStreamResponseBaseObject,
+                OpenAIRealtimeStreamSessionEvents,
+            ]
+        ] = []
         self.input_message: Dict = {}
 
         _logged_real_time_event_types = litellm.logged_real_time_event_types
@@ -62,10 +72,14 @@ class RealTimeStreaming:
             _logged_real_time_event_types = DefaultLoggedRealTimeEventTypes
         self.logged_real_time_event_types = _logged_real_time_event_types
 
-    def _should_store_message(self, message: Union[str, bytes]) -> bool:
-        if isinstance(message, bytes):
-            message = message.decode("utf-8")
-        message_obj = json.loads(message)
+    def _should_store_message(
+        self,
+        message_obj: Union[
+            dict,
+            OpenAIRealtimeStreamSessionEvents,
+            OpenAIRealtimeStreamResponseBaseObject,
+        ],
+    ) -> bool:
         _msg_type = message_obj["type"]
         if self.logged_real_time_event_types == "*":
             return True
@@ -75,8 +89,22 @@ class RealTimeStreaming:
 
     def store_message(self, message: Union[str, bytes]):
         """Store message in list"""
-        if self._should_store_message(message):
-            self.messages.append(message)
+        if isinstance(message, bytes):
+            message = message.decode("utf-8")
+        message_obj = json.loads(message)
+        try:
+            if (
+                message_obj.get("type") == "session.created"
+                or message_obj.get("type") == "session.updated"
+            ):
+                message_obj = OpenAIRealtimeStreamSessionEvents(**message_obj)  # type: ignore
+            else:
+                message_obj = OpenAIRealtimeStreamResponseBaseObject(**message_obj)  # type: ignore
+        except Exception as e:
+            verbose_logger.debug(f"Error parsing message for logging: {e}")
+            raise e
+        if self._should_store_message(message_obj):
+            self.messages.append(message_obj)
 
     def store_input(self, message: dict):
         """Store input message"""
@@ -122,7 +150,6 @@ class RealTimeStreaming:
             pass
 
     async def bidirectional_forward(self):
-
         forward_task = asyncio.create_task(self.backend_to_client_send_messages())
         try:
             await self.client_ack_messages()

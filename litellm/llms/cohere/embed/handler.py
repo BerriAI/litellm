@@ -56,7 +56,6 @@ async def async_embedding(
     encoding: Callable,
     client: Optional[AsyncHTTPHandler] = None,
 ):
-
     ## LOGGING
     logging_obj.pre_call(
         input=input,
