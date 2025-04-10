@@ -1,7 +1,6 @@
 import copy
 import json
 import re
-import traceback
 import uuid
 import xml.etree.ElementTree as ET
 from enum import Enum
