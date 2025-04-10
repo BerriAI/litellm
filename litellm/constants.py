@@ -515,6 +515,7 @@ LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
+PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME = "prometheus_emit_budget_metrics_job"
 DEFAULT_CRON_JOB_LOCK_TTL_SECONDS = 60  # 1 minute
 PROXY_BUDGET_RESCHEDULER_MIN_TIME = 597
 PROXY_BUDGET_RESCHEDULER_MAX_TIME = 605

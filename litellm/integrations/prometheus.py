@@ -1469,11 +1469,36 @@ class PrometheusLogger(CustomLogger):
             data_type="keys",
         )
 
-    async def _initialize_remaining_budget_metrics(self):
+    async def initialize_remaining_budget_metrics(self):
         """
-        Initialize remaining budget metrics for all teams to avoid metric discrepancies.
+        Handler for initializing remaining budget metrics for all teams to avoid metric discrepancies.
 
         Runs when prometheus logger starts up.
+
+        - If redis cache is available, we use the pod lock manager to acquire a lock and initialize the metrics.
+            - Ensures only one pod emits the metrics at a time.
+        - If redis cache is not available, we initialize the metrics directly.
+        """
+        from litellm.constants import PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME
+        from litellm.proxy.proxy_server import proxy_logging_obj
+
+        pod_lock_manager = proxy_logging_obj.db_spend_update_writer.pod_lock_manager
+        if pod_lock_manager and pod_lock_manager.redis_cache:
+            if await pod_lock_manager.acquire_lock(
+                cronjob_id=PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME
+            ):
+                try:
+                    await self._initialize_remaining_budget_metrics()
+                finally:
+                    await pod_lock_manager.release_lock(
+                        cronjob_id=PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME
+                    )
+        else:
+            await self._initialize_remaining_budget_metrics()
+
+    async def _initialize_remaining_budget_metrics(self):
+        """
+        Helper to initialize remaining budget metrics for all teams and API keys.
         """
         await self._initialize_team_budget_metrics()
         await self._initialize_api_key_budget_metrics()
@@ -1755,7 +1780,7 @@ class PrometheusLogger(CustomLogger):
                 % PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES
             )
             scheduler.add_job(
-                prometheus_logger._initialize_remaining_budget_metrics,
+                prometheus_logger.initialize_remaining_budget_metrics,
                 "interval",
                 minutes=PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES,
             )
