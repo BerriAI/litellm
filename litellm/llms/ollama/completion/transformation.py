@@ -89,9 +89,9 @@ class OllamaConfig(BaseConfig):
     repeat_penalty: Optional[float] = None
     temperature: Optional[float] = None
     seed: Optional[int] = None
-    stop: Optional[list] = (
-        None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
-    )
+    stop: Optional[
+        list
+    ] = None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
     tfs_z: Optional[float] = None
     num_predict: Optional[int] = None
     top_k: Optional[int] = None
@@ -353,6 +353,7 @@ class OllamaConfig(BaseConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
@@ -361,6 +362,7 @@ class OllamaConfig(BaseConfig):
     def get_complete_url(
         self,
         api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,

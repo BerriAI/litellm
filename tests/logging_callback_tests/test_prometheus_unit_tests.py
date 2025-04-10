@@ -713,7 +713,7 @@ async def test_async_post_call_failure_hook(prometheus_logger):
         team_alias="test_team_alias",
         user="test_user",
         exception_status="429",
-        exception_class="RateLimitError",
+        exception_class="Openai.RateLimitError",
     )
     prometheus_logger.litellm_proxy_failed_requests_metric.labels().inc.assert_called_once()
 
@@ -948,7 +948,7 @@ async def test_log_success_fallback_event(prometheus_logger):
         team="test_team",
         team_alias="test_team_alias",
         exception_status="429",
-        exception_class="RateLimitError",
+        exception_class="Openai.RateLimitError",
     )
     prometheus_logger.litellm_deployment_successful_fallbacks.labels().inc.assert_called_once()
 
@@ -985,7 +985,7 @@ async def test_log_failure_fallback_event(prometheus_logger):
         team="test_team",
         team_alias="test_team_alias",
         exception_status="429",
-        exception_class="RateLimitError",
+        exception_class="Openai.RateLimitError",
     )
     prometheus_logger.litellm_deployment_failed_fallbacks.labels().inc.assert_called_once()
 
@@ -1500,3 +1500,33 @@ def test_set_team_budget_metrics_with_custom_labels(prometheus_logger, monkeypat
         "metadata_organization": None,
         "metadata_environment": None,
     }
+
+
+def test_get_exception_class_name(prometheus_logger):
+    """
+    Test that _get_exception_class_name correctly formats the exception class name
+    """
+    # Test case 1: Exception with llm_provider
+    rate_limit_error = litellm.RateLimitError(
+        message="Rate limit exceeded",
+        llm_provider="openai",
+        model="gpt-3.5-turbo"
+    )
+    assert prometheus_logger._get_exception_class_name(rate_limit_error) == "Openai.RateLimitError"
+
+    # Test case 2: Exception with empty llm_provider
+    auth_error = litellm.AuthenticationError(
+        message="Invalid API key",
+        llm_provider="",
+        model="gpt-4"
+    )
+    assert prometheus_logger._get_exception_class_name(auth_error) == "AuthenticationError"
+
+    # Test case 3: Exception with None llm_provider
+    context_window_error = litellm.ContextWindowExceededError(
+        message="Context length exceeded",
+        llm_provider=None,
+        model="gpt-4"
+    )
+    assert prometheus_logger._get_exception_class_name(context_window_error) == "ContextWindowExceededError"
+

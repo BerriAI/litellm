@@ -33,10 +33,10 @@ class _ProxyDBLogger(CustomLogger):
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
     ):
-        from litellm.proxy.proxy_server import update_database
-
         if _ProxyDBLogger._should_track_errors_in_db() is False:
             return
+
+        from litellm.proxy.proxy_server import proxy_logging_obj
 
         _metadata = dict(
             StandardLoggingUserAPIKeyMetadata(
@@ -52,10 +52,10 @@ class _ProxyDBLogger(CustomLogger):
         )
         _metadata["user_api_key"] = user_api_key_dict.api_key
         _metadata["status"] = "failure"
-        _metadata["error_information"] = (
-            StandardLoggingPayloadSetup.get_error_information(
-                original_exception=original_exception,
-            )
+        _metadata[
+            "error_information"
+        ] = StandardLoggingPayloadSetup.get_error_information(
+            original_exception=original_exception,
         )
 
         existing_metadata: dict = request_data.get("metadata", None) or {}
@@ -67,7 +67,7 @@ class _ProxyDBLogger(CustomLogger):
             request_data.get("proxy_server_request") or {}
         )
         request_data["litellm_params"]["metadata"] = existing_metadata
-        await update_database(
+        await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key_dict.api_key,
             response_cost=0.0,
             user_id=user_api_key_dict.user_id,
@@ -94,7 +94,6 @@ class _ProxyDBLogger(CustomLogger):
             prisma_client,
             proxy_logging_obj,
             update_cache,
-            update_database,
         )
 
         verbose_proxy_logger.debug("INSIDE _PROXY_track_cost_callback")
@@ -138,7 +137,7 @@ class _ProxyDBLogger(CustomLogger):
                     end_user_id=end_user_id,
                 ):
                     ## UPDATE DATABASE
-                    await update_database(
+                    await proxy_logging_obj.db_spend_update_writer.update_database(
                         token=user_api_key,
                         response_cost=response_cost,
                         user_id=user_id,
@@ -195,13 +194,15 @@ class _ProxyDBLogger(CustomLogger):
             error_msg = f"Error in tracking cost callback - {str(e)}\n Traceback:{traceback.format_exc()}"
             model = kwargs.get("model", "")
             metadata = kwargs.get("litellm_params", {}).get("metadata", {})
-            error_msg += f"\n Args to _PROXY_track_cost_callback\n model: {model}\n metadata: {metadata}\n"
+            call_type = kwargs.get("call_type", "")
+            error_msg += f"\n Args to _PROXY_track_cost_callback\n model: {model}\n metadata: {metadata}\n call_type: {call_type}\n"
             asyncio.create_task(
                 proxy_logging_obj.failed_tracking_alert(
                     error_message=error_msg,
                     failing_model=model,
                 )
             )
+
             verbose_proxy_logger.exception(
                 "Error in tracking cost callback - %s", str(e)
             )

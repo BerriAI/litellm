@@ -20,6 +20,7 @@ from litellm.proxy._types import (
     WebhookEvent,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.health_check import (
     _clean_endpoint_data,
     _update_litellm_params_for_health_check,
@@ -381,19 +382,22 @@ async def _db_health_readiness_check():
     global db_health_cache
 
     # Note - Intentionally don't try/except this so it raises an exception when it fails
+    try:
+        # if timedelta is less than 2 minutes return DB Status
+        time_diff = datetime.now() - db_health_cache["last_updated"]
+        if db_health_cache["status"] != "unknown" and time_diff < timedelta(minutes=2):
+            return db_health_cache
 
-    # if timedelta is less than 2 minutes return DB Status
-    time_diff = datetime.now() - db_health_cache["last_updated"]
-    if db_health_cache["status"] != "unknown" and time_diff < timedelta(minutes=2):
+        if prisma_client is None:
+            db_health_cache = {"status": "disconnected", "last_updated": datetime.now()}
+            return db_health_cache
+
+        await prisma_client.health_check()
+        db_health_cache = {"status": "connected", "last_updated": datetime.now()}
         return db_health_cache
-
-    if prisma_client is None:
-        db_health_cache = {"status": "disconnected", "last_updated": datetime.now()}
+    except Exception as e:
+        PrismaDBExceptionHandler.handle_db_exception(e)
         return db_health_cache
-
-    await prisma_client.health_check()
-    db_health_cache = {"status": "connected", "last_updated": datetime.now()}
-    return db_health_cache
 
 
 @router.get(

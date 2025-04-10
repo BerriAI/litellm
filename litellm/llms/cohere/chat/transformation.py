@@ -54,7 +54,8 @@ class CohereChatConfig(BaseConfig):
         search_queries_only (bool, optional): When true, the response will only contain a list of generated search queries.
         documents (List[Dict[str, str]], optional): A list of relevant documents that the model can cite.
         temperature (float, optional): A non-negative float that tunes the degree of randomness in generation.
-        max_tokens (int, optional): The maximum number of tokens the model will generate as part of the response.
+        max_tokens [DEPRECATED - use max_completion_tokens] (int, optional): The maximum number of tokens the model will generate as part of the response.
+        max_completion_tokens (int, optional): The maximum number of tokens the model will generate as part of the response.
         k (int, optional): Ensures only the top k most likely tokens are considered for generation at each step.
         p (float, optional): Ensures that only the most likely tokens, with total probability mass of p, are considered for generation.
         frequency_penalty (float, optional): Used to reduce repetitiveness of generated tokens.
@@ -75,6 +76,7 @@ class CohereChatConfig(BaseConfig):
     documents: Optional[list] = None
     temperature: Optional[int] = None
     max_tokens: Optional[int] = None
+    max_completion_tokens: Optional[int] = None
     k: Optional[int] = None
     p: Optional[int] = None
     frequency_penalty: Optional[int] = None
@@ -96,6 +98,7 @@ class CohereChatConfig(BaseConfig):
         documents: Optional[list] = None,
         temperature: Optional[int] = None,
         max_tokens: Optional[int] = None,
+        max_completion_tokens: Optional[int] = None,
         k: Optional[int] = None,
         p: Optional[int] = None,
         frequency_penalty: Optional[int] = None,
@@ -115,6 +118,7 @@ class CohereChatConfig(BaseConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
@@ -131,6 +135,7 @@ class CohereChatConfig(BaseConfig):
             "stream",
             "temperature",
             "max_tokens",
+            "max_completion_tokens",
             "top_p",
             "frequency_penalty",
             "presence_penalty",
@@ -156,6 +161,8 @@ class CohereChatConfig(BaseConfig):
                 optional_params["temperature"] = value
             if param == "max_tokens":
                 optional_params["max_tokens"] = value
+            if param == "max_completion_tokens":
+                optional_params["max_tokens"] = value
             if param == "n":
                 optional_params["num_generations"] = value
             if param == "top_p":
@@ -180,7 +187,6 @@ class CohereChatConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-
         ## Load Config
         for k, v in litellm.CohereChatConfig.get_config().items():
             if (
@@ -222,7 +228,6 @@ class CohereChatConfig(BaseConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-
         try:
             raw_response_json = raw_response.json()
             model_response.choices[0].message.content = raw_response_json["text"]  # type: ignore

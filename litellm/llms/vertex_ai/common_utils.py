@@ -1,11 +1,14 @@
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, get_type_hints
 import re
-from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
 
+import litellm
 from litellm import supports_response_schema, supports_system_messages, verbose_logger
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.llms.vertex_ai import PartType
+from litellm.types.llms.vertex_ai import PartType, Schema
 
 
 class VertexAIError(BaseLLMException):
@@ -28,6 +31,10 @@ def get_supports_system_message(
         supports_system_message = supports_system_messages(
             model=model, custom_llm_provider=_custom_llm_provider
         )
+
+        # Vertex Models called in the `/gemini` request/response format also support system messages
+        if litellm.VertexGeminiConfig._is_model_gemini_spec_model(model):
+            supports_system_message = True
     except Exception as e:
         verbose_logger.warning(
             "Unable to identify if system message supported. Defaulting to 'False'. Received error message - {}\nAdd it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json".format(
@@ -55,7 +62,9 @@ def get_supports_response_schema(
 
 from typing import Literal, Optional
 
-all_gemini_url_modes = Literal["chat", "embedding", "batch_embedding"]
+all_gemini_url_modes = Literal[
+    "chat", "embedding", "batch_embedding", "image_generation"
+]
 
 
 def _get_vertex_url(
@@ -68,6 +77,8 @@ def _get_vertex_url(
 ) -> Tuple[str, str]:
     url: Optional[str] = None
     endpoint: Optional[str] = None
+
+    model = litellm.VertexGeminiConfig.get_model_for_vertex_ai_url(model=model)
     if mode == "chat":
         ### SET RUNTIME ENDPOINT ###
         endpoint = "generateContent"
@@ -91,7 +102,11 @@ def _get_vertex_url(
         if model.isdigit():
             # https://us-central1-aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/us-central1/endpoints/$ENDPOINT_ID:predict
             url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
-
+    elif mode == "image_generation":
+        endpoint = "predict"
+        url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+        if model.isdigit():
+            url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
     if not url or not endpoint:
         raise ValueError(f"Unable to get vertex url/endpoint for mode: {mode}")
     return url, endpoint
@@ -127,6 +142,10 @@ def _get_gemini_url(
         url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
             _gemini_model_name, endpoint, gemini_api_key
         )
+    elif mode == "image_generation":
+        raise ValueError(
+            "LiteLLM's `gemini/` route does not support image generation yet. Let us know if you need this feature by opening an issue at https://github.com/BerriAI/litellm/issues"
+        )
 
     return url, endpoint
 
@@ -150,6 +169,9 @@ def _build_vertex_schema(parameters: dict):
     """
     This is a modified version of https://github.com/google-gemini/generative-ai-python/blob/8f77cc6ac99937cd3a81299ecf79608b91b06bbb/google/generativeai/types/content_types.py#L419
     """
+    # Get valid fields from Schema TypedDict
+    valid_schema_fields = set(get_type_hints(Schema).keys())
+
     defs = parameters.pop("$defs", {})
     # flatten the defs
     for name, value in defs.items():
@@ -160,85 +182,89 @@ def _build_vertex_schema(parameters: dict):
     #     * https://github.com/pydantic/pydantic/issues/1270
     #     * https://stackoverflow.com/a/58841311
     #     * https://github.com/pydantic/pydantic/discussions/4872
-    convert_to_nullable(parameters)
+    convert_anyof_null_to_nullable(parameters)
     add_object_type(parameters)
     # Postprocessing
-    # 4. Suppress unnecessary title generation:
-    #    * https://github.com/pydantic/pydantic/issues/1051
-    #    * http://cl/586221780
-    strip_field(parameters, field_name="title")
-
-    strip_field(
-        parameters, field_name="$schema"
-    )  # 5. Remove $schema - json schema value, not supported by OpenAPI - causes vertex errors.
-    strip_field(
-        parameters, field_name="$id"
-    )  # 6. Remove id - json schema value, not supported by OpenAPI - causes vertex errors.
-
-    return parameters
+    # Filter out fields that don't exist in Schema
+    filtered_parameters = filter_schema_fields(parameters, valid_schema_fields)
+    return filtered_parameters
 
 
-def unpack_defs(schema, defs):
-    properties = schema.get("properties", None)
-    if properties is None:
-        return
+def filter_schema_fields(
+    schema_dict: Dict[str, Any], valid_fields: Set[str], processed=None
+) -> Dict[str, Any]:
+    """
+    Recursively filter a schema dictionary to keep only valid fields.
+    """
+    if processed is None:
+        processed = set()
 
-    for name, value in properties.items():
-        ref_key = value.get("$ref", None)
-        if ref_key is not None:
-            ref = defs[ref_key.split("defs/")[-1]]
-            unpack_defs(ref, defs)
-            properties[name] = ref
+    # Handle circular references
+    schema_id = id(schema_dict)
+    if schema_id in processed:
+        return schema_dict
+    processed.add(schema_id)
+
+    if not isinstance(schema_dict, dict):
+        return schema_dict
+
+    result = {}
+    for key, value in schema_dict.items():
+        if key not in valid_fields:
             continue
 
-        anyof = value.get("anyOf", None)
-        if anyof is not None:
-            for i, atype in enumerate(anyof):
-                ref_key = atype.get("$ref", None)
-                if ref_key is not None:
-                    ref = defs[ref_key.split("defs/")[-1]]
-                    unpack_defs(ref, defs)
-                    anyof[i] = ref
-            continue
-
-        items = value.get("items", None)
-        if items is not None:
-            ref_key = items.get("$ref", None)
-            if ref_key is not None:
-                ref = defs[ref_key.split("defs/")[-1]]
-                unpack_defs(ref, defs)
-                value["items"] = ref
-                continue
-
-
-def convert_to_nullable(schema):
-    anyof = schema.pop("anyOf", None)
-    if anyof is not None:
-        if len(anyof) != 2:
-            raise ValueError(
-                "Invalid input: Type Unions are not supported, except for `Optional` types. "
-                "Please provide an `Optional` type or a non-Union type."
-            )
-        a, b = anyof
-        if a == {"type": "null"}:
-            schema.update(b)
-        elif b == {"type": "null"}:
-            schema.update(a)
+        if key == "properties" and isinstance(value, dict):
+            result[key] = {
+                k: filter_schema_fields(v, valid_fields, processed)
+                for k, v in value.items()
+            }
+        elif key == "items" and isinstance(value, dict):
+            result[key] = filter_schema_fields(value, valid_fields, processed)
+        elif key == "anyOf" and isinstance(value, list):
+            result[key] = [
+                filter_schema_fields(item, valid_fields, processed) for item in value  # type: ignore
+            ]
         else:
+            result[key] = value
+
+    return result
+
+
+def convert_anyof_null_to_nullable(schema, depth=0):
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(
+            f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
+        )
+    """ Converts null objects within anyOf by removing them and adding nullable to all remaining objects """
+    anyof = schema.get("anyOf", None)
+    if anyof is not None:
+        contains_null = False
+        for atype in anyof:
+            if atype == {"type": "null"}:
+                # remove null type
+                anyof.remove(atype)
+                contains_null = True
+
+        if len(anyof) == 0:
+            # Edge case: response schema with only null type present is invalid in Vertex AI
             raise ValueError(
-                "Invalid input: Type Unions are not supported, except for `Optional` types. "
-                "Please provide an `Optional` type or a non-Union type."
+                "Invalid input: AnyOf schema with only null type is not supported. "
+                "Please provide a non-null type."
             )
-        schema["nullable"] = True
+
+        if contains_null:
+            # set all types to nullable following guidance found here: https://cloud.google.com/vertex-ai/generative-ai/docs/samples/generativeaionvertexai-gemini-controlled-generation-response-schema-3#generativeaionvertexai_gemini_controlled_generation_response_schema_3-python
+            for atype in anyof:
+                atype["nullable"] = True
 
     properties = schema.get("properties", None)
     if properties is not None:
         for name, value in properties.items():
-            convert_to_nullable(value)
+            convert_anyof_null_to_nullable(value, depth=depth + 1)
 
     items = schema.get("items", None)
     if items is not None:
-        convert_to_nullable(items)
+        convert_anyof_null_to_nullable(items, depth=depth + 1)
 
 
 def add_object_type(schema):

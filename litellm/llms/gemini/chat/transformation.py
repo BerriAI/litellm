@@ -81,6 +81,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             "stop",
             "logprobs",
             "frequency_penalty",
+            "modalities",
         ]
 
     def map_openai_params(
@@ -90,7 +91,6 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         model: str,
         drop_params: bool,
     ) -> Dict:
-
         if litellm.vertex_ai_safety_settings is not None:
             optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
         return super().map_openai_params(

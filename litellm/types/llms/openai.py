@@ -234,6 +234,63 @@ class Thread(BaseModel):
     """The object type, which is always `thread`."""
 
 
+OpenAICreateFileRequestOptionalParams = Literal["purpose"]
+
+OpenAIFilesPurpose = Literal[
+    "assistants",
+    "assistants_output",
+    "batch",
+    "batch_output",
+    "fine-tune",
+    "fine-tune-results",
+    "vision",
+    "user_data",
+]
+
+
+class OpenAIFileObject(BaseModel):
+    id: str
+    """The file identifier, which can be referenced in the API endpoints."""
+
+    bytes: int
+    """The size of the file, in bytes."""
+
+    created_at: int
+    """The Unix timestamp (in seconds) for when the file was created."""
+
+    filename: str
+    """The name of the file."""
+
+    object: Literal["file"]
+    """The object type, which is always `file`."""
+
+    purpose: OpenAIFilesPurpose
+    """The intended purpose of the file.
+
+    Supported values are `assistants`, `assistants_output`, `batch`, `batch_output`,
+    `fine-tune`, `fine-tune-results`, `vision`, and `user_data`.
+    """
+
+    status: Literal["uploaded", "processed", "error"]
+    """Deprecated.
+
+    The current status of the file, which can be either `uploaded`, `processed`, or
+    `error`.
+    """
+
+    expires_at: Optional[int] = None
+    """The Unix timestamp (in seconds) for when the file will expire."""
+
+    status_details: Optional[str] = None
+    """Deprecated.
+
+    For details on why a fine-tuning training file failed validation, see the
+    `error` field on `fine_tuning.job`.
+    """
+
+    _hidden_params: dict = {}
+
+
 # OpenAI Files Types
 class CreateFileRequest(TypedDict, total=False):
     """
@@ -505,10 +562,11 @@ class ChatCompletionDocumentObject(TypedDict):
     citations: Optional[CitationsObject]
 
 
-class ChatCompletionFileObjectFile(TypedDict):
-    file_data: Optional[str]
-    file_id: Optional[str]
-    filename: Optional[str]
+class ChatCompletionFileObjectFile(TypedDict, total=False):
+    file_data: str
+    file_id: str
+    filename: str
+    format: str
 
 
 class ChatCompletionFileObject(TypedDict):
@@ -637,6 +695,7 @@ class ChatCompletionToolParamFunctionChunk(TypedDict, total=False):
     name: Required[str]
     description: str
     parameters: dict
+    strict: bool
 
 
 class OpenAIChatCompletionToolParam(TypedDict):
@@ -722,12 +781,12 @@ class OpenAIChatCompletionChunk(ChatCompletionChunk):
 
 class Hyperparameters(BaseModel):
     batch_size: Optional[Union[str, int]] = None  # "Number of examples in each batch."
-    learning_rate_multiplier: Optional[Union[str, float]] = (
-        None  # Scaling factor for the learning rate
-    )
-    n_epochs: Optional[Union[str, int]] = (
-        None  # "The number of epochs to train the model for"
-    )
+    learning_rate_multiplier: Optional[
+        Union[str, float]
+    ] = None  # Scaling factor for the learning rate
+    n_epochs: Optional[
+        Union[str, int]
+    ] = None  # "The number of epochs to train the model for"
 
 
 class FineTuningJobCreate(BaseModel):
@@ -754,18 +813,18 @@ class FineTuningJobCreate(BaseModel):
 
     model: str  # "The name of the model to fine-tune."
     training_file: str  # "The ID of an uploaded file that contains training data."
-    hyperparameters: Optional[Hyperparameters] = (
-        None  # "The hyperparameters used for the fine-tuning job."
-    )
-    suffix: Optional[str] = (
-        None  # "A string of up to 18 characters that will be added to your fine-tuned model name."
-    )
-    validation_file: Optional[str] = (
-        None  # "The ID of an uploaded file that contains validation data."
-    )
-    integrations: Optional[List[str]] = (
-        None  # "A list of integrations to enable for your fine-tuning job."
-    )
+    hyperparameters: Optional[
+        Hyperparameters
+    ] = None  # "The hyperparameters used for the fine-tuning job."
+    suffix: Optional[
+        str
+    ] = None  # "A string of up to 18 characters that will be added to your fine-tuned model name."
+    validation_file: Optional[
+        str
+    ] = None  # "The ID of an uploaded file that contains validation data."
+    integrations: Optional[
+        List[str]
+    ] = None  # "A list of integrations to enable for your fine-tuning job."
     seed: Optional[int] = None  # "The seed controls the reproducibility of the job."
 
 
@@ -779,7 +838,12 @@ class LiteLLMFineTuningJobCreate(FineTuningJobCreate):
 AllEmbeddingInputValues = Union[str, List[str], List[int], List[List[int]]]
 
 OpenAIAudioTranscriptionOptionalParams = Literal[
-    "language", "prompt", "temperature", "response_format", "timestamp_granularities"
+    "language",
+    "prompt",
+    "temperature",
+    "response_format",
+    "timestamp_granularities",
+    "include",
 ]
 
 
@@ -829,7 +893,17 @@ class BaseLiteLLMOpenAIResponseObject(BaseModel):
 
 
 class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
-    reasoning_tokens: int
+    reasoning_tokens: Optional[int] = None
+
+    text_tokens: Optional[int] = None
+
+    model_config = {"extra": "allow"}
+
+
+class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
+    audio_tokens: Optional[int] = None
+    cached_tokens: Optional[int] = None
+    text_tokens: Optional[int] = None
 
     model_config = {"extra": "allow"}
 
@@ -838,10 +912,13 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
     input_tokens: int
     """The number of input tokens."""
 
+    input_tokens_details: Optional[InputTokensDetails] = None
+    """A detailed breakdown of the input tokens."""
+
     output_tokens: int
     """The number of output tokens."""
 
-    output_tokens_details: Optional[OutputTokensDetails]
+    output_tokens_details: Optional[OutputTokensDetails] = None
     """A detailed breakdown of the output tokens."""
 
     total_tokens: int
@@ -1106,4 +1183,24 @@ ResponsesAPIStreamingResponse = Annotated[
         ErrorEvent,
     ],
     Discriminator("type"),
+]
+
+
+REASONING_EFFORT = Literal["low", "medium", "high"]
+
+
+class OpenAIRealtimeStreamSessionEvents(TypedDict):
+    event_id: str
+    session: dict
+    type: Union[Literal["session.created"], Literal["session.updated"]]
+
+
+class OpenAIRealtimeStreamResponseBaseObject(TypedDict):
+    event_id: str
+    response: dict
+    type: str
+
+
+OpenAIRealtimeStreamList = List[
+    Union[OpenAIRealtimeStreamResponseBaseObject, OpenAIRealtimeStreamSessionEvents]
 ]
