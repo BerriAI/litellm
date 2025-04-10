@@ -94,6 +94,7 @@ class VertexMultimodalEmbedding(VertexLLM):
             optional_params=optional_params,
             api_key=auth_header,
             api_base=api_base,
+            litellm_params=litellm_params,
         )
 
         ## LOGGING

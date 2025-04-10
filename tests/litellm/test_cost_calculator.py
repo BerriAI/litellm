@@ -78,6 +78,8 @@ def test_cost_calculator_with_usage():
 
 
 def test_handle_realtime_stream_cost_calculation():
+    from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
+
     # Setup test data
     results: OpenAIRealtimeStreamList = [
         {"type": "session.created", "session": {"model": "gpt-3.5-turbo"}},
@@ -99,9 +101,14 @@ def test_handle_realtime_stream_cost_calculation():
         },
     ]
 
+    combined_usage_object = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results,
+    )
+
     # Test with explicit model name
     cost = handle_realtime_stream_cost_calculation(
         results=results,
+        combined_usage_object=combined_usage_object,
         custom_llm_provider="openai",
         litellm_model_name="gpt-3.5-turbo",
     )
@@ -117,8 +124,10 @@ def test_handle_realtime_stream_cost_calculation():
 
     # Test with different model name in session
     results[0]["session"]["model"] = "gpt-4"
+
     cost = handle_realtime_stream_cost_calculation(
         results=results,
+        combined_usage_object=combined_usage_object,
         custom_llm_provider="openai",
         litellm_model_name="gpt-3.5-turbo",
     )
@@ -132,8 +141,12 @@ def test_handle_realtime_stream_cost_calculation():
 
     # Test with no response.done events
     results = [{"type": "session.created", "session": {"model": "gpt-3.5-turbo"}}]
+    combined_usage_object = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results,
+    )
     cost = handle_realtime_stream_cost_calculation(
         results=results,
+        combined_usage_object=combined_usage_object,
         custom_llm_provider="openai",
         litellm_model_name="gpt-3.5-turbo",
     )
