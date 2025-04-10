@@ -2667,16 +2667,16 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         return final_params
     elif custom_llm_provider == "cohere":
         if "embed-multilingual-v3.0" in model or "embed-english-v3.0" in model:
-            object = litellm.CohereEmbeddingConfig()
+            cohere_config = litellm.CohereEmbeddingConfig()
         else:  # unmapped model
             supported_params = []
             _check_valid_arg(supported_params=supported_params)
             final_params = {**kwargs}
             return final_params
 
-        supported_params = object.get_supported_openai_params()
+        supported_params = cohere_config.get_supported_openai_params()
         _check_valid_arg(supported_params=supported_params)
-        optional_params = object.map_openai_params(
+        optional_params = cohere_config.map_openai_params(
             non_default_params=non_default_params, optional_params={}
         )
         final_params = {**optional_params, **kwargs}
