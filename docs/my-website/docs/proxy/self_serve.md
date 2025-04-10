@@ -161,43 +161,11 @@ Here's the available UI roles for a LiteLLM Internal User:
   - `internal_user`: can login, view/create/delete their own keys, view their spend. **Cannot** add new users.
   - `internal_user_viewer`: can login, view their own keys, view their own spend. **Cannot** create/delete keys, add new users.
 
-## Advanced
-### Setting custom logout URLs
+## Auto-add SSO users to teams
 
-Set `PROXY_LOGOUT_URL` in your .env if you want users to get redirected to a specific URL when they click logout
+This walks through setting up sso auto-add for **Okta, Google SSO**
 
-```
-export PROXY_LOGOUT_URL="https://www.google.com"
-```
-
-<Image img={require('../../img/ui_logout.png')}  style={{ width: '400px', height: 'auto' }} />
-
-
-### Set max budget for internal users 
-
-Automatically apply budget per internal user when they sign up. By default the table will be checked every 10 minutes, for users to reset. To modify this, [see this](./users.md#reset-budgets)
-
-```yaml
-litellm_settings:
-  max_internal_user_budget: 10
-  internal_user_budget_duration: "1mo" # reset every month
-```
-
-This sets a max budget of $10 USD for internal users when they sign up. 
-
-This budget only applies to personal keys created by that user - seen under `Default Team` on the UI. 
-
-<Image img={require('../../img/max_budget_for_internal_users.png')}  style={{ width: '500px', height: 'auto' }} />
-
-This budget does not apply to keys created under non-default teams.
-
-
-### Set max budget for teams
-
-[**Go Here**](./team_budgets.md)
-
-### Auto-add SSO users to teams
-
+### Okta, Google SSO 
 
 1. Specify the JWT field that contains the team ids, that the user belongs to. 
 
@@ -233,6 +201,16 @@ curl -X POST '<PROXY_BASE_URL>/team/new' \
 
 Here's a walkthrough of [how it works](https://www.loom.com/share/8959be458edf41fd85937452c29a33f3?sid=7ebd6d37-569a-4023-866e-e0cde67cb23e)
 
+### Microsoft Entra ID SSO group assignment
+
+This walks through setting up sso auto-add for **Microsoft Entra ID**
+
+Follow along this video for a walkthrough of how to set this up with Microsoft Entra ID
+
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/ea711323aa9a496d84a01fd7b2a12f54?sid=c53e238c-5bfd-4135-b8fb-b5b1a08632cf" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
+
 ### Debugging SSO JWT fields 
 
 If you need to inspect the JWT fields received from your SSO provider by LiteLLM, follow these instructions. This guide walks you through setting up a debug callback to view the JWT data during the SSO process.
@@ -264,6 +242,42 @@ If you need to inspect the JWT fields received from your SSO provider by LiteLLM
 3. View the JWT fields 
 
 Once redirected, you should see a page called "SSO Debug Information". This page displays the JWT fields received from your SSO provider (as shown in the image above)
+
+
+## Advanced
+### Setting custom logout URLs
+
+Set `PROXY_LOGOUT_URL` in your .env if you want users to get redirected to a specific URL when they click logout
+
+```
+export PROXY_LOGOUT_URL="https://www.google.com"
+```
+
+<Image img={require('../../img/ui_logout.png')}  style={{ width: '400px', height: 'auto' }} />
+
+
+### Set max budget for internal users 
+
+Automatically apply budget per internal user when they sign up. By default the table will be checked every 10 minutes, for users to reset. To modify this, [see this](./users.md#reset-budgets)
+
+```yaml
+litellm_settings:
+  max_internal_user_budget: 10
+  internal_user_budget_duration: "1mo" # reset every month
+```
+
+This sets a max budget of $10 USD for internal users when they sign up. 
+
+This budget only applies to personal keys created by that user - seen under `Default Team` on the UI. 
+
+<Image img={require('../../img/max_budget_for_internal_users.png')}  style={{ width: '500px', height: 'auto' }} />
+
+This budget does not apply to keys created under non-default teams.
+
+
+### Set max budget for teams
+
+[**Go Here**](./team_budgets.md)
 
 
 ### Restrict Users from creating personal keys 
