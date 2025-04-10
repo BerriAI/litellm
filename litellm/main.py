@@ -3406,7 +3406,9 @@ def embedding(  # noqa: PLR0915
             }
         )
 
-    litellm_params_dict = get_litellm_params(**kwargs)
+    litellm_params_dict = get_litellm_params(
+        **kwargs, original_encoding_format=encoding_format,
+    )
 
     logging: Logging = litellm_logging_obj  # type: ignore
     logging.update_environment_variables(
@@ -3590,7 +3592,6 @@ def embedding(  # noqa: PLR0915
                 input=input,
                 optional_params=optional_params,
                 encoding=encoding,
-                encoding_format=encoding_format,
                 api_key=cohere_key,  # type: ignore
                 headers=headers,
                 logging_obj=logging,
@@ -3598,6 +3599,7 @@ def embedding(  # noqa: PLR0915
                 aembedding=aembedding,
                 timeout=timeout,
                 client=client,
+                litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "huggingface":
             api_key = (
@@ -3627,14 +3629,13 @@ def embedding(  # noqa: PLR0915
                 model=model,
                 input=transformed_input,
                 encoding=encoding,
-                encoding_format=encoding_format,
                 logging_obj=logging,
                 optional_params=optional_params,
                 model_response=EmbeddingResponse(),
                 client=client,
                 timeout=timeout,
                 aembedding=aembedding,
-                litellm_params={},
+                litellm_params=litellm_params_dict,
                 api_base=api_base,
                 print_verbose=print_verbose,
                 extra_headers=extra_headers,

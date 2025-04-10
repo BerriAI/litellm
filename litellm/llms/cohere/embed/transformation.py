@@ -113,7 +113,7 @@ class CohereEmbeddingConfig:
         model: str,
         encoding: Any,
         input: list,
-        encoding_format: Optional[str],
+        litellm_params: dict,
     ) -> EmbeddingResponse:
         response_json = response.json()
         ## LOGGING
@@ -134,13 +134,14 @@ class CohereEmbeddingConfig:
                 'usage'
             }
         """
-        should_output_base64 = encoding_format == "base64"
-        if encoding_format:
+        original_encoding_format = litellm_params.get("original_encoding_format", None)
+        should_output_base64 = original_encoding_format == "base64"
+        if original_encoding_format:
             if should_output_base64:
                 # see map_openai_params; we asked cohere for float in this case
                 embeddings = response_json["embeddings"]["float"]
             else:
-                embeddings = response_json["embeddings"][encoding_format]
+                embeddings = response_json["embeddings"][original_encoding_format]
         else:
             embeddings = response_json["embeddings"]
         output_data = []

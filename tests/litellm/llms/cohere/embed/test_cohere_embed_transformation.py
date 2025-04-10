@@ -61,7 +61,7 @@ class TestCohereTransform:
             model=self.model,
             encoding=encoding,
             input=["What is this"],
-            encoding_format="float",
+            litellm_params={"original_encoding_format": "float"},
         )
         assert result.data == [
             {"object": "embedding", "index": 0, "embedding": [-0.013511658, 0.002840042, -0.046295166]}
@@ -78,7 +78,7 @@ class TestCohereTransform:
             model=self.model,
             encoding=encoding,
             input=["What is this"],
-            encoding_format="base64",
+            litellm_params={"original_encoding_format": "base64"},
         )
         assert result.data == [
             {"object": "embedding", "index": 0, "embedding": "AGBdvAAgOjsAoD29"}
@@ -106,7 +106,7 @@ class TestCohereTransform:
             model=self.model,
             encoding=encoding,
             input=["What is this"],
-            encoding_format=None,
+            litellm_params={"original_encoding_format": None},
         )
         assert result.data == [
             {"object": "embedding", "index": 0, "embedding": [-0.013511658, 0.002840042, -0.046295166]}
