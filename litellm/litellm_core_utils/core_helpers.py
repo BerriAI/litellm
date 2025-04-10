@@ -10,7 +10,7 @@ from litellm.types.llms.openai import AllMessageValues
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     Span = Any
 
@@ -73,6 +73,8 @@ def remove_index_from_tool_calls(
 def get_litellm_metadata_from_kwargs(kwargs: dict):
     """
     Helper to get litellm metadata from all litellm request kwargs
+
+    Return `litellm_metadata` if it exists, otherwise return `metadata`
     """
     litellm_params = kwargs.get("litellm_params", {})
     if litellm_params:

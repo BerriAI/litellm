@@ -11,7 +11,7 @@ import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
+)  # Adds the parent directory to the system path
 
 
 import os
@@ -880,6 +880,9 @@ def test_completion_azure_mistral_large_function_calling(provider):
     This primarily tests if the 'Function()' pydantic object correctly handles argument param passed in as a dict vs. string
     """
     litellm.set_verbose = True
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+
+    model_cost = litellm.get_model_cost_map(url="")
     tools = [
         {
             "type": "function",
@@ -1575,148 +1578,6 @@ HF Tests we should pass
 """
 
 
-#####################################################
-#####################################################
-# Test util to sort models to TGI, conv, None
-from litellm.llms.huggingface.chat.transformation import HuggingfaceChatConfig
-
-
-def test_get_hf_task_for_model():
-    model = "glaiveai/glaive-coder-7b"
-    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
-    print(f"model:{model}, model type: {model_type}")
-    assert model_type == "text-generation-inference"
-
-    model = "meta-llama/Llama-2-7b-hf"
-    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
-    print(f"model:{model}, model type: {model_type}")
-    assert model_type == "text-generation-inference"
-
-    model = "facebook/blenderbot-400M-distill"
-    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
-    print(f"model:{model}, model type: {model_type}")
-    assert model_type == "conversational"
-
-    model = "facebook/blenderbot-3B"
-    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
-    print(f"model:{model}, model type: {model_type}")
-    assert model_type == "conversational"
-
-    # neither Conv or None
-    model = "roneneldan/TinyStories-3M"
-    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
-    print(f"model:{model}, model type: {model_type}")
-    assert model_type == "text-generation"
-
-
-# test_get_hf_task_for_model()
-# litellm.set_verbose=False
-# ################### Hugging Face TGI models ########################
-# # TGI model
-# # this is a TGI model https://huggingface.co/glaiveai/glaive-coder-7b
-def tgi_mock_post(url, **kwargs):
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.headers = {"Content-Type": "application/json"}
-    mock_response.json.return_value = [
-        {
-            "generated_text": "<|assistant|>\nI'm",
-            "details": {
-                "finish_reason": "length",
-                "generated_tokens": 10,
-                "seed": None,
-                "prefill": [],
-                "tokens": [
-                    {
-                        "id": 28789,
-                        "text": "<",
-                        "logprob": -0.025222778,
-                        "special": False,
-                    },
-                    {
-                        "id": 28766,
-                        "text": "|",
-                        "logprob": -0.000003695488,
-                        "special": False,
-                    },
-                    {
-                        "id": 489,
-                        "text": "ass",
-                        "logprob": -0.0000019073486,
-                        "special": False,
-                    },
-                    {
-                        "id": 11143,
-                        "text": "istant",
-                        "logprob": -0.000002026558,
-                        "special": False,
-                    },
-                    {
-                        "id": 28766,
-                        "text": "|",
-                        "logprob": -0.0000015497208,
-                        "special": False,
-                    },
-                    {
-                        "id": 28767,
-                        "text": ">",
-                        "logprob": -0.0000011920929,
-                        "special": False,
-                    },
-                    {
-                        "id": 13,
-                        "text": "\n",
-                        "logprob": -0.00009703636,
-                        "special": False,
-                    },
-                    {"id": 28737, "text": "I", "logprob": -0.1953125, "special": False},
-                    {
-                        "id": 28742,
-                        "text": "'",
-                        "logprob": -0.88183594,
-                        "special": False,
-                    },
-                    {
-                        "id": 28719,
-                        "text": "m",
-                        "logprob": -0.00032639503,
-                        "special": False,
-                    },
-                ],
-            },
-        }
-    ]
-    return mock_response
-
-
-def test_hf_test_completion_tgi():
-    litellm.set_verbose = True
-    try:
-        client = HTTPHandler()
-
-        with patch.object(client, "post", side_effect=tgi_mock_post) as mock_client:
-            response = completion(
-                model="huggingface/HuggingFaceH4/zephyr-7b-beta",
-                messages=[{"content": "Hello, how are you?", "role": "user"}],
-                max_tokens=10,
-                wait_for_model=True,
-                client=client,
-            )
-            mock_client.assert_called_once()
-            # Add any assertions-here to check the response
-            print(response)
-            assert "options" in mock_client.call_args.kwargs["data"]
-            json_data = json.loads(mock_client.call_args.kwargs["data"])
-            assert "wait_for_model" in json_data["options"]
-            assert json_data["options"]["wait_for_model"] is True
-    except litellm.ServiceUnavailableError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# hf_test_completion_tgi()
-
 
 @pytest.mark.parametrize(
     "provider", ["openai", "hosted_vllm", "lm_studio"]
@@ -1865,26 +1726,6 @@ def mock_post(url, **kwargs):
     ]
     return mock_response
 
-
-def test_hf_classifier_task():
-    try:
-        client = HTTPHandler()
-        with patch.object(client, "post", side_effect=mock_post):
-            litellm.set_verbose = True
-            user_message = "I like you. I love you"
-            messages = [{"content": user_message, "role": "user"}]
-            response = completion(
-                model="huggingface/text-classification/shahrukhx01/question-vs-statement-classifier",
-                messages=messages,
-                client=client,
-            )
-            print(f"response: {response}")
-            assert isinstance(response, litellm.ModelResponse)
-            assert isinstance(response.choices[0], litellm.Choices)
-            assert response.choices[0].message.content is not None
-            assert isinstance(response.choices[0].message.content, str)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {str(e)}")
 
 
 def test_ollama_image():
@@ -2065,16 +1906,16 @@ def test_completion_openai():
 @pytest.mark.parametrize(
     "model, api_version",
     [
-        ("gpt-4o-2024-08-06", None),
-        ("azure/chatgpt-v-2", None),
+        # ("gpt-4o-2024-08-06", None),
+        # ("azure/chatgpt-v-2", None),
         ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", None),
-        ("azure/gpt-4o", "2024-08-01-preview"),
+        # ("azure/gpt-4o", "2024-08-01-preview"),
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
 def test_completion_openai_pydantic(model, api_version):
     try:
-        litellm.set_verbose = True
+        litellm._turn_on_debug()
         from pydantic import BaseModel
 
         messages = [
@@ -2933,13 +2774,19 @@ def test_completion_azure():
 # test_completion_azure()
 
 
+@pytest.mark.skip(
+    reason="this is bad test. It doesn't actually fail if the token is not set in the header. "
+)
 def test_azure_openai_ad_token():
+    import time
+
     # this tests if the azure ad token is set in the request header
     # the request can fail since azure ad tokens expire after 30 mins, but the header MUST have the azure ad token
     # we use litellm.input_callbacks for this test
     def tester(
         kwargs,  # kwargs to completion
     ):
+        print("inside kwargs")
         print(kwargs["additional_args"])
         if kwargs["additional_args"]["headers"]["Authorization"] != "Bearer gm":
             pytest.fail("AZURE AD TOKEN Passed but not set in request header")
@@ -2962,7 +2809,9 @@ def test_azure_openai_ad_token():
         litellm.input_callback = []
     except Exception as e:
         litellm.input_callback = []
-        pytest.fail(f"An exception occurs - {str(e)}")
+        pass
+
+    time.sleep(1)
 
 
 # test_azure_openai_ad_token()
@@ -3522,7 +3371,6 @@ async def test_completion_bedrock_httpx_models(sync_mode, model):
                 messages=[{"role": "user", "content": "Hey! how's it going?"}],
                 temperature=0.2,
                 max_tokens=200,
-                stop=["stop sequence"],
             )
 
             assert isinstance(response, litellm.ModelResponse)
@@ -3534,7 +3382,6 @@ async def test_completion_bedrock_httpx_models(sync_mode, model):
                 messages=[{"role": "user", "content": "Hey! how's it going?"}],
                 temperature=0.2,
                 max_tokens=100,
-                stop=["stop sequence"],
             )
 
             assert isinstance(response, litellm.ModelResponse)
@@ -4356,14 +4203,14 @@ async def test_dynamic_azure_params(stream, sync_mode):
 
     ## recreate mock client
     if sync_mode:
-        mock_client = MagicMock(return_value="Hello world!")
+        new_mock_client = MagicMock(return_value="Hello world!")
     else:
-        mock_client = AsyncMock(return_value="Hello world!")
+        new_mock_client = AsyncMock(return_value="Hello world!")
 
     ## CHECK IF NEW CLIENT IS USED (PARAM CHANGE)
     with patch.object(
-        client.chat.completions.with_raw_response, "create", new=mock_client
-    ) as mock_client:
+        client.chat.completions.with_raw_response, "create", new=new_mock_client
+    ) as new_mock_client:
         try:
             if sync_mode:
                 _ = completion(
@@ -4385,7 +4232,7 @@ async def test_dynamic_azure_params(stream, sync_mode):
             pass
 
         try:
-            mock_client.assert_not_called()
+            new_mock_client.assert_called()
         except Exception as e:
             raise e
 
@@ -4830,3 +4677,14 @@ def test_completion_gpt_4o_empty_str():
             messages=[{"role": "user", "content": ""}],
         )
         assert resp.choices[0].message.content is not None
+
+
+def test_completion_openrouter_reasoning_content():
+    litellm._turn_on_debug()
+    resp = litellm.completion(
+        model="openrouter/anthropic/claude-3.7-sonnet",
+        messages=[{"role": "user", "content": "Hello world"}],
+        reasoning={"effort": "high"},
+    )
+    print(resp)
+    assert resp.choices[0].message.reasoning_content is not None

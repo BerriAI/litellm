@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import NumericalInput from "../shared/numerical_input";
 import {
   Card,
   Title,
@@ -20,7 +21,7 @@ import {
   Icon
 } from "@tremor/react";
 import { teamInfoCall, teamMemberDeleteCall, teamMemberAddCall, teamMemberUpdateCall, Member, teamUpdateCall } from "@/components/networking";
-import { Button, Form, Input, Select, message, InputNumber, Tooltip } from "antd";
+import { Button, Form, Input, Select, message, Tooltip } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import {
   Select as Select2,
@@ -29,6 +30,7 @@ import { PencilAltIcon, PlusIcon, TrashIcon } from "@heroicons/react/outline";
 import MemberModal from "./edit_membership";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+import { Team } from "../key_team_helpers/key_list";
 
 
 interface TeamData {
@@ -68,6 +70,7 @@ interface TeamInfoProps {
   is_proxy_admin: boolean;
   userModels: string[];
   editTeam: boolean;
+  onUpdate?: (team: Team) => void
 }
 
 const TeamInfoView: React.FC<TeamInfoProps> = ({ 
@@ -77,7 +80,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   is_team_admin, 
   is_proxy_admin,
   userModels,
-  editTeam
+  editTeam,
+  onUpdate
 }) => {
   const [teamData, setTeamData] = useState<TeamData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -175,6 +179,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     try {
       if (!accessToken) return;
 
+      let parsedMetadata = {};
+      try {
+        parsedMetadata = values.metadata ? JSON.parse(values.metadata) : {};
+      } catch (e) {
+        message.error("Invalid JSON in metadata field");
+        return;
+      }
+
       const updateData = {
         team_id: teamId,
         team_alias: values.team_alias,
@@ -184,13 +196,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         max_budget: values.max_budget,
         budget_duration: values.budget_duration,
         metadata: {
-          ...teamData?.team_info?.metadata,
+          ...parsedMetadata,
           guardrails: values.guardrails || []
         }
       };
       
       const response = await teamUpdateCall(accessToken, updateData);
-      
+      if (onUpdate) {
+        onUpdate(response.data)
+      }
+    
       message.success("Team settings updated successfully");
       setIsEditing(false);
       fetchTeamInfo();
@@ -222,9 +237,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       <TabGroup defaultIndex={editTeam ? 2 : 0}>
         <TabList className="mb-4">
-          <Tab>Overview</Tab>
-          <Tab>Members</Tab>
-          <Tab>Settings</Tab>
+          {[
+            <Tab key="overview">Overview</Tab>,
+            ...(canEditTeam ? [
+              <Tab key="members">Members</Tab>,
+              <Tab key="settings">Settings</Tab>
+            ] : [])
+          ]}
         </TabList>
 
         <TabPanels>
@@ -378,7 +397,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </Form.Item>
 
                   <Form.Item label="Max Budget (USD)" name="max_budget">
-                    <InputNumber step={0.01} precision={2} style={{ width: "100%" }} />
+                    <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
                   </Form.Item>
 
                   <Form.Item label="Reset Budget" name="budget_duration">
@@ -390,11 +409,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </Form.Item>
 
                   <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
-                    <InputNumber step={1} style={{ width: "100%" }} />
+                    <NumericalInput step={1} style={{ width: "100%" }} />
                   </Form.Item>
 
                   <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
-                    <InputNumber step={1} style={{ width: "100%" }} />
+                    <NumericalInput step={1} style={{ width: "100%" }} />
                   </Form.Item>
 
                   <Form.Item

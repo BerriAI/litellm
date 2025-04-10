@@ -339,9 +339,6 @@ def test_pass_through_routes_support_all_methods():
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         router as llm_router,
     )
-    from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
-        router as vertex_router,
-    )
 
     # Expected HTTP methods
     expected_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
@@ -361,7 +358,6 @@ def test_pass_through_routes_support_all_methods():
 
     # Check both routers
     check_router_methods(llm_router)
-    check_router_methods(vertex_router)
 
 
 def test_is_bedrock_agent_runtime_route():

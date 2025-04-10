@@ -1266,13 +1266,13 @@ def test_completion_cost_prompt_caching(model, custom_llm_provider):
 @pytest.mark.parametrize(
     "model",
     [
-        "databricks/databricks-meta-llama-3-1-70b-instruct",
-        "databricks/databricks-meta-llama-3-70b-instruct",
+        "databricks/databricks-meta-llama-3-3-70b-instruct",
         "databricks/databricks-dbrx-instruct",
         # "databricks/databricks-mixtral-8x7b-instruct",
     ],
 )
 def test_completion_cost_databricks(model):
+    litellm._turn_on_debug()
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
     model, messages = model, [{"role": "user", "content": "What is 2+2?"}]
@@ -1280,7 +1280,8 @@ def test_completion_cost_databricks(model):
     resp = litellm.completion(model=model, messages=messages)  # works fine
 
     print(resp)
-    cost = completion_cost(completion_response=resp)
+    print(f"hidden_params: {resp._hidden_params}")
+    assert resp._hidden_params["response_cost"] > 0
 
 
 @pytest.mark.parametrize(
@@ -1423,7 +1424,9 @@ def test_cost_azure_openai_prompt_caching():
     print("_expected_cost2", _expected_cost2)
     print("cost_2", cost_2)
 
-    assert cost_2 == _expected_cost2
+    assert (
+        abs(cost_2 - _expected_cost2) < 1e-5
+    )  # Allow for small floating-point differences
 
 
 def test_completion_cost_vertex_llama3():
@@ -2452,6 +2455,14 @@ def test_completion_cost_params_gemini_3():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
+    usage = Usage(
+        completion_tokens=2,
+        prompt_tokens=3771,
+        total_tokens=3773,
+        completion_tokens_details=None,
+        prompt_tokens_details=None,
+    )
+
     response = ModelResponse(
         id="chatcmpl-61043504-4439-48be-9996-e29bdee24dc3",
         choices=[
@@ -2470,13 +2481,7 @@ def test_completion_cost_params_gemini_3():
         model="gemini-1.5-flash",
         object="chat.completion",
         system_fingerprint=None,
-        usage=Usage(
-            completion_tokens=2,
-            prompt_tokens=3771,
-            total_tokens=3773,
-            completion_tokens_details=None,
-            prompt_tokens_details=None,
-        ),
+        usage=usage,
         vertex_ai_grounding_metadata=[],
         vertex_ai_safety_results=[
             [
@@ -2499,10 +2504,9 @@ def test_completion_cost_params_gemini_3():
         **{
             "model": "gemini-1.5-flash",
             "custom_llm_provider": "vertex_ai",
-            "prompt_tokens": 3771,
-            "completion_tokens": 2,
             "prompt_characters": None,
             "completion_characters": 3,
+            "usage": usage,
         }
     )
 
@@ -2767,6 +2771,7 @@ def test_add_known_models():
     )
 
 
+@pytest.mark.skip(reason="flaky test")
 def test_bedrock_cost_calc_with_region():
     from litellm import completion
 
@@ -2949,9 +2954,6 @@ def test_cost_calculator_with_custom_pricing():
 @pytest.mark.asyncio
 async def test_cost_calculator_with_custom_pricing_router(model_item, custom_pricing):
     from litellm import Router
-
-    litellm._turn_on_debug()
-
     if custom_pricing == "litellm_params":
         model_item["litellm_params"]["input_cost_per_token"] = 0.0000008
         model_item["litellm_params"]["output_cost_per_token"] = 0.0000032

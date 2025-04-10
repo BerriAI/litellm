@@ -20,7 +20,11 @@ from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionImageObject,
+    ChatCompletionImageUrlObject,
+)
 from litellm.types.utils import ModelResponse, ModelResponseStream
 from litellm.utils import convert_to_model_response_object
 
@@ -121,6 +125,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             "max_retries",
             "extra_headers",
             "parallel_tool_calls",
+            "audio",
         ]  # works across all models
 
         model_specific_params = []
@@ -189,6 +194,16 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                             content_item["image_url"] = {
                                 "url": content_item["image_url"],
                             }
+                        elif isinstance(content_item["image_url"], dict):
+                            litellm_specific_params = {"format"}
+                            new_image_url_obj = ChatCompletionImageUrlObject(
+                                **{  # type: ignore
+                                    k: v
+                                    for k, v in content_item["image_url"].items()
+                                    if k not in litellm_specific_params
+                                }
+                            )
+                            content_item["image_url"] = new_image_url_obj
         return messages
 
     def transform_request(
@@ -275,8 +290,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     def get_complete_url(
         self,
         api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         """
@@ -304,6 +321,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
@@ -375,7 +393,6 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
 
 class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
-
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
             return ModelResponseStream(

@@ -6,7 +6,7 @@ authors:
   - name: Krrish Dholakia
     title: CEO, LiteLLM
     url: https://www.linkedin.com/in/krish-d/
-    image_url: https://media.licdn.com/dms/image/v2/D4D03AQGrlsJ3aqpHmQ/profile-displayphoto-shrink_400_400/B4DZSAzgP7HYAg-/0/1737327772964?e=1743638400&v=beta&t=39KOXMUFedvukiWWVPHf3qI45fuQD7lNglICwN31DrI
+    image_url: https://media.licdn.com/dms/image/v2/D4D03AQGrlsJ3aqpHmQ/profile-displayphoto-shrink_400_400/B4DZSAzgP7HYAg-/0/1737327772964?e=1749686400&v=beta&t=Hkl3U8Ps0VtvNxX0BNNq24b4dtX5wQaPFp6oiKCIHD8
   - name: Ishaan Jaffer
     title: CTO, LiteLLM
     url: https://www.linkedin.com/in/reffajnaahsi/
@@ -19,12 +19,6 @@ import Image from '@theme/IdealImage';
 
 # v1.61.20-stable
 
-
-:::info
-
-`v1.61.20-stable` will be live on 2025-02-04. 
-
-:::
 
 These are the changes since `v1.61.13-stable`.
 

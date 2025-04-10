@@ -178,6 +178,10 @@ def test_spend_logs_payload(model_id: Optional[str]):
                 "metadata": {
                     "user_api_key_end_user_id": "test-user",
                 },
+                "model_map_information": {
+                    "tpm": 1000,
+                    "rpm": 1000,
+                },
             },
         },
         "response_obj": litellm.ModelResponse(
@@ -357,6 +361,10 @@ def test_spend_logs_payload_with_prompts_enabled(monkeypatch):
             "user_api_key_end_user_id": "test-user",
         },
         "request_tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"],
+        "model_map_information": {
+            "tpm": 1000,
+            "rpm": 1000,
+        },
     }
     litellm_params = {
         "proxy_server_request": {

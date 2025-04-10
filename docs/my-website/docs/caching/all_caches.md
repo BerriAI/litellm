@@ -3,7 +3,7 @@ import TabItem from '@theme/TabItem';
 
 # Caching - In-Memory, Redis, s3, Redis Semantic Cache, Disk
 
-[**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm.caching.caching.py)
+[**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/caching/caching.py)
 
 :::info
 
@@ -26,7 +26,7 @@ Install redis
 pip install redis
 ```
 
-For the hosted version you can setup your own Redis DB here: https://app.redislabs.com/
+For the hosted version you can setup your own Redis DB here: https://redis.io/try-free/
 
 ```python
 import litellm
@@ -37,11 +37,11 @@ litellm.cache = Cache(type="redis", host=<host>, port=<port>, password=<password
 
 # Make completion calls
 response1 = completion(
-    model="gpt-3.5-turbo", 
+    model="gpt-3.5-turbo",
     messages=[{"role": "user", "content": "Tell me a joke."}]
 )
 response2 = completion(
-    model="gpt-3.5-turbo", 
+    model="gpt-3.5-turbo",
     messages=[{"role": "user", "content": "Tell me a joke."}]
 )
 
@@ -91,12 +91,12 @@ response2 = completion(
 
 <TabItem value="redis-sem" label="redis-semantic cache">
 
-Install redis
+Install redisvl client
 ```shell
-pip install redisvl==0.0.7
+pip install redisvl==0.4.1
 ```
 
-For the hosted version you can setup your own Redis DB here: https://app.redislabs.com/
+For the hosted version you can setup your own Redis DB here: https://redis.io/try-free/
 
 ```python
 import litellm
@@ -114,6 +114,7 @@ litellm.cache = Cache(
     port=os.environ["REDIS_PORT"],
     password=os.environ["REDIS_PASSWORD"],
     similarity_threshold=0.8, # similarity threshold for cache hits, 0 == no similarity, 1 = exact matches, 0.5 == 50% similarity
+    ttl=120,
     redis_semantic_cache_embedding_model="text-embedding-ada-002", # this model is passed to litellm.embedding(), any litellm.embedding() model is supported here
 )
 response1 = completion(
@@ -471,10 +472,12 @@ def __init__(
     password: Optional[str] = None,
     namespace: Optional[str] = None,
     default_in_redis_ttl: Optional[float] = None,
-    similarity_threshold: Optional[float] = None,
-    redis_semantic_cache_use_async=False,
-    redis_semantic_cache_embedding_model="text-embedding-ada-002",
     redis_flush_size=None,
+
+    # redis semantic cache params
+    similarity_threshold: Optional[float] = None,
+    redis_semantic_cache_embedding_model: str = "text-embedding-ada-002",
+    redis_semantic_cache_index_name: Optional[str] = None,
 
     # s3 Bucket, boto3 configuration
     s3_bucket_name: Optional[str] = None,

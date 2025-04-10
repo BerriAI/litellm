@@ -33,7 +33,7 @@ from litellm.proxy._types import (
     ScopeMapping,
     Span,
 )
-from litellm.proxy.management_helpers.ui_session_handler import UISessionHandler
+from litellm.proxy.auth.auth_checks import can_team_access_model
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 from .auth_checks import (
@@ -166,7 +166,6 @@ class JWTHandler:
         self, token: dict, default_value: Optional[str]
     ) -> Optional[str]:
         try:
-
             if self.litellm_jwtauth.end_user_id_jwt_field is not None:
                 user_id = token[self.litellm_jwtauth.end_user_id_jwt_field]
             else:
@@ -339,38 +338,42 @@ class JWTHandler:
         return scopes
 
     async def get_public_key(self, kid: Optional[str]) -> dict:
-
         keys_url = os.getenv("JWT_PUBLIC_KEY_URL")
 
         if keys_url is None:
             raise Exception("Missing JWT Public Key URL from environment.")
 
-        cached_keys = await self.user_api_key_cache.async_get_cache(
-            "litellm_jwt_auth_keys"
-        )
-        if cached_keys is None:
-            response = await self.http_handler.get(keys_url)
+        keys_url_list = [url.strip() for url in keys_url.split(",")]
 
-            response_json = response.json()
-            if "keys" in response_json:
-                keys: JWKKeyValue = response.json()["keys"]
+        for key_url in keys_url_list:
+            cache_key = f"litellm_jwt_auth_keys_{key_url}"
+
+            cached_keys = await self.user_api_key_cache.async_get_cache(cache_key)
+
+            if cached_keys is None:
+                response = await self.http_handler.get(key_url)
+
+                response_json = response.json()
+                if "keys" in response_json:
+                    keys: JWKKeyValue = response.json()["keys"]
+                else:
+                    keys = response_json
+
+                await self.user_api_key_cache.async_set_cache(
+                    key=cache_key,
+                    value=keys,
+                    ttl=self.litellm_jwtauth.public_key_ttl,  # cache for 10 mins
+                )
             else:
-                keys = response_json
+                keys = cached_keys
 
-            await self.user_api_key_cache.async_set_cache(
-                key="litellm_jwt_auth_keys",
-                value=keys,
-                ttl=self.litellm_jwtauth.public_key_ttl,  # cache for 10 mins
-            )
-        else:
-            keys = cached_keys
+            public_key = self.parse_keys(keys=keys, kid=kid)
+            if public_key is not None:
+                return cast(dict, public_key)
 
-        public_key = self.parse_keys(keys=keys, kid=kid)
-        if public_key is None:
-            raise Exception(
-                f"No matching public key found. kid={kid}, keys_url={keys_url}, cached_keys={cached_keys}, len(keys)={len(keys)}"
-            )
-        return cast(dict, public_key)
+        raise Exception(
+            f"No matching public key found. keys={keys_url_list}, kid={kid}"
+        )
 
     def parse_keys(self, keys: JWKKeyValue, kid: Optional[str]) -> Optional[JWTKeyItem]:
         public_key: Optional[JWTKeyItem] = None
@@ -407,60 +410,10 @@ class JWTHandler:
         else:
             return False
 
-    def _validate_ui_token(self, token: str) -> Optional[dict]:
-        """
-        Helper function to validate tokens generated for the LiteLLM UI.
-        Returns the decoded payload if it's a valid UI token, None otherwise.
-        """
-        import jwt
-
-        from litellm.proxy.proxy_server import master_key
-
-        try:
-            # Decode without verification to check if it's a UI token
-            unverified_payload = jwt.decode(token, options={"verify_signature": False})
-
-            # Check if this looks like a UI token (has specific claims that only UI tokens would have)
-            if UISessionHandler.is_ui_session_token(unverified_payload):
-
-                # This looks like a UI token, now verify it with the master key
-                if not master_key:
-                    verbose_proxy_logger.debug(
-                        "Missing LITELLM_MASTER_KEY for UI token validation"
-                    )
-                    return None
-
-                try:
-                    payload = jwt.decode(
-                        token,
-                        master_key,
-                        algorithms=["HS256"],
-                        audience="litellm-ui",
-                        leeway=self.leeway,
-                    )
-                    verbose_proxy_logger.debug(
-                        "Successfully validated UI token for payload: %s",
-                        json.dumps(payload, indent=4),
-                    )
-                    return payload
-                except jwt.InvalidTokenError as e:
-                    verbose_proxy_logger.debug(f"Invalid UI token: {str(e)}")
-                    raise ValueError(
-                        f"Invalid UI token, Unable to validate token signature {str(e)}"
-                    )
-
-            return None  # Not a UI token
-        except Exception as e:
-            raise e
-
     async def auth_jwt(self, token: str) -> dict:
         # Supported algos: https://pyjwt.readthedocs.io/en/stable/algorithms.html
         # "Warning: Make sure not to mix symmetric and asymmetric algorithms that interpret
         #   the key in different ways (e.g. HS* and RS*)."
-
-        ui_payload = self._validate_ui_token(token)
-        if ui_payload:
-            return ui_payload
         algorithms = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512"]
 
         audience = os.getenv("JWT_AUDIENCE")
@@ -667,7 +620,6 @@ class JWTAuthManager:
         user_id: Optional[str],
         org_id: Optional[str],
         api_key: str,
-        jwt_valid_token: dict,
     ) -> Optional[JWTAuthBuilderResult]:
         """Check admin status and route access permissions"""
         if not jwt_handler.is_admin(scopes=scopes):
@@ -677,7 +629,6 @@ class JWTAuthManager:
             user_role=LitellmUserRoles.PROXY_ADMIN,
             user_route=route,
             litellm_proxy_roles=jwt_handler.litellm_jwtauth,
-            jwt_valid_token=jwt_valid_token,
         )
         if not is_allowed:
             allowed_routes: List[Any] = jwt_handler.litellm_jwtauth.admin_allowed_routes
@@ -751,7 +702,6 @@ class JWTAuthManager:
         user_api_key_cache: DualCache,
         parent_otel_span: Optional[Span],
         proxy_logging_obj: ProxyLogging,
-        jwt_valid_token: dict,
     ) -> Tuple[Optional[str], Optional[LiteLLM_TeamTable]]:
         """Find first team with access to the requested model"""
 
@@ -777,14 +727,17 @@ class JWTAuthManager:
                     team_models = team_object.models
                     if isinstance(team_models, list) and (
                         not requested_model
-                        or requested_model in team_models
-                        or "*" in team_models
+                        or can_team_access_model(
+                            model=requested_model,
+                            team_object=team_object,
+                            llm_router=None,
+                            team_model_aliases=None,
+                        )
                     ):
                         is_allowed = allowed_routes_check(
                             user_role=LitellmUserRoles.TEAM,
                             user_route=route,
                             litellm_proxy_roles=jwt_handler.litellm_jwtauth,
-                            jwt_valid_token=jwt_valid_token,
                         )
                         if is_allowed:
                             return team_id, team_object
@@ -967,7 +920,6 @@ class JWTAuthManager:
         object_id = jwt_handler.get_object_id(token=jwt_valid_token, default_value=None)
 
         if rbac_role and object_id:
-
             if rbac_role == LitellmUserRoles.TEAM:
                 team_id = object_id
             elif rbac_role == LitellmUserRoles.INTERNAL_USER:
@@ -975,13 +927,7 @@ class JWTAuthManager:
 
         # Check admin access
         admin_result = await JWTAuthManager.check_admin_access(
-            jwt_handler=jwt_handler,
-            scopes=scopes,
-            route=route,
-            user_id=user_id,
-            org_id=org_id,
-            api_key=api_key,
-            jwt_valid_token=jwt_valid_token,
+            jwt_handler, scopes, route, user_id, org_id, api_key
         )
         if admin_result:
             return admin_result
@@ -990,15 +936,16 @@ class JWTAuthManager:
         ## SPECIFIC TEAM ID
 
         if not team_id:
-            team_id, team_object = (
-                await JWTAuthManager.find_and_validate_specific_team_id(
-                    jwt_handler,
-                    jwt_valid_token,
-                    prisma_client,
-                    user_api_key_cache,
-                    parent_otel_span,
-                    proxy_logging_obj,
-                )
+            (
+                team_id,
+                team_object,
+            ) = await JWTAuthManager.find_and_validate_specific_team_id(
+                jwt_handler,
+                jwt_valid_token,
+                prisma_client,
+                user_api_key_cache,
+                parent_otel_span,
+                proxy_logging_obj,
             )
 
         if not team_object and not team_id:
@@ -1013,7 +960,6 @@ class JWTAuthManager:
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
-                jwt_valid_token=jwt_valid_token,
             )
 
         # Get other objects

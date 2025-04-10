@@ -1,7 +1,16 @@
 #### What this does ####
 #    On success, logs events to Promptlayer
 import traceback
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+)
 
 from pydantic import BaseModel
 
@@ -14,6 +23,7 @@ from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
+    ModelResponseStream,
     StandardCallbackDynamicParams,
     StandardLoggingPayload,
 )
@@ -21,7 +31,7 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     Span = Any
 
@@ -239,6 +249,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             "image_generation",
             "moderation",
             "audio_transcription",
+            "responses",
         ],
     ) -> Any:
         pass
@@ -249,6 +260,15 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         response: str,
     ) -> Any:
         pass
+
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_data: dict,
+    ) -> AsyncGenerator[ModelResponseStream, None]:
+        async for item in response:
+            yield item
 
     #### SINGLE-USE #### - https://docs.litellm.ai/docs/observability/custom_callback#using-your-custom-callback-function
 

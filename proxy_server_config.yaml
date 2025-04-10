@@ -46,12 +46,9 @@ model_list:
     model_info:
       mode: embedding
       base_model: text-embedding-ada-002
-  - model_name: dall-e-2
+  - model_name: dall-e-2 # some tests use dall-e-2 which is now deprecated, alias to dall-e-3
     litellm_params:
-      model: azure/
-      api_version: 2023-06-01-preview
-      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
-      api_key: os.environ/AZURE_API_KEY
+      model: openai/dall-e-3
   - model_name: openai-dall-e-3
     litellm_params:
       model: dall-e-3

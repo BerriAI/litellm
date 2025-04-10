@@ -38,7 +38,7 @@ class S3Logger:
             if litellm.s3_callback_params is not None:
                 # read in .env variables - example os.environ/AWS_BUCKET_NAME
                 for key, value in litellm.s3_callback_params.items():
-                    if type(value) is str and value.startswith("os.environ/"):
+                    if isinstance(value, str) and value.startswith("os.environ/"):
                         litellm.s3_callback_params[key] = litellm.get_secret(value)
                 # now set s3 params from litellm.s3_logger_params
                 s3_bucket_name = litellm.s3_callback_params.get("s3_bucket_name")

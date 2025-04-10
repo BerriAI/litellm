@@ -1,5 +1,6 @@
 import asyncio
 import os
+import ssl
 import time
 from typing import TYPE_CHECKING, Any, Callable, List, Mapping, Optional, Union
 
@@ -94,7 +95,7 @@ class AsyncHTTPHandler:
         event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]] = None,
         concurrent_limit=1000,
         client_alias: Optional[str] = None,  # name for client in logs
-        ssl_verify: Optional[Union[bool, str]] = None,
+        ssl_verify: Optional[VerifyTypes] = None,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
@@ -111,13 +112,32 @@ class AsyncHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]],
         concurrent_limit: int,
         event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]],
-        ssl_verify: Optional[Union[bool, str]] = None,
+        ssl_verify: Optional[VerifyTypes] = None,
     ) -> httpx.AsyncClient:
-
         # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
         # /path/to/certificate.pem
         if ssl_verify is None:
             ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+
+        ssl_security_level = os.getenv("SSL_SECURITY_LEVEL")
+
+        # If ssl_verify is not False and we need a lower security level
+        if (
+            not ssl_verify
+            and ssl_security_level
+            and isinstance(ssl_security_level, str)
+        ):
+            # Create a custom SSL context with reduced security level
+            custom_ssl_context = ssl.create_default_context()
+            custom_ssl_context.set_ciphers(ssl_security_level)
+
+            # If ssl_verify is a path to a CA bundle, load it into our custom context
+            if isinstance(ssl_verify, str) and os.path.exists(ssl_verify):
+                custom_ssl_context.load_verify_locations(cafile=ssl_verify)
+
+            # Use our custom SSL context instead of the original ssl_verify value
+            ssl_verify = custom_ssl_context
+
         # An SSL certificate used by the requested host to authenticate the client.
         # /path/to/client.pem
         cert = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
@@ -172,7 +192,7 @@ class AsyncHTTPHandler:
     async def post(
         self,
         url: str,
-        data: Optional[Union[dict, str]] = None,  # type: ignore
+        data: Optional[Union[dict, str, bytes]] = None,  # type: ignore
         json: Optional[dict] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
@@ -407,7 +427,7 @@ class AsyncHTTPHandler:
         self,
         url: str,
         client: httpx.AsyncClient,
-        data: Optional[Union[dict, str]] = None,  # type: ignore
+        data: Optional[Union[dict, str, bytes]] = None,  # type: ignore
         json: Optional[dict] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
@@ -507,7 +527,7 @@ class HTTPHandler:
     def post(
         self,
         url: str,
-        data: Optional[Union[dict, str]] = None,
+        data: Optional[Union[dict, str, bytes]] = None,
         json: Optional[Union[dict, str, List]] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
@@ -553,7 +573,6 @@ class HTTPHandler:
                 setattr(e, "text", error_text)
 
             setattr(e, "status_code", e.response.status_code)
-
             raise e
         except Exception as e:
             raise e
@@ -569,7 +588,6 @@ class HTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
     ):
         try:
-
             if timeout is not None:
                 req = self.client.build_request(
                     "PATCH", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore
@@ -588,7 +606,6 @@ class HTTPHandler:
                 llm_provider="litellm-httpx-handler",
             )
         except httpx.HTTPStatusError as e:
-
             if stream is True:
                 setattr(e, "message", mask_sensitive_info(e.response.read()))
                 setattr(e, "text", mask_sensitive_info(e.response.read()))
@@ -614,7 +631,6 @@ class HTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
     ):
         try:
-
             if timeout is not None:
                 req = self.client.build_request(
                     "PUT", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore

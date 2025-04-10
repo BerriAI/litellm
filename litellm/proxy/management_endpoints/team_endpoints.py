@@ -14,7 +14,7 @@ import json
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, List, Optional, Tuple, Union, cast
+from typing import List, Optional, Tuple, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -40,6 +40,7 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
     SpecialManagementEndpointEnums,
+    SpecialModelNames,
     TeamAddMemberResponse,
     TeamInfoResponseObject,
     TeamListResponseObject,
@@ -57,7 +58,10 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
+from litellm.proxy.management_endpoints.common_utils import (
+    _is_user_team_admin,
+    _set_object_metadata_field,
+)
 from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
@@ -67,6 +71,7 @@ from litellm.proxy.utils import (
     _premium_user_check,
     handle_exception_on_proxy,
 )
+from litellm.router import Router
 
 router = APIRouter()
 
@@ -283,8 +288,8 @@ async def new_team(  # noqa: PLR0915
         # Set Management Endpoint Metadata Fields
         for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
             if getattr(data, field) is not None:
-                _set_team_metadata_field(
-                    team_data=complete_team_data,
+                _set_object_metadata_field(
+                    object_data=complete_team_data,
                     field_name=field,
                     value=getattr(data, field),
                 )
@@ -465,7 +470,7 @@ async def update_team(
 
     if existing_team_row is None:
         raise HTTPException(
-            status_code=400,
+            status_code=404,
             detail={"error": f"Team not found, passed team_id={data.team_id}"},
         )
 
@@ -501,12 +506,12 @@ async def update_team(
             updated_kv["model_id"] = _model_id
 
     updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
-    team_row: Optional[LiteLLM_TeamTable] = (
-        await prisma_client.db.litellm_teamtable.update(
-            where={"team_id": data.team_id},
-            data=updated_kv,
-            include={"litellm_model_table": True},  # type: ignore
-        )
+    team_row: Optional[
+        LiteLLM_TeamTable
+    ] = await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": data.team_id},
+        data=updated_kv,
+        include={"litellm_model_table": True},  # type: ignore
     )
 
     if team_row is None or team_row.team_id is None:
@@ -1132,14 +1137,16 @@ async def delete_team(
     team_rows: List[LiteLLM_TeamTable] = []
     for team_id in data.team_ids:
         try:
-            team_row_base: BaseModel = (
-                await prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": team_id}
-                )
+            team_row_base: Optional[
+                BaseModel
+            ] = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id}
             )
+            if team_row_base is None:
+                raise Exception
         except Exception:
             raise HTTPException(
-                status_code=400,
+                status_code=404,
                 detail={"error": f"Team not found, passed team_id={team_id}"},
             )
         team_row_pydantic = LiteLLM_TeamTable(**team_row_base.model_dump())
@@ -1235,6 +1242,23 @@ def validate_membership(
         )
 
 
+def _unfurl_all_proxy_models(
+    team_info: LiteLLM_TeamTable, llm_router: Router
+) -> LiteLLM_TeamTable:
+    if (
+        SpecialModelNames.all_proxy_models.value in team_info.models
+        and llm_router is not None
+    ):
+        team_models: set[str] = set()  # make set to avoid duplicates
+        for model in team_info.models:
+            if model != SpecialModelNames.all_proxy_models.value:
+                team_models.add(model)
+        for model in llm_router.get_model_names():
+            team_models.add(model)
+        team_info.models = list(team_models)
+    return team_info
+
+
 @router.get(
     "/team/info", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
@@ -1274,9 +1298,13 @@ async def team_info(
             )
 
         try:
-            team_info: BaseModel = await prisma_client.db.litellm_teamtable.find_unique(
+            team_info: Optional[
+                BaseModel
+            ] = await prisma_client.db.litellm_teamtable.find_unique(
                 where={"team_id": team_id}
             )
+            if team_info is None:
+                raise Exception
         except Exception:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1326,6 +1354,9 @@ async def team_info(
         else:
             _team_info = LiteLLM_TeamTable()
 
+        # ## UNFURL 'all-proxy-models' into the team_info.models list ##
+        # if llm_router is not None:
+        #     _team_info = _unfurl_all_proxy_models(_team_info, llm_router)
         response_object = TeamInfoResponseObject(
             team_id=team_id,
             team_info=_team_info,
@@ -1671,23 +1702,6 @@ def _update_team_metadata_field(updated_kv: dict, field_name: str) -> None:
             updated_kv["metadata"][field_name] = _value
         else:
             updated_kv["metadata"] = {field_name: _value}
-
-
-def _set_team_metadata_field(
-    team_data: LiteLLM_TeamTable, field_name: str, value: Any
-) -> None:
-    """
-    Helper function to set metadata fields that require premium user checks
-
-    Args:
-        team_data: The team data object to modify
-        field_name: Name of the metadata field to set
-        value: Value to set for the field
-    """
-    if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-        _premium_user_check()
-    team_data.metadata = team_data.metadata or {}
-    team_data.metadata[field_name] = value
 
 
 @router.get(

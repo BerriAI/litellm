@@ -21,18 +21,21 @@ import { KeyResponse } from "./key_team_helpers/key_list";
 import { Form, Input, InputNumber, message, Select } from "antd";
 import { KeyEditView } from "./key_edit_view";
 import { RegenerateKeyModal } from "./regenerate_key_modal";
+import { rolesWithWriteAccess } from '../utils/roles';
 
 interface KeyInfoViewProps {
   keyId: string;
   onClose: () => void;
   keyData: KeyResponse | undefined;
+  onKeyDataUpdate?: (data: Partial<KeyResponse>) => void;
+  onDelete?: () => void;
   accessToken: string | null;
   userID: string | null;
   userRole: string | null;
   teams: any[] | null;
 }
 
-export default function KeyInfoView({ keyId, onClose, keyData, accessToken, userID, userRole, teams }: KeyInfoViewProps) {
+export default function KeyInfoView({ keyId, onClose, keyData, accessToken, userID, userRole, teams, onKeyDataUpdate, onDelete }: KeyInfoViewProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -92,6 +95,9 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
       }
 
       const newKeyValues = await keyUpdateCall(accessToken, formValues);
+      if (onKeyDataUpdate) {
+        onKeyDataUpdate(newKeyValues)
+      }
       message.success("Key updated successfully");
       setIsEditing(false);
       // Refresh key data here if needed
@@ -106,6 +112,9 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
       if (!accessToken) return;
       await keyDeleteCall(accessToken as string, keyData.token);
       message.success("Key deleted successfully");
+      if (onDelete) {
+        onDelete()
+      }
       onClose();
     } catch (error) {
       console.error("Error deleting the key:", error);
@@ -128,24 +137,26 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
           <Title>{keyData.key_alias || "API Key"}</Title>
           <Text className="text-gray-500 font-mono">{keyData.token}</Text>
         </div>
-        <div className="flex gap-2">
-          <Button
-            icon={RefreshIcon}
-            variant="secondary"
-            onClick={() => setIsRegenerateModalOpen(true)}
-            className="flex items-center"
-          >
-            Regenerate Key
-          </Button>
-          <Button
-            icon={TrashIcon}
-            variant="secondary"
-            onClick={() => setIsDeleteModalOpen(true)}
-            className="flex items-center"
-          >
-            Delete Key
-          </Button>
-        </div>
+        {userRole && rolesWithWriteAccess.includes(userRole) && (
+          <div className="flex gap-2">
+            <Button
+              icon={RefreshIcon}
+              variant="secondary"
+              onClick={() => setIsRegenerateModalOpen(true)}
+              className="flex items-center"
+            >
+              Regenerate Key
+            </Button>
+            <Button
+              icon={TrashIcon}
+              variant="secondary"
+              onClick={() => setIsDeleteModalOpen(true)}
+              className="flex items-center"
+            >
+              Delete Key
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Add RegenerateKeyModal */}
@@ -246,7 +257,7 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
             <Card>
               <div className="flex justify-between items-center mb-4">
                 <Title>Key Settings</Title>
-                {!isEditing && (
+                {!isEditing && userRole && rolesWithWriteAccess.includes(userRole) && (
                   <Button variant="light" onClick={() => setIsEditing(true)}>
                     Edit Settings
                   </Button>

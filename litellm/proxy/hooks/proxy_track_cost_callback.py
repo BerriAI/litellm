@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import log_db_metrics
+from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.types.utils import (
     StandardLoggingPayload,
     StandardLoggingUserAPIKeyMetadata,
@@ -32,7 +33,10 @@ class _ProxyDBLogger(CustomLogger):
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
     ):
-        from litellm.proxy.proxy_server import update_database
+        if _ProxyDBLogger._should_track_errors_in_db() is False:
+            return
+
+        from litellm.proxy.proxy_server import proxy_logging_obj
 
         _metadata = dict(
             StandardLoggingUserAPIKeyMetadata(
@@ -48,10 +52,10 @@ class _ProxyDBLogger(CustomLogger):
         )
         _metadata["user_api_key"] = user_api_key_dict.api_key
         _metadata["status"] = "failure"
-        _metadata["error_information"] = (
-            StandardLoggingPayloadSetup.get_error_information(
-                original_exception=original_exception,
-            )
+        _metadata[
+            "error_information"
+        ] = StandardLoggingPayloadSetup.get_error_information(
+            original_exception=original_exception,
         )
 
         existing_metadata: dict = request_data.get("metadata", None) or {}
@@ -63,7 +67,7 @@ class _ProxyDBLogger(CustomLogger):
             request_data.get("proxy_server_request") or {}
         )
         request_data["litellm_params"]["metadata"] = existing_metadata
-        await update_database(
+        await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key_dict.api_key,
             response_cost=0.0,
             user_id=user_api_key_dict.user_id,
@@ -90,7 +94,6 @@ class _ProxyDBLogger(CustomLogger):
             prisma_client,
             proxy_logging_obj,
             update_cache,
-            update_database,
         )
 
         verbose_proxy_logger.debug("INSIDE _PROXY_track_cost_callback")
@@ -134,7 +137,7 @@ class _ProxyDBLogger(CustomLogger):
                     end_user_id=end_user_id,
                 ):
                     ## UPDATE DATABASE
-                    await update_database(
+                    await proxy_logging_obj.db_spend_update_writer.update_database(
                         token=user_api_key,
                         response_cost=response_cost,
                         user_id=user_id,
@@ -191,16 +194,33 @@ class _ProxyDBLogger(CustomLogger):
             error_msg = f"Error in tracking cost callback - {str(e)}\n Traceback:{traceback.format_exc()}"
             model = kwargs.get("model", "")
             metadata = kwargs.get("litellm_params", {}).get("metadata", {})
-            error_msg += f"\n Args to _PROXY_track_cost_callback\n model: {model}\n metadata: {metadata}\n"
+            call_type = kwargs.get("call_type", "")
+            error_msg += f"\n Args to _PROXY_track_cost_callback\n model: {model}\n metadata: {metadata}\n call_type: {call_type}\n"
             asyncio.create_task(
                 proxy_logging_obj.failed_tracking_alert(
                     error_message=error_msg,
                     failing_model=model,
                 )
             )
+
             verbose_proxy_logger.exception(
                 "Error in tracking cost callback - %s", str(e)
             )
+
+    @staticmethod
+    def _should_track_errors_in_db():
+        """
+        Returns True if errors should be tracked in the database
+
+        By default, errors are tracked in the database
+
+        If users want to disable error tracking, they can set the disable_error_logs flag in the general_settings
+        """
+        from litellm.proxy.proxy_server import general_settings
+
+        if general_settings.get("disable_error_logs") is True:
+            return False
+        return
 
 
 def _should_track_cost_callback(
@@ -212,6 +232,11 @@ def _should_track_cost_callback(
     """
     Determine if the cost callback should be tracked based on the kwargs
     """
+
+    # don't run track cost callback if user opted into disabling spend
+    if ProxyUpdateSpend.disable_spend_updates() is True:
+        return False
+
     if (
         user_api_key is not None
         or user_id is not None
