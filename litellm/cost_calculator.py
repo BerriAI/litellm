@@ -403,6 +403,7 @@ def _select_model_name_for_cost_calc(
     base_model: Optional[str] = None,
     custom_pricing: Optional[bool] = None,
     custom_llm_provider: Optional[str] = None,
+    router_model_id: Optional[str] = None,
 ) -> Optional[str]:
     """
     1. If custom pricing is true, return received model name
@@ -417,12 +418,6 @@ def _select_model_name_for_cost_calc(
         model=model, custom_llm_provider=custom_llm_provider
     )
 
-    if custom_pricing is True:
-        return_model = model
-
-    if base_model is not None:
-        return_model = base_model
-
     completion_response_model: Optional[str] = None
     if completion_response is not None:
         if isinstance(completion_response, BaseModel):
@@ -430,6 +425,16 @@ def _select_model_name_for_cost_calc(
         elif isinstance(completion_response, dict):
             completion_response_model = completion_response.get("model", None)
     hidden_params: Optional[dict] = getattr(completion_response, "_hidden_params", None)
+
+    if custom_pricing is True:
+        if router_model_id is not None and router_model_id in litellm.model_cost:
+            return_model = router_model_id
+        else:
+            return_model = model
+
+    if base_model is not None:
+        return_model = base_model
+
     if completion_response_model is None and hidden_params is not None:
         if (
             hidden_params.get("model", None) is not None
@@ -559,6 +564,7 @@ def completion_cost(  # noqa: PLR0915
     base_model: Optional[str] = None,
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams] = None,
     litellm_model_name: Optional[str] = None,
+    router_model_id: Optional[str] = None,
 ) -> float:
     """
     Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
@@ -617,12 +623,12 @@ def completion_cost(  # noqa: PLR0915
             custom_llm_provider=custom_llm_provider,
             custom_pricing=custom_pricing,
             base_model=base_model,
+            router_model_id=router_model_id,
         )
 
         potential_model_names = [selected_model]
         if model is not None:
             potential_model_names.append(model)
-
         for idx, model in enumerate(potential_model_names):
             try:
                 verbose_logger.info(
@@ -943,6 +949,7 @@ def response_cost_calculator(
     prompt: str = "",
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams] = None,
     litellm_model_name: Optional[str] = None,
+    router_model_id: Optional[str] = None,
 ) -> float:
     """
     Returns
@@ -973,6 +980,8 @@ def response_cost_calculator(
                 base_model=base_model,
                 prompt=prompt,
                 standard_built_in_tools_params=standard_built_in_tools_params,
+                litellm_model_name=litellm_model_name,
+                router_model_id=router_model_id,
             )
         return response_cost
     except Exception as e:
@@ -1149,8 +1158,128 @@ def batch_cost_calculator(
     return total_prompt_cost, total_completion_cost
 
 
+class RealtimeAPITokenUsageProcessor:
+    @staticmethod
+    def collect_usage_from_realtime_stream_results(
+        results: OpenAIRealtimeStreamList,
+    ) -> List[Usage]:
+        """
+        Collect usage from realtime stream results
+        """
+        response_done_events: List[OpenAIRealtimeStreamResponseBaseObject] = cast(
+            List[OpenAIRealtimeStreamResponseBaseObject],
+            [result for result in results if result["type"] == "response.done"],
+        )
+        usage_objects: List[Usage] = []
+        for result in response_done_events:
+            usage_object = (
+                ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                    result["response"].get("usage", {})
+                )
+            )
+            usage_objects.append(usage_object)
+        return usage_objects
+
+    @staticmethod
+    def combine_usage_objects(usage_objects: List[Usage]) -> Usage:
+        """
+        Combine multiple Usage objects into a single Usage object, checking model keys for nested values.
+        """
+        from litellm.types.utils import (
+            CompletionTokensDetails,
+            PromptTokensDetailsWrapper,
+            Usage,
+        )
+
+        combined = Usage()
+
+        # Sum basic token counts
+        for usage in usage_objects:
+            # Handle direct attributes by checking what exists in the model
+            for attr in dir(usage):
+                if not attr.startswith("_") and not callable(getattr(usage, attr)):
+                    current_val = getattr(combined, attr, 0)
+                    new_val = getattr(usage, attr, 0)
+                    if (
+                        new_val is not None
+                        and isinstance(new_val, (int, float))
+                        and isinstance(current_val, (int, float))
+                    ):
+                        setattr(combined, attr, current_val + new_val)
+            # Handle nested prompt_tokens_details
+            if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details:
+                if (
+                    not hasattr(combined, "prompt_tokens_details")
+                    or not combined.prompt_tokens_details
+                ):
+                    combined.prompt_tokens_details = PromptTokensDetailsWrapper()
+
+                # Check what keys exist in the model's prompt_tokens_details
+                for attr in dir(usage.prompt_tokens_details):
+                    if not attr.startswith("_") and not callable(
+                        getattr(usage.prompt_tokens_details, attr)
+                    ):
+                        current_val = getattr(combined.prompt_tokens_details, attr, 0)
+                        new_val = getattr(usage.prompt_tokens_details, attr, 0)
+                        if new_val is not None:
+                            setattr(
+                                combined.prompt_tokens_details,
+                                attr,
+                                current_val + new_val,
+                            )
+
+            # Handle nested completion_tokens_details
+            if (
+                hasattr(usage, "completion_tokens_details")
+                and usage.completion_tokens_details
+            ):
+                if (
+                    not hasattr(combined, "completion_tokens_details")
+                    or not combined.completion_tokens_details
+                ):
+                    combined.completion_tokens_details = CompletionTokensDetails()
+
+                # Check what keys exist in the model's completion_tokens_details
+                for attr in dir(usage.completion_tokens_details):
+                    if not attr.startswith("_") and not callable(
+                        getattr(usage.completion_tokens_details, attr)
+                    ):
+                        current_val = getattr(
+                            combined.completion_tokens_details, attr, 0
+                        )
+                        new_val = getattr(usage.completion_tokens_details, attr, 0)
+                        if new_val is not None:
+                            setattr(
+                                combined.completion_tokens_details,
+                                attr,
+                                current_val + new_val,
+                            )
+
+        return combined
+
+    @staticmethod
+    def collect_and_combine_usage_from_realtime_stream_results(
+        results: OpenAIRealtimeStreamList,
+    ) -> Usage:
+        """
+        Collect and combine usage from realtime stream results
+        """
+        collected_usage_objects = (
+            RealtimeAPITokenUsageProcessor.collect_usage_from_realtime_stream_results(
+                results
+            )
+        )
+        combined_usage_object = RealtimeAPITokenUsageProcessor.combine_usage_objects(
+            collected_usage_objects
+        )
+        return combined_usage_object
+
+
 def handle_realtime_stream_cost_calculation(
-    results: OpenAIRealtimeStreamList, custom_llm_provider: str, litellm_model_name: str
+    results: OpenAIRealtimeStreamList,
+    combined_usage_object: Usage,
+    custom_llm_provider: str,
+    litellm_model_name: str,
 ) -> float:
     """
     Handles the cost calculation for realtime stream responses.
@@ -1160,10 +1289,6 @@ def handle_realtime_stream_cost_calculation(
     Args:
         results: A list of OpenAIRealtimeStreamBaseObject objects
     """
-    response_done_events: List[OpenAIRealtimeStreamResponseBaseObject] = cast(
-        List[OpenAIRealtimeStreamResponseBaseObject],
-        [result for result in results if result["type"] == "response.done"],
-    )
     received_model = None
     potential_model_names = []
     for result in results:
@@ -1176,21 +1301,19 @@ def handle_realtime_stream_cost_calculation(
     potential_model_names.append(litellm_model_name)
     input_cost_per_token = 0.0
     output_cost_per_token = 0.0
-    for result in response_done_events:
-        usage_object = (
-            ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-                result["response"].get("usage", {})
-            )
-        )
 
-        for model_name in potential_model_names:
+    for model_name in potential_model_names:
+        try:
             _input_cost_per_token, _output_cost_per_token = generic_cost_per_token(
                 model=model_name,
-                usage=usage_object,
+                usage=combined_usage_object,
                 custom_llm_provider=custom_llm_provider,
             )
-            input_cost_per_token += _input_cost_per_token
-            output_cost_per_token += _output_cost_per_token
+        except Exception:
+            continue
+        input_cost_per_token += _input_cost_per_token
+        output_cost_per_token += _output_cost_per_token
+        break  # exit if we find a valid model
     total_cost = input_cost_per_token + output_cost_per_token
 
     return total_cost
