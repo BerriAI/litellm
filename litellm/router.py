@@ -4816,7 +4816,9 @@ class Router:
         model_name = model_info["model_name"]
         return self.get_model_list(model_name=model_name)
 
-    def get_deployment_model_info(self, model_id: str) -> Optional[ModelInfo]:
+    def get_deployment_model_info(
+        self, model_id: str, model_name: str
+    ) -> Optional[ModelInfo]:
         """
         For a given model id, return the model info
 
@@ -4824,21 +4826,29 @@ class Router:
         2. If not, check if litellm model name is in model info
         3. If not, return None
         """
+        from litellm.utils import _update_dictionary
+
         model_info: Optional[ModelInfo] = None
+        litellm_model_name_model_info: Optional[ModelInfo] = None
+
         try:
             model_info = litellm.get_model_info(model=model_id)
-            return model_info
         except Exception:
             pass
 
-        deployment = self.get_deployment(model_id=model_id)
-        if deployment is None:
-            return None
-        litellm_model_name = deployment.litellm_params.model
         try:
-            model_info = litellm.get_model_info(model=litellm_model_name)
+            litellm_model_name_model_info = litellm.get_model_info(model=model_name)
         except Exception:
             pass
+
+        if model_info is not None and litellm_model_name_model_info is not None:
+            model_info = cast(
+                ModelInfo,
+                _update_dictionary(
+                    cast(dict, litellm_model_name_model_info).copy(),
+                    cast(dict, model_info),
+                ),
+            )
 
         return model_info
 
@@ -4902,11 +4912,14 @@ class Router:
             try:
                 model_id = model.get("model_info", {}).get("id", None)
                 if model_id is not None:
-                    model_info = self.get_deployment_model_info(model_id=model_id)
+                    model_info = self.get_deployment_model_info(
+                        model_id=model_id, model_name=litellm_params.model
+                    )
                 else:
                     model_info = None
             except Exception:
                 model_info = None
+
             # get llm provider
             litellm_model, llm_provider = "", ""
             try:
