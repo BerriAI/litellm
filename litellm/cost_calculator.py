@@ -403,6 +403,7 @@ def _select_model_name_for_cost_calc(
     base_model: Optional[str] = None,
     custom_pricing: Optional[bool] = None,
     custom_llm_provider: Optional[str] = None,
+    router_model_id: Optional[str] = None,
 ) -> Optional[str]:
     """
     1. If custom pricing is true, return received model name
@@ -426,14 +427,8 @@ def _select_model_name_for_cost_calc(
     hidden_params: Optional[dict] = getattr(completion_response, "_hidden_params", None)
 
     if custom_pricing is True:
-        if (
-            hidden_params is not None
-            and hidden_params.get("model_id", None) is not None
-        ):
-            return_model = hidden_params.get(
-                "model_id", model
-            )  # if router has set a model_id, use that
-            return return_model
+        if router_model_id is not None and router_model_id in litellm.model_cost:
+            return_model = router_model_id
         else:
             return_model = model
 
@@ -628,15 +623,12 @@ def completion_cost(  # noqa: PLR0915
             custom_llm_provider=custom_llm_provider,
             custom_pricing=custom_pricing,
             base_model=base_model,
+            router_model_id=router_model_id,
         )
 
         potential_model_names = [selected_model]
         if model is not None:
             potential_model_names.append(model)
-        if router_model_id is not None:
-            potential_model_names.insert(
-                0, router_model_id
-            )  # check custom pricing first
         for idx, model in enumerate(potential_model_names):
             try:
                 verbose_logger.info(
