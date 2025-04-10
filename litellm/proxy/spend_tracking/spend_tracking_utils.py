@@ -360,6 +360,39 @@ def _get_messages_for_spend_logs_payload(
     return "{}"
 
 
+def _sanitize_request_body_for_spend_logs_payload(
+    request_body: dict,
+    visited: Optional[set] = None,
+) -> dict:
+    """
+    Recursively sanitize request body to prevent logging large base64 strings or other large values.
+    Truncates strings longer than 1000 characters and handles nested dictionaries.
+    """
+    MAX_STRING_LENGTH = 1000
+
+    if visited is None:
+        visited = set()
+
+    # Get the object's memory address to track visited objects
+    obj_id = id(request_body)
+    if obj_id in visited:
+        return {}
+    visited.add(obj_id)
+
+    def _sanitize_value(value: Any) -> Any:
+        if isinstance(value, dict):
+            return _sanitize_request_body_for_spend_logs_payload(value, visited)
+        elif isinstance(value, list):
+            return [_sanitize_value(item) for item in value]
+        elif isinstance(value, str):
+            if len(value) > MAX_STRING_LENGTH:
+                return f"{value[:MAX_STRING_LENGTH]}... (truncated {len(value) - MAX_STRING_LENGTH} chars)"
+            return value
+        return value
+
+    return {k: _sanitize_value(v) for k, v in request_body.items()}
+
+
 def _add_proxy_server_request_to_metadata(
     metadata: dict,
     litellm_params: dict,
@@ -373,6 +406,7 @@ def _add_proxy_server_request_to_metadata(
         )
         if _proxy_server_request is not None:
             _request_body = _proxy_server_request.get("body", {}) or {}
+            _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
             _request_body_json_str = json.dumps(_request_body, default=str)
             metadata["proxy_server_request"] = _request_body_json_str
     return metadata
