@@ -432,3 +432,47 @@ async def test_default_team_params():
         assert create_call_args["max_budget"] == 10
         assert create_call_args["budget_duration"] == "1d"
         assert create_call_args["models"] == ["special-gpt-5"]
+
+
+@pytest.mark.asyncio
+async def test_create_team_without_default_params():
+    """
+    Test team creation when litellm.default_team_params is None
+    Should create team with just the basic required fields
+    """
+    # Arrange
+    litellm.default_team_params = None
+
+    def mock_jsonify_team_object(db_data):
+        return db_data
+
+    # Mock Prisma client
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_first = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_teamtable.create = AsyncMock()
+    mock_prisma.get_data = AsyncMock(return_value=None)
+    mock_prisma.jsonify_team_object = MagicMock(side_effect=mock_jsonify_team_object)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        # Act
+        team_id = str(uuid.uuid4())
+        await MicrosoftSSOHandler.create_litellm_teams_from_service_principal_team_ids(
+            service_principal_teams=[
+                MicrosoftServicePrincipalTeam(
+                    principalId=team_id,
+                    principalDisplayName="Test Team",
+                )
+            ]
+        )
+
+        # Assert
+        mock_prisma.db.litellm_teamtable.create.assert_called_once()
+        create_call_args = mock_prisma.db.litellm_teamtable.create.call_args.kwargs[
+            "data"
+        ]
+        assert create_call_args["team_id"] == team_id
+        assert create_call_args["team_alias"] == "Test Team"
+        # Should not have any of the optional fields
+        assert "max_budget" not in create_call_args
+        assert "budget_duration" not in create_call_args
+        assert create_call_args["models"] == []
