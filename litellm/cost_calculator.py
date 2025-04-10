@@ -569,6 +569,7 @@ def completion_cost(  # noqa: PLR0915
     base_model: Optional[str] = None,
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams] = None,
     litellm_model_name: Optional[str] = None,
+    router_model_id: Optional[str] = None,
 ) -> float:
     """
     Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
@@ -632,7 +633,10 @@ def completion_cost(  # noqa: PLR0915
         potential_model_names = [selected_model]
         if model is not None:
             potential_model_names.append(model)
-
+        if router_model_id is not None:
+            potential_model_names.insert(
+                0, router_model_id
+            )  # check custom pricing first
         for idx, model in enumerate(potential_model_names):
             try:
                 verbose_logger.info(
@@ -953,6 +957,7 @@ def response_cost_calculator(
     prompt: str = "",
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams] = None,
     litellm_model_name: Optional[str] = None,
+    router_model_id: Optional[str] = None,
 ) -> float:
     """
     Returns
@@ -983,6 +988,8 @@ def response_cost_calculator(
                 base_model=base_model,
                 prompt=prompt,
                 standard_built_in_tools_params=standard_built_in_tools_params,
+                litellm_model_name=litellm_model_name,
+                router_model_id=router_model_id,
             )
         return response_cost
     except Exception as e:
