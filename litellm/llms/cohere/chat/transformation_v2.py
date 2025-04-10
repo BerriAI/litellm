@@ -128,6 +128,7 @@ class CohereChatConfigV2(BaseConfig):
         optional_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
     ) -> dict:
         # Use the api_key parameter directly
         return cohere_validate_environment(
