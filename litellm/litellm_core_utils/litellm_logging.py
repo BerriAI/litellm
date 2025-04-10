@@ -33,6 +33,7 @@ from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
 )
 from litellm.cost_calculator import (
+    RealtimeAPITokenUsageProcessor,
     _select_model_name_for_cost_calc,
     handle_realtime_stream_cost_calculation,
 )
@@ -1054,11 +1055,18 @@ class Logging(LiteLLMLoggingBaseClass):
             ## else set cost to None
 
             if self.call_type == CallTypes.arealtime.value and isinstance(result, list):
+                combined_usage_object = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+                    results=result
+                )
                 self.model_call_details[
                     "response_cost"
                 ] = handle_realtime_stream_cost_calculation(
-                    result, self.custom_llm_provider, self.model
+                    results=result,
+                    combined_usage_object=combined_usage_object,
+                    custom_llm_provider=self.custom_llm_provider,
+                    litellm_model_name=self.model,
                 )
+                self.model_call_details["combined_usage_object"] = combined_usage_object
             if (
                 standard_logging_object is None
                 and result is not None
@@ -3132,6 +3140,7 @@ class StandardLoggingPayloadSetup:
         prompt_integration: Optional[str] = None,
         applied_guardrails: Optional[List[str]] = None,
         mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall] = None,
+        usage_object: Optional[dict] = None,
     ) -> StandardLoggingMetadata:
         """
         Clean and filter the metadata dictionary to include only the specified keys in StandardLoggingMetadata.
@@ -3179,6 +3188,7 @@ class StandardLoggingPayloadSetup:
             prompt_management_metadata=prompt_management_metadata,
             applied_guardrails=applied_guardrails,
             mcp_tool_call_metadata=mcp_tool_call_metadata,
+            usage_object=usage_object,
         )
         if isinstance(metadata, dict):
             # Filter the metadata dictionary to include only the specified keys
@@ -3204,8 +3214,12 @@ class StandardLoggingPayloadSetup:
         return clean_metadata
 
     @staticmethod
-    def get_usage_from_response_obj(response_obj: Optional[dict]) -> Usage:
+    def get_usage_from_response_obj(
+        response_obj: Optional[dict], combined_usage_object: Optional[Usage] = None
+    ) -> Usage:
         ## BASE CASE ##
+        if combined_usage_object is not None:
+            return combined_usage_object
         if response_obj is None:
             return Usage(
                 prompt_tokens=0,
@@ -3334,6 +3348,7 @@ class StandardLoggingPayloadSetup:
             litellm_overhead_time_ms=None,
             batch_models=None,
             litellm_model_name=None,
+            usage_object=None,
         )
         if hidden_params is not None:
             for key in StandardLoggingHiddenParams.__annotations__.keys():
@@ -3450,6 +3465,7 @@ def get_standard_logging_object_payload(
                         litellm_overhead_time_ms=None,
                         batch_models=None,
                         litellm_model_name=None,
+                        usage_object=None,
                     )
                 )
 
@@ -3466,8 +3482,12 @@ def get_standard_logging_object_payload(
         call_type = kwargs.get("call_type")
         cache_hit = kwargs.get("cache_hit", False)
         usage = StandardLoggingPayloadSetup.get_usage_from_response_obj(
-            response_obj=response_obj
+            response_obj=response_obj,
+            combined_usage_object=cast(
+                Optional[Usage], kwargs.get("combined_usage_object")
+            ),
         )
+
         id = response_obj.get("id", kwargs.get("litellm_call_id"))
 
         _model_id = metadata.get("model_info", {}).get("id", "")
@@ -3506,6 +3526,7 @@ def get_standard_logging_object_payload(
             prompt_integration=kwargs.get("prompt_integration", None),
             applied_guardrails=kwargs.get("applied_guardrails", None),
             mcp_tool_call_metadata=kwargs.get("mcp_tool_call_metadata", None),
+            usage_object=usage.model_dump(),
         )
 
         _request_body = proxy_server_request.get("body", {})
@@ -3646,6 +3667,7 @@ def get_standard_logging_metadata(
         prompt_management_metadata=None,
         applied_guardrails=None,
         mcp_tool_call_metadata=None,
+        usage_object=None,
     )
     if isinstance(metadata, dict):
         # Filter the metadata dictionary to include only the specified keys
@@ -3740,6 +3762,7 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         litellm_overhead_time_ms=None,
         batch_models=None,
         litellm_model_name=None,
+        usage_object=None,
     )
 
     # Convert numeric values to appropriate types

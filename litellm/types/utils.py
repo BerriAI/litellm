@@ -1709,6 +1709,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     prompt_management_metadata: Optional[StandardLoggingPromptManagementMetadata]
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
     applied_guardrails: Optional[List[str]]
+    usage_object: Optional[dict]
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):
@@ -1729,6 +1730,7 @@ class StandardLoggingHiddenParams(TypedDict):
     additional_headers: Optional[StandardLoggingAdditionalHeaders]
     batch_models: Optional[List[str]]
     litellm_model_name: Optional[str]  # the model name sent to the provider by litellm
+    usage_object: Optional[dict]
 
 
 class StandardLoggingModelInformation(TypedDict):

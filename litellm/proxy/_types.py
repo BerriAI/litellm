@@ -28,6 +28,7 @@ from litellm.types.utils import (
     ProviderField,
     StandardCallbackDynamicParams,
     StandardLoggingMCPToolCall,
+    StandardLoggingModelInformation,
     StandardLoggingPayloadErrorInformation,
     StandardLoggingPayloadStatus,
     StandardPassThroughResponseObject,
@@ -1936,6 +1937,8 @@ class SpendLogsMetadata(TypedDict):
     proxy_server_request: Optional[str]
     batch_models: Optional[List[str]]
     error_information: Optional[StandardLoggingPayloadErrorInformation]
+    usage_object: Optional[dict]
+    model_map_information: Optional[StandardLoggingModelInformation]
 
 
 class SpendLogsPayload(TypedDict):
