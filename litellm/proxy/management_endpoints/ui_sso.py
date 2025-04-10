@@ -846,22 +846,8 @@ class SSOAuthenticationHandler:
         try:
             if user_info is not None:
                 user_id = user_info.user_id
-                user_defined_values = SSOUserDefinedValues(
-                    models=getattr(user_info, "models", user_id_models),
-                    user_id=user_info.user_id or "",
-                    user_email=getattr(user_info, "user_email", user_email),
-                    user_role=getattr(user_info, "user_role", None),
-                    max_budget=getattr(
-                        user_info, "max_budget", max_internal_user_budget
-                    ),
-                    budget_duration=getattr(
-                        user_info, "budget_duration", internal_user_budget_duration
-                    ),
-                )
-
-                # update id
                 await prisma_client.db.litellm_usertable.update_many(
-                    where={"user_email": user_email}, data={"user_id": user_id}  # type: ignore
+                    where={"user_id": user_id}, data={"user_email": user_email}
                 )
             else:
                 verbose_proxy_logger.info(
@@ -983,7 +969,7 @@ class MicrosoftSSOHandler:
         response = response or {}
         verbose_proxy_logger.debug(f"Microsoft SSO Callback Response: {response}")
         openid_response = CustomOpenID(
-            email=response.get("mail"),
+            email=response.get("userPrincipalName") or response.get("mail"),
             display_name=response.get("displayName"),
             provider="microsoft",
             id=response.get("id"),
