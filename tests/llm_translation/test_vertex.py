@@ -141,6 +141,7 @@ def test_build_vertex_schema():
     [
         ([{"googleSearch": {}}], "googleSearch"),
         ([{"googleSearchRetrieval": {}}], "googleSearchRetrieval"),
+        ([{"enterpriseWebSearch": {}}], "enterpriseWebSearch"),
         ([{"code_execution": {}}], "code_execution"),
     ],
 )

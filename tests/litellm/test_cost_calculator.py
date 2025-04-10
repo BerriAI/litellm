@@ -78,6 +78,8 @@ def test_cost_calculator_with_usage():
 
 
 def test_handle_realtime_stream_cost_calculation():
+    from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
+
     # Setup test data
     results: OpenAIRealtimeStreamList = [
         {"type": "session.created", "session": {"model": "gpt-3.5-turbo"}},
@@ -99,9 +101,14 @@ def test_handle_realtime_stream_cost_calculation():
         },
     ]
 
+    combined_usage_object = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results,
+    )
+
     # Test with explicit model name
     cost = handle_realtime_stream_cost_calculation(
         results=results,
+        combined_usage_object=combined_usage_object,
         custom_llm_provider="openai",
         litellm_model_name="gpt-3.5-turbo",
     )
@@ -117,8 +124,10 @@ def test_handle_realtime_stream_cost_calculation():
 
     # Test with different model name in session
     results[0]["session"]["model"] = "gpt-4"
+
     cost = handle_realtime_stream_cost_calculation(
         results=results,
+        combined_usage_object=combined_usage_object,
         custom_llm_provider="openai",
         litellm_model_name="gpt-3.5-turbo",
     )
@@ -132,9 +141,73 @@ def test_handle_realtime_stream_cost_calculation():
 
     # Test with no response.done events
     results = [{"type": "session.created", "session": {"model": "gpt-3.5-turbo"}}]
+    combined_usage_object = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results,
+    )
     cost = handle_realtime_stream_cost_calculation(
         results=results,
+        combined_usage_object=combined_usage_object,
         custom_llm_provider="openai",
         litellm_model_name="gpt-3.5-turbo",
     )
     assert cost == 0.0  # No usage, no cost
+
+
+def test_custom_pricing_with_router_model_id():
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "prod/claude-3-5-sonnet-20240620",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-5-sonnet-20240620",
+                    "api_key": "test_api_key",
+                },
+                "model_info": {
+                    "id": "my-unique-model-id",
+                    "input_cost_per_token": 0.000006,
+                    "output_cost_per_token": 0.00003,
+                    "cache_creation_input_token_cost": 0.0000075,
+                    "cache_read_input_token_cost": 0.0000006,
+                },
+            },
+            {
+                "model_name": "claude-3-5-sonnet-20240620",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-5-sonnet-20240620",
+                    "api_key": "test_api_key",
+                },
+                "model_info": {
+                    "input_cost_per_token": 100,
+                    "output_cost_per_token": 200,
+                },
+            },
+        ]
+    )
+
+    result = router.completion(
+        model="claude-3-5-sonnet-20240620",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        mock_response=True,
+    )
+
+    result_2 = router.completion(
+        model="prod/claude-3-5-sonnet-20240620",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        mock_response=True,
+    )
+
+    assert (
+        result._hidden_params["response_cost"]
+        > result_2._hidden_params["response_cost"]
+    )
+
+    model_info = router.get_deployment_model_info(
+        model_id="my-unique-model-id", model_name="anthropic/claude-3-5-sonnet-20240620"
+    )
+    assert model_info is not None
+    assert model_info["input_cost_per_token"] == 0.000006
+    assert model_info["output_cost_per_token"] == 0.00003
+    assert model_info["cache_creation_input_token_cost"] == 0.0000075
+    assert model_info["cache_read_input_token_cost"] == 0.0000006

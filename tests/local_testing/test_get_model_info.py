@@ -314,12 +314,14 @@ def test_get_model_info_custom_model_router():
                     "input_cost_per_token": 1,
                     "output_cost_per_token": 1,
                     "model": "openai/meta-llama/Meta-Llama-3-8B-Instruct",
-                    "model_id": "c20d603e-1166-4e0f-aa65-ed9c476ad4ca",
                 },
+                "model_info": {
+                    "id": "c20d603e-1166-4e0f-aa65-ed9c476ad4ca",
+                }
             }
         ]
     )
-    info = get_model_info("openai/meta-llama/Meta-Llama-3-8B-Instruct")
+    info = get_model_info("c20d603e-1166-4e0f-aa65-ed9c476ad4ca")
     print("info", info)
     assert info is not None
 
@@ -431,6 +433,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_character_above_128k_tokens": {"type": "number"},
                 "input_cost_per_image": {"type": "number"},
                 "input_cost_per_image_above_128k_tokens": {"type": "number"},
+                "input_cost_per_token_above_200k_tokens": {"type": "number"},
                 "input_cost_per_pixel": {"type": "number"},
                 "input_cost_per_query": {"type": "number"},
                 "input_cost_per_request": {"type": "number"},
@@ -483,6 +486,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_second": {"type": "number"},
                 "output_cost_per_token": {"type": "number"},
                 "output_cost_per_token_above_128k_tokens": {"type": "number"},
+                "output_cost_per_token_above_200k_tokens": {"type": "number"},
                 "output_cost_per_token_batches": {"type": "number"},
                 "output_db_cost_per_token": {"type": "number"},
                 "output_dbu_cost_per_token": {"type": "number"},
@@ -539,6 +543,13 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "items": {
                         "type": "string",
                         "enum": ["text", "audio", "image", "video"],
+                    },
+                },
+                "supported_output_modalities": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["text", "image"],
                     },
                 },
                 "supports_native_streaming": {"type": "boolean"},

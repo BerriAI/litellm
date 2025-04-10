@@ -2954,9 +2954,6 @@ def test_cost_calculator_with_custom_pricing():
 @pytest.mark.asyncio
 async def test_cost_calculator_with_custom_pricing_router(model_item, custom_pricing):
     from litellm import Router
-
-    litellm._turn_on_debug()
-
     if custom_pricing == "litellm_params":
         model_item["litellm_params"]["input_cost_per_token"] = 0.0000008
         model_item["litellm_params"]["output_cost_per_token"] = 0.0000032
