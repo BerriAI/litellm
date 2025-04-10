@@ -468,9 +468,6 @@ async def auth_callback(request: Request):  # noqa: PLR0915
                 result=result,
                 user_info=user_info,
                 user_email=user_email,
-                user_id_models=user_id_models,
-                max_internal_user_budget=max_internal_user_budget,
-                internal_user_budget_duration=internal_user_budget_duration,
                 user_defined_values=user_defined_values,
                 prisma_client=prisma_client,
             )
@@ -831,16 +828,13 @@ class SSOAuthenticationHandler:
         result: Optional[Union[CustomOpenID, OpenID, dict]],
         user_info: Optional[Union[NewUserResponse, LiteLLM_UserTable]],
         user_email: Optional[str],
-        user_id_models: List[str],
-        max_internal_user_budget: Optional[float],
-        internal_user_budget_duration: Optional[str],
         user_defined_values: Optional[SSOUserDefinedValues],
         prisma_client: PrismaClient,
     ):
         """
         Connects the SSO Users to the User Table in LiteLLM DB
 
-        - If user on LiteLLM DB, update the user_id with the SSO user_id
+        - If user on LiteLLM DB, update the user_email with the SSO user_email
         - If user not on LiteLLM DB, insert the user into LiteLLM DB
         """
         try:

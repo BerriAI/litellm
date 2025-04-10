@@ -3,7 +3,7 @@ import json
 import os
 import sys
 from typing import Optional, cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Request
@@ -18,6 +18,7 @@ from litellm.proxy.management_endpoints.types import CustomOpenID
 from litellm.proxy.management_endpoints.ui_sso import (
     GoogleSSOHandler,
     MicrosoftSSOHandler,
+    SSOAuthenticationHandler,
 )
 from litellm.types.proxy.management_endpoints.ui_sso import (
     MicrosoftGraphAPIUserGroupDirectoryObject,
@@ -410,3 +411,52 @@ def test_get_group_ids_from_graph_api_response():
     assert len(result) == 2
     assert "group1" in result
     assert "group2" in result
+
+
+@pytest.mark.asyncio
+async def test_upsert_sso_user_existing_user():
+    """
+    If a user_id is already in the LiteLLM DB and the user signed in with SSO. Ensure that the user_id is updated with the SSO user_email
+
+    SSO Test
+    """
+    # Arrange
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.litellm_usertable = MagicMock()
+    mock_prisma.db.litellm_usertable.update_many = AsyncMock()
+
+    # Create a mock existing user
+    mock_user = MagicMock()
+    mock_user.user_id = "existing_user_123"
+    mock_user.user_email = "old_email@example.com"
+
+    # Create mock SSO response
+    mock_sso_response = CustomOpenID(
+        email="new_email@example.com",
+        display_name="Test User",
+        provider="microsoft",
+        id="existing_user_123",
+        first_name="Test",
+        last_name="User",
+        team_ids=[],
+    )
+
+    # Create mock user defined values
+    mock_user_defined_values = MagicMock()
+
+    # Act
+    result = await SSOAuthenticationHandler.upsert_sso_user(
+        result=mock_sso_response,
+        user_info=mock_user,
+        user_email="new_email@example.com",
+        user_defined_values=mock_user_defined_values,
+        prisma_client=mock_prisma,
+    )
+
+    # Assert
+    mock_prisma.db.litellm_usertable.update_many.assert_called_once_with(
+        where={"user_id": "existing_user_123"},
+        data={"user_email": "new_email@example.com"},
+    )
+    assert result == mock_user
