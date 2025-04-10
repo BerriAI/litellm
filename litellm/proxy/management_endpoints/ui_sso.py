@@ -1059,7 +1059,7 @@ class MicrosoftSSOHandler:
                 )
 
             # If service_principal_group_ids is not empty, only return group_ids that are in both all_group_ids and service_principal_group_ids
-            if len(service_principal_group_ids) > 0:
+            if service_principal_group_ids and len(service_principal_group_ids) > 0:
                 all_group_ids = [
                     group_id
                     for group_id in all_group_ids
