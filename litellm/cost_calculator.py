@@ -618,6 +618,7 @@ def completion_cost(  # noqa: PLR0915
             completion_response=completion_response
         )
         rerank_billed_units: Optional[RerankBilledUnits] = None
+
         selected_model = _select_model_name_for_cost_calc(
             model=model,
             completion_response=completion_response,
@@ -798,13 +799,11 @@ def completion_cost(  # noqa: PLR0915
                 ):
                     if (
                         cost_per_token_usage_object is None
-                        or litellm_model_name is None
                         or custom_llm_provider is None
                     ):
                         raise ValueError(
-                            "usage object, litellm_model_name, and custom_llm_provider must be provided for realtime stream cost calculation. Got cost_per_token_usage_object={}, litellm_model_name={}, custom_llm_provider={}".format(
+                            "usage object and custom_llm_provider must be provided for realtime stream cost calculation. Got cost_per_token_usage_object={}, custom_llm_provider={}".format(
                                 cost_per_token_usage_object,
-                                litellm_model_name,
                                 custom_llm_provider,
                             )
                         )
@@ -812,7 +811,7 @@ def completion_cost(  # noqa: PLR0915
                         results=completion_response.results,
                         combined_usage_object=cost_per_token_usage_object,
                         custom_llm_provider=custom_llm_provider,
-                        litellm_model_name=litellm_model_name,
+                        litellm_model_name=model,
                     )
                 # Calculate cost based on prompt_tokens, completion_tokens
                 if (
