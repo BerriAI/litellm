@@ -1576,7 +1576,7 @@ class TranscriptionResponse(OpenAIObject):
             return self.dict()
 
 
-class GenericImageParsingChunk(TypedDict):
+class GenericMediaParsingChunk(TypedDict):
     type: str
     media_type: str
     data: str
