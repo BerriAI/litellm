@@ -1,5 +1,5 @@
 """
-Helper functions to handle images passed in messages
+Helper functions to handle media passed in messages
 """
 
 import base64
@@ -24,8 +24,8 @@ def _process_media_response(response: Response, url: str) -> str:
     media_bytes = response.content
     base64_data = base64.b64encode(media_bytes).decode("utf-8")
 
-    media_tyte = response.headers.get("Content-Type")
-    if media_tyte is None:
+    media_type = response.headers.get("Content-Type")
+    if media_type is None:
         med_type = url.split(".")[-1].lower()
         _med_type = {
             "jpg": "image/jpeg",
@@ -41,7 +41,7 @@ def _process_media_response(response: Response, url: str) -> str:
             )
         med_type = _med_type
     else:
-        med_type = media_tyte
+        med_type = media_type
 
     result = f"data:{med_type};base64,{base64_data}"
     in_memory_cache.set_cache(url, result)

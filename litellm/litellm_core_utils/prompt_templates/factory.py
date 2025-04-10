@@ -36,7 +36,7 @@ from litellm.types.llms.vertex_ai import PartType as VertexPartType
 from litellm.types.utils import GenericMediaParsingChunk
 
 from .common_utils import convert_content_list_to_str, is_non_content_values_set
-from .image_handling import convert_url_to_base64
+from .media_handling import convert_url_to_base64
 
 
 def default_pt(messages):
@@ -721,7 +721,9 @@ def convert_to_anthropic_media_obj(
 ) -> GenericMediaParsingChunk:
     """
     Input:
-    "openai_media_url": "data:{media_type};base64,{base64_data}",
+    openai_media_url:
+      - "data:{media_type};base64,{base64_data}"
+      - HTTP URL, e.g. "http://example.com/image.jpg"
 
     Return:
     "source": {
@@ -750,7 +752,7 @@ def convert_to_anthropic_media_obj(
         if "Error: Unable to fetch media from URL" in str(e):
             raise e
         raise Exception(
-            """Media url not in expected format. Example Expected input - "openai_media_url": "data:{media_type};base64,{base64_image}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp']."""
+            """Media url not in expected format. Example Expected input - "http://example.com/image.jpg" or "data:{media_type};base64,{base64_image}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'video/mp4']."""
         )
 
 
