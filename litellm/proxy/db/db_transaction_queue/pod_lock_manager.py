@@ -21,9 +21,8 @@ class PodLockManager:
     Ensures that only one pod can run a cron job at a time.
     """
 
-    def __init__(self, cronjob_id: str, redis_cache: Optional[RedisCache] = None):
+    def __init__(self, redis_cache: Optional[RedisCache] = None):
         self.pod_id = str(uuid.uuid4())
-        self.cronjob_id = cronjob_id
         self.redis_cache = redis_cache
 
     @staticmethod
@@ -32,7 +31,7 @@ class PodLockManager:
 
     async def acquire_lock(
         self,
-        cronjob_id: Optional[str] = None,
+        cronjob_id: str,
     ) -> Optional[bool]:
         """
         Attempt to acquire the lock for a specific cron job using Redis.
@@ -42,7 +41,6 @@ class PodLockManager:
             verbose_proxy_logger.debug("redis_cache is None, skipping acquire_lock")
             return None
         try:
-            cronjob_id = cronjob_id or self.cronjob_id
             verbose_proxy_logger.debug(
                 "Pod %s attempting to acquire Redis lock for cronjob_id=%s",
                 self.pod_id,
@@ -88,7 +86,7 @@ class PodLockManager:
 
     async def release_lock(
         self,
-        cronjob_id: Optional[str] = None,
+        cronjob_id: str,
     ):
         """
         Release the lock if the current pod holds it.
@@ -98,7 +96,7 @@ class PodLockManager:
             verbose_proxy_logger.debug("redis_cache is None, skipping release_lock")
             return
         try:
-            cronjob_id = cronjob_id or self.cronjob_id
+            cronjob_id = cronjob_id
             verbose_proxy_logger.debug(
                 "Pod %s attempting to release Redis lock for cronjob_id=%s",
                 self.pod_id,
@@ -143,7 +141,7 @@ class PodLockManager:
                 )
         except Exception as e:
             verbose_proxy_logger.error(
-                f"Error releasing Redis lock for {self.cronjob_id}: {e}"
+                f"Error releasing Redis lock for {cronjob_id}: {e}"
             )
 
     @staticmethod
