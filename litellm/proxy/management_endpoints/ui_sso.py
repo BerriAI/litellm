@@ -1193,35 +1193,42 @@ class MicrosoftSSOHandler:
             litellm_team_name: Optional[str] = service_principal_team.get(
                 "principalDisplayName"
             )
-            if litellm_team_id:
-                try:
-                    verbose_proxy_logger.debug(
-                        f"Creating Litellm Team: {litellm_team_id} - {litellm_team_name}"
-                    )
+            if not litellm_team_id:
+                verbose_proxy_logger.debug(
+                    f"Skipping team creation for {litellm_team_name} because it has no principalId"
+                )
+                continue
 
-                    team_obj = await prisma_client.db.litellm_teamtable.find_first(
-                        where={"team_id": litellm_team_id}
+            try:
+                verbose_proxy_logger.debug(
+                    f"Creating Litellm Team: {litellm_team_id} - {litellm_team_name}"
+                )
+
+                team_obj = await prisma_client.db.litellm_teamtable.find_first(
+                    where={"team_id": litellm_team_id}
+                )
+                verbose_proxy_logger.debug(f"Team object: {team_obj}")
+
+                # only create a new team if it doesn't exist
+                if team_obj:
+                    verbose_proxy_logger.debug(
+                        f"Team already exists: {litellm_team_id} - {litellm_team_name}"
                     )
-                    verbose_proxy_logger.debug(f"Team object: {team_obj}")
-                    if team_obj:
-                        verbose_proxy_logger.debug(
-                            f"Team already exists: {litellm_team_id} - {litellm_team_name}"
-                        )
-                        continue
-                    await new_team(
-                        data=NewTeamRequest(
-                            team_id=litellm_team_id,
-                            team_alias=litellm_team_name,
-                        ),
-                        # params used for Audit Logging
-                        http_request=Request(scope={"type": "http", "method": "POST"}),
-                        user_api_key_dict=UserAPIKeyAuth(
-                            token="",
-                            key_alias=f"litellm.{MicrosoftSSOHandler.__name__}",
-                        ),
-                    )
-                except Exception as e:
-                    verbose_proxy_logger.exception(f"Error creating Litellm Team: {e}")
+                    continue
+                await new_team(
+                    data=NewTeamRequest(
+                        team_id=litellm_team_id,
+                        team_alias=litellm_team_name,
+                    ),
+                    # params used for Audit Logging
+                    http_request=Request(scope={"type": "http", "method": "POST"}),
+                    user_api_key_dict=UserAPIKeyAuth(
+                        token="",
+                        key_alias=f"litellm.{MicrosoftSSOHandler.__name__}",
+                    ),
+                )
+            except Exception as e:
+                verbose_proxy_logger.exception(f"Error creating Litellm Team: {e}")
 
 
 class GoogleSSOHandler:
