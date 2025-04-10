@@ -724,7 +724,7 @@ class Choices(OpenAIObject):
         finish_reason=None,
         index=0,
         message: Optional[Union[Message, dict]] = None,
-        logprobs=None,
+        logprobs: Optional[Union[ChoiceLogprobs, dict]] = None,
         enhancements=None,
         **params,
     ):
@@ -746,7 +746,7 @@ class Choices(OpenAIObject):
         if logprobs is not None:
             if isinstance(logprobs, dict):
                 self.logprobs = ChoiceLogprobs(**logprobs)
-            else:
+            elif isinstance(logprobs, ChoiceLogprobs):
                 self.logprobs = logprobs
         if enhancements is not None:
             self.enhancements = enhancements
