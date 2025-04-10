@@ -44,6 +44,9 @@ class PassThroughEndpointLogging:
         self.assemblyai_passthrough_logging_handler = (
             AssemblyAIPassthroughLoggingHandler()
         )
+        self.azure_passthrough_logging_handler = (
+            AzurePassthroughLoggingHandler()
+        )
 
     async def _handle_logging(
         self,
@@ -117,23 +120,24 @@ class PassThroughEndpointLogging:
             )
             kwargs = vertex_passthrough_logging_handler_result["kwargs"]
         elif self.is_azure_route(url_route):
-            azure_passthrough_logging_handler_result = await (
-                AzurePassthroughLoggingHandler.azure_passthrough_handler(
-                    httpx_response=httpx_response,
-                    logging_obj=logging_obj,
-                    url_route=url_route,
-                    result=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                    cache_hit=cache_hit,
-                    extra_query_params=query_params,
-                    **kwargs,
-                )
+            if (
+                AzurePassthroughLoggingHandler._should_log_request(
+                    httpx_response.request.method
+                ) is not True
+            ): 
+                return
+            self.azure_passthrough_logging_handler.azure_passthrough_handler(
+                httpx_response=httpx_response,
+                logging_obj=logging_obj,
+                url_route=url_route,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                extra_query_params=query_params,
+                **kwargs,
             )
-            standard_logging_response_object = (
-                azure_passthrough_logging_handler_result["result"]
-            )
-            kwargs = azure_passthrough_logging_handler_result["kwargs"]
+            return
         elif self.is_anthropic_route(url_route):
             anthropic_passthrough_logging_handler_result = (
                 AnthropicPassthroughLoggingHandler.anthropic_passthrough_handler(
