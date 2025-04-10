@@ -1,0 +1,22 @@
+model_list:
+  - model_name: bedrock-claude-3-5-sonnet
+    litellm_params:
+      model: 'bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0'
+      aws_region_name: ap-southeast-1
+  - model_name: bedrock-claude-3-5-sonnet-v2
+    litellm_params:
+      model: 'bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0'
+      aws_region_name: ap-southeast-1
+  - model_name: bedrock-claude-3-7-sonnet
+    litellm_params:
+      model: 'bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0'
+      aws_region_name: us-east-1
+  - model_name: bedrock-claude-3-sonnet
+    litellm_params:
+      model: 'bedrock/anthropic.claude-3-sonnet-20240229-v1:0'
+  - model_name: bedrock-llama3-8b-instruct-v1
+    litellm_params:
+      model: 'bedrock/meta.llama3-8b-instruct-v1:0'
+  - model_name: bedrock-mixtral-8x7b-instruct-v0
+    litellm_params:
+      model: 'bedrock/mistral.mixtral-8x7b-instruct-v0:1'
