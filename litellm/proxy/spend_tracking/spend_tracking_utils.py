@@ -13,7 +13,11 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
-from litellm.types.utils import StandardLoggingMCPToolCall, StandardLoggingPayload
+from litellm.types.utils import (
+    StandardLoggingMCPToolCall,
+    StandardLoggingModelInformation,
+    StandardLoggingPayload,
+)
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 
@@ -39,6 +43,8 @@ def _get_spend_logs_metadata(
     applied_guardrails: Optional[List[str]] = None,
     batch_models: Optional[List[str]] = None,
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall] = None,
+    usage_object: Optional[dict] = None,
+    model_map_information: Optional[StandardLoggingModelInformation] = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -57,6 +63,8 @@ def _get_spend_logs_metadata(
             proxy_server_request=None,
             batch_models=None,
             mcp_tool_call_metadata=None,
+            model_map_information=None,
+            usage_object=None,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -74,6 +82,8 @@ def _get_spend_logs_metadata(
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
+    clean_metadata["usage_object"] = usage_object
+    clean_metadata["model_map_information"] = model_map_information
     return clean_metadata
 
 
@@ -153,6 +163,17 @@ def get_logging_payload(  # noqa: PLR0915
 
     api_key = metadata.get("user_api_key", "")
 
+    standard_logging_prompt_tokens: int = 0
+    standard_logging_completion_tokens: int = 0
+    standard_logging_total_tokens: int = 0
+    if standard_logging_payload is not None:
+        standard_logging_prompt_tokens = standard_logging_payload.get(
+            "prompt_tokens", 0
+        )
+        standard_logging_completion_tokens = standard_logging_payload.get(
+            "completion_tokens", 0
+        )
+        standard_logging_total_tokens = standard_logging_payload.get("total_tokens", 0)
     if api_key is not None and isinstance(api_key, str):
         if api_key.startswith("sk-"):
             # hash the api_key
@@ -208,6 +229,16 @@ def get_logging_payload(  # noqa: PLR0915
             if standard_logging_payload is not None
             else None
         ),
+        usage_object=(
+            standard_logging_payload["metadata"].get("usage_object", None)
+            if standard_logging_payload is not None
+            else None
+        ),
+        model_map_information=(
+            standard_logging_payload["model_map_information"]
+            if standard_logging_payload is not None
+            else None
+        ),
     )
 
     special_usage_fields = ["completion_tokens", "prompt_tokens", "total_tokens"]
@@ -227,6 +258,7 @@ def get_logging_payload(  # noqa: PLR0915
         import time
 
         id = f"{id}_cache_hit{time.time()}"  # SpendLogs does not allow duplicate request_id
+
     try:
         payload: SpendLogsPayload = SpendLogsPayload(
             request_id=str(id),
@@ -242,9 +274,11 @@ def get_logging_payload(  # noqa: PLR0915
             metadata=json.dumps(clean_metadata),
             cache_key=cache_key,
             spend=kwargs.get("response_cost", 0),
-            total_tokens=usage.get("total_tokens", 0),
-            prompt_tokens=usage.get("prompt_tokens", 0),
-            completion_tokens=usage.get("completion_tokens", 0),
+            total_tokens=usage.get("total_tokens", standard_logging_total_tokens),
+            prompt_tokens=usage.get("prompt_tokens", standard_logging_prompt_tokens),
+            completion_tokens=usage.get(
+                "completion_tokens", standard_logging_completion_tokens
+            ),
             request_tags=request_tags,
             end_user=end_user_id or "",
             api_base=litellm_params.get("api_base", ""),
