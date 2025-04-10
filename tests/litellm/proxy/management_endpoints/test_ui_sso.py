@@ -25,6 +25,37 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
 )
 
 
+def test_microsoft_sso_handler_openid_from_response_user_principal_name():
+    # Arrange
+    # Create a mock response similar to what Microsoft SSO would return
+    mock_response = {
+        "userPrincipalName": "test@example.com",
+        "displayName": "Test User",
+        "id": "user123",
+        "givenName": "Test",
+        "surname": "User",
+        "some_other_field": "value",
+    }
+    expected_team_ids = ["team1", "team2"]
+    # Act
+    # Call the method being tested
+    result = MicrosoftSSOHandler.openid_from_response(
+        response=mock_response, team_ids=expected_team_ids
+    )
+
+    # Assert
+
+    # Check that the result is a CustomOpenID object with the expected values
+    assert isinstance(result, CustomOpenID)
+    assert result.email == "test@example.com"
+    assert result.display_name == "Test User"
+    assert result.provider == "microsoft"
+    assert result.id == "user123"
+    assert result.first_name == "Test"
+    assert result.last_name == "User"
+    assert result.team_ids == expected_team_ids
+
+
 def test_microsoft_sso_handler_openid_from_response():
     # Arrange
     # Create a mock response similar to what Microsoft SSO would return
