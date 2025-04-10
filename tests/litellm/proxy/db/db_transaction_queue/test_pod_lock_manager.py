@@ -46,8 +46,9 @@ async def test_acquire_lock_success(pod_lock_manager, mock_redis):
     assert result == True
 
     # Verify set_cache was called with correct parameters
+    lock_key = pod_lock_manager.get_redis_lock_key(cronjob_id="test_job")
     mock_redis.async_set_cache.assert_called_once_with(
-        pod_lock_manager.lock_key,
+        lock_key,
         pod_lock_manager.pod_id,
         nx=True,
         ttl=DEFAULT_CRON_JOB_LOCK_TTL_SECONDS,
@@ -72,7 +73,8 @@ async def test_acquire_lock_existing_active(pod_lock_manager, mock_redis):
     # Verify set_cache was called
     mock_redis.async_set_cache.assert_called_once()
     # Verify get_cache was called to check existing lock
-    mock_redis.async_get_cache.assert_called_once_with(pod_lock_manager.lock_key)
+    lock_key = pod_lock_manager.get_redis_lock_key(cronjob_id="test_job")
+    mock_redis.async_get_cache.assert_called_once_with(lock_key)
 
 
 @pytest.mark.asyncio
@@ -127,9 +129,10 @@ async def test_release_lock_success(pod_lock_manager, mock_redis):
     )
 
     # Verify get_cache was called
-    mock_redis.async_get_cache.assert_called_once_with(pod_lock_manager.lock_key)
+    lock_key = pod_lock_manager.get_redis_lock_key(cronjob_id="test_job")
+    mock_redis.async_get_cache.assert_called_once_with(lock_key)
     # Verify delete_cache was called
-    mock_redis.async_delete_cache.assert_called_once_with(pod_lock_manager.lock_key)
+    mock_redis.async_delete_cache.assert_called_once_with(lock_key)
 
 
 @pytest.mark.asyncio
@@ -145,7 +148,8 @@ async def test_release_lock_different_pod(pod_lock_manager, mock_redis):
     )
 
     # Verify get_cache was called
-    mock_redis.async_get_cache.assert_called_once_with(pod_lock_manager.lock_key)
+    lock_key = pod_lock_manager.get_redis_lock_key(cronjob_id="test_job")
+    mock_redis.async_get_cache.assert_called_once_with(lock_key)
     # Verify delete_cache was NOT called
     mock_redis.async_delete_cache.assert_not_called()
 
@@ -158,10 +162,13 @@ async def test_release_lock_no_lock(pod_lock_manager, mock_redis):
     # Mock get_cache to return None (no lock)
     mock_redis.async_get_cache.return_value = None
 
-    await pod_lock_manager.release_lock()
+    await pod_lock_manager.release_lock(
+        cronjob_id="test_job",
+    )
 
     # Verify get_cache was called
-    mock_redis.async_get_cache.assert_called_once_with(pod_lock_manager.lock_key)
+    lock_key = pod_lock_manager.get_redis_lock_key(cronjob_id="test_job")
+    mock_redis.async_get_cache.assert_called_once_with(lock_key)
     # Verify delete_cache was NOT called
     mock_redis.async_delete_cache.assert_not_called()
 
