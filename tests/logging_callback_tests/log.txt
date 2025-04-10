@@ -6,10 +6,10 @@ plugins: snapshot-0.9.0, cov-5.0.0, timeout-2.2.0, postgresql-7.0.1, respx-0.21.
 asyncio: mode=Mode.STRICT
 collecting ... collected 4 items
 
-test_built_in_tools_cost_tracking.py::test_openai_responses_api_web_search_cost_tracking[tools_config0-search_context_size_low-True] PASSED [ 25%]
-test_built_in_tools_cost_tracking.py::test_openai_responses_api_web_search_cost_tracking[tools_config1-search_context_size_low-False] PASSED [ 50%]
-test_built_in_tools_cost_tracking.py::test_openai_responses_api_web_search_cost_tracking[tools_config2-search_context_size_medium-True] PASSED [ 75%]
-test_built_in_tools_cost_tracking.py::test_openai_responses_api_web_search_cost_tracking[tools_config3-search_context_size_medium-False] PASSED [100%]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False] PASSED [ 25%]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-True] PASSED [ 50%]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[True-False] PASSED [ 75%]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[True-True] PASSED [100%]
 
 =============================== warnings summary ===============================
 ../../../../../../Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/pydantic/_internal/_config.py:295
@@ -17,10 +17,10 @@ test_built_in_tools_cost_tracking.py::test_openai_responses_api_web_search_cost_
     warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
 
 ../../litellm/litellm_core_utils/get_model_cost_map.py:24
-test_built_in_tools_cost_tracking.py::test_openai_responses_api_web_search_cost_tracking[tools_config0-search_context_size_low-True]
-test_built_in_tools_cost_tracking.py::test_openai_responses_api_web_search_cost_tracking[tools_config1-search_context_size_low-False]
-test_built_in_tools_cost_tracking.py::test_openai_responses_api_web_search_cost_tracking[tools_config2-search_context_size_medium-True]
-test_built_in_tools_cost_tracking.py::test_openai_responses_api_web_search_cost_tracking[tools_config3-search_context_size_medium-False]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-True]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[True-False]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[True-True]
   /Users/krrishdholakia/Documents/litellm/litellm/litellm_core_utils/get_model_cost_map.py:24: DeprecationWarning: open_text is deprecated. Use files() instead. Refer to https://importlib-resources.readthedocs.io/en/latest/using.html#migrating-from-legacy for migration advice.
     with importlib.resources.open_text(
 
@@ -28,12 +28,85 @@ test_built_in_tools_cost_tracking.py::test_openai_responses_api_web_search_cost_
   /Users/krrishdholakia/Documents/litellm/litellm/utils.py:183: DeprecationWarning: open_text is deprecated. Use files() instead. Refer to https://importlib-resources.readthedocs.io/en/latest/using.html#migrating-from-legacy for migration advice.
     with resources.open_text(
 
-test_built_in_tools_cost_tracking.py::test_openai_responses_api_web_search_cost_tracking[tools_config0-search_context_size_low-True]
-test_built_in_tools_cost_tracking.py::test_openai_responses_api_web_search_cost_tracking[tools_config1-search_context_size_low-False]
-test_built_in_tools_cost_tracking.py::test_openai_responses_api_web_search_cost_tracking[tools_config2-search_context_size_medium-True]
-test_built_in_tools_cost_tracking.py::test_openai_responses_api_web_search_cost_tracking[tools_config3-search_context_size_medium-False]
-  /Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/httpx/_content.py:204: DeprecationWarning: Use 'content=<...>' to upload raw bytes/text content.
-    warnings.warn(message, DeprecationWarning)
+test_otel_logging.py:145
+  /Users/krrishdholakia/Documents/litellm/tests/logging_callback_tests/test_otel_logging.py:145: PytestUnknownMarkWarning: Unknown pytest.mark.flaky - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.flaky(retries=6, delay=2)
+
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+  /Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/google/rpc/__init__.py:18: DeprecationWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html
+    import pkg_resources
+
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+  /Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/pkg_resources/__init__.py:2868: DeprecationWarning: Deprecated call to `pkg_resources.declare_namespace('google')`.
+  Implementing implicit namespace packages (as specified in PEP 420) is preferred to `pkg_resources.declare_namespace`. See https://setuptools.pypa.io/en/latest/references/keywords.html#keyword-namespace-packages
+    declare_namespace(pkg)
+
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+  /Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/pkg_resources/__init__.py:2868: DeprecationWarning: Deprecated call to `pkg_resources.declare_namespace('google.cloud')`.
+  Implementing implicit namespace packages (as specified in PEP 420) is preferred to `pkg_resources.declare_namespace`. See https://setuptools.pypa.io/en/latest/references/keywords.html#keyword-namespace-packages
+    declare_namespace(pkg)
+
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+  /Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/pkg_resources/__init__.py:2348: DeprecationWarning: Deprecated call to `pkg_resources.declare_namespace('google')`.
+  Implementing implicit namespace packages (as specified in PEP 420) is preferred to `pkg_resources.declare_namespace`. See https://setuptools.pypa.io/en/latest/references/keywords.html#keyword-namespace-packages
+    declare_namespace(parent)
+
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+  /Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/pkg_resources/__init__.py:2868: DeprecationWarning: Deprecated call to `pkg_resources.declare_namespace('google.logging')`.
+  Implementing implicit namespace packages (as specified in PEP 420) is preferred to `pkg_resources.declare_namespace`. See https://setuptools.pypa.io/en/latest/references/keywords.html#keyword-namespace-packages
+    declare_namespace(pkg)
+
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+  /Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/pkg_resources/__init__.py:2868: DeprecationWarning: Deprecated call to `pkg_resources.declare_namespace('google.iam')`.
+  Implementing implicit namespace packages (as specified in PEP 420) is preferred to `pkg_resources.declare_namespace`. See https://setuptools.pypa.io/en/latest/references/keywords.html#keyword-namespace-packages
+    declare_namespace(pkg)
+
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+  /Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/pkg_resources/__init__.py:2868: DeprecationWarning: Deprecated call to `pkg_resources.declare_namespace('mpl_toolkits')`.
+  Implementing implicit namespace packages (as specified in PEP 420) is preferred to `pkg_resources.declare_namespace`. See https://setuptools.pypa.io/en/latest/references/keywords.html#keyword-namespace-packages
+    declare_namespace(pkg)
+
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+  /Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/pkg_resources/__init__.py:2868: DeprecationWarning: Deprecated call to `pkg_resources.declare_namespace('sphinxcontrib')`.
+  Implementing implicit namespace packages (as specified in PEP 420) is preferred to `pkg_resources.declare_namespace`. See https://setuptools.pypa.io/en/latest/references/keywords.html#keyword-namespace-packages
+    declare_namespace(pkg)
+
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+  /Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/pkg_resources/__init__.py:2868: DeprecationWarning: Deprecated call to `pkg_resources.declare_namespace('testing')`.
+  Implementing implicit namespace packages (as specified in PEP 420) is preferred to `pkg_resources.declare_namespace`. See https://setuptools.pypa.io/en/latest/references/keywords.html#keyword-namespace-packages
+    declare_namespace(pkg)
+
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+  /Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/pkg_resources/__init__.py:2868: DeprecationWarning: Deprecated call to `pkg_resources.declare_namespace('testing.common')`.
+  Implementing implicit namespace packages (as specified in PEP 420) is preferred to `pkg_resources.declare_namespace`. See https://setuptools.pypa.io/en/latest/references/keywords.html#keyword-namespace-packages
+    declare_namespace(pkg)
+
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+  /Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/pkg_resources/__init__.py:2348: DeprecationWarning: Deprecated call to `pkg_resources.declare_namespace('testing')`.
+  Implementing implicit namespace packages (as specified in PEP 420) is preferred to `pkg_resources.declare_namespace`. See https://setuptools.pypa.io/en/latest/references/keywords.html#keyword-namespace-packages
+    declare_namespace(parent)
+
+test_otel_logging.py::test_awesome_otel_with_message_logging_off[False-False]
+  /Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/google/rpc/__init__.py:20: DeprecationWarning: Deprecated call to `pkg_resources.declare_namespace('google.rpc')`.
+  Implementing implicit namespace packages (as specified in PEP 420) is preferred to `pkg_resources.declare_namespace`. See https://setuptools.pypa.io/en/latest/references/keywords.html#keyword-namespace-packages
+    pkg_resources.declare_namespace(__name__)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================= 4 passed, 11 warnings in 18.95s ========================
+======================== 4 passed, 37 warnings in 5.63s ========================
