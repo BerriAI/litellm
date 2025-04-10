@@ -18,3 +18,10 @@ class MicrosoftGraphAPIUserGroupResponse(TypedDict, total=False):
     odata_context: Optional[str]
     odata_nextLink: Optional[str]
     value: Optional[List[MicrosoftGraphAPIUserGroupDirectoryObject]]
+
+
+class MicrosoftServicePrincipalTeam(TypedDict, total=False):
+    """Model for Microsoft Service Principal Team"""
+
+    principalDisplayName: Optional[str]
+    principalId: Optional[str]
