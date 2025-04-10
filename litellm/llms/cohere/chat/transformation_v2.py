@@ -208,9 +208,7 @@ class CohereChatConfigV2(BaseConfig):
             messages=messages, model=model, llm_provider="cohere_chat"
         )
         optional_params["messages"] = cohere_messages
-        # Cohere's API expects just the model name (e.g., "command-r") without the provider prefix
-        # This extracts the model name from the full model string (e.g., "cohere_v2/command-r")
-        optional_params["model"] = model.split("/")[-1]  # Extract model name from model string
+        optional_params["model"] = model
 
         ## Handle Tool Calling
         if "tools" in optional_params:
