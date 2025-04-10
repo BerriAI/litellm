@@ -34,6 +34,7 @@ from .llms.openai import (
     ChatCompletionUsageBlock,
     FileSearchTool,
     OpenAIChatCompletionChunk,
+    OpenAIRealtimeStreamList,
     WebSearchOptions,
 )
 from .rerank import RerankResponse
@@ -61,6 +62,18 @@ class LiteLLMPydanticObjectBase(BaseModel):
         except Exception:
             # if using pydantic v1
             return self.__fields_set__
+
+    def __contains__(self, key):
+        # Define custom behavior for the 'in' operator
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -2150,6 +2163,12 @@ class LiteLLMBatch(Batch):
         except Exception:
             # if using pydantic v1
             return self.dict()
+
+
+class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
+    results: OpenAIRealtimeStreamList
+    usage: Usage
+    _hidden_params: dict = {}
 
 
 class RawRequestTypedDict(TypedDict, total=False):

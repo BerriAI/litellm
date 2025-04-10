@@ -68,6 +68,7 @@ from litellm.types.utils import (
     ImageResponse,
     LiteLLMBatch,
     LiteLLMLoggingBaseClass,
+    LiteLLMRealtimeStreamLoggingObject,
     ModelResponse,
     ModelResponseStream,
     RawRequestTypedDict,
@@ -902,6 +903,7 @@ class Logging(LiteLLMLoggingBaseClass):
             FineTuningJob,
             ResponsesAPIResponse,
             ResponseCompletedEvent,
+            LiteLLMRealtimeStreamLoggingObject,
         ],
         cache_hit: Optional[bool] = None,
         litellm_model_name: Optional[str] = None,
@@ -1055,39 +1057,49 @@ class Logging(LiteLLMLoggingBaseClass):
             ## if model in model cost map - log the response cost
             ## else set cost to None
 
+            logging_result = result
+
             if self.call_type == CallTypes.arealtime.value and isinstance(result, list):
                 combined_usage_object = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
                     results=result
                 )
-                self.model_call_details[
-                    "response_cost"
-                ] = handle_realtime_stream_cost_calculation(
-                    results=result,
-                    combined_usage_object=combined_usage_object,
-                    custom_llm_provider=self.custom_llm_provider,
-                    litellm_model_name=self.model,
+                logging_result = (
+                    RealtimeAPITokenUsageProcessor.create_logging_realtime_object(
+                        usage=combined_usage_object,
+                        results=result,
+                    )
                 )
-                self.model_call_details["combined_usage_object"] = combined_usage_object
+
+                # self.model_call_details[
+                #     "response_cost"
+                # ] = handle_realtime_stream_cost_calculation(
+                #     results=result,
+                #     combined_usage_object=combined_usage_object,
+                #     custom_llm_provider=self.custom_llm_provider,
+                #     litellm_model_name=self.model,
+                # )
+                # self.model_call_details["combined_usage_object"] = combined_usage_object
             if (
                 standard_logging_object is None
                 and result is not None
                 and self.stream is not True
             ):
                 if (
-                    isinstance(result, ModelResponse)
-                    or isinstance(result, ModelResponseStream)
-                    or isinstance(result, EmbeddingResponse)
-                    or isinstance(result, ImageResponse)
-                    or isinstance(result, TranscriptionResponse)
-                    or isinstance(result, TextCompletionResponse)
-                    or isinstance(result, HttpxBinaryResponseContent)  # tts
-                    or isinstance(result, RerankResponse)
-                    or isinstance(result, FineTuningJob)
-                    or isinstance(result, LiteLLMBatch)
-                    or isinstance(result, ResponsesAPIResponse)
+                    isinstance(logging_result, ModelResponse)
+                    or isinstance(logging_result, ModelResponseStream)
+                    or isinstance(logging_result, EmbeddingResponse)
+                    or isinstance(logging_result, ImageResponse)
+                    or isinstance(logging_result, TranscriptionResponse)
+                    or isinstance(logging_result, TextCompletionResponse)
+                    or isinstance(logging_result, HttpxBinaryResponseContent)  # tts
+                    or isinstance(logging_result, RerankResponse)
+                    or isinstance(logging_result, FineTuningJob)
+                    or isinstance(logging_result, LiteLLMBatch)
+                    or isinstance(logging_result, ResponsesAPIResponse)
+                    or isinstance(logging_result, LiteLLMRealtimeStreamLoggingObject)
                 ):
                     ## HIDDEN PARAMS ##
-                    hidden_params = getattr(result, "_hidden_params", {})
+                    hidden_params = getattr(logging_result, "_hidden_params", {})
                     if hidden_params:
                         # add to metadata for logging
                         if self.model_call_details.get("litellm_params") is not None:
@@ -1105,7 +1117,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             self.model_call_details["litellm_params"]["metadata"][  # type: ignore
                                 "hidden_params"
                             ] = getattr(
-                                result, "_hidden_params", {}
+                                logging_result, "_hidden_params", {}
                             )
                     ## RESPONSE COST - Only calculate if not in hidden_params ##
                     if "response_cost" in hidden_params:
@@ -1115,14 +1127,14 @@ class Logging(LiteLLMLoggingBaseClass):
                     else:
                         self.model_call_details[
                             "response_cost"
-                        ] = self._response_cost_calculator(result=result)
+                        ] = self._response_cost_calculator(result=logging_result)
                     ## STANDARDIZED LOGGING PAYLOAD
 
                     self.model_call_details[
                         "standard_logging_object"
                     ] = get_standard_logging_object_payload(
                         kwargs=self.model_call_details,
-                        init_response_obj=result,
+                        init_response_obj=logging_result,
                         start_time=start_time,
                         end_time=end_time,
                         logging_obj=self,
