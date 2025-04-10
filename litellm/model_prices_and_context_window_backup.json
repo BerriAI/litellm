@@ -4901,7 +4901,7 @@
         "input_cost_per_audio_token": 0.0000007,
         "input_cost_per_token": 0.00000125,
         "input_cost_per_token_above_200k_tokens": 0.0000025, 
-        "output_cost_per_token": 0.0000010,
+        "output_cost_per_token": 0.00001,
         "output_cost_per_token_above_200k_tokens": 0.000015, 
         "litellm_provider": "gemini",
         "mode": "chat",
