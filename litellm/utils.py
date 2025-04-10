@@ -6233,7 +6233,7 @@ class ProviderConfigManager:
             return litellm.OpenAITextCompletionConfig()
         elif litellm.LlmProviders.COHERE_CHAT == provider:
             return litellm.CohereChatConfig()
-        elif litellm.LlmProviders.COHERE_CHAT_V2 == provider:
+        elif litellm.LlmProviders.COHERE_V2 == provider:
             return litellm.CohereChatConfigV2()
         elif litellm.LlmProviders.COHERE == provider:
             return litellm.CohereConfig()

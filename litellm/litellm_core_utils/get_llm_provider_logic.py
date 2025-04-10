@@ -27,7 +27,7 @@ def handle_cohere_chat_model_custom_llm_provider(
 ) -> Tuple[str, Optional[str]]:
     """
     if user sets model = "cohere/command-r" -> use custom_llm_provider = "cohere_chat"
-    if api_version = "v2" -> use custom_llm_provider = "cohere_chat_v2"
+    if api_version = "v2" -> use custom_llm_provider = "cohere_v2"
 
     Args:
         model: The model name
@@ -42,7 +42,7 @@ def handle_cohere_chat_model_custom_llm_provider(
         if custom_llm_provider == "cohere" and model in litellm.cohere_chat_models:
             # Check if v2 API version is specified
             if api_version == "v2":
-                return model, "cohere_chat_v2"
+                return model, "cohere_v2"
             return model, "cohere_chat"
 
     if "/" in model:
@@ -54,7 +54,7 @@ def handle_cohere_chat_model_custom_llm_provider(
         ):
             # Check if v2 API version is specified
             if api_version == "v2":
-                return _model, "cohere_chat_v2"
+                return _model, "cohere_v2"
             return _model, "cohere_chat"
 
     return model, custom_llm_provider
@@ -141,8 +141,8 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "cohere_v2"
             
         # For backward compatibility
-        elif model.startswith("cohere_chat_v2/"):
-            model = model.replace("cohere_chat_v2/", "")
+        elif model.startswith("cohere_v2/"):
+            model = model.replace("cohere_v2/", "")
             custom_llm_provider = "cohere_v2"
             
         model, custom_llm_provider = handle_cohere_chat_model_custom_llm_provider(
