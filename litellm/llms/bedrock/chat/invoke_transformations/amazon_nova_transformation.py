@@ -6,20 +6,41 @@ Inherits from `AmazonConverseConfig`
 Nova + Invoke API Tutorial: https://docs.aws.amazon.com/nova/latest/userguide/using-invoke-api.html
 """
 
-from typing import List
+from typing import Any, List, Optional
+
+import httpx
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.llms.bedrock import BedrockInvokeNovaRequest
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponse
+
+from ..converse_transformation import AmazonConverseConfig
+from .base_invoke_transformation import AmazonInvokeConfig
 
 
-class AmazonInvokeNovaConfig(litellm.AmazonConverseConfig):
+class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
     """
     Config for sending `nova` requests to `/bedrock/invoke/`
     """
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+
+    def get_supported_openai_params(self, model: str) -> list:
+        return AmazonConverseConfig.get_supported_openai_params(self, model)
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        return AmazonConverseConfig.map_openai_params(
+            self, non_default_params, optional_params, model, drop_params
+        )
 
     def transform_request(
         self,
@@ -29,7 +50,8 @@ class AmazonInvokeNovaConfig(litellm.AmazonConverseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        _transformed_nova_request = super().transform_request(
+        _transformed_nova_request = AmazonConverseConfig.transform_request(
+            self,
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -44,6 +66,35 @@ class AmazonInvokeNovaConfig(litellm.AmazonConverseConfig):
             _bedrock_invoke_nova_request
         )
         return bedrock_invoke_nova_request
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: Logging,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> litellm.ModelResponse:
+        return AmazonConverseConfig.transform_response(
+            self,
+            model,
+            raw_response,
+            model_response,
+            logging_obj,
+            request_data,
+            messages,
+            optional_params,
+            litellm_params,
+            encoding,
+            api_key,
+            json_mode,
+        )
 
     def _filter_allowed_fields(
         self, bedrock_invoke_nova_request: BedrockInvokeNovaRequest

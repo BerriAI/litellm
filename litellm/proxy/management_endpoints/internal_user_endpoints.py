@@ -1434,7 +1434,7 @@ async def get_user_daily_activity(
         default=1, description="Page number for pagination", ge=1
     ),
     page_size: int = fastapi.Query(
-        default=50, description="Items per page", ge=1, le=100
+        default=50, description="Items per page", ge=1, le=1000
     ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> SpendAnalyticsPaginatedResponse:

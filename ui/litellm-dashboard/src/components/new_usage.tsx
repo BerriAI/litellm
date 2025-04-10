@@ -22,14 +22,12 @@ import ViewUserSpend from "./view_user_spend";
 import TopKeyView from "./top_key_view";
 import { ActivityMetrics, processActivityData } from './activity_metrics';
 import { SpendMetrics, DailyData, ModelActivityData, MetricWithMetadata, KeyMetricWithMetadata } from './usage/types';
+
 interface NewUsagePageProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
 }
-
-
-
 
 const NewUsagePage: React.FC<NewUsagePageProps> = ({
   accessToken,
@@ -177,8 +175,39 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
     if (!accessToken || !dateValue.from || !dateValue.to) return;
     const startTime = dateValue.from;
     const endTime = dateValue.to;
-    const data = await userDailyActivityCall(accessToken, startTime, endTime);
-    setUserSpendData(data);
+    
+    try {
+      // Get first page
+      const firstPageData = await userDailyActivityCall(accessToken, startTime, endTime);
+      
+      // Check if we need to fetch more pages
+      if (firstPageData.metadata.total_pages > 10) {
+        throw new Error("Too many pages of data (>10). Please select a smaller date range.");
+      }
+
+      // If only one page, just set the data
+      if (firstPageData.metadata.total_pages === 1) {
+        setUserSpendData(firstPageData);
+        return;
+      }
+
+      // Fetch all pages
+      const allResults = [...firstPageData.results];
+      
+      for (let page = 2; page <= firstPageData.metadata.total_pages; page++) {
+        const pageData = await userDailyActivityCall(accessToken, startTime, endTime, page);
+        allResults.push(...pageData.results);
+      }
+
+      // Combine all results with the first page's metadata
+      setUserSpendData({
+        results: allResults,
+        metadata: firstPageData.metadata
+      });
+    } catch (error) {
+      console.error("Error fetching user spend data:", error);
+      throw error;
+    }
   };
 
   useEffect(() => {

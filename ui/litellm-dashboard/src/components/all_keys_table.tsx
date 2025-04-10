@@ -13,9 +13,12 @@ import { Organization, userListCall } from "./networking";
 import { createTeamSearchFunction } from "./key_team_helpers/team_search_fn";
 import { createOrgSearchFunction } from "./key_team_helpers/organization_search_fn";
 import { useFilterLogic } from "./key_team_helpers/filter_logic";
+import { Setter } from "@/types";
+import { updateExistingKeys } from "@/utils/dataUtils";
 
 interface AllKeysTableProps {
   keys: KeyResponse[];
+  setKeys: Setter<KeyResponse[]>;
   isLoading?: boolean;
   pagination: {
     currentPage: number;
@@ -87,6 +90,7 @@ const TeamFilter = ({
  */
 export function AllKeysTable({ 
   keys, 
+  setKeys,
   isLoading = false,
   pagination,
   onPageChange,
@@ -364,6 +368,23 @@ export function AllKeysTable({
           keyId={selectedKeyId} 
           onClose={() => setSelectedKeyId(null)}
           keyData={keys.find(k => k.token === selectedKeyId)}
+          onKeyDataUpdate={(updatedKeyData) => {
+            setKeys(keys => keys.map(key => {
+              if (key.token === updatedKeyData.token) {
+                // The shape of key is different from that of
+                // updatedKeyData(received from keyUpdateCall in networking.tsx).
+                // Hence, we can't replace key with updatedKeys since it might lead
+                // to unintended bugs/behaviors.
+                // So instead, we only update fields that are present in both.
+                return updateExistingKeys(key, updatedKeyData)
+              }
+              
+              return key
+            }))
+          }}
+          onDelete={() => {
+            setKeys(keys => keys.filter(key => key.token !== selectedKeyId))
+          }}
           accessToken={accessToken}
           userID={userID}
           userRole={userRole}

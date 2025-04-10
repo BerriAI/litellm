@@ -51,9 +51,6 @@ def decrypt_value_helper(value: str):
         # if it's not str - do not decrypt it, return the value
         return value
     except Exception as e:
-        import traceback
-
-        traceback.print_stack()
         verbose_proxy_logger.error(
             f"Error decrypting value, Did your master_key/salt key change recently? \nError: {str(e)}\nSet permanent salt key - https://docs.litellm.ai/docs/proxy/prod#5-set-litellm-salt-key"
         )

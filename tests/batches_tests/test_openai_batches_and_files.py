@@ -423,25 +423,35 @@ mock_vertex_batch_response = {
 
 
 @pytest.mark.asyncio
-async def test_avertex_batch_prediction():
-    with patch(
+async def test_avertex_batch_prediction(monkeypatch):
+    monkeypatch.setenv("GCS_BUCKET_NAME", "litellm-local")
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    client = AsyncHTTPHandler()
+
+    async def mock_side_effect(*args, **kwargs):
+        print("args", args, "kwargs", kwargs)
+        url = kwargs.get("url", "")
+        if "files" in url:
+            mock_response.json.return_value = mock_file_response
+        elif "batch" in url:
+            mock_response.json.return_value = mock_vertex_batch_response
+            mock_response.status_code = 200
+        return mock_response
+
+    with patch.object(
+        client, "post", side_effect=mock_side_effect
+    ) as mock_post, patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
-    ) as mock_post:
+    ) as mock_global_post:
         # Configure mock responses
         mock_response = MagicMock()
         mock_response.raise_for_status.return_value = None
 
         # Set up different responses for different API calls
-        async def mock_side_effect(*args, **kwargs):
-            url = kwargs.get("url", "")
-            if "files" in url:
-                mock_response.json.return_value = mock_file_response
-            elif "batch" in url:
-                mock_response.json.return_value = mock_vertex_batch_response
-                mock_response.status_code = 200
-            return mock_response
-
+        
         mock_post.side_effect = mock_side_effect
+        mock_global_post.side_effect = mock_side_effect
 
         # load_vertex_ai_credentials()
         litellm.set_verbose = True
@@ -455,6 +465,7 @@ async def test_avertex_batch_prediction():
             file=open(file_path, "rb"),
             purpose="batch",
             custom_llm_provider="vertex_ai",
+            client=client
         )
         print("Response from creating file=", file_obj)
 

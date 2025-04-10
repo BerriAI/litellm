@@ -6,6 +6,7 @@ export async function makeOpenAIImageGenerationRequest(
   updateUI: (imageUrl: string, model: string) => void,
   selectedModel: string,
   accessToken: string,
+  tags?: string[],
   signal?: AbortSignal
 ) {
   // base url should be the current base_url
@@ -21,6 +22,7 @@ export async function makeOpenAIImageGenerationRequest(
     apiKey: accessToken,
     baseURL: proxyBaseUrl,
     dangerouslyAllowBrowser: true,
+    defaultHeaders: tags && tags.length > 0 ? { 'x-litellm-tags': tags.join(',') } : undefined,
   });
 
   try {

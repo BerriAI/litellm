@@ -1,13 +1,13 @@
 import types
 from typing import List, Optional
 
-from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
+from litellm.llms.cohere.chat.transformation import CohereChatConfig
 
 
-class AmazonCohereConfig(AmazonInvokeConfig, BaseConfig):
+class AmazonCohereConfig(AmazonInvokeConfig, CohereChatConfig):
     """
     Reference: https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=command
 
@@ -19,7 +19,6 @@ class AmazonCohereConfig(AmazonInvokeConfig, BaseConfig):
     """
 
     max_tokens: Optional[int] = None
-    temperature: Optional[float] = None
     return_likelihood: Optional[str] = None
 
     def __init__(
@@ -55,11 +54,10 @@ class AmazonCohereConfig(AmazonInvokeConfig, BaseConfig):
         }
 
     def get_supported_openai_params(self, model: str) -> List[str]:
-        return [
-            "max_tokens",
-            "temperature",
-            "stream",
-        ]
+        supported_params = CohereChatConfig.get_supported_openai_params(
+            self, model=model
+        )
+        return supported_params
 
     def map_openai_params(
         self,
@@ -68,11 +66,10 @@ class AmazonCohereConfig(AmazonInvokeConfig, BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        for k, v in non_default_params.items():
-            if k == "stream":
-                optional_params["stream"] = v
-            if k == "temperature":
-                optional_params["temperature"] = v
-            if k == "max_tokens":
-                optional_params["max_tokens"] = v
-        return optional_params
+        return CohereChatConfig.map_openai_params(
+            self,
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+        )

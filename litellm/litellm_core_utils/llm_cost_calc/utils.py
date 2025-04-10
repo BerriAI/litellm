@@ -90,35 +90,45 @@ def _generic_cost_per_character(
     return prompt_cost, completion_cost
 
 
-def _get_prompt_token_base_cost(model_info: ModelInfo, usage: Usage) -> float:
+def _get_token_base_cost(model_info: ModelInfo, usage: Usage) -> Tuple[float, float]:
     """
     Return prompt cost for a given model and usage.
 
-    If input_tokens > 128k and `input_cost_per_token_above_128k_tokens` is set, then we use the `input_cost_per_token_above_128k_tokens` field.
+    If input_tokens > threshold and `input_cost_per_token_above_[x]k_tokens` or `input_cost_per_token_above_[x]_tokens` is set,
+    then we use the corresponding threshold cost.
     """
-    input_cost_per_token_above_128k_tokens = model_info.get(
-        "input_cost_per_token_above_128k_tokens"
-    )
-    if _is_above_128k(usage.prompt_tokens) and input_cost_per_token_above_128k_tokens:
-        return input_cost_per_token_above_128k_tokens
-    return model_info["input_cost_per_token"]
+    prompt_base_cost = model_info["input_cost_per_token"]
+    completion_base_cost = model_info["output_cost_per_token"]
 
+    ## CHECK IF ABOVE THRESHOLD
+    threshold: Optional[float] = None
+    for key, value in sorted(model_info.items(), reverse=True):
+        if key.startswith("input_cost_per_token_above_") and value is not None:
+            try:
+                # Handle both formats: _above_128k_tokens and _above_128_tokens
+                threshold_str = key.split("_above_")[1].split("_tokens")[0]
+                threshold = float(threshold_str.replace("k", "")) * (
+                    1000 if "k" in threshold_str else 1
+                )
+                if usage.prompt_tokens > threshold:
+                    prompt_base_cost = cast(
+                        float,
+                        model_info.get(key, prompt_base_cost),
+                    )
+                    completion_base_cost = cast(
+                        float,
+                        model_info.get(
+                            f"output_cost_per_token_above_{threshold_str}_tokens",
+                            completion_base_cost,
+                        ),
+                    )
+                    break
+            except (IndexError, ValueError):
+                continue
+            except Exception:
+                continue
 
-def _get_completion_token_base_cost(model_info: ModelInfo, usage: Usage) -> float:
-    """
-    Return prompt cost for a given model and usage.
-
-    If input_tokens > 128k and `input_cost_per_token_above_128k_tokens` is set, then we use the `input_cost_per_token_above_128k_tokens` field.
-    """
-    output_cost_per_token_above_128k_tokens = model_info.get(
-        "output_cost_per_token_above_128k_tokens"
-    )
-    if (
-        _is_above_128k(usage.completion_tokens)
-        and output_cost_per_token_above_128k_tokens
-    ):
-        return output_cost_per_token_above_128k_tokens
-    return model_info["output_cost_per_token"]
+    return prompt_base_cost, completion_base_cost
 
 
 def calculate_cost_component(
@@ -215,7 +225,9 @@ def generic_cost_per_token(
     if text_tokens == 0:
         text_tokens = usage.prompt_tokens - cache_hit_tokens - audio_tokens
 
-    prompt_base_cost = _get_prompt_token_base_cost(model_info=model_info, usage=usage)
+    prompt_base_cost, completion_base_cost = _get_token_base_cost(
+        model_info=model_info, usage=usage
+    )
 
     prompt_cost = float(text_tokens) * prompt_base_cost
 
@@ -253,9 +265,6 @@ def generic_cost_per_token(
     )
 
     ## CALCULATE OUTPUT COST
-    completion_base_cost = _get_completion_token_base_cost(
-        model_info=model_info, usage=usage
-    )
     text_tokens = usage.completion_tokens
     audio_tokens = 0
     if usage.completion_tokens_details is not None:

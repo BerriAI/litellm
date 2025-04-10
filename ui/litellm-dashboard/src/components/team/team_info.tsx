@@ -30,6 +30,7 @@ import { PencilAltIcon, PlusIcon, TrashIcon } from "@heroicons/react/outline";
 import MemberModal from "./edit_membership";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+import { Team } from "../key_team_helpers/key_list";
 
 
 interface TeamData {
@@ -69,6 +70,7 @@ interface TeamInfoProps {
   is_proxy_admin: boolean;
   userModels: string[];
   editTeam: boolean;
+  onUpdate?: (team: Team) => void
 }
 
 const TeamInfoView: React.FC<TeamInfoProps> = ({ 
@@ -78,7 +80,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   is_team_admin, 
   is_proxy_admin,
   userModels,
-  editTeam
+  editTeam,
+  onUpdate
 }) => {
   const [teamData, setTeamData] = useState<TeamData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -199,7 +202,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       };
       
       const response = await teamUpdateCall(accessToken, updateData);
-      
+      if (onUpdate) {
+        onUpdate(response.data)
+      }
+    
       message.success("Team settings updated successfully");
       setIsEditing(false);
       fetchTeamInfo();

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { keyListCall, Organization } from '../networking';
+import { Setter } from '@/types';
 
 export interface Team {
     team_id: string;
@@ -94,13 +95,14 @@ totalPages: number;
 totalCount: number;
 }
 
+
 interface UseKeyListReturn {
 keys: KeyResponse[];
 isLoading: boolean;
 error: Error | null;
 pagination: PaginationData;
 refresh: (params?: Record<string, unknown>) => Promise<void>;
-setKeys: (newKeysOrUpdater: KeyResponse[] | ((prevKeys: KeyResponse[]) => KeyResponse[])) => void;
+setKeys: Setter<KeyResponse[]>;
 }
 
 const useKeyList = ({

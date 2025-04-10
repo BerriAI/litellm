@@ -84,6 +84,7 @@ import {
   modelAvailableCall,
   teamListCall
 } from "./networking";
+import { updateExistingKeys } from "@/utils/dataUtils";
 
 const getOrganizationModels = (organization: Organization | null, userModels: string[]) => {
   let tempModelsToPick = [];
@@ -321,6 +322,22 @@ const Teams: React.FC<TeamProps> = ({
       {selectedTeamId ? (
         <TeamInfoView 
         teamId={selectedTeamId} 
+        onUpdate={data => {
+            setTeams(teams => {
+              if (teams == null) {
+                return teams;
+              }
+            
+              return teams.map(team => {
+                if (data.team_id === team.team_id) {
+                  return updateExistingKeys(team, data)
+                }
+                
+                return team
+              })
+            })
+
+        }}
         onClose={() => {
           setSelectedTeamId(null);
           setEditTeam(false);

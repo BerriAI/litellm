@@ -474,6 +474,7 @@ class BaseLLMChatTest(ABC):
         """
         PROD Test: ensure nested json schema sent to proxy works as expected.
         """
+        litellm._turn_on_debug()
         from pydantic import BaseModel
         from litellm.utils import supports_response_schema
         from litellm.llms.base_llm.base_utils import type_to_response_format_param
@@ -804,6 +805,35 @@ class BaseLLMChatTest(ABC):
         url = f"data:application/pdf;base64,{encoded_file}"
 
         return url
+    
+    def test_empty_tools(self):
+        """
+        Related Issue: https://github.com/BerriAI/litellm/issues/9080
+        """
+        try:
+            from litellm import completion, ModelResponse
+
+            litellm.set_verbose = True
+            litellm._turn_on_debug()
+            from litellm.utils import supports_function_calling
+
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+            litellm.model_cost = litellm.get_model_cost_map(url="")
+
+            base_completion_call_args = self.get_base_completion_call_args()
+            if not supports_function_calling(base_completion_call_args["model"], None):
+                print("Model does not support function calling")
+                pytest.skip("Model does not support function calling")
+            
+            response = completion(**base_completion_call_args, messages=[{"role": "user", "content": "Hello, how are you?"}], tools=[]) # just make sure call doesn't fail
+            print("response: ", response)
+            assert response is not None
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
+        except litellm.RateLimitError:
+            pass
+        except Exception as e:
+            pytest.fail(f"Error occurred: {e}")
 
     def test_basic_tool_calling(self):
         try:
@@ -928,7 +958,8 @@ class BaseLLMChatTest(ABC):
         assert response._hidden_params["response_cost"] > 0
 
     @pytest.mark.parametrize("input_type", ["input_audio", "audio_url"])
-    def test_supports_audio_input(self, input_type):
+    @pytest.mark.parametrize("format_specified", [True, False])
+    def test_supports_audio_input(self, input_type, format_specified):
         from litellm.utils import return_raw_request, supports_audio_input
         from litellm.types.utils import CallTypes
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -958,10 +989,16 @@ class BaseLLMChatTest(ABC):
         test_file_id = "gs://bucket/file.wav"
 
         if input_type == "input_audio":
-            audio_content.append({
-                "type": "input_audio",
-                "input_audio": {"data": encoded_string, "format": audio_format},
-            })
+            if format_specified:
+                audio_content.append({
+                    "type": "input_audio",
+                    "input_audio": {"data": encoded_string, "format": audio_format},
+                })
+            else:
+                audio_content.append({
+                    "type": "input_audio",
+                    "input_audio": {"data": encoded_string},
+                })
         elif input_type == "audio_url":
             audio_content.append(
                 {
@@ -995,6 +1032,101 @@ class BaseLLMChatTest(ABC):
             assert encoded_string in json.dumps(raw_request), "Audio data not sent to gemini"
         elif input_type == "audio_url":
             assert test_file_id in json.dumps(raw_request), "Audio URL not sent to gemini"
+
+
+    def test_function_calling_with_tool_response(self):
+        from litellm.utils import supports_function_calling
+        from litellm import completion
+
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        base_completion_call_args = self.get_base_completion_call_args()
+        if not supports_function_calling(base_completion_call_args["model"], None):
+            print("Model does not support function calling")
+            pytest.skip("Model does not support function calling")
+        
+        def get_weather(city: str):
+            return f"City: {city}, Weather: Sunny with 34 degree Celcius"
+
+        TOOLS = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the weather in a city",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "city": {
+                                "type": "string",
+                                "description": "The city to get the weather for",
+                            }
+                        },
+                        "required": ["city"],
+                        "additionalProperties": False,
+                    },
+                    "strict": True,
+                },
+            }
+        ]
+
+
+        messages = [{ "content": "How is the weather in Mumbai?","role": "user"}]
+        response, iteration = "", 0
+        while True:
+            if response:
+                break
+            # Create a streaming response with tool calling enabled
+            stream = completion(
+                **base_completion_call_args,
+                messages=messages,
+                tools=TOOLS,
+                stream=True,
+            )
+
+            final_tool_calls = {}
+            for chunk in stream:
+                delta = chunk.choices[0].delta
+                print(delta)
+                if delta.content:
+                    response += delta.content
+                elif delta.tool_calls:
+                    for tool_call in chunk.choices[0].delta.tool_calls or []:
+                        index = tool_call.index
+                        if index not in final_tool_calls:
+                            final_tool_calls[index] = tool_call
+                        else:
+                            final_tool_calls[
+                                index
+                            ].function.arguments += tool_call.function.arguments
+            if final_tool_calls:
+                for tool_call in final_tool_calls.values():
+                    if tool_call.function.name == "get_weather":
+                        city = json.loads(tool_call.function.arguments)["city"]
+                        tool_response = get_weather(city)
+                        messages.append(
+                            {
+                                "role": "assistant",
+                                "tool_calls": [tool_call],
+                                "content": None,
+                            }
+                        )
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "content": tool_response,
+                            }
+                        )
+            iteration += 1
+            if iteration > 2:
+                print("Something went wrong!")
+                break
+
+        print(response)
+
+        
 
 class BaseOSeriesModelsTest(ABC):  # test across azure/openai
     @abstractmethod
@@ -1265,3 +1397,5 @@ class BaseAnthropicChatTest(ABC):
             reasoning_effort="high",
         )
         assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+
+        assert "reasoning_effort" not in optional_params

@@ -100,7 +100,6 @@ async def cache_ping():
     except Exception as e:
         import traceback
 
-        traceback.print_exc()
         error_message = {
             "message": f"Service Unhealthy ({str(e)})",
             "litellm_cache_params": safe_dumps(litellm_cache_params),

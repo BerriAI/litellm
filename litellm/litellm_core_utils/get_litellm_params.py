@@ -112,5 +112,8 @@ def get_litellm_params(
         "max_retries": max_retries,
         "timeout": kwargs.get("timeout"),
         "original_encoding_format": original_encoding_format,
+        "bucket_name": kwargs.get("bucket_name"),
+        "vertex_credentials": kwargs.get("vertex_credentials"),
+        "vertex_project": kwargs.get("vertex_project"),
     }
     return litellm_params

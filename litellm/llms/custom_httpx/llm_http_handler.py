@@ -234,6 +234,10 @@ class BaseLLMHTTPHandler:
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
         )
+        if provider_config is None:
+            raise ValueError(
+                f"Provider config not found for model: {model} and provider: {custom_llm_provider}"
+            )
 
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
@@ -243,6 +247,7 @@ class BaseLLMHTTPHandler:
             messages=messages,
             optional_params=optional_params,
             api_base=api_base,
+            litellm_params=litellm_params,
         )
 
         api_base = provider_config.get_complete_url(
@@ -621,6 +626,7 @@ class BaseLLMHTTPHandler:
             model=model,
             messages=[],
             optional_params=optional_params,
+            litellm_params=litellm_params,
         )
 
         api_base = provider_config.get_complete_url(
@@ -892,6 +898,7 @@ class BaseLLMHTTPHandler:
             model=model,
             messages=[],
             optional_params=optional_params,
+            litellm_params=litellm_params,
         )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -1224,15 +1231,19 @@ class BaseLLMHTTPHandler:
             model="",
             messages=[],
             optional_params={},
+            litellm_params=litellm_params,
         )
 
-        api_base = provider_config.get_complete_url(
+        api_base = provider_config.get_complete_file_url(
             api_base=api_base,
             api_key=api_key,
             model="",
             optional_params={},
             litellm_params=litellm_params,
+            data=create_file_data,
         )
+        if api_base is None:
+            raise ValueError("api_base is required for create_file")
 
         # Get the transformed request data for both steps
         transformed_request = provider_config.transform_create_file_request(
@@ -1259,48 +1270,57 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        try:
-            # Step 1: Initial request to get upload URL
-            initial_response = sync_httpx_client.post(
-                url=api_base,
-                headers={
-                    **headers,
-                    **transformed_request["initial_request"]["headers"],
-                },
-                data=json.dumps(transformed_request["initial_request"]["data"]),
-                timeout=timeout,
-            )
-
-            # Extract upload URL from response headers
-            upload_url = initial_response.headers.get("X-Goog-Upload-URL")
-
-            if not upload_url:
-                raise ValueError("Failed to get upload URL from initial request")
-
-            # Step 2: Upload the actual file
+        if isinstance(transformed_request, str) or isinstance(
+            transformed_request, bytes
+        ):
             upload_response = sync_httpx_client.post(
-                url=upload_url,
-                headers=transformed_request["upload_request"]["headers"],
-                data=transformed_request["upload_request"]["data"],
+                url=api_base,
+                headers=headers,
+                data=transformed_request,
                 timeout=timeout,
             )
+        else:
+            try:
+                # Step 1: Initial request to get upload URL
+                initial_response = sync_httpx_client.post(
+                    url=api_base,
+                    headers={
+                        **headers,
+                        **transformed_request["initial_request"]["headers"],
+                    },
+                    data=json.dumps(transformed_request["initial_request"]["data"]),
+                    timeout=timeout,
+                )
 
-            return provider_config.transform_create_file_response(
-                model=None,
-                raw_response=upload_response,
-                logging_obj=logging_obj,
-                litellm_params=litellm_params,
-            )
+                # Extract upload URL from response headers
+                upload_url = initial_response.headers.get("X-Goog-Upload-URL")
 
-        except Exception as e:
-            raise self._handle_error(
-                e=e,
-                provider_config=provider_config,
-            )
+                if not upload_url:
+                    raise ValueError("Failed to get upload URL from initial request")
+
+                # Step 2: Upload the actual file
+                upload_response = sync_httpx_client.post(
+                    url=upload_url,
+                    headers=transformed_request["upload_request"]["headers"],
+                    data=transformed_request["upload_request"]["data"],
+                    timeout=timeout,
+                )
+            except Exception as e:
+                raise self._handle_error(
+                    e=e,
+                    provider_config=provider_config,
+                )
+
+        return provider_config.transform_create_file_response(
+            model=None,
+            raw_response=upload_response,
+            logging_obj=logging_obj,
+            litellm_params=litellm_params,
+        )
 
     async def async_create_file(
         self,
-        transformed_request: dict,
+        transformed_request: Union[bytes, str, dict],
         litellm_params: dict,
         provider_config: BaseFilesConfig,
         headers: dict,
@@ -1319,45 +1339,54 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        try:
-            # Step 1: Initial request to get upload URL
-            initial_response = await async_httpx_client.post(
-                url=api_base,
-                headers={
-                    **headers,
-                    **transformed_request["initial_request"]["headers"],
-                },
-                data=json.dumps(transformed_request["initial_request"]["data"]),
-                timeout=timeout,
-            )
-
-            # Extract upload URL from response headers
-            upload_url = initial_response.headers.get("X-Goog-Upload-URL")
-
-            if not upload_url:
-                raise ValueError("Failed to get upload URL from initial request")
-
-            # Step 2: Upload the actual file
+        if isinstance(transformed_request, str) or isinstance(
+            transformed_request, bytes
+        ):
             upload_response = await async_httpx_client.post(
-                url=upload_url,
-                headers=transformed_request["upload_request"]["headers"],
-                data=transformed_request["upload_request"]["data"],
+                url=api_base,
+                headers=headers,
+                data=transformed_request,
                 timeout=timeout,
             )
+        else:
+            try:
+                # Step 1: Initial request to get upload URL
+                initial_response = await async_httpx_client.post(
+                    url=api_base,
+                    headers={
+                        **headers,
+                        **transformed_request["initial_request"]["headers"],
+                    },
+                    data=json.dumps(transformed_request["initial_request"]["data"]),
+                    timeout=timeout,
+                )
 
-            return provider_config.transform_create_file_response(
-                model=None,
-                raw_response=upload_response,
-                logging_obj=logging_obj,
-                litellm_params=litellm_params,
-            )
+                # Extract upload URL from response headers
+                upload_url = initial_response.headers.get("X-Goog-Upload-URL")
 
-        except Exception as e:
-            verbose_logger.exception(f"Error creating file: {e}")
-            raise self._handle_error(
-                e=e,
-                provider_config=provider_config,
-            )
+                if not upload_url:
+                    raise ValueError("Failed to get upload URL from initial request")
+
+                # Step 2: Upload the actual file
+                upload_response = await async_httpx_client.post(
+                    url=upload_url,
+                    headers=transformed_request["upload_request"]["headers"],
+                    data=transformed_request["upload_request"]["data"],
+                    timeout=timeout,
+                )
+            except Exception as e:
+                verbose_logger.exception(f"Error creating file: {e}")
+                raise self._handle_error(
+                    e=e,
+                    provider_config=provider_config,
+                )
+
+        return provider_config.transform_create_file_response(
+            model=None,
+            raw_response=upload_response,
+            logging_obj=logging_obj,
+            litellm_params=litellm_params,
+        )
 
     def list_files(self):
         """

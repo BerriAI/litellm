@@ -323,7 +323,8 @@ class TestHuggingFace(BaseLLMChatTest):
             model="huggingface/fireworks-ai/meta-llama/Meta-Llama-3-8B-Instruct",
             messages=[{"role": "user", "content": "Hello"}],
             optional_params={},
-            api_key="test_api_key"
+            api_key="test_api_key",
+            litellm_params={}
         )
         
         assert headers["Authorization"] == "Bearer test_api_key"

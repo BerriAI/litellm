@@ -191,6 +191,7 @@ def clean_headers(
     if litellm_key_header_name is not None:
         special_headers.append(litellm_key_header_name.lower())
     clean_headers = {}
+
     for header, value in headers.items():
         if header.lower() not in special_headers:
             clean_headers[header] = value

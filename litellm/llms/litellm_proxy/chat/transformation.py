@@ -10,6 +10,11 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class LiteLLMProxyChatConfig(OpenAIGPTConfig):
+    def get_supported_openai_params(self, model: str) -> List:
+        list = super().get_supported_openai_params(model)
+        list.append("thinking")
+        return list
+
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
