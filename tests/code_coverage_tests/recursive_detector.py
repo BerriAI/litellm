@@ -17,6 +17,7 @@ IGNORE_FUNCTIONS = [
     "mask_dict",
     "_serialize",  # we now set a max depth for this
     "_sanitize_request_body_for_spend_logs_payload", # testing added for circular reference
+    "_sanitize_value", # testing added for circular reference
 ]
 
 
