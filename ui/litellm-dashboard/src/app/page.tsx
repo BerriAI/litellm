@@ -314,6 +314,8 @@ export default function CreateKeyPage() {
                 <BudgetPanel accessToken={accessToken} />
               ) : page == "guardrails" ? (
                 <GuardrailsPanel accessToken={accessToken} />
+              ): page == "transform-request" ? (
+                <TransformRequestPanel accessToken={accessToken} />
               ): page == "general-settings" ? (
                 <GeneralSettings
                   userID={userID}
