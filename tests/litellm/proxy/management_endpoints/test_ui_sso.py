@@ -19,6 +19,10 @@ from litellm.proxy.management_endpoints.ui_sso import (
     GoogleSSOHandler,
     MicrosoftSSOHandler,
 )
+from litellm.types.proxy.management_endpoints.ui_sso import (
+    MicrosoftGraphAPIUserGroupDirectoryObject,
+    MicrosoftGraphAPIUserGroupResponse,
+)
 
 
 def test_microsoft_sso_handler_openid_from_response():
@@ -32,23 +36,14 @@ def test_microsoft_sso_handler_openid_from_response():
         "surname": "User",
         "some_other_field": "value",
     }
-
-    # Create a mock JWTHandler that returns predetermined team IDs
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
     expected_team_ids = ["team1", "team2"]
-    mock_jwt_handler.get_team_ids_from_jwt.return_value = expected_team_ids
-
     # Act
     # Call the method being tested
     result = MicrosoftSSOHandler.openid_from_response(
-        response=mock_response, jwt_handler=mock_jwt_handler
+        response=mock_response, team_ids=expected_team_ids
     )
 
     # Assert
-    # Verify the JWT handler was called with the correct parameters
-    mock_jwt_handler.get_team_ids_from_jwt.assert_called_once_with(
-        cast(dict, mock_response)
-    )
 
     # Check that the result is a CustomOpenID object with the expected values
     assert isinstance(result, CustomOpenID)
@@ -64,13 +59,9 @@ def test_microsoft_sso_handler_openid_from_response():
 def test_microsoft_sso_handler_with_empty_response():
     # Arrange
     # Test with None response
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
-    mock_jwt_handler.get_team_ids_from_jwt.return_value = []
 
     # Act
-    result = MicrosoftSSOHandler.openid_from_response(
-        response=None, jwt_handler=mock_jwt_handler
-    )
+    result = MicrosoftSSOHandler.openid_from_response(response=None, team_ids=[])
 
     # Assert
     assert isinstance(result, CustomOpenID)
@@ -82,14 +73,10 @@ def test_microsoft_sso_handler_with_empty_response():
     assert result.last_name is None
     assert result.team_ids == []
 
-    # Make sure the JWT handler was called with an empty dict
-    mock_jwt_handler.get_team_ids_from_jwt.assert_called_once_with({})
-
 
 def test_get_microsoft_callback_response():
     # Arrange
     mock_request = MagicMock(spec=Request)
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
     mock_response = {
         "mail": "microsoft_user@example.com",
         "displayName": "Microsoft User",
@@ -115,7 +102,6 @@ def test_get_microsoft_callback_response():
                     request=mock_request,
                     microsoft_client_id="mock_client_id",
                     redirect_url="http://mock_redirect_url",
-                    jwt_handler=mock_jwt_handler,
                 )
             )
 
@@ -132,7 +118,6 @@ def test_get_microsoft_callback_response():
 def test_get_microsoft_callback_response_raw_sso_response():
     # Arrange
     mock_request = MagicMock(spec=Request)
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
     mock_response = {
         "mail": "microsoft_user@example.com",
         "displayName": "Microsoft User",
@@ -157,7 +142,6 @@ def test_get_microsoft_callback_response_raw_sso_response():
                     request=mock_request,
                     microsoft_client_id="mock_client_id",
                     redirect_url="http://mock_redirect_url",
-                    jwt_handler=mock_jwt_handler,
                     return_raw_sso_response=True,
                 )
             )
@@ -206,3 +190,192 @@ def test_get_google_callback_response():
     assert result.get("sub") == "google123"
     assert result.get("given_name") == "Google"
     assert result.get("family_name") == "User"
+
+
+@pytest.mark.asyncio
+async def test_get_user_groups_from_graph_api():
+    # Arrange
+    mock_response = {
+        "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#directoryObjects",
+        "value": [
+            {
+                "@odata.type": "#microsoft.graph.group",
+                "id": "group1",
+                "displayName": "Group 1",
+            },
+            {
+                "@odata.type": "#microsoft.graph.group",
+                "id": "group2",
+                "displayName": "Group 2",
+            },
+        ],
+    }
+
+    async def mock_get(*args, **kwargs):
+        mock = MagicMock()
+        mock.json.return_value = mock_response
+        return mock
+
+    with patch(
+        "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
+    ) as mock_client:
+        mock_client.return_value = MagicMock()
+        mock_client.return_value.get = mock_get
+
+        # Act
+        result = await MicrosoftSSOHandler.get_user_groups_from_graph_api(
+            access_token="mock_token"
+        )
+
+        # Assert
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert "group1" in result
+        assert "group2" in result
+
+
+@pytest.mark.asyncio
+async def test_get_user_groups_pagination():
+    # Arrange
+    first_response = {
+        "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#directoryObjects",
+        "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/memberOf?$skiptoken=page2",
+        "value": [
+            {
+                "@odata.type": "#microsoft.graph.group",
+                "id": "group1",
+                "displayName": "Group 1",
+            },
+        ],
+    }
+    second_response = {
+        "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#directoryObjects",
+        "value": [
+            {
+                "@odata.type": "#microsoft.graph.group",
+                "id": "group2",
+                "displayName": "Group 2",
+            },
+        ],
+    }
+
+    responses = [first_response, second_response]
+    current_response = {"index": 0}
+
+    async def mock_get(*args, **kwargs):
+        mock = MagicMock()
+        mock.json.return_value = responses[current_response["index"]]
+        current_response["index"] += 1
+        return mock
+
+    with patch(
+        "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
+    ) as mock_client:
+        mock_client.return_value = MagicMock()
+        mock_client.return_value.get = mock_get
+
+        # Act
+        result = await MicrosoftSSOHandler.get_user_groups_from_graph_api(
+            access_token="mock_token"
+        )
+
+        # Assert
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert "group1" in result
+        assert "group2" in result
+        assert current_response["index"] == 2  # Verify both pages were fetched
+
+
+@pytest.mark.asyncio
+async def test_get_user_groups_empty_response():
+    # Arrange
+    mock_response = {
+        "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#directoryObjects",
+        "value": [],
+    }
+
+    async def mock_get(*args, **kwargs):
+        mock = MagicMock()
+        mock.json.return_value = mock_response
+        return mock
+
+    with patch(
+        "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
+    ) as mock_client:
+        mock_client.return_value = MagicMock()
+        mock_client.return_value.get = mock_get
+
+        # Act
+        result = await MicrosoftSSOHandler.get_user_groups_from_graph_api(
+            access_token="mock_token"
+        )
+
+        # Assert
+        assert isinstance(result, list)
+        assert len(result) == 0
+
+
+@pytest.mark.asyncio
+async def test_get_user_groups_error_handling():
+    # Arrange
+    async def mock_get(*args, **kwargs):
+        raise Exception("API Error")
+
+    with patch(
+        "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
+    ) as mock_client:
+        mock_client.return_value = MagicMock()
+        mock_client.return_value.get = mock_get
+
+        # Act
+        result = await MicrosoftSSOHandler.get_user_groups_from_graph_api(
+            access_token="mock_token"
+        )
+
+        # Assert
+        assert isinstance(result, list)
+        assert len(result) == 0
+
+
+def test_get_group_ids_from_graph_api_response():
+    # Arrange
+    mock_response = MicrosoftGraphAPIUserGroupResponse(
+        odata_context="https://graph.microsoft.com/v1.0/$metadata#directoryObjects",
+        odata_nextLink=None,
+        value=[
+            MicrosoftGraphAPIUserGroupDirectoryObject(
+                odata_type="#microsoft.graph.group",
+                id="group1",
+                displayName="Group 1",
+                description=None,
+                deletedDateTime=None,
+                roleTemplateId=None,
+            ),
+            MicrosoftGraphAPIUserGroupDirectoryObject(
+                odata_type="#microsoft.graph.group",
+                id="group2",
+                displayName="Group 2",
+                description=None,
+                deletedDateTime=None,
+                roleTemplateId=None,
+            ),
+            MicrosoftGraphAPIUserGroupDirectoryObject(
+                odata_type="#microsoft.graph.group",
+                id=None,  # Test handling of None id
+                displayName="Invalid Group",
+                description=None,
+                deletedDateTime=None,
+                roleTemplateId=None,
+            ),
+        ],
+    )
+
+    # Act
+    result = MicrosoftSSOHandler._get_group_ids_from_graph_api_response(mock_response)
+
+    # Assert
+    assert isinstance(result, list)
+    assert len(result) == 2
+    assert "group1" in result
+    assert "group2" in result
