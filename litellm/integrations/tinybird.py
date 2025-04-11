@@ -20,11 +20,8 @@ class TinybirdLogger(CustomLogger):
 
         self.validate_environment(api_key=api_key, api_base=api_base)
         self.api_base = api_base or os.getenv("TINYBIRD_API_HOST")
-        self.api_key: str = api_key or os.getenv("TINYBIRD_TOKEN")
-        self.datasource_name = datasource_name or os.getenv("TINYBIRD_DATASOURCE_NAME")
-        self.headers = {
-            "Authorization": "Bearer " + self.api_key
-        }
+        self.api_key: str = api_key or os.getenv("TINYBIRD_TOKEN") or ""
+        self.datasource_name = datasource_name or os.getenv("TINYBIRD_DATASOURCE_NAME") or "litellm"
         self.async_handler = TinybirdLitellmAsyncHandler(
             api_url=self.api_base, 
             tinybird_token=self.api_key, 
