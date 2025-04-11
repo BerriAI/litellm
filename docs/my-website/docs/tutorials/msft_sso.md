@@ -17,6 +17,8 @@ Sync Microsoft SSO Groups, Members with LiteLLM Teams.
 
 ## 1. Auto-Create Entra ID Groups on LiteLLM Teams 
 
+In this step, our goal is to have LiteLLM automatically create a new team on the LiteLLM DB when there is a new Group Added to the LiteLLM Enterprise App on Azure Entra ID.
+
 ### 1.1 Create a new group in Entra ID
 
 
@@ -50,8 +52,6 @@ Sign into the LiteLLM UI via SSO. You should be redirected to the Entra ID SSO p
 
 <Image img={require('../../img/msft_sso_sign_in.png')}  style={{ width: '800px', height: 'auto' }} />
 
-
-
 ### 1.4 Check the new team on LiteLLM UI
 
 On the LiteLLM UI, Navigate to `Teams`, You should see the new team `Production LLM Evals Group` auto-created on LiteLLM. 
@@ -65,11 +65,34 @@ When a SSO user signs in to LiteLLM, LiteLLM automatically fetches the Groups un
 
 ## 2. Sync Entra ID Team Memberships
 
-### 2.1 Add a member to the group in Entra ID
+In this step, we will have LiteLLM automatically add a user to the `Production LLM Evals` Team on the LiteLLM DB when a new user is added to the `Production LLM Evals` Group in Entra ID.
 
-### 2.2 Sign in as the new user on LiteLLM UI
+### 2.1 Navigate to the `Production LLM Evals` Group in Entra ID
 
-### 2.3 Check the team membership on LiteLLM UI
+Navigate to the `Production LLM Evals` Group in Entra ID.
+
+<Image img={require('../../img/msft_member_1.png')}  style={{ width: '800px', height: 'auto' }} />
+
+
+### 2.2 Add a member to the group in Entra ID
+
+Select `Members` > `Add members`
+
+In this stage you should add the user you want to add to the `Production LLM Evals` Team.
+
+<Image img={require('../../img/msft_member_2.png')}  style={{ width: '800px', height: 'auto' }} />
+
+
+
+### 2.3 Sign in as the new user on LiteLLM UI
+
+Sign in as the new user on LiteLLM UI. You should be redirected to the Entra ID SSO page. This SSO sign in flow will trigger LiteLLM to fetch the latest Groups and Members from Azure Entra ID. During this step LiteLLM sync it's teams, team members with what is available from Entra ID
+
+<Image img={require('../../img/msft_sso_sign_in.png')}  style={{ width: '800px', height: 'auto' }} />
+
+
+
+### 2.4 Check the team membership on LiteLLM UI
 
 ## 3. Set default params for new teams and users auto-created on LiteLLM
 
