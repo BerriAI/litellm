@@ -126,18 +126,19 @@ class CohereChatConfigV2(BaseConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
     ) -> dict:
         # Use the api_key parameter directly
+        # litellm_params is required by the base class but not used by cohere_validate_environment
         return cohere_validate_environment(
             headers=headers,
             model=model,
             messages=messages,
             optional_params=optional_params,
             api_key=api_key,
-            api_version="v2",  # Specify v2 API version
+            api_version="v2"  # Specify v2 API version
         )
 
     def get_supported_openai_params(self, model: str) -> List[str]:
