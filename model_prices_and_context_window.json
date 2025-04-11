@@ -3097,6 +3097,30 @@
         "supports_vision": true,
         "supports_tool_choice": true
     },
+    "xai/grok-3-beta": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.0000005,
+        "litellm_provider": "xai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "source": "https://x.ai/api#pricing"
+    },
+    "xai/grok-3-mini-beta": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 0.0000003,
+        "output_cost_per_token": 0.00000005,
+        "litellm_provider": "xai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "source": "https://x.ai/api#pricing"
+    },
     "xai/grok-vision-beta": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
