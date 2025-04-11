@@ -8,12 +8,11 @@ load_dotenv()
 
 # For testing, make sure the COHERE_API_KEY or CO_API_KEY environment variable is set
 # You can set it before running the tests with: export COHERE_API_KEY=your_api_key
-import io
-import os
 
 sys.path.insert(
-    0, os.path.abspath("../..")
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../"))
 )  # Adds the parent directory to the system path
+
 import json
 
 import pytest
