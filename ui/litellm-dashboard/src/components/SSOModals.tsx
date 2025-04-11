@@ -27,6 +27,7 @@ interface SSOProviderConfig {
     label: string;
     name: string;
     placeholder?: string;
+    required?: boolean;
   }>;
 }
 
@@ -47,11 +48,13 @@ const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
       microsoft_client_id: 'MICROSOFT_CLIENT_ID',
       microsoft_client_secret: 'MICROSOFT_CLIENT_SECRET',
       microsoft_tenant: 'MICROSOFT_TENANT',
+      microsoft_service_principal_id: 'MICROSOFT_SERVICE_PRINCIPAL_ID',
     },
     fields: [
       { label: 'MICROSOFT CLIENT ID', name: 'microsoft_client_id' },
       { label: 'MICROSOFT CLIENT SECRET', name: 'microsoft_client_secret' },
       { label: 'MICROSOFT TENANT', name: 'microsoft_tenant' },
+      { label: 'MICROSOFT SERVICE PRINCIPAL ID', name: 'microsoft_service_principal_id', required: false },
     ],
   },
   okta: {
@@ -108,7 +111,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
         key={field.name}
         label={field.label}
         name={field.name}
-        rules={[{ required: true, message: `Please enter the ${field.label.toLowerCase()}` }]}
+        rules={[{ required: field.required !== false, message: `Please enter the ${field.label.toLowerCase()}` }]}
       >
         {field.name.includes('client') ? (
           <Input.Password />
@@ -167,14 +170,14 @@ const SSOModals: React.FC<SSOModalsProps> = ({
             <Form.Item
               label="Proxy Admin Email"
               name="user_email"
-              rules={[{ required: true, message: "Please enter the email of the proxy admin" }]}
+              rules={[{ required: false, message: "Please enter the email of the proxy admin" }]}
             >
               <TextInput />
             </Form.Item>
             <Form.Item
               label="PROXY BASE URL"
               name="proxy_base_url"
-              rules={[{ required: true, message: "Please enter the proxy base url" }]}
+              rules={[{ required: false, message: "Please enter the proxy base url" }]}
             >
               <TextInput />
             </Form.Item>
