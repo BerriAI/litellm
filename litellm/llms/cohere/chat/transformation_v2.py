@@ -181,7 +181,9 @@ class CohereChatConfigV2(BaseConfig):
                 optional_params["presence_penalty"] = value
             if param == "stop":
                 optional_params["stop_sequences"] = value
-            # The transform_request method will handle the tools parameter with _construct_cohere_tool
+            if param == "tools":
+                cohere_tools = self._construct_cohere_tool(tools=value)
+                optional_params["tools"] = cohere_tools
             if param == "seed":
                 optional_params["seed"] = value
         return optional_params
@@ -211,10 +213,7 @@ class CohereChatConfigV2(BaseConfig):
         optional_params["messages"] = cohere_messages
         optional_params["model"] = model
 
-        ## Handle Tool Calling
-        if "tools" in optional_params:
-            cohere_tools = self._construct_cohere_tool(tools=optional_params["tools"])
-            optional_params["tools"] = cohere_tools
+        ## Tool Calling is now handled in map_openai_params
 
         # Handle tool results if present
         if "tool_results" in optional_params and isinstance(optional_params["tool_results"], list):
