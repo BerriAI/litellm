@@ -94,6 +94,10 @@ Sign in as the new user on LiteLLM UI. You should be redirected to the Entra ID 
 
 ### 2.4 Check the team membership on LiteLLM UI
 
+On the LiteLLM UI, Navigate to `Teams`, You should see the new team `Production LLM Evals Group`. Since your are now a member of the `Production LLM Evals Group` in Entra ID, you should see the new team `Production LLM Evals Group` on the LiteLLM UI.
+
+<Image img={require('../../img/msft_member_3.png')}  style={{ width: '800px', height: 'auto' }} />
+
 ## 3. Set default params for new teams and users auto-created on LiteLLM
 
 ### 3.1 Set default params for new teams
