@@ -11,6 +11,7 @@ Has all /sso/* routes
 import asyncio
 import os
 import uuid
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -938,14 +939,13 @@ class SSOAuthenticationHandler:
                 team_id=litellm_team_id,
                 team_alias=litellm_team_name,
             )
-            if litellm.default_team_params:
-                team_request = litellm.default_team_params.model_copy(
-                    deep=True,
-                    update={
-                        "team_id": litellm_team_id,
-                        "team_alias": litellm_team_name,
-                    },
-                )
+            if litellm.default_team_params and isinstance(
+                litellm.default_team_params, dict
+            ):
+                _team_request = deepcopy(litellm.default_team_params)
+                _team_request["team_id"] = litellm_team_id
+                _team_request["team_alias"] = litellm_team_name
+                team_request = NewTeamRequest(**_team_request)
             await new_team(
                 data=team_request,
                 # params used for Audit Logging
