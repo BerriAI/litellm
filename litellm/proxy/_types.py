@@ -191,6 +191,28 @@ class LiteLLM_UpperboundKeyGenerateParams(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
 
 
+class KeyManagementRoutes(str, enum.Enum):
+    """
+    Enum for key management routes
+    """
+
+    # write routes
+    KEY_GENERATE = "/key/generate"
+    KEY_UPDATE = "/key/update"
+    KEY_DELETE = "/key/delete"
+    KEY_REGENERATE = "/key/regenerate"
+    KEY_REGENERATE_WITH_PATH_PARAM = "/key/{key_id}/regenerate"
+    KEY_BLOCK = "/key/block"
+    KEY_UNBLOCK = "/key/unblock"
+
+    # info and health routes
+    KEY_INFO = "/key/info"
+    KEY_HEALTH = "/key/health"
+
+    # list routes
+    KEY_LIST = "/key/list"
+
+
 class LiteLLMRoutes(enum.Enum):
     openai_route_names = [
         "chat_completion",
@@ -321,14 +343,19 @@ class LiteLLMRoutes(enum.Enum):
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
     master_key_only_routes = ["/global/spend/reset"]
 
-    management_routes = [  # key
-        "/key/generate",
-        "/key/{token_id}/regenerate",
-        "/key/update",
-        "/key/delete",
-        "/key/info",
-        "/key/health",
-        "/key/list",
+    key_management_routes = [
+        KeyManagementRoutes.KEY_GENERATE,
+        KeyManagementRoutes.KEY_UPDATE,
+        KeyManagementRoutes.KEY_DELETE,
+        KeyManagementRoutes.KEY_INFO,
+        KeyManagementRoutes.KEY_REGENERATE,
+        KeyManagementRoutes.KEY_REGENERATE_WITH_PATH_PARAM,
+        KeyManagementRoutes.KEY_LIST,
+        KeyManagementRoutes.KEY_BLOCK,
+        KeyManagementRoutes.KEY_UNBLOCK,
+    ]
+
+    management_routes = [
         # user
         "/user/new",
         "/user/update",
@@ -348,7 +375,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/update",
         "/model/delete",
         "/model/info",
-    ]
+    ] + key_management_routes
 
     spend_tracking_routes = [
         # spend
@@ -407,21 +434,19 @@ class LiteLLMRoutes(enum.Enum):
         "/get/litellm_model_cost_map",
     ] + info_routes
 
-    internal_user_routes = [
-        "/key/generate",
-        "/key/{token_id}/regenerate",
-        "/key/update",
-        "/key/delete",
-        "/key/health",
-        "/key/info",
-        "/global/spend/tags",
-        "/global/spend/keys",
-        "/global/spend/models",
-        "/global/spend/provider",
-        "/global/spend/end_users",
-        "/global/activity",
-        "/global/activity/model",
-    ] + spend_tracking_routes
+    internal_user_routes = (
+        [
+            "/global/spend/tags",
+            "/global/spend/keys",
+            "/global/spend/models",
+            "/global/spend/provider",
+            "/global/spend/end_users",
+            "/global/activity",
+            "/global/activity/model",
+        ]
+        + spend_tracking_routes
+        + key_management_routes
+    )
 
     internal_user_view_only_routes = (
         spend_tracking_routes + global_spend_tracking_routes
@@ -1110,6 +1135,7 @@ class LiteLLM_TeamTable(TeamBase):
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
     model_id: Optional[int] = None
+    team_member_permissions: Optional[List[str]] = None
     litellm_model_table: Optional[LiteLLM_ModelTable] = None
     created_at: Optional[datetime] = None
 
@@ -2156,6 +2182,11 @@ class ProxyErrorTypes(str, enum.Enum):
     Cache ping error
     """
 
+    team_member_permission_error = "team_member_permission_error"
+    """
+    Team member permission error
+    """
+
     @classmethod
     def get_model_access_error_type_for_object(
         cls, object_type: Literal["key", "user", "team"]
@@ -2308,6 +2339,38 @@ class TeamModelDeleteRequest(BaseModel):
 
     team_id: str
     models: List[str]
+
+
+class GetTeamMemberPermissionsRequest(BaseModel):
+    """Request to get the team member permissions for a team"""
+
+    team_id: str
+
+
+class GetTeamMemberPermissionsResponse(BaseModel):
+    """Response to get the team member permissions for a team"""
+
+    team_id: str
+    """
+    The team id that the permissions are for
+    """
+
+    team_member_permissions: Optional[List[str]] = []
+    """
+    The team member permissions currently set for the team
+    """
+
+    all_available_permissions: List[str]
+    """
+    All available team member permissions
+    """
+
+
+class UpdateTeamMemberPermissionsRequest(BaseModel):
+    """Request to update the team member permissions for a team"""
+
+    team_id: str
+    team_member_permissions: List[str]
 
 
 # Organization Member Requests

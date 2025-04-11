@@ -20,6 +20,8 @@ import {
   Table,
   Icon
 } from "@tremor/react";
+import TeamMembersComponent from "./team_member_view";
+import MemberPermissions from "./member_permissions";
 import { teamInfoCall, teamMemberDeleteCall, teamMemberAddCall, teamMemberUpdateCall, Member, teamUpdateCall } from "@/components/networking";
 import { Button, Form, Input, Select, message, Tooltip } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
@@ -33,7 +35,7 @@ import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_
 import { Team } from "../key_team_helpers/key_list";
 
 
-interface TeamData {
+export interface TeamData {
   team_id: string;
   team_info: {
     team_alias: string;
@@ -62,7 +64,7 @@ interface TeamData {
   team_memberships: any[];
 }
 
-interface TeamInfoProps {
+export interface TeamInfoProps {
   teamId: string;
   onClose: () => void;
   accessToken: string | null;
@@ -241,6 +243,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             <Tab key="overview">Overview</Tab>,
             ...(canEditTeam ? [
               <Tab key="members">Members</Tab>,
+              <Tab key="member-permissions">Member Permissions</Tab>,
               <Tab key="settings">Settings</Tab>
             ] : [])
           ]}
@@ -287,58 +290,23 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
           {/* Members Panel */}
           <TabPanel>
-            <div className="space-y-4">
-              <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableHeaderCell>User ID</TableHeaderCell>
-                      <TableHeaderCell>User Email</TableHeaderCell>
-                      <TableHeaderCell>Role</TableHeaderCell>
-                      <TableHeaderCell></TableHeaderCell>
-                    </TableRow>
-                  </TableHead>
+            <TeamMembersComponent
+              teamData={teamData}
+              canEditTeam={canEditTeam}
+              handleMemberDelete={handleMemberDelete}
+              setSelectedEditMember={setSelectedEditMember}
+              setIsEditMemberModalVisible={setIsEditMemberModalVisible}
+              setIsAddMemberModalVisible={setIsAddMemberModalVisible}
+            />
+          </TabPanel>
 
-                  <TableBody>
-                    {teamData.team_info.members_with_roles.map((member: Member, index: number) => (
-                      <TableRow key={index}>
-                        <TableCell>
-                          <Text className="font-mono">{member.user_id}</Text>
-                        </TableCell>
-                        <TableCell>
-                          <Text className="font-mono">{member.user_email}</Text>
-                        </TableCell>
-                        <TableCell>
-                          <Text className="font-mono">{member.role}</Text>
-                        </TableCell>
-                        <TableCell>
-                          {canEditTeam && (
-                            <>
-                              <Icon
-                                icon={PencilAltIcon}
-                                size="sm"
-                                onClick={() => {
-                                  setSelectedEditMember(member);
-                                  setIsEditMemberModalVisible(true);
-                                }}
-                              />
-                              <Icon
-                                onClick={() => handleMemberDelete(member)}
-                                icon={TrashIcon}
-                                size="sm"
-                              />
-                            </>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </Card>
-              <TremorButton onClick={() => setIsAddMemberModalVisible(true)}>
-                Add Member
-              </TremorButton>
-            </div>
+          {/* Member Permissions Panel */}
+          <TabPanel>
+            <MemberPermissions 
+              teamId={teamId}
+              accessToken={accessToken}
+              canEditTeam={canEditTeam}
+            />
           </TabPanel>
 
           {/* Settings Panel */}
