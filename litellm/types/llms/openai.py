@@ -288,7 +288,10 @@ class OpenAIFileObject(BaseModel):
     `error` field on `fine_tuning.job`.
     """
 
-    _hidden_params: dict = {}
+    _hidden_params: dict = {"response_cost": 0.0}  # no cost for writing a file
+
+
+CREATE_FILE_REQUESTS_PURPOSE = Literal["assistants", "batch", "fine-tune"]
 
 
 # OpenAI Files Types
@@ -307,8 +310,8 @@ class CreateFileRequest(TypedDict, total=False):
         timeout: Optional[float] = None
     """
 
-    file: FileTypes
-    purpose: Literal["assistants", "batch", "fine-tune"]
+    file: Required[FileTypes]
+    purpose: Required[CREATE_FILE_REQUESTS_PURPOSE]
     extra_headers: Optional[Dict[str, str]]
     extra_body: Optional[Dict[str, str]]
     timeout: Optional[float]
