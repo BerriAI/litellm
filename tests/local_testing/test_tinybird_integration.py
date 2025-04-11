@@ -66,7 +66,7 @@ def test_acompletion_sync():
             loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
         loop.close()
 
-test_acompletion_sync()
+# test_acompletion_sync()
 
 litellm.success_callback = []
 litellm.failure_callback = []
