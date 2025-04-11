@@ -329,10 +329,6 @@ class LiteLLMProxyRequestSetup:
         """
         data = LitellmDataForBackendLLMCall()
 
-        user = LiteLLMProxyRequestSetup.get_user_from_headers(headers, general_settings)
-        if user is not None:
-            data["user"] = user
-
         if (
             general_settings
             and general_settings.get("forward_client_headers_to_llm_api") is True
@@ -527,6 +523,14 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             general_settings=general_settings,
         )
     )
+
+    # Parse user info from headers
+    user = LiteLLMProxyRequestSetup.get_user_from_headers(_headers, general_settings)
+    if user is not None:
+        if user_api_key_dict.end_user_id is None:
+            user_api_key_dict.end_user_id = user
+        if "user" not in data:
+            data["user"] = user
 
     # Include original request and headers in the data
     data["proxy_server_request"] = {
