@@ -380,6 +380,7 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_native_streaming": false,
+        "supports_reasoning": true,
         "supported_modalities": ["text", "image"],
         "supported_output_modalities": ["text"],
         "supported_endpoints": ["/v1/responses", "/v1/batch"]
@@ -402,6 +403,7 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_native_streaming": false,
+        "supports_reasoning": true,
         "supported_modalities": ["text", "image"],
         "supported_output_modalities": ["text"],
         "supported_endpoints": ["/v1/responses", "/v1/batch"]
@@ -421,6 +423,7 @@
         "supports_prompt_caching": true,
         "supports_system_messages": true,
         "supports_response_schema": true,
+        "supports_reasoning": true,
         "supports_tool_choice": true
     },
     "o1-mini": {
@@ -449,6 +452,7 @@
         "supports_vision": false,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
+        "supports_reasoning": true,
         "supports_tool_choice": true
     },
     "o3-mini-2025-01-31": {
@@ -465,6 +469,7 @@
         "supports_vision": false,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
+        "supports_reasoning": true,
         "supports_tool_choice": true
     },
     "o1-mini-2024-09-12": {
@@ -477,6 +482,7 @@
         "litellm_provider": "openai",
         "mode": "chat",
         "supports_vision": true,
+        "supports_reasoning": true,
         "supports_prompt_caching": true
     },
     "o1-preview": {
@@ -489,6 +495,7 @@
         "litellm_provider": "openai",
         "mode": "chat",
         "supports_vision": true,
+        "supports_reasoning": true,
         "supports_prompt_caching": true
     },
     "o1-preview-2024-09-12": {
@@ -501,6 +508,7 @@
         "litellm_provider": "openai",
         "mode": "chat",
         "supports_vision": true,
+        "supports_reasoning": true,
         "supports_prompt_caching": true
     },
     "o1-2024-12-17": {
@@ -518,6 +526,7 @@
         "supports_prompt_caching": true,
         "supports_system_messages": true,
         "supports_response_schema": true,
+        "supports_reasoning": true,
         "supports_tool_choice": true
     },
     "chatgpt-4o-latest": {
@@ -1417,6 +1426,7 @@
         "cache_read_input_token_cost": 0.00000055,
         "litellm_provider": "azure",
         "mode": "chat",
+        "supports_reasoning": true,
         "supports_vision": false,
         "supports_prompt_caching": true,
         "supports_tool_choice": true
@@ -1433,6 +1443,7 @@
         "litellm_provider": "azure",
         "mode": "chat",
         "supports_vision": false,
+        "supports_reasoning": true,
         "supports_prompt_caching": true,
         "supports_tool_choice": true
     },
@@ -1448,6 +1459,7 @@
         "litellm_provider": "azure",
         "mode": "chat",
         "supports_vision": false,
+        "supports_reasoning": true,
         "supports_prompt_caching": true,
         "supports_tool_choice": true
     },
@@ -1478,6 +1490,7 @@
         "mode": "chat",
         "supports_vision": false,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -1493,6 +1506,7 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": false,
+        "supports_reasoning": true,
         "supports_prompt_caching": true
     },
     "azure/o1-mini-2024-09-12": {
@@ -1507,6 +1521,7 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": false,
+        "supports_reasoning": true,
         "supports_prompt_caching": true
     },
     "azure/us/o1-mini-2024-09-12": {
@@ -1553,6 +1568,7 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": true,
+        "supports_reasoning": true,
         "supports_prompt_caching": true,
         "supports_tool_choice": true
     },
@@ -1568,6 +1584,7 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": true,
+        "supports_reasoning": true,
         "supports_prompt_caching": true,
         "supports_tool_choice": true
     },
@@ -1613,6 +1630,7 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": false,
+        "supports_reasoning": true,
         "supports_prompt_caching": true
     },
     "azure/o1-preview-2024-09-12": {
@@ -1627,6 +1645,7 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": false,
+        "supports_reasoning": true,
         "supports_prompt_caching": true
     },
     "azure/us/o1-preview-2024-09-12": {
@@ -7032,6 +7051,7 @@
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_parallel_function_calling": true,
         "supports_vision": false,
         "supports_tool_choice": true
@@ -7045,6 +7065,7 @@
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_parallel_function_calling": true,
         "supports_vision": false,
         "supports_tool_choice": true
