@@ -192,7 +192,7 @@ class AsyncHTTPHandler:
     async def post(
         self,
         url: str,
-        data: Optional[Union[dict, str]] = None,  # type: ignore
+        data: Optional[Union[dict, str, bytes]] = None,  # type: ignore
         json: Optional[dict] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
@@ -427,7 +427,7 @@ class AsyncHTTPHandler:
         self,
         url: str,
         client: httpx.AsyncClient,
-        data: Optional[Union[dict, str]] = None,  # type: ignore
+        data: Optional[Union[dict, str, bytes]] = None,  # type: ignore
         json: Optional[dict] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
@@ -527,7 +527,7 @@ class HTTPHandler:
     def post(
         self,
         url: str,
-        data: Optional[Union[dict, str]] = None,
+        data: Optional[Union[dict, str, bytes]] = None,
         json: Optional[Union[dict, str, List]] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
@@ -573,7 +573,6 @@ class HTTPHandler:
                 setattr(e, "text", error_text)
 
             setattr(e, "status_code", e.response.status_code)
-
             raise e
         except Exception as e:
             raise e

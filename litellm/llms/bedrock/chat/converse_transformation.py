@@ -30,6 +30,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
     ChatCompletionUserMessage,
+    OpenAIChatCompletionToolParam,
     OpenAIMessageContentListBlock,
 )
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
@@ -211,13 +212,29 @@ class AmazonConverseConfig(BaseConfig):
         )
         return _tool
 
+    def _apply_tool_call_transformation(
+        self,
+        tools: List[OpenAIChatCompletionToolParam],
+        model: str,
+        non_default_params: dict,
+        optional_params: dict,
+    ):
+        optional_params = self._add_tools_to_optional_params(
+            optional_params=optional_params, tools=tools
+        )
+
+        if (
+            "meta.llama3-3-70b-instruct-v1:0" in model
+            and non_default_params.get("stream", False) is True
+        ):
+            optional_params["fake_stream"] = True
+
     def map_openai_params(
         self,
         non_default_params: dict,
         optional_params: dict,
         model: str,
         drop_params: bool,
-        messages: Optional[List[AllMessageValues]] = None,
     ) -> dict:
         is_thinking_enabled = self.is_thinking_enabled(non_default_params)
 
@@ -286,8 +303,11 @@ class AmazonConverseConfig(BaseConfig):
             if param == "top_p":
                 optional_params["topP"] = value
             if param == "tools" and isinstance(value, list):
-                optional_params = self._add_tools_to_optional_params(
-                    optional_params=optional_params, tools=value
+                self._apply_tool_call_transformation(
+                    tools=cast(List[OpenAIChatCompletionToolParam], value),
+                    model=model,
+                    non_default_params=non_default_params,
+                    optional_params=optional_params,
                 )
             if param == "tool_choice":
                 _tool_choice_value = self.map_tool_choice_values(
@@ -633,8 +653,10 @@ class AmazonConverseConfig(BaseConfig):
             cache_read_input_tokens = usage["cacheReadInputTokens"]
             input_tokens += cache_read_input_tokens
         if "cacheWriteInputTokens" in usage:
+            """
+            Do not increment prompt_tokens with cacheWriteInputTokens
+            """
             cache_creation_input_tokens = usage["cacheWriteInputTokens"]
-            input_tokens += cache_creation_input_tokens
 
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens
@@ -811,6 +833,7 @@ class AmazonConverseConfig(BaseConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:

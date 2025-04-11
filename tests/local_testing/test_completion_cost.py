@@ -1266,13 +1266,13 @@ def test_completion_cost_prompt_caching(model, custom_llm_provider):
 @pytest.mark.parametrize(
     "model",
     [
-        "databricks/databricks-meta-llama-3.2-3b-instruct",
-        "databricks/databricks-meta-llama-3.3-70b-instruct",
+        "databricks/databricks-meta-llama-3-3-70b-instruct",
         "databricks/databricks-dbrx-instruct",
         # "databricks/databricks-mixtral-8x7b-instruct",
     ],
 )
 def test_completion_cost_databricks(model):
+    litellm._turn_on_debug()
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
     model, messages = model, [{"role": "user", "content": "What is 2+2?"}]
@@ -2954,9 +2954,6 @@ def test_cost_calculator_with_custom_pricing():
 @pytest.mark.asyncio
 async def test_cost_calculator_with_custom_pricing_router(model_item, custom_pricing):
     from litellm import Router
-
-    litellm._turn_on_debug()
-
     if custom_pricing == "litellm_params":
         model_item["litellm_params"]["input_cost_per_token"] = 0.0000008
         model_item["litellm_params"]["output_cost_per_token"] = 0.0000032

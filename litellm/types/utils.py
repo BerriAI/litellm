@@ -2,7 +2,7 @@ import json
 import time
 import uuid
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Union
 
 from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
@@ -34,6 +34,7 @@ from .llms.openai import (
     ChatCompletionUsageBlock,
     FileSearchTool,
     OpenAIChatCompletionChunk,
+    OpenAIRealtimeStreamList,
     WebSearchOptions,
 )
 from .rerank import RerankResponse
@@ -120,6 +121,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
+    input_cost_per_token_above_200k_tokens: Optional[
+        float
+    ]  # only for vertex ai gemini-2.5-pro models
     input_cost_per_character_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
@@ -136,6 +140,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
+    output_cost_per_token_above_200k_tokens: Optional[
+        float
+    ]  # only for vertex ai gemini-2.5-pro models
     output_cost_per_character_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
@@ -718,7 +725,7 @@ class Choices(OpenAIObject):
         finish_reason=None,
         index=0,
         message: Optional[Union[Message, dict]] = None,
-        logprobs=None,
+        logprobs: Optional[Union[ChoiceLogprobs, dict, Any]] = None,
         enhancements=None,
         **params,
     ):
@@ -1703,6 +1710,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     prompt_management_metadata: Optional[StandardLoggingPromptManagementMetadata]
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
     applied_guardrails: Optional[List[str]]
+    usage_object: Optional[dict]
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):
@@ -1723,6 +1731,7 @@ class StandardLoggingHiddenParams(TypedDict):
     additional_headers: Optional[StandardLoggingAdditionalHeaders]
     batch_models: Optional[List[str]]
     litellm_model_name: Optional[str]  # the model name sent to the provider by litellm
+    usage_object: Optional[dict]
 
 
 class StandardLoggingModelInformation(TypedDict):
@@ -2144,6 +2153,31 @@ class LiteLLMBatch(Batch):
             return self.dict()
 
 
+class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
+    results: OpenAIRealtimeStreamList
+    usage: Usage
+    _hidden_params: dict = {}
+
+    def __contains__(self, key):
+        # Define custom behavior for the 'in' operator
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
+
+    def json(self, **kwargs):  # type: ignore
+        try:
+            return self.model_dump()  # noqa
+        except Exception:
+            # if using pydantic v1
+            return self.dict()
+
+
 class RawRequestTypedDict(TypedDict, total=False):
     raw_request_api_base: Optional[str]
     raw_request_body: Optional[dict]
@@ -2170,3 +2204,20 @@ class CreateCredentialItem(CredentialBase):
         if not values.get("credential_values") and not values.get("model_id"):
             raise ValueError("Either credential_values or model_id must be set")
         return values
+
+
+class ExtractedFileData(TypedDict):
+    """
+    TypedDict for storing processed file data
+
+    Attributes:
+        filename: Name of the file if provided
+        content: The file content in bytes
+        content_type: MIME type of the file
+        headers: Any additional headers for the file
+    """
+
+    filename: Optional[str]
+    content: bytes
+    content_type: Optional[str]
+    headers: Mapping[str, str]

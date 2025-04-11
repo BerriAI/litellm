@@ -22,6 +22,7 @@ import {
   ThunderboltOutlined,
   LockOutlined,
   ToolOutlined,
+  TagsOutlined,
 } from '@ant-design/icons';
 import { old_admin_roles, v2_admin_role_names, all_admin_roles, rolesAllowedToSeeUsage, rolesWithWriteAccess, internalUserRoles } from '../utils/roles';
 
@@ -63,9 +64,6 @@ const Sidebar: React.FC<SidebarProps> = ({
     { key: "14", page: "api_ref", label: "API Reference", icon: <ApiOutlined /> },
     { key: "16", page: "model-hub", label: "Model Hub", icon: <AppstoreOutlined /> },
     { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined />},
-    
-
-    
     { 
       key: "experimental", 
       page: "experimental",
@@ -76,7 +74,9 @@ const Sidebar: React.FC<SidebarProps> = ({
         { key: "10", page: "budgets", label: "Budgets", icon: <BankOutlined />, roles: all_admin_roles },
         { key: "11", page: "guardrails", label: "Guardrails", icon: <SafetyOutlined />, roles: all_admin_roles },
         { key: "12", page: "new_usage", label: "New Usage", icon: <BarChartOutlined />, roles: [...all_admin_roles, ...internalUserRoles] },
+        { key: "20", page: "transform-request", label: "API Playground", icon: <ApiOutlined />, roles: [...all_admin_roles, ...internalUserRoles] },
         { key: "18", page: "mcp-tools", label: "MCP Tools", icon: <ToolOutlined />, roles: all_admin_roles },
+        { key: "19", page: "tag-management", label: "Tag Management", icon: <TagsOutlined />, roles: all_admin_roles },
       ]
     },
     {

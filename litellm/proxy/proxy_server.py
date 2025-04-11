@@ -139,6 +139,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.proxy._experimental.mcp_server.server import router as mcp_router
 from litellm.proxy._experimental.mcp_server.tool_registry import (
@@ -236,6 +237,9 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 )
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
+)
+from litellm.proxy.management_endpoints.tag_management_endpoints import (
+    router as tag_management_router,
 )
 from litellm.proxy.management_endpoints.team_callback_endpoints import (
     router as team_callback_router,
@@ -347,13 +351,13 @@ from fastapi import (
     Request,
     Response,
     UploadFile,
+    applications,
     status,
-    applications
 )
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.openapi.utils import get_openapi
 from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import (
     FileResponse,
     JSONResponse,
@@ -384,6 +388,7 @@ global_max_parallel_request_retries_env: Optional[str] = os.getenv(
     "LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES"
 )
 proxy_state = ProxyState()
+SENSITIVE_DATA_MASKER = SensitiveDataMasker()
 if global_max_parallel_request_retries_env is None:
     global_max_parallel_request_retries: int = 3
 else:
@@ -735,7 +740,7 @@ try:
 
 except Exception:
     pass
-# current_dir = os.path.dirname(os.path.abspath(__file__))
+current_dir = os.path.dirname(os.path.abspath(__file__))
 # ui_path = os.path.join(current_dir, "_experimental", "out")
 # # Mount this test directory instead
 # app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
@@ -753,14 +758,18 @@ app.add_middleware(PrometheusAuthMiddleware)
 
 swagger_path = os.path.join(current_dir, "swagger")
 app.mount("/swagger", StaticFiles(directory=swagger_path), name="swagger")
+
+
 def swagger_monkey_patch(*args, **kwargs):
     return get_swagger_ui_html(
         *args,
         **kwargs,
         swagger_js_url="/swagger/swagger-ui-bundle.js",
         swagger_css_url="/swagger/swagger-ui.css",
-        swagger_favicon_url="/swagger/favicon.png"
+        swagger_favicon_url="/swagger/favicon.png",
     )
+
+
 applications.get_swagger_ui_html = swagger_monkey_patch
 
 from typing import Dict
@@ -794,9 +803,9 @@ model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
     dual_cache=user_api_key_cache
 )
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
-redis_usage_cache: Optional[
-    RedisCache
-] = None  # redis cache used for tracking spend, tpm/rpm limits
+redis_usage_cache: Optional[RedisCache] = (
+    None  # redis cache used for tracking spend, tpm/rpm limits
+)
 user_custom_auth = None
 user_custom_key_generate = None
 user_custom_sso = None
@@ -1122,9 +1131,9 @@ async def update_cache(  # noqa: PLR0915
         _id = "team_id:{}".format(team_id)
         try:
             # Fetch the existing cost for the given user
-            existing_spend_obj: Optional[
-                LiteLLM_TeamTable
-            ] = await user_api_key_cache.async_get_cache(key=_id)
+            existing_spend_obj: Optional[LiteLLM_TeamTable] = (
+                await user_api_key_cache.async_get_cache(key=_id)
+            )
             if existing_spend_obj is None:
                 # do nothing if team not in api key cache
                 return
@@ -1390,7 +1399,9 @@ class ProxyConfig:
         team_config: dict = {}
         for team in all_teams_config:
             if "team_id" not in team:
-                raise Exception(f"team_id missing from team: {team}")
+                raise Exception(
+                    f"team_id missing from team: {SENSITIVE_DATA_MASKER.mask_dict(team)}"
+                )
             if team_id == team["team_id"]:
                 team_config = team
                 break
@@ -2801,9 +2812,9 @@ async def initialize(  # noqa: PLR0915
         user_api_base = api_base
         dynamic_config[user_model]["api_base"] = api_base
     if api_version:
-        os.environ[
-            "AZURE_API_VERSION"
-        ] = api_version  # set this for azure - litellm can read this from the env
+        os.environ["AZURE_API_VERSION"] = (
+            api_version  # set this for azure - litellm can read this from the env
+        )
     if max_tokens:  # model-specific param
         dynamic_config[user_model]["max_tokens"] = max_tokens
     if temperature:  # model-specific param
@@ -3179,6 +3190,11 @@ class ProxyStartupEvent:
                     timezone=ZoneInfo("America/Los_Angeles"),  # Pacific Time
                 )
                 await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
+
+        if litellm.prometheus_initialize_budget_metrics is True:
+            from litellm.integrations.prometheus import PrometheusLogger
+
+            PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
 
         scheduler.start()
 
@@ -4261,8 +4277,47 @@ async def websocket_endpoint(
         "websocket": websocket,
     }
 
+    headers = dict(websocket.headers.items())  # Convert headers to dict first
+
+    request = Request(
+        scope={
+            "type": "http",
+            "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()],
+            "method": "POST",
+            "path": "/v1/realtime",
+        }
+    )
+
+    request._url = websocket.url
+
+    async def return_body():
+        return_string = f'{{"model": "{model}"}}'
+        # return string as bytes
+        return return_string.encode()
+
+    request.body = return_body  # type: ignore
+
     ### ROUTE THE REQUEST ###
+    base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
+        (
+            data,
+            litellm_logging_obj,
+        ) = await base_llm_response_processor.common_processing_pre_call_logic(
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_logging_obj=proxy_logging_obj,
+            proxy_config=proxy_config,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            model=model,
+            route_type="_arealtime",
+        )
         llm_call = await route_request(
             data=data,
             route_type="_arealtime",
@@ -7703,9 +7758,9 @@ async def get_config_list(
                             hasattr(sub_field_info, "description")
                             and sub_field_info.description is not None
                         ):
-                            nested_fields[
-                                idx
-                            ].field_description = sub_field_info.description
+                            nested_fields[idx].field_description = (
+                                sub_field_info.description
+                            )
                         idx += 1
 
                     _stored_in_db = None
@@ -8135,3 +8190,4 @@ app.include_router(openai_files_router)
 app.include_router(team_callback_router)
 app.include_router(budget_management_router)
 app.include_router(model_management_router)
+app.include_router(tag_management_router)

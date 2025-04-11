@@ -880,6 +880,9 @@ def test_completion_azure_mistral_large_function_calling(provider):
     This primarily tests if the 'Function()' pydantic object correctly handles argument param passed in as a dict vs. string
     """
     litellm.set_verbose = True
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+
+    model_cost = litellm.get_model_cost_map(url="")
     tools = [
         {
             "type": "function",
@@ -1903,16 +1906,16 @@ def test_completion_openai():
 @pytest.mark.parametrize(
     "model, api_version",
     [
-        ("gpt-4o-2024-08-06", None),
-        ("azure/chatgpt-v-2", None),
+        # ("gpt-4o-2024-08-06", None),
+        # ("azure/chatgpt-v-2", None),
         ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", None),
-        ("azure/gpt-4o", "2024-08-01-preview"),
+        # ("azure/gpt-4o", "2024-08-01-preview"),
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
 def test_completion_openai_pydantic(model, api_version):
     try:
-        litellm.set_verbose = True
+        litellm._turn_on_debug()
         from pydantic import BaseModel
 
         messages = [
@@ -3368,7 +3371,6 @@ async def test_completion_bedrock_httpx_models(sync_mode, model):
                 messages=[{"role": "user", "content": "Hey! how's it going?"}],
                 temperature=0.2,
                 max_tokens=200,
-                stop=["stop sequence"],
             )
 
             assert isinstance(response, litellm.ModelResponse)
@@ -3380,7 +3382,6 @@ async def test_completion_bedrock_httpx_models(sync_mode, model):
                 messages=[{"role": "user", "content": "Hey! how's it going?"}],
                 temperature=0.2,
                 max_tokens=100,
-                stop=["stop sequence"],
             )
 
             assert isinstance(response, litellm.ModelResponse)

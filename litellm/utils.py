@@ -2245,7 +2245,8 @@ def supports_embedding_image_input(
 ####### HELPER FUNCTIONS ################
 def _update_dictionary(existing_dict: Dict, new_dict: dict) -> dict:
     for k, v in new_dict.items():
-        existing_dict[k] = v
+        if v is not None:
+            existing_dict[k] = v
 
     return existing_dict
 
@@ -3376,7 +3377,6 @@ def get_optional_params(  # noqa: PLR0915
                     if drop_params is not None and isinstance(drop_params, bool)
                     else False
                 ),
-                messages=messages,
             )
 
         elif "anthropic" in bedrock_base_model and bedrock_route == "invoke":
@@ -3719,6 +3719,17 @@ def get_optional_params(  # noqa: PLR0915
                     else False
                 ),
             )
+    elif provider_config is not None:
+        optional_params = provider_config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
     else:  # assume passing in params for openai-like api
         optional_params = litellm.OpenAILikeChatConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -4522,6 +4533,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 input_cost_per_token_above_128k_tokens=_model_info.get(
                     "input_cost_per_token_above_128k_tokens", None
                 ),
+                input_cost_per_token_above_200k_tokens=_model_info.get(
+                    "input_cost_per_token_above_200k_tokens", None
+                ),
                 input_cost_per_query=_model_info.get("input_cost_per_query", None),
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
                 input_cost_per_audio_token=_model_info.get(
@@ -4545,6 +4559,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ),
                 output_cost_per_character_above_128k_tokens=_model_info.get(
                     "output_cost_per_character_above_128k_tokens", None
+                ),
+                output_cost_per_token_above_200k_tokens=_model_info.get(
+                    "output_cost_per_token_above_200k_tokens", None
                 ),
                 output_cost_per_second=_model_info.get("output_cost_per_second", None),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
@@ -6112,6 +6129,8 @@ def validate_and_fix_openai_messages(messages: List):
     for message in messages:
         if not message.get("role"):
             message["role"] = "assistant"
+        if message.get("tool_calls"):
+            message["tool_calls"] = jsonify_tools(tools=message["tool_calls"])
     return validate_chat_completion_messages(messages=messages)
 
 
@@ -6200,7 +6219,7 @@ class ProviderConfigManager:
     @staticmethod
     def get_provider_chat_config(  # noqa: PLR0915
         model: str, provider: LlmProviders
-    ) -> BaseConfig:
+    ) -> Optional[BaseConfig]:
         """
         Returns the provider config for a given provider.
         """
@@ -6231,9 +6250,22 @@ class ProviderConfigManager:
             return litellm.AnthropicConfig()
         elif litellm.LlmProviders.ANTHROPIC_TEXT == provider:
             return litellm.AnthropicTextConfig()
+        elif litellm.LlmProviders.VERTEX_AI_BETA == provider:
+            return litellm.VertexGeminiConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
-            if "claude" in model:
+            if "gemini" in model:
+                return litellm.VertexGeminiConfig()
+            elif "claude" in model:
                 return litellm.VertexAIAnthropicConfig()
+            elif model in litellm.vertex_mistral_models:
+                if "codestral" in model:
+                    return litellm.CodestralTextCompletionConfig()
+                else:
+                    return litellm.MistralConfig()
+            elif model in litellm.vertex_ai_ai21_models:
+                return litellm.VertexAIAi21Config()
+            else:  # use generic openai-like param mapping
+                return litellm.VertexAILlama3Config()
         elif litellm.LlmProviders.CLOUDFLARE == provider:
             return litellm.CloudflareChatConfig()
         elif litellm.LlmProviders.SAGEMAKER_CHAT == provider:
@@ -6256,7 +6288,6 @@ class ProviderConfigManager:
             litellm.LlmProviders.CUSTOM == provider
             or litellm.LlmProviders.CUSTOM_OPENAI == provider
             or litellm.LlmProviders.OPENAI_LIKE == provider
-            or litellm.LlmProviders.LITELLM_PROXY == provider
         ):
             return litellm.OpenAILikeChatConfig()
         elif litellm.LlmProviders.AIOHTTP_OPENAI == provider:
@@ -6361,9 +6392,15 @@ class ProviderConfigManager:
                 return litellm.AmazonMistralConfig()
             elif bedrock_invoke_provider == "deepseek_r1":  # deepseek models on bedrock
                 return litellm.AmazonDeepSeekR1Config()
+            elif bedrock_invoke_provider == "nova":
+                return litellm.AmazonInvokeNovaConfig()
             else:
                 return litellm.AmazonInvokeConfig()
-        return litellm.OpenAIGPTConfig()
+        elif litellm.LlmProviders.LITELLM_PROXY == provider:
+            return litellm.LiteLLMProxyChatConfig()
+        elif litellm.LlmProviders.OPENAI == provider:
+            return litellm.OpenAIGPTConfig()
+        return None
 
     @staticmethod
     def get_provider_embedding_config(
@@ -6487,6 +6524,10 @@ class ProviderConfigManager:
             )
 
             return GoogleAIStudioFilesHandler()
+        elif LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
+
+            return VertexAIFilesConfig()
         return None
 
 
@@ -6705,3 +6746,20 @@ def return_raw_request(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict
         return RawRequestTypedDict(
             error=received_exception,
         )
+
+
+def jsonify_tools(tools: List[Any]) -> List[Dict]:
+    """
+    Fixes https://github.com/BerriAI/litellm/issues/9321
+
+    Where user passes in a pydantic base model
+    """
+    new_tools: List[Dict] = []
+    for tool in tools:
+        if isinstance(tool, BaseModel):
+            tool = tool.model_dump(exclude_none=True)
+        elif isinstance(tool, dict):
+            tool = tool.copy()
+        if isinstance(tool, dict):
+            new_tools.append(tool)
+    return new_tools
