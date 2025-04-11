@@ -4,6 +4,7 @@ Common utility functions used for translating messages across providers
 
 import io
 import mimetypes
+import re
 from os import PathLike
 from typing import Dict, List, Literal, Mapping, Optional, Union, cast
 
@@ -336,11 +337,16 @@ def get_format_from_file_id(file_id: Optional[str]) -> Optional[str]:
     if not file_id:
         return None
     try:
-        if file_id.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX):
-            return file_id.split(":")[0].split(";")[0]
-        else:
-            return None
-    except:
+        if file_id.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
+            match = re.match(
+                f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}:(.*?);unified_id",
+                file_id,
+            )
+            if match:
+                return match.group(1)
+
+        return None
+    except Exception:
         return None
 
 

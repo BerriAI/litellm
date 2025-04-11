@@ -92,7 +92,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger):
 
         for file_id in file_ids:
             ## CHECK IF FILE ID IS MANAGED BY LITELM
-            if file_id.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX):
+            if file_id.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
                 litellm_managed_file_ids.append(file_id)
 
         if litellm_managed_file_ids:
@@ -122,7 +122,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger):
 
         file_type = file_data["content_type"]
 
-        unified_file_id = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.format(
+        unified_file_id = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
             file_type, str(uuid.uuid4())
         )
 
