@@ -11,6 +11,7 @@ Has all /sso/* routes
 import asyncio
 import os
 import uuid
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -919,13 +920,13 @@ class SSOAuthenticationHandler:
                 team_alias=litellm_team_name,
             )
             if litellm.default_team_params:
-                team_request = litellm.default_team_params.model_copy(
-                    deep=True,
-                    update={
-                        "team_id": litellm_team_id,
-                        "team_alias": litellm_team_name,
-                    },
+                team_request = SSOAuthenticationHandler._cast_and_deepcopy_litellm_default_team_params(
+                    default_team_params=litellm.default_team_params,
+                    litellm_team_id=litellm_team_id,
+                    litellm_team_name=litellm_team_name,
+                    team_request=team_request,
                 )
+
             await new_team(
                 data=team_request,
                 # params used for Audit Logging
@@ -937,6 +938,35 @@ class SSOAuthenticationHandler:
             )
         except Exception as e:
             verbose_proxy_logger.exception(f"Error creating Litellm Team: {e}")
+
+    @staticmethod
+    def _cast_and_deepcopy_litellm_default_team_params(
+        default_team_params: Union[NewTeamRequest, Dict],
+        team_request: NewTeamRequest,
+        litellm_team_id: str,
+        litellm_team_name: Optional[str] = None,
+    ) -> NewTeamRequest:
+        """
+        Casts and deepcopies the litellm.default_team_params to a NewTeamRequest object
+
+        - Ensures we create a new NewTeamRequest object
+        - Handle the case where litellm.default_team_params is a dict or a NewTeamRequest object
+        - Adds the litellm_team_id and litellm_team_name to the NewTeamRequest object
+        """
+        if isinstance(default_team_params, dict):
+            _team_request = deepcopy(default_team_params)
+            _team_request["team_id"] = litellm_team_id
+            _team_request["team_alias"] = litellm_team_name
+            team_request = NewTeamRequest(**_team_request)
+        elif isinstance(litellm.default_team_params, NewTeamRequest):
+            team_request = litellm.default_team_params.model_copy(
+                deep=True,
+                update={
+                    "team_id": litellm_team_id,
+                    "team_alias": litellm_team_name,
+                },
+            )
+        return team_request
 
 
 class MicrosoftSSOHandler:

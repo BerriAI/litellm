@@ -435,6 +435,7 @@ const sidebars = {
       label: "Tutorials",
       items: [
         "tutorials/openweb_ui",
+        "tutorials/msft_sso",
         'tutorials/litellm_proxy_aporia',
         {
           type: "category",

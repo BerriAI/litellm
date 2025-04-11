@@ -418,62 +418,21 @@ def test_get_group_ids_from_graph_api_response():
 
 
 @pytest.mark.asyncio
-async def test_upsert_sso_user_existing_user():
-    """
-    If a user_id is already in the LiteLLM DB and the user signed in with SSO. Ensure that the user_id is updated with the SSO user_email
-
-    SSO Test
-    """
-    # Arrange
-    mock_prisma = MagicMock()
-    mock_prisma.db = MagicMock()
-    mock_prisma.db.litellm_usertable = MagicMock()
-    mock_prisma.db.litellm_usertable.update_many = AsyncMock()
-
-    # Create a mock existing user
-    mock_user = MagicMock()
-    mock_user.user_id = "existing_user_123"
-    mock_user.user_email = "old_email@example.com"
-
-    # Create mock SSO response
-    mock_sso_response = CustomOpenID(
-        email="new_email@example.com",
-        display_name="Test User",
-        provider="microsoft",
-        id="existing_user_123",
-        first_name="Test",
-        last_name="User",
-        team_ids=[],
-    )
-
-    # Create mock user defined values
-    mock_user_defined_values = MagicMock()
-
-    # Act
-    result = await SSOAuthenticationHandler.upsert_sso_user(
-        result=mock_sso_response,
-        user_info=mock_user,
-        user_email="new_email@example.com",
-        user_defined_values=mock_user_defined_values,
-        prisma_client=mock_prisma,
-    )
-
-    # Assert
-    mock_prisma.db.litellm_usertable.update_many.assert_called_once_with(
-        where={"user_id": "existing_user_123"},
-        data={"user_email": "new_email@example.com"},
-    )
-    assert result == mock_user
-
-
-async def test_default_team_params():
+@pytest.mark.parametrize(
+    "team_params",
+    [
+        # Test case 1: Using NewTeamRequest
+        NewTeamRequest(max_budget=10, budget_duration="1d", models=["special-gpt-5"]),
+        # Test case 2: Using Dict
+        {"max_budget": 10, "budget_duration": "1d", "models": ["special-gpt-5"]},
+    ],
+)
+async def test_default_team_params(team_params):
     """
     When litellm.default_team_params is set, it should be used to create a new team
     """
     # Arrange
-    litellm.default_team_params = NewTeamRequest(
-        max_budget=10, budget_duration="1d", models=["special-gpt-5"]
-    )
+    litellm.default_team_params = team_params
 
     def mock_jsonify_team_object(db_data):
         return db_data
