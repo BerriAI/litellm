@@ -98,7 +98,7 @@ On the LiteLLM UI, Navigate to `Teams`, You should see the new team `Production 
 
 <Image img={require('../../img/msft_member_3.png')}  style={{ width: '800px', height: 'auto' }} />
 
-## 3. Set default params for new teams and users auto-created on LiteLLM
+## 3. Set default params for new teams auto-created on LiteLLM
 
 Since litellm auto creates a new team on the LiteLLM DB when there is a new Group Added to the LiteLLM Enterprise App on Azure Entra ID, we can set default params for new teams created. 
 
@@ -119,9 +119,12 @@ litellm_settings:
 ### 3.2 Auto-create a new team on LiteLLM
 
 - In this step you should add a new group to the LiteLLM Enterprise App on Azure Entra ID (like we did in step 1.1). We will call this group `Default LiteLLM Prod Team` on Azure Entra ID.
+- Start litellm proxy server with your config
 - Sign into LiteLLM UI via SSO
 - Navigate to `Teams` and you should see the new team `Default LiteLLM Prod Team` auto-created on LiteLLM
 - Note LiteLLM will set the default params for this new team. 
+
+<Image img={require('../../img/msft_default_settings.png')}  style={{ width: '800px', height: 'auto' }} />
 
 
 
