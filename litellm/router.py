@@ -3211,6 +3211,7 @@ class Router:
         model_group: Optional[str] = kwargs.get("model")
         disable_fallbacks: Optional[bool] = kwargs.pop("disable_fallbacks", False)
         fallbacks: Optional[List] = kwargs.get("fallbacks", self.fallbacks)
+        original_messages: Optional[List] = copy.deepcopy(kwargs.get("messages", None))
         context_window_fallbacks: Optional[List] = kwargs.get(
             "context_window_fallbacks", self.context_window_fallbacks
         )
@@ -3261,6 +3262,8 @@ class Router:
                 input_kwargs["max_fallbacks"] = self.max_fallbacks
             if "fallback_depth" not in input_kwargs:
                 input_kwargs["fallback_depth"] = 0
+            if original_messages is not None:
+                input_kwargs["messages"] = original_messages
 
             try:
                 verbose_router_logger.info("Trying to fallback b/w models")
