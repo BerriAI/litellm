@@ -2304,6 +2304,7 @@
         "litellm_provider": "azure_ai",
         "mode": "chat",
         "supports_tool_choice": true,
+        "supports_reasoning": true,
         "source": "https://techcommunity.microsoft.com/blog/machinelearningblog/deepseek-r1-improved-performance-higher-limits-and-transparent-pricing/4386367"
     },
     "azure_ai/deepseek-v3": {
@@ -3004,6 +3005,7 @@
         "supports_function_calling": true, 
         "supports_assistant_prefill": true,
         "supports_tool_choice": true,
+        "supports_reasoning": true,
         "supports_prompt_caching": true
     },
     "deepseek/deepseek-chat": {
@@ -3268,6 +3270,7 @@
         "mode": "chat",
         "supports_system_messages": false,
         "supports_function_calling": false, 
+        "supports_reasoning": true,
         "supports_response_schema": false,
         "supports_tool_choice": true
     },
@@ -6697,6 +6700,7 @@
         "mode": "chat",
         "supports_function_calling": true, 
         "supports_assistant_prefill": true,
+        "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_prompt_caching": true
     },
@@ -8766,6 +8770,7 @@
         "output_cost_per_token": 0.0000054,
         "litellm_provider": "bedrock_converse",
         "mode": "chat",
+        "supports_reasoning": true,
         "supports_function_calling": false, 
         "supports_tool_choice": false
 
@@ -10851,6 +10856,7 @@
         "max_input_tokens": 32768,
         "max_output_tokens": 8192,
         "litellm_provider": "snowflake",
+        "supports_reasoning": true,
         "mode": "chat"
     },
     "snowflake/snowflake-arctic": {
