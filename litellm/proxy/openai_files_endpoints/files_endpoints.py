@@ -548,9 +548,29 @@ async def get_file(
         )
 
         ## check if file_id is a litellm managed file
-        response = await litellm.afile_retrieve(
-            custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
+        is_base64_unified_file_id = (
+            _PROXY_LiteLLMManagedFiles._is_base64_encoded_unified_file_id(file_id)
         )
+
+        if is_base64_unified_file_id:
+            managed_files_obj = cast(
+                Optional[_PROXY_LiteLLMManagedFiles],
+                proxy_logging_obj.get_proxy_hook("managed_files"),
+            )
+            if managed_files_obj is None:
+                raise ProxyException(
+                    message="Managed files hook not found",
+                    type="None",
+                    param="None",
+                    code=500,
+                )
+            response = await managed_files_obj.afile_retrieve(
+                file_id=file_id, litellm_parent_otel_span=user_api_key_dict.parent_otel_span, **data  # type: ignore
+            )
+        else:
+            response = await litellm.afile_retrieve(
+                custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
+            )
 
         ### ALERTING ###
         asyncio.create_task(
