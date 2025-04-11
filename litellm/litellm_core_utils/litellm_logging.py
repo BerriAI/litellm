@@ -56,6 +56,7 @@ from litellm.types.llms.openai import (
     Batch,
     FineTuningJob,
     HttpxBinaryResponseContent,
+    OpenAIFileObject,
     ResponseCompletedEvent,
     ResponsesAPIResponse,
 )
@@ -902,6 +903,7 @@ class Logging(LiteLLMLoggingBaseClass):
             FineTuningJob,
             ResponsesAPIResponse,
             ResponseCompletedEvent,
+            OpenAIFileObject,
             LiteLLMRealtimeStreamLoggingObject,
         ],
         cache_hit: Optional[bool] = None,
@@ -1095,6 +1097,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     or isinstance(logging_result, FineTuningJob)
                     or isinstance(logging_result, LiteLLMBatch)
                     or isinstance(logging_result, ResponsesAPIResponse)
+                    or isinstance(logging_result, OpenAIFileObject)
                     or isinstance(logging_result, LiteLLMRealtimeStreamLoggingObject)
                 ):
                     ## HIDDEN PARAMS ##

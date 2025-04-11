@@ -2692,10 +2692,6 @@ class PrismaCompatibleUpdateDBModel(TypedDict, total=False):
     updated_by: str
 
 
-class SpecialEnums(enum.Enum):
-    LITELM_MANAGED_FILE_ID_PREFIX = "litellm_proxy/"
-
-
 class SpecialManagementEndpointEnums(enum.Enum):
     DEFAULT_ORGANIZATION = "default_organization"
 
