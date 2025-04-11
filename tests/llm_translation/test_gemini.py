@@ -83,3 +83,5 @@ def test_gemini_image_generation():
         modalities=["image", "text"],
     )
     assert response.choices[0].message.content is not None
+
+
